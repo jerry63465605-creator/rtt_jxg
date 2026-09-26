@@ -1,0 +1,485 @@
+{
+ "map": "quartermaster-sub-wars",
+ "width": 4835,
+ "height": 1612,
+ "updated": "2026-09-21T12:48:50.154Z",
+ "points": [
+  {
+   "name": "冰岛",
+   "x": 94,
+   "y": 115,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "不列颠",
+   "x": 548,
+   "y": 223,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "亚速尔",
+   "x": 133,
+   "y": 529,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北欧",
+   "x": 955,
+   "y": 105,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "东欧",
+   "x": 1046,
+   "y": 360,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "西欧",
+   "x": 543,
+   "y": 504,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "东欧",
+   "x": 1247,
+   "y": 181,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "波罗的海",
+   "x": 1032,
+   "y": 180,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "莫斯科",
+   "x": 1278,
+   "y": 290,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "中亚",
+   "x": 1628,
+   "y": 511,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "黑海",
+   "x": 1387,
+   "y": 582,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "巴尔干",
+   "x": 970,
+   "y": 507,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "意大利",
+   "x": 829,
+   "y": 586,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "黑海",
+   "x": 1150,
+   "y": 550,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "非洲北部",
+   "x": 760,
+   "y": 735,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "中东",
+   "x": 1280,
+   "y": 705,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "北海",
+   "x": 354,
+   "y": 338,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "西伯利亚",
+   "x": 1986,
+   "y": 184,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国西部",
+   "x": 2109,
+   "y": 692,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "蒙古",
+   "x": 2219,
+   "y": 496,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国东北",
+   "x": 2511,
+   "y": 532,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国东部",
+   "x": 2349,
+   "y": 787,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "菲律宾",
+   "x": 2588,
+   "y": 1073,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "海参崴",
+   "x": 2758,
+   "y": 134,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "阿拉斯加",
+   "x": 3482,
+   "y": 58,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "加拿大",
+   "x": 4090,
+   "y": 169,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "美国",
+   "x": 4015,
+   "y": 442,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "北太平洋",
+   "x": 3536,
+   "y": 862,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中太平洋",
+   "x": 3058,
+   "y": 946,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东太平洋",
+   "x": 4459,
+   "y": 1074,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南太平洋",
+   "x": 4071,
+   "y": 1316,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北大西洋",
+   "x": 4490,
+   "y": 488,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南大西洋",
+   "x": 353,
+   "y": 1248,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "拉丁美洲",
+   "x": 4199,
+   "y": 1054,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "非洲南部",
+   "x": 683,
+   "y": 1081,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "非洲东部",
+   "x": 1058,
+   "y": 1060,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "马达加斯加",
+   "x": 1167,
+   "y": 1390,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "阿拉伯海",
+   "x": 1397,
+   "y": 1073,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度",
+   "x": 1807,
+   "y": 817,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度洋",
+   "x": 1877,
+   "y": 1365,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东南亚",
+   "x": 2174,
+   "y": 927,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南海",
+   "x": 2494,
+   "y": 1163,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度尼西亚",
+   "x": 2436,
+   "y": 1244,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东海",
+   "x": 2561,
+   "y": 830,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "新几内亚",
+   "x": 2839,
+   "y": 1156,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "澳大利亚",
+   "x": 2756,
+   "y": 1394,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "新西兰",
+   "x": 3038,
+   "y": 1384,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "德国",
+   "x": 860,
+   "y": 374,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "乌克兰",
+   "x": 1214,
+   "y": 444,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "地中海",
+   "x": 1004,
+   "y": 662,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "日本",
+   "x": 2732,
+   "y": 694,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "硫磺岛",
+   "x": 2929,
+   "y": 766,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北太平yang",
+   "x": 3233,
+   "y": 438,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  }
+ ]
+}

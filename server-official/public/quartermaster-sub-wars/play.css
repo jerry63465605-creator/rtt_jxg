@@ -1,0 +1,1229 @@
+/*
+ * 军需官 · 次要战场 —— 对局页样式
+ * 布局由 /common/client.css 提供；本文件只定义地图元素与配色。
+ */
+
+:root {
+	--axis: #a33;
+	--allies: #1560a8;
+	--axis-light: #f0c8c8;
+	--allies-light: #c8d8f0;
+	--land: #d8c9a8;
+	--sea: #9fc4d8;
+}
+
+main { background-color: #2b3a45; }
+
+/* ================= 地图 ================= */
+
+/*
+ * #mapwrap 必须显式占位（与 PoG 的 play.css 一致）：
+ * #map 是 absolute 定位不占文档流，若 wrap 无高度，
+ * 地图下方的 Hand 面板会顶到地图上面。
+ * client.js 的缩放/fit 也依赖 mapwrap.clientWidth/Height 计算比例。
+ */
+#mapwrap {
+	width: 4835px;
+	height: 1612px;
+}
+
+#map {
+	width: 4835px;
+	height: 1612px;
+	background-image: url(map.png);
+	background-size: 4835px 1612px;
+	background-repeat: no-repeat;
+}
+
+#spaces, #pieces {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+#pieces { pointer-events: none; }
+#pieces > * { pointer-events: auto; }
+
+/* ---- 格位方块 ---- */
+
+.space {
+	position: absolute;
+	box-sizing: border-box;
+	border: 2px solid #0009;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	font-size: 22px;
+	font-weight: bold;
+	line-height: 1.1;
+	color: #111;
+	background-color: #ffffff10;   /* 极淡，让底图地名透出来 */
+	cursor: pointer;
+	user-select: none;
+	transition: box-shadow .1s, background-color .1s;
+}
+
+/* 方块内不再重复写地名（底图已有大字），仅在调试开关下显示 */
+.space > .space_name {
+	padding: 0 3px;
+	font-size: 13px;
+	color: #000c;
+	text-shadow: 0 0 4px #fff, 0 0 4px #fff;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity .1s;
+}
+body.debug .space > .space_name,
+.space:hover > .space_name { opacity: 1; }
+
+.space.land { background-color: #d8c9a822; }
+.space.sea  { background-color: #9fc4d822; }
+
+/* 补给点 / 大本营 / 海峡 */
+.space.supply  { border-color: #b8860b; border-width: 5px; }
+.space.home_base { border-color: #8b0000; border-width: 5px; }
+.space.strait  { border-style: dashed; border-color: #ff22cc; border-width: 5px; }
+
+.space::after {
+	position: absolute;
+	top: 2px;
+	left: 5px;
+	font-size: 18px;
+	line-height: 1;
+	pointer-events: none;
+}
+
+.space.supply::after { content: "\2605"; color: #b8860b; }
+.space.strait::after { content: "\1F6A7"; color: #ff22cc; left: auto; right: 5px; }
+
+/*
+ * 仅对【单一阵营】有效的补给点（动态层，可被卡牌造成）。
+ * 用半透明 + 虚线边框区分于"两阵营都算"的普通补给点。
+ */
+.space.supply.half {
+	border-style: dashed;
+	border-color: #b8860b99;
+}
+.space.supply.half::after { opacity: .55; }
+
+/* 鼠标悬停 / 高亮 */
+.space:hover { background-color: #ffffff88; }
+.space.tip { box-shadow: 0 0 0 3px #ffea00 inset; }
+
+.space.attract { animation: attract_pulse .5s ease-out 2; }
+@keyframes attract_pulse {
+	0%   { box-shadow: 0 0 0 0 #fff, 0 0 14px 6px #ffea00; }
+	100% { box-shadow: 0 0 0 0 #fff0, 0 0 0 0 #ffea0000; }
+}
+
+/* 本方视角下可用的连通（调试用） */
+body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
+
+/* 选中*/
+.space.selected { box-shadow: 0 0 0 4px #ffea00 inset; }
+
+/* ---- 算子 ---- */
+
+.unit {
+	position: absolute;
+	box-sizing: border-box;
+	width: 46px;
+	height: 46px;
+	margin: -23px 0 0 -23px;
+	border-radius: 50%;
+	border: 3px solid #000;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	font-size: 13px;
+	font-weight: bold;
+	line-height: 1;
+	color: #fff;
+	text-shadow: 0 1px 2px #000;
+	box-shadow: 0 2px 5px #0006;
+	cursor: pointer;
+	z-index: 10;
+	user-select: none;
+}
+
+.unit.army  { background-color: #4a6b3a; border-radius: 6px; }
+.unit.navy  { background-color: #2a4a7a; border-radius: 6px; }
+
+/* 空军：圆形 + 更大的投影，视觉上"浮在空中" */
+.unit.air {
+	background-color: #7a5a2a;
+	border-radius: 50%;
+	box-shadow: 0 6px 10px #0008;
+}
+
+.unit.germany   { outline: 3px solid #333; }
+.unit.japan     { outline: 3px solid #c00; }
+.unit.italy     { outline: 3px solid #0a0; }
+.unit.uk        { outline: 3px solid #06c; }
+.unit.france    { outline: 3px solid #08c; }
+.unit.ussr      { outline: 3px solid #c30; }
+.unit.usa       { outline: 3px solid #069; }
+.unit.china     { outline: 3px solid #a80; }
+
+.unit:hover { filter: brightness(1.25); }
+.unit.tip { box-shadow: 0 0 0 3px #ffea00, 0 2px 5px #0006; }
+.unit.attract { animation: attract_pulse .5s ease-out 2; }
+
+/*
+ * 补给状态：
+ *   有补给 -> 细绿边（弱化，不干扰视觉）
+ *   断补   -> 红色粗圈 + 呼吸动画（强警示，规则上将在补给阶段被移除）
+ */
+.unit.in_supply { outline-color: #2d7a2d; }
+
+.unit.out_of_supply {
+	border-color: #d00;
+	box-shadow: 0 0 0 4px #ff0000aa, 0 2px 5px #0006;
+	animation: supply_warn 1.2s ease-in-out infinite;
+}
+
+@keyframes supply_warn {
+	0%, 100% { box-shadow: 0 0 0 3px #ff000088, 0 2px 5px #0006; }
+	50%      { box-shadow: 0 0 0 8px #ff0000cc, 0 2px 5px #0006; }
+}
+
+/* 断补算子右上角的警示标记 */
+.unit.out_of_supply::after {
+	content: "!";
+	position: absolute;
+	top: -8px;
+	right: -8px;
+	width: 16px;
+	height: 16px;
+	line-height: 16px;
+	text-align: center;
+	border-radius: 50%;
+	background-color: #d00;
+	color: #fff;
+	font-size: 12px;
+	font-weight: bold;
+	text-shadow: none;
+	box-shadow: 0 1px 3px #0008;
+}
+
+/* 同格位多个算子：横向错开，由 update_pieces 设置 left 偏移 */
+.unit .unit_label {
+	font-size: 11px;
+	letter-spacing: .5px;
+}
+
+/* ================= 侧栏 ================= */
+
+#role_Axis   { background-color: var(--axis-light); }
+#role_Allies { background-color: var(--allies-light); }
+body.Axis   header.your_turn { background-color: #e8b0b0; }
+body.Allies header.your_turn { background-color: #b0c8e8; }
+
+#turn_info { font-size: 13px; }
+#turn_line { padding: 2px 0; }
+#strait_line { font-size: 11px; color: #444; padding: 2px 0; }
+
+#strait_line .st-axis   { color: var(--axis); font-weight: bold; }
+#strait_line .st-allies { color: var(--allies); font-weight: bold; }
+
+/* ---- 补给状态行 ---- */
+
+#supply_line {
+	font-size: 11px;
+	color: #444;
+	padding: 2px 0;
+	line-height: 1.7;
+}
+
+#supply_line .sn {
+	display: inline-block;
+	margin-right: 5px;
+	white-space: nowrap;
+}
+
+#supply_line .sn b {
+	color: #333;
+	font-weight: bold;
+	margin-left: 1px;
+}
+
+#supply_line .sn.cur {
+	background-color: #ffee88;
+	border-radius: 3px;
+	padding: 0 3px;
+}
+
+/* 断补数量（-N）用红色突出 */
+#supply_line .sn .bad {
+	color: #d00;
+	font-weight: bold;
+	font-style: normal;
+	margin-left: 1px;
+}
+
+#supply_line .cur_nation {
+	color: #06c;
+	font-weight: bold;
+}
+
+/* ---- 参战状态行（苏联 / 美国中立规则） ---- */
+
+#neutral_line {
+	font-size: 11px;
+	color: #444;
+	padding: 2px 0;
+	line-height: 1.7;
+}
+
+#neutral_line .nt {
+	display: inline-block;
+	margin-right: 6px;
+	white-space: nowrap;
+	cursor: help;
+}
+
+#neutral_line .nt b {
+	font-weight: bold;
+	margin-left: 2px;
+	padding: 0 3px;
+	border-radius: 3px;
+}
+
+/* 中立：灰底，表示"还没动手" */
+#neutral_line .nt.neutral b {
+	background-color: #ddd;
+	color: #555;
+}
+
+/* 已参战：红底，表示"已经在打" */
+#neutral_line .nt.joined b {
+	background-color: #d33;
+	color: #fff;
+}
+
+/* 中立国的参战条件清单（缩进一行一条） */
+#neutral_line .cond_list {
+	margin: 2px 0 2px 10px;
+	padding-left: 8px;
+	border-left: 2px solid #ccc;
+}
+
+#neutral_line .cond {
+	display: block;
+	color: #777;
+	font-size: 10px;
+	line-height: 1.6;
+}
+
+#neutral_line .cond.done {
+	color: #2a7;
+	font-weight: bold;
+}
+
+/* ================= 回合状态机面板 ================= */
+
+#phase_panel {
+	border: 2px solid #333;
+	border-radius: 6px;
+	padding: 5px 7px;
+	margin-bottom: 6px;
+	background-color: #f8f8f8;
+}
+
+#phase_head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	font-size: 14px;
+}
+
+#phase_nation {
+	font-weight: bold;
+	color: #06c;
+}
+
+#phase_name {
+	color: #333;
+}
+
+#phase_step {
+	margin-left: auto;
+	color: #888;
+	font-size: 12px;
+}
+
+/* 7 阶段进度条 */
+#phase_track {
+	display: flex;
+	gap: 3px;
+	margin: 5px 0 3px;
+}
+
+#phase_track .ph {
+	flex: 1;
+	height: 18px;
+	line-height: 18px;
+	text-align: center;
+	font-size: 11px;
+	border-radius: 3px;
+	background-color: #ddd;
+	color: #888;
+	border: 1px solid #bbb;
+}
+
+#phase_track .ph.done {
+	background-color: #7ab87a;
+	color: #fff;
+	border-color: #5a9a5a;
+}
+
+#phase_track .ph.cur {
+	background-color: #ffb800;
+	color: #000;
+	font-weight: bold;
+	border-color: #cc9200;
+	box-shadow: 0 0 5px #ffb800aa;
+}
+
+#phase_note {
+	font-size: 11px;
+	color: #a33;
+	min-height: 14px;
+	margin: 2px 0 4px;
+}
+
+#phase_actions button {
+	width: 100%;
+}
+
+#phase_actions button:disabled {
+	opacity: .45;
+	cursor: default;
+}
+
+/* ================= 手牌区 ================= */
+
+#hand_panel {
+	border-top: 1px solid #ccc;
+	padding-top: 5px;
+	margin-top: 5px;
+}
+
+#hand_head {
+	font-size: 12px;
+	font-weight: bold;
+	color: #333;
+	margin-bottom: 4px;
+}
+
+#hand_head #hand_ap {
+	color: #c60;
+	margin-left: 6px;
+}
+
+#hand_counts {
+	color: #888;
+	font-size: 11px;
+	margin-top: 2px;
+}
+
+/* ============================================================
+ * 卡牌区（仿 PoG：Hand 面板在地图下方，卡用真实卡图）
+ * ============================================================ */
+
+.panel-list {
+	max-width: 2550px;
+	margin: 0 auto;
+	/*
+	 * client.js 会按 transform: scale() 缩放 main 里的内容层，
+	 * 手牌区在地图【下方】；未占位时它的命中区域会被 #mapwrap 覆盖，
+	 * 表现为"看得见但点不中"。显式抬高层级 + 自身建立层叠上下文，
+	 * 保证卡牌始终可点。
+	 */
+	position: relative;
+	z-index: 50;
+}
+
+.panel {
+	background-color: #0002;
+	margin: 12px;
+}
+
+.panel-head {
+	padding: 0 8px;
+	background-color: #0002;
+	text-align: center;
+	font-weight: bold;
+	color: #fff;
+}
+
+.panel-body {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 12px;
+}
+
+#hand_cards {
+	min-height: 190px;
+}
+
+/* 手牌卡：确保可点（卡片本体与内部图片都不吞掉事件） */
+#hand_cards .card {
+	position: relative;
+	z-index: 1;
+	cursor: pointer;
+	pointer-events: auto;
+}
+
+#hand_cards .card img { pointer-events: none; }
+
+#hand_cards .card.sel {
+	outline: 3px solid #c90;
+	outline-offset: 2px;
+	transform: translateY(-6px);
+}
+
+#hand_limit_note {
+	font-weight: normal;
+	font-size: 11px;
+	color: #ffd;
+}
+
+#hand_limit_note.over { color: #f88; }
+
+/* 桌面响应卡面板 */
+#response_cards {
+	min-height: 190px;
+}
+
+#response_cards .card {
+	position: relative;
+	z-index: 1;
+	pointer-events: auto;     /* 与手牌区一致，避免“看得见点不中” */
+}
+
+#response_cards .card img { pointer-events: none; }
+
+#response_cards .hand_empty {
+	width: 100%;
+	color: #aaa;
+	font-style: italic;
+	padding: 8px 0;
+}
+
+/* 对方暗置的响应卡：牌背 */
+.card.back {
+	background-color: #2b2f4a;
+	background-image: none !important;
+	border-left: 5px solid #555;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.card.back::after {
+	content: "响应";
+	color: #cdd3ff;
+	font-size: 16px;
+	font-weight: bold;
+	letter-spacing: 6px;
+	writing-mode: vertical-rl;
+}
+
+/*
+ * 卡牌：使用真实卡图（cards/<img>）。
+ * 素材原始 384x576（2:3），这里按 120x180 显示，
+ * 悬停时用 #tooltip 放大到 250x375 查看细节（仿 PoG）。
+ */
+.card {
+	position: relative;
+	width: 120px;
+	height: 180px;
+	border-radius: 9px;
+	box-shadow: 1px 1px 4px #0006;
+	transition: transform 100ms;
+	background-color: #efebe0;
+	background-size: 100% 100%;
+	background-repeat: no-repeat;
+	border: 1px solid #000;
+	cursor: pointer;
+}
+
+.card:hover {
+	transform: translateY(-4px);
+	box-shadow: 0 6px 14px #0008;
+}
+
+/* 无卡图时的回落：显示卡名文字（原 PoG 也是文字卡底） */
+.card .card_fallback {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	padding: 5px 6px;
+	font-size: 11px;
+	pointer-events: none;
+}
+
+.card .card_fallback .card_name {
+	font-weight: bold;
+	line-height: 1.2;
+	color: #222;
+	text-shadow: 0 0 3px #fff;
+}
+
+.card .card_fallback .card_type {
+	font-size: 9px;
+	color: #666;
+	text-align: right;
+}
+
+/* 按卡牌类型配色（左侧色条，卡图之上叠加，便于分辨类型） */
+.card.t-BASIC    { border-left: 5px solid #bdbdbd; }
+.card.t-EVENT    { border-left: 5px solid #4a9b4a; }
+.card.t-ECON     { border-left: 5px solid #d4a017; }
+.card.t-RESPONSE { border-left: 5px solid #3a7fc1; }
+.card.t-STATUS   { border-left: 5px solid #9b59b6; }
+.card.t-EFFECT   { border-left: 5px solid #e74c3c; }
+
+/* 选中等待选目标时的高亮 */
+.card.pending_card {
+	box-shadow: 0 0 0 4px #ffb800, 0 6px 14px #0008;
+}
+
+/* 资源阶段：可弃牌换点的牌 */
+.card.as-discard {
+	border-style: dashed;
+	border-width: 2px;
+}
+
+/* 角标：内侧，避免越界压到相邻卡 */
+.card .badge {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	background-color: #06c;
+	color: #fff;
+	font-size: 9px;
+	padding: 1px 4px;
+	border-radius: 3px;
+	pointer-events: none;
+}
+
+.card.as-discard .badge { background-color: #c60; }
+
+/* 对手手牌（只显示牌背 + 张数） */
+.hand_back {
+	width: 84px;
+	height: 126px;
+	border: 2px solid #444;
+	border-radius: 8px;
+	background: repeating-linear-gradient(45deg, #2a4a7a, #2a4a7a 6px, #1e3a63 6px, #1e3a63 12px);
+	color: #fff;
+	font-size: 11px;
+	text-align: center;
+	padding-top: 50px;
+	box-sizing: border-box;
+}
+
+.hand_empty {
+	font-size: 12px;
+	color: #bbb;
+	padding: 8px;
+}
+
+/* 悬停放大的卡图（仿 PoG 的 #tooltip） */
+#tooltip {
+	pointer-events: none;
+	position: fixed;
+	z-index: 600;
+	right: 260px;
+	top: 60px;
+}
+
+#tooltip .card {
+	width: 250px;
+	height: 375px;
+	cursor: default;
+}
+
+#tooltip .card:hover { transform: none; }
+
+/* 《空军力量》模式选择 —— 固定浮层，保证一定可见
+ * （之前放在 #hand_panel 普通流里，常落在可视区外，表现为
+ *  "点空军力量没反应 / 不弹模式框"，而同在右侧的 #ask_box 却看得到） */
+#mode_chooser {
+	position: fixed;
+	left: 50%;
+	bottom: 18px;
+	transform: translateX(-50%);
+	z-index: 600;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0;
+	padding: 10px 14px;
+	background-color: #fff3cd;
+	border: 2px solid #e69500;
+	border-radius: 8px;
+	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+	max-width: 92vw;
+}
+
+#mode_chooser.hide { display: none; }
+
+#mode_chooser button {
+	font-size: 13px;
+	padding: 7px 10px;
+	text-align: left;
+	cursor: pointer;
+}
+
+/* ================= 询问面板 / 资源再分配面板 ================= */
+
+#ask_box, #resource_box {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin: 5px 0;
+	padding: 5px;
+	background-color: #fff8e6;
+	border: 2px solid #c90;
+	border-radius: 5px;
+}
+
+#ask_box.hide, #resource_box.hide,
+#play_choices.hide, #btn_resource.hide { display: none; }
+
+#ask_box button, #resource_box button {
+	font-size: 11px;
+	padding: 3px 5px;
+	text-align: left;
+}
+
+#ask_box .ask_head, #resource_box .ask_head {
+	font-size: 11px;
+	font-weight: bold;
+	color: #840;
+}
+
+#ask_box .ask_text, #resource_box .ask_text {
+	font-size: 10px;
+	color: #333;
+}
+
+button.primary {
+	background-color: #ffd977;
+	border-color: #c90;
+	font-weight: bold;
+}
+
+/* 出牌阶段三选一的按钮组 */
+#play_choices {
+	display: flex;
+	gap: 4px;
+	margin-bottom: 4px;
+}
+
+/* 已无可选动作的手牌（出牌阶段已行动） */
+.card.disabled {
+	filter: grayscale(1) brightness(0.85);
+	cursor: not-allowed;
+}
+
+/* 资源再分配中被选为代价 / 已选的基本卡 */
+.card.sel {
+	outline: 3px solid #c90;
+	outline-offset: 1px;
+}
+
+/* 地图上被高亮的合法目标地区 */
+.space.target {
+	outline: 4px solid #ffb800;
+	outline-offset: 2px;
+	box-shadow: 0 0 12px #ffb800cc;
+	z-index: 5;
+}
+
+/* 注意：必须高于 .unit 的 z-index(10)，否则高亮的算子会被同格其它算子盖住 */
+.unit.target {
+	box-shadow: 0 0 0 4px #ffb800, 0 2px 6px #0007 !important;
+	z-index: 20;
+}
+
+#log .axis   { background-color: var(--axis-light); }
+#log .allies { background-color: var(--allies-light); }
+
+/* ================= 调试面板 ================= */
+
+/* 放在左下角，默认半透明，悬停/点击时变实心 */
+#debug_panel {
+	position: absolute;
+	left: 10px;
+	bottom: 34px;
+	width: 210px;
+	background-color: #fffc;
+	border: 2px solid #000;
+	border-radius: 6px;
+	z-index: 100;
+	box-shadow: 0 4px 12px #0006;
+	opacity: .55;
+	transition: opacity .15s;
+}
+
+#debug_panel:hover { opacity: 1; }
+
+#debug_panel .panel-head {
+	background-color: #444;
+	color: #fff;
+	padding: 4px 8px;
+	font-weight: bold;
+	font-size: 13px;
+}
+
+#debug_panel .panel-body { padding: 6px 8px; font-size: 12px; }
+#debug_panel .panel-body p { margin: 5px 0; }
+#debug_panel label { display: block; margin: 4px 0; }
+#debug_panel select { width: 100%; }
+#debug_panel button { width: 100%; margin-top: 3px; }
+#debug_panel button.on { background-color: #0a5; color: #fff; }
+#debug_panel .panel-body p.sep {
+	margin: 8px 0 3px;
+	padding-top: 6px;
+	border-top: 1px dashed #999;
+	font-weight: bold;
+	color: #555;
+	font-size: 11px;
+}
+#dbg_hint { color: #a33; font-weight: bold; min-height: 16px; }
+
+/* ================= 分数面板 ================= */
+
+#score_panel {
+	margin: 8px 0;
+	padding: 6px 8px;
+	background-color: #1e1e1e;
+	border: 1px solid #555;
+	border-radius: 5px;
+}
+
+#score_head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-weight: bold;
+	color: #ffd977;
+	margin-bottom: 4px;
+}
+
+#score_winner {
+	font-size: 11px;
+	font-weight: normal;
+	color: #7fe07f;
+}
+
+#score_total {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+}
+
+.score-side {
+	display: flex;
+	align-items: baseline;
+	gap: 4px;
+	padding: 2px 8px;
+	border-radius: 4px;
+	background-color: #2b2b2b;
+}
+
+.score-side b { font-size: 18px; }
+.score-side i { font-style: normal; font-size: 11px; opacity: .75; }
+
+.score-side.axis   { color: #ff9d6b; border-left: 3px solid #c05020; }
+.score-side.allies { color: #7fc4ff; border-left: 3px solid #2060c0; }
+
+/* 本方那一侧加高亮边框 */
+body.axis   .score-side.axis,
+body.allies .score-side.allies {
+	background-color: #3a3a1e;
+	box-shadow: 0 0 6px #ffd97755;
+}
+
+#score_gap {
+	font-size: 11px;
+	color: #bbb;
+	white-space: nowrap;
+}
+
+/* 计分明细：每个地块一行 */
+#score_detail_head {
+	margin-top: 6px;
+	font-size: 11px;
+	color: #ffe9b8;
+}
+
+#score_detail {
+	margin-top: 3px;
+	font-size: 11px;
+}
+
+#score_detail .row {
+	display: flex;
+	justify-content: space-between;
+	gap: 6px;
+	padding: 1px 3px;
+	border-bottom: 1px dotted #444;
+}
+
+#score_detail .row .nm { color: #ddd; }
+#score_detail .row .pt { color: #ffd977; font-weight: bold; white-space: nowrap; }
+#score_detail .row.shared .nm { color: #9fd89f; }   /* 共同占领 */
+#score_detail .row .who { color: #999; font-size: 10px; }
+#score_detail .none { color: #888; }
+#score_detail .total {
+	display: flex;
+	justify-content: space-between;
+	padding-top: 3px;
+	margin-top: 3px;
+	border-top: 1px solid #555;
+	font-weight: bold;
+	color: #ffd977;
+}
+
+/* 地图上的计分标记 */
+#mapwrap .marker-badge {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 0 4px;
+	height: 20px;
+	background-color: #000000cc;
+	border: 2px solid #ffd977;
+	border-radius: 10px;
+	color: #ffd977;
+	font-size: 12px;
+	font-weight: bold;
+	pointer-events: none;   /* 不挡地区点击 */
+	z-index: 30;
+	white-space: nowrap;
+}
+
+/* 专属标记（只对某国生效）用不同边框色区分 */
+#mapwrap .marker-badge.owned {
+	border-color: #7fe07f;
+	color: #b6f5b6;
+}
+
+#mapwrap .marker-badge .who {
+	font-size: 10px;
+	font-weight: normal;
+	opacity: .85;
+}
+
+/* ================= 战斗：在地图上选发起单位 ================= */
+
+/*
+ * 可点选的发起单位：金色呼吸光晕，与"目标地区"的虚线框区分开。
+ */
+.unit.pickable {
+	outline: 3px solid #ffd977;
+	outline-offset: 2px;
+	cursor: pointer;
+	animation: pickable-pulse 1.1s ease-in-out infinite;
+	z-index: 25;
+}
+
+@keyframes pickable-pulse {
+	0%, 100% { box-shadow: 0 0 4px 2px #ffd977aa; }
+	50%      { box-shadow: 0 0 12px 5px #ffd977ff; }
+}
+
+/* ================= 资源再分配弹框 ================= */
+
+.modal {
+	position: fixed;
+	inset: 0;
+	z-index: 500;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-color: #0008;
+}
+
+.modal.hide { display: none; }
+
+.modal-box {
+	display: flex;
+	flex-direction: column;
+	max-width: min(92vw, 1100px);
+	max-height: 90vh;
+	background-color: #2b2b2b;
+	border: 3px solid #c90;
+	border-radius: 8px;
+	box-shadow: 0 10px 40px #000c;
+	overflow: hidden;
+}
+
+.modal-head {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	padding: 8px 12px;
+	background-color: #6a4a10;
+	color: #ffd977;
+	font-weight: bold;
+	font-size: 15px;
+}
+
+.modal-head .modal-sub {
+	flex: 1;
+	font-size: 11px;
+	font-weight: normal;
+	color: #ffe9b8;
+}
+
+.modal-close {
+	background: none;
+	border: none;
+	color: #ffd977;
+	font-size: 20px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 4px;
+}
+
+.modal-section {
+	padding: 8px 12px;
+	overflow-y: auto;
+}
+
+.modal-label {
+	margin-bottom: 6px;
+	color: #ffe9b8;
+	font-size: 12px;
+	font-weight: bold;
+}
+
+.modal-hint {
+	margin-left: 6px;
+	font-weight: normal;
+	color: #bbb;
+}
+
+/*
+ * 弹框里的说明文字（双十字系统的排序说明）。
+ * 与 .modal-hint 的区别：它是【整段】说明，不是标签后的短提示，
+ * 所以要独立成块、换行显示、字号略小。
+ */
+.modal-desc {
+	margin-top: 4px;
+	padding: 6px 8px;
+	background: #2a2a2a;
+	border-left: 3px solid #ffe9b8;
+	border-radius: 3px;
+	color: #ccc;
+	font-size: 11px;
+	line-height: 1.6;
+}
+
+/* 卡牌网格：弹框里的卡比手牌区略小 */
+.card-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	min-height: 130px;
+}
+
+.card-grid .card {
+	width: 100px;
+	height: 150px;
+	cursor: pointer;
+	position: relative;
+}
+
+.card-grid .card img { width: 100%; height: 100%; object-fit: cover; }
+
+/* 可选基本卡被选中 */
+.card-grid .card.sel {
+	outline: 3px solid #c90;
+	outline-offset: 2px;
+	transform: translateY(-4px);
+}
+
+/* 手牌代价列表里的置灰（不可选的牌） */
+.card-grid .card.disabled {
+	filter: grayscale(1) brightness(0.6);
+	cursor: not-allowed;
+}
+
+.card-grid .card .badge {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	background-color: #c90;
+	color: #000;
+	font-size: 10px;
+	font-weight: bold;
+	padding: 1px 4px;
+	border-radius: 3px;
+}
+
+.modal-foot {
+	display: flex;
+	gap: 8px;
+	padding: 8px 12px;
+	border-top: 1px solid #555;
+	background-color: #222;
+}
+
+.modal-foot button {
+	font-size: 13px;
+	padding: 5px 14px;
+}
+
+.modal-foot button:disabled {
+	opacity: .45;
+	cursor: not-allowed;
+}
+
+/* 牌堆为空时的提示行 */
+.card-grid .empty-note {
+	color: #999;
+	font-size: 12px;
+	padding: 20px 0;
+}
+
+/* ================= 响应式 ================= */
+
+@media (max-width: 700px) {
+	#debug_panel { width: 180px; }
+	.space { font-size: 13px; }
+	.unit { width: 38px; height: 38px; margin: -19px 0 0 -19px; font-size: 11px; }
+}
+
+/* ================= 桌面状态卡（STATUS）区 ================= */
+
+#table_status {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: stretch;
+	padding: 6px 8px;
+	margin: 4px 0;
+	background-color: #1e2630;
+	border: 1px solid #3a4756;
+	border-radius: 6px;
+}
+
+#table_status .ts-title {
+	width: 100%;
+	font-size: 12px;
+	font-weight: bold;
+	color: #ffd977;
+	margin-bottom: 2px;
+}
+
+#table_status .ts-card {
+	min-width: 150px;
+	max-width: 220px;
+	padding: 5px 8px;
+	border-radius: 6px;
+	background-color: #2b3642;
+	border: 1px solid #445666;
+	color: #e6edf3;
+	cursor: default;
+	transition: box-shadow .1s, border-color .1s, transform .1s;
+}
+
+/* 可触发（含建设类：正在建设陆军时） */
+#table_status .ts-card.ready {
+	cursor: pointer;
+	border-color: #5a8ab0;
+}
+
+#table_status .ts-card.ready:hover {
+	box-shadow: 0 0 8px #5a8ab055;
+	transform: translateY(-2px);
+}
+
+/* S4：正在打《建设陆军》卡，可点击放弃建设 */
+#table_status .ts-card.build-ready {
+	border-color: #3fa34d;
+	box-shadow: 0 0 8px #3fa34d66;
+	background-color: #243524;
+}
+
+#table_status .ts-card.build-ready:hover {
+	box-shadow: 0 0 12px #3fa34d99;
+}
+
+/* 非建设阶段：灰显提示 */
+#table_status .ts-card.ts-disabled {
+	opacity: .55;
+	filter: grayscale(.3);
+}
+
+#table_status .ts-name {
+	font-size: 13px;
+	font-weight: bold;
+	color: #fff;
+	margin-bottom: 2px;
+}
+
+#table_status .ts-desc {
+	font-size: 11px;
+	color: #b9c4cf;
+	line-height: 1.4;
+}
+
+#table_status .ts-ready {
+	margin-top: 4px;
+	font-size: 11px;
+	font-weight: bold;
+	color: #6bd47a;
+}
+
+#table_status .ts-note {
+	margin-top: 4px;
+	font-size: 10px;
+	color: #8a97a4;
+}
+
+#table_status .ts-used {
+	margin-top: 4px;
+	font-size: 10px;
+	color: #d99;
+}
+
+/* 自动卡（15340 国家资源动员法）：计分阶段自动结算，不可主动触发 */
+#table_status .ts-card.ts-auto {
+	border-color: #b8893a;
+	background-color: #2e2a20;
+	cursor: default;
+}
+
+#table_status .ts-card.ts-auto .ts-note {
+	color: #e0b070;
+}
+
+/* 持续效果（光环/地图改动）卡：中性显示，不可主动触发 */
+#table_status .ts-card.ts-ongoing {
+	border-color: #4a6b8a;
+	background-color: #1f2a33;
+	cursor: default;
+}
+
+#table_status .ts-card.ts-ongoing .ts-note {
+	color: #9cc4e0;
+}

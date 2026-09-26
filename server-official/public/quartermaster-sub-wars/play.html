@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+	<meta name="theme-color" content="#444">
+	<meta charset="UTF-8">
+	<title>军需官 · 次要战场</title>
+	<link rel="stylesheet" href="/fonts/fonts.css">
+	<link rel="stylesheet" href="/common/client.css">
+	<link rel="stylesheet" href="play.css">
+	<script defer src="/common/client.js"></script>
+	<script defer src="data.js"></script>
+	<script defer src="layout.js"></script>
+	<script defer src="play.js"></script>
+</head>
+<body>
+
+<header>
+	<div id="toolbar">
+		<details>
+			<summary><img src="/images/cog.svg"></summary>
+			<menu>
+				<li><a href="about.html" target="_blank">关于</a>
+				<li><a href="info/rules.html" target="_blank">规则</a>
+			</menu>
+		</details>
+		<details id="info_menu">
+			<summary><img src="/images/wooden-sign.svg"></summary>
+			<menu>
+				<li onclick="show_straits()"> 海峡控制权</li>
+				<li class="separator">
+				<li onclick="send_query('straits')"> 查询海峡状态</li>
+				<li onclick="send_query('adjacency')"> 查询本方相邻关系</li>
+			</menu>
+		</details>
+		<button id="debug_button" onclick="toggle_debug()" title="调试面板"><img src="/images/stack.svg"></button>
+	</div>
+</header>
+
+<aside>
+	<div id="roles">
+		<div class="role" id="role_Axis">
+			<div class="role_name">轴心国</div>
+			<div class="role_stat" id="axis_stat"></div>
+			<div class="role_user">-</div>
+		</div>
+		<div class="role" id="role_Allies">
+			<div class="role_name">同盟国</div>
+			<div class="role_stat" id="allies_stat"></div>
+			<div class="role_user">-</div>
+		</div>
+	</div>
+	<!-- 回合状态机面板 -->
+	<div id="phase_panel">
+		<div id="phase_head">
+			<span id="phase_nation">—</span>
+			<span id="phase_name">—</span>
+			<span id="phase_step">0/7</span>
+		</div>
+		<div id="phase_track"></div>
+		<div id="phase_note"></div>
+		<div id="phase_actions">
+			<!-- 出牌阶段三选一（无行动点） -->
+			<div id="play_choices" class="hide">
+				<button id="btn_discard_mode" class="action" onclick="toggle_discard_mode()">弃 1 张手牌</button>
+				<button id="btn_minus_score" class="action" onclick="do_minus_score()">减 1 分</button>
+			</div>
+			<!-- 资源再分配：弃 3 张手牌挑 1 张基本卡 -->
+			<button id="btn_resource" class="action hide" onclick="start_resource_swap()">资源再分配…</button>
+			<!-- 空军阶段②：弃 1 张手牌调度 1 支空军（与打出《空军力量》二选一） -->
+			<button id="btn_air_move" class="action hide" onclick="start_air_move()">调度空军…</button>
+			<!-- 弃牌阶段：点手牌框住选中后，用此按钮确认弃置 -->
+			<button id="btn_confirm_discard" class="action primary hide"
+				onclick="confirm_discard()">确认弃牌</button>
+			<!-- 友方出牌回合开始是否询问收回部队（默认关闭 = 跳过） -->
+			<button id="btn_toggle_ask" class="action" onclick="toggle_ask_remove()">询问收回部队：关</button>
+			<button id="btn_next_phase" class="action" onclick="do_next_phase()">下一阶段 ▶</button>
+			<!--
+				多选目标的【Done】按钮（2026-09-25）—— 参考 pog 右上角 Done。
+				只在 pending_event_targets.pick > 1 时显示；
+				未选满 N 个时置灰；选满后亮起，点击 -> confirm_event_done。
+			-->
+			<button id="btn_event_done" class="action primary hide" onclick="confirm_event_done()">Done</button>
+		</div>
+		<!-- 资源再分配的挑选面板 -->
+		<div id="resource_box" class="hide"></div>
+		<!-- 通用询问面板 -->
+		<div id="ask_box" class="hide"></div>
+	</div>
+
+	<div id="turn_info">
+		<div id="turn_line"></div>
+		<div id="supply_line"></div>
+		<div id="neutral_line"></div>
+		<div id="strait_line"></div>
+		<div id="violations"></div>
+	</div>
+
+	<!-- 分数面板：阵营总分 + 本方计分明细（按地块） -->
+	<div id="score_panel">
+		<div id="score_head">
+			<span>分数</span>
+			<span id="score_winner" class="hide"></span>
+		</div>
+		<div id="score_total">
+			<span class="score-side axis"><b id="score_axis">0</b><i>轴心</i></span>
+			<span class="score-gap" id="score_gap"></span>
+			<span class="score-side allies"><b id="score_allies">0</b><i>同盟</i></span>
+		</div>
+		<div id="score_detail_head" class="hide">
+			本方（<span id="score_my_nation">—</span>）本次可得
+		</div>
+		<div id="score_detail"></div>
+	</div>
+
+	<!-- 手牌摘要（卡图在地图下方的 Hand 面板） -->
+	<div id="hand_panel">
+		<div id="hand_head">
+			<span id="hand_nation">—</span>
+			<span id="hand_ap"></span>
+		</div>
+		<div id="hand_counts"></div>
+		<!-- 《空军力量》三选一 -->
+		<div id="mode_chooser" class="hide"></div>
+	</div>
+
+	<div id="log"></div>
+</aside>
+
+<div id="tooltip" hidden></div>
+
+<!-- 资源再分配弹框：展示牌堆中实际可选的基本卡 -->
+<div id="resource_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span>资源再分配</span>
+			<span class="modal-sub">弃 3 张手牌 → 从牌堆挑 1 张基本卡 → 洗混牌堆</span>
+			<button class="modal-close" onclick="cancel_resource_swap()">×</button>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				① 选择要拿的基本卡
+				<span id="res_pick_note" class="modal-hint">（牌堆中的基本卡）</span>
+			</div>
+			<div id="res_basics" class="card-grid"></div>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				② 选择要弃的 3 张手牌
+				<span id="res_cost_note" class="modal-hint">0/3</span>
+			</div>
+			<div id="res_cost" class="card-grid"></div>
+		</div>
+		<div class="modal-foot">
+			<button id="res_confirm" class="action primary" onclick="submit_resource_swap()">确认换取</button>
+			<button class="action" onclick="cancel_resource_swap()">取消</button>
+		</div>
+	</div>
+</div>
+
+<!--
+	双十字系统弹框：观看对手手牌并重排到其牌堆顶
+	格式与"资源再分配"一致（modal + modal-section + card-grid + modal-foot）。
+-->
+<div id="peek_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span>双十字系统</span>
+			<span class="modal-sub">观看对手手牌 → 按你点击的顺序置于其牌堆顶</span>
+			<button class="modal-close" onclick="cancel_peek()">×</button>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				① 观看的手牌
+				<span id="peek_target_note" class="modal-hint">（对手手牌）</span>
+			</div>
+			<div id="peek_cards" class="card-grid"></div>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				② 依次点击，决定牌堆顶的顺序
+				<span id="peek_order_note" class="modal-hint">0/2</span>
+			</div>
+			<div id="peek_order_desc" class="modal-desc">
+				先点的排在最上面（牌堆顶）。已排的牌会标上序号，再点一次可取消。
+			</div>
+		</div>
+		<div class="modal-foot">
+			<button id="peek_confirm" class="action primary" onclick="submit_peek()">确认顺序</button>
+			<button class="action" onclick="reset_peek_order()">重排</button>
+			<button class="action" onclick="cancel_peek()">取消</button>
+		</div>
+	</div>
+</div>
+
+<!--
+	ECHO / EVENT 卡的"选 N 张弃牌代价"弹框（2026-09-25）
+	格式与 resource_modal / peek_modal 一致。
+	玩家点手牌切换选中，达 N 张后【确认】可点 -> 进入高亮地区流程。
+-->
+<div id="echo_discard_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span id="echo_discard_title" class="modal-title">选 N 张手牌作为代价</span>
+			<button class="modal-close" onclick="cancel_echo_discard()">×</button>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				<span class="modal-name">手牌（点选切换，本卡不可选）</span>
+				<span id="echo_discard_note" class="modal-hint">0/N</span>
+			</div>
+			<div id="echo_discard_grid" class="card-grid"></div>
+		</div>
+		<div class="modal-foot">
+			<button id="echo_discard_confirm" class="action primary" onclick="confirm_echo_discard()">确认弃牌</button>
+			<button class="action" onclick="cancel_echo_discard()">取消</button>
+		</div>
+	</div>
+</div>
+
+<main data-max-zoom="2">
+	<div id="mapwrap">
+		<div id="map">
+			<div id="spaces"></div>
+			<div id="pieces">
+				<div id="focus" class="hide"></div>
+			</div>
+		</div>
+	</div>
+
+	<!-- 卡牌区（仿 PoG 的 .panel-list：手牌在地图下方） -->
+	<div class="panel-list">
+		<div class="panel" id="hand_wrap">
+			<div class="panel-head">
+				Hand <span id="hand_limit_note"></span>
+			</div>
+			<div class="panel-body" id="hand_cards"></div>
+		</div>
+
+		<div class="panel" id="response_wrap">
+			<div class="panel-head">
+				桌面响应卡 <span id="response_note"></span>
+			</div>
+			<div class="panel-body" id="response_cards"></div>
+		</div>
+	</div>
+
+	<div id="debug_panel" class="hide">
+		<div class="panel">
+			<div class="panel-head">调试：放置部队</div>
+			<div class="panel-body">
+				<p>
+					<label>国家
+						<select id="dbg_nation">
+							<option value="德国">德国</option>
+							<option value="日本">日本</option>
+							<option value="意大利">意大利</option>
+							<option value="英国">英国</option>
+							<option value="法国">法国</option>
+							<option value="苏联">苏联</option>
+							<option value="美国">美国</option>
+							<option value="中国">中国</option>
+						</select>
+					</label>
+					<label>军种
+						<select id="dbg_type">
+							<option value="army">陆军</option>
+							<option value="navy">海军</option>
+							<option value="air">空军</option>
+						</select>
+					</label>
+				</p>
+				<p><button id="dbg_place_btn" class="action" onclick="debug_place_mode()">点地图放置</button></p>
+				<p><button id="dbg_remove_btn" class="action" onclick="debug_remove_mode()">点部队移除</button></p>
+				<p><button class="action" onclick="debug_clear()">清空所有部队</button></p>
+				<p class="sep">补给</p>
+				<p><button class="action" onclick="debug_resolve_supply()">结算当前国补给</button></p>
+				<p><button class="action" onclick="debug_next_nation()">下一个行动国</button></p>
+				<p id="dbg_hint"></p>
+			</div>
+		</div>
+	</div>
+</main>
+
+<footer id="status"></footer>
+
+</body>
+</html>

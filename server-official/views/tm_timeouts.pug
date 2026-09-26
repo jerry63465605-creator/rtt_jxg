@@ -1,0 +1,32 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title Tournament Timeouts
+	body
+		include header
+		article
+
+			h1 Tournament Timeouts
+
+			table.wide.striped
+				thead
+					tr
+						th Game
+						th Notice
+						th Moves
+						th Time used
+						th Timeout
+						th.r Deadline
+				tbody
+					each item in timeouts
+						tr
+							td
+								a(href="/join/"+item.game_id)= "#" + item.game_id
+							td= item.notice
+							td= item.moves
+							td= item.time_used.split(",").map(x=>Math.ceil(x*24)).join(", ")
+							td= item.hard_timeout
+							td.r= item.xtime
+

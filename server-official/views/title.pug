@@ -1,0 +1,84 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title= title.title_name
+	body
+		include header
+		article
+			h1= title.title_name
+
+			div.logo
+				+gamecover(title.title_id)
+
+			| !{ title.about_html }
+
+			p Read more about the game on #[a(href="https://boardgamegeek.com/boardgame/"+title.bgg) boardgamegeek.com].
+
+			if user
+
+				h2 Open
+				if open_games.length > 0
+					+gamelist(open_games, true)
+				else
+					p No open games right now.
+
+				p
+					a(href="/create/"+title.title_id) Create a new game
+
+				if replacement_games.length > 0
+					h2 Open (missing players)
+					+gamelist(replacement_games, true)
+
+				if ((seeds && seeds.length > 0) || (pools && pools.length > 0))
+					h2 Tournaments
+
+					if seeds && seeds.length > 0
+						table.wide.striped
+							thead
+								tr
+									th Registrations
+									th
+									th
+									th
+									th
+									th.r !{TM_ICON_QUEUE}
+							tbody
+								each seed in seeds
+									tr
+										td
+											a.black(href="/tm/seed/" + seed.seed_name)= seed.seed_name
+										td level #{seed.level}
+										if seed.is_open || seed.queue_count > 0
+											td #{seed.queue_count} queued
+										else
+											td
+										if seed.ticket_count > 1
+											td #{seed.ticket_count} tickets
+										else
+											td
+										if seed.is_open || seed.is_queued || seed.queue_count > 0
+											if seed.is_queued
+												td !{TM_ICON_TICKET}
+												td.r: a(href="/tm/withdraw/"+seed.seed_id+"/"+seed.level) Withdraw
+											else if seed.ticket_count
+												td
+												td.r: a(href="/tm/register/"+seed.seed_id+"/"+seed.level) Register
+											else
+												td(colspan=2)
+										else
+											td.c(colspan=2): i - closed -
+
+					+poollist(pools, "Active")
+
+				if active_games.length > 0
+					h2 Recently active
+					+gamelist(active_games, true)
+
+				if finished_games.length > 0
+					h2 Recently finished
+					+gamelist(finished_games, true)
+
+			else
+				p.error You must log in to see games in progress!

@@ -1,0 +1,202 @@
+#!/usr/bin/env -S node
+
+// regression test runner
+
+"use strict"
+
+const sqlite3 = require("better-sqlite3")
+
+if (process.argv.length < 3) {
+	console.error("usage: rtt test TITLE [DATABASE [FIRST_ID [LAST_ID]]]")
+	process.exit(1)
+}
+
+var title_id = process.argv[2]
+var db_file = process.argv[3] ?? "db"
+var first_id = parseInt(process.argv[4] ?? 0)
+var last_id = parseInt(process.argv[5] ?? 1e9)
+
+var rules = require("../public/" + title_id + "/rules.js")
+var db = new sqlite3(db_file)
+var select_game = db.prepare("select * from games where game_id=?")
+var select_replay = db.prepare("select * from game_replay where game_id=?")
+var select_state = db.prepare("select state from game_state where game_id=?").pluck()
+
+var diverged = []
+var crashed = []
+var changed = []
+
+if (db_file.includes("archive"))
+	for (var game_id of db.prepare("select game_id from games where title_id=? and game_id between ? and ?").pluck().all(title_id, first_id, last_id))
+		test_game(game_id)
+else
+	for (var game_id of db.prepare("select game_id from games where status>0 and title_id=? and game_id between ? and ?").pluck().all(title_id, first_id, last_id))
+		test_game(game_id)
+
+function is_role_active(active, role) {
+	return active === role || active === "Both" || active.includes(role)
+}
+
+function is_valid_action(rules, state, role, verb, noun) {
+	if (!is_role_active(state.active, role))
+		return false
+	var view = rules.view(state, role)
+	var va = view.actions[verb]
+	if (va === 1 || va === true || typeof va === "string")
+		return (noun === undefined || noun === null || typeof noun === "object")
+	if (Array.isArray(va))
+		return (va.includes(noun) || (Array.isArray(noun) && va.includes(noun[0])))
+	return false
+}
+
+function get_game_roles(rules, scenario, options) {
+	var roles = rules.roles
+	if (typeof roles === "function") {
+		if (typeof options === "string")
+			options = JSON.parse(options)
+		return roles(scenario, options)
+	}
+	return roles
+}
+
+function get_resign_result(roles, losers) {
+	var winners = roles.filter(x => losers !== x && !losers.includes(x))
+	if (winners.length === 0)
+		return "None"
+	if (winners.length === 1)
+		return winners[0]
+	return winners.join(", ")
+}
+
+function finish_game(rules, state, result, message) {
+	if (typeof rules.finish === "function") {
+		state = rules.finish(state, result, message)
+	} else {
+		state.state = "game_over"
+		state.active = "None"
+		state.result = result
+		state.victory = message
+		state.log.push("")
+		state.log.push(message)
+	}
+	return state
+}
+
+function object_diff(diff, path, a, b) {
+	var result = false
+	var i, key
+	var a_length
+	if (a === b)
+		return
+	if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+		if (Array.isArray(a) && Array.isArray(b)) {
+			if (b.length !== a.length) {
+				diff.push(["-", path + ".length", a.length])
+				diff.push(["+", path + ".length", b.length])
+				return
+			}
+			for (i = 0; i < Math.min(a.length, b.length); ++i)
+				object_diff(diff, path + "[" + i + "]", a[i], b[i])
+			for (; i < a.length; ++i)
+				diff.push(["-", path + "[" + a[i] + "]", a[i]])
+			for (; i < b.length; ++i)
+				diff.push(["+", path + "[" + b[i] + "]", b[i]])
+			return
+		}
+		for (key in a) {
+			if (a[key] !== undefined) {
+				if (b[key] === undefined)
+					diff.push(["-", path + "." + key, a[key]])
+				else
+					object_diff(diff, path + "." + key, a[key], b[key])
+			}
+		}
+		for (key in b) {
+			if (b[key] !== undefined) {
+				if (a[key] === undefined)
+					diff.push(["+", path + "." + key, b[key]])
+			}
+		}
+		return
+	}
+	diff.push(["-", path, a])
+	diff.push(["+", path, b])
+}
+
+function test_game(game_id) {
+	var game = select_game.get(game_id)
+	if (!game) {
+		console.error("game not found:", game_id)
+		return
+	}
+
+	var roles = get_game_roles(rules, game.scenario, game.options)
+
+	var replay = select_replay.all(game_id)
+	if (replay.length === 0)
+		return
+
+	console.log("testing", game_id)
+
+	var state = null
+	try {
+		var old_active = null
+		for (var i = 0; i < replay.length; ++i) {
+			var item = replay[i]
+			var args = JSON.parse(item.arguments)
+			switch (item.action) {
+			case ".setup":
+				state = rules.setup(...args)
+				break
+			case ".abandon":
+				finish_game(rules, state, "None", item.role + " abandoned the game.")
+			case ".resign":
+				finish_game(rules, state, get_resign_result(roles, item.role), item.role + " resigned.")
+				break
+			case ".timeout":
+				finish_game(rules, state, get_resign_result(roles, item.role), item.role.split(",").join(" and ") + " timed out.")
+				break
+			default:
+				if (!is_valid_action(rules, state, item.role, item.action, args)) {
+					console.log("DIVERGENCE IN GAME " + game_id)
+					console.log(`invalid action: ${item.role} ${item.action} ${item.arguments}`)
+					console.log("\t", "active", state.active)
+					console.log("\t", "state", (state.state ?? state.L?.P))
+					console.log("\t", "actions", JSON.stringify(rules.view(state, item.role).actions))
+					throw "invalid action"
+				}
+
+				state = rules.action(state, item.role, item.action, args)
+
+				if (state.$pie)
+					delete state.$pie
+
+				break
+			}
+		}
+
+		// var state = JSON.parse(JSON.stringify(state)) // splat diff between null and undefined
+		var orig_state = JSON.parse(select_state.get(game_id))
+		var diff = []
+		object_diff(diff, "G", orig_state, state)
+		if (diff.length > 0) {
+			changed.push(game_id)
+			console.log("DIFF IN GAME STATE " + game_id)
+			for (var [x, path, val] of diff)
+				console.log(x + " " + path + " = " + JSON.stringify(val))
+		}
+	} catch (err) {
+		if (err !== "invalid action") {
+			console.log("ERROR", game_id, title_id, err)
+			crashed.push(game_id)
+		} else {
+			diverged.push(game_id)
+		}
+	}
+}
+
+if (last_id > first_id) {
+	console.log("CRASHED", crashed.join(", "))
+	console.log("DIVERGED", diverged.join(", "))
+	console.log("CHANGED", changed.join(", "))
+}

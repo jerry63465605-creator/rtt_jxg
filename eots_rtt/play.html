@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<!-- vim:set nowrap: -->
+<html>
+<head>
+    <meta name="viewport"
+          content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+    <meta name="theme-color" content="#444">
+    <meta charset="UTF-8">
+    <title>EMPIRE OF THE SUN</title>
+    <link id="favicon" rel="icon" href="page_logo.svg">
+    <link rel="stylesheet" href="/fonts/fonts.css">
+    <link rel="stylesheet" href="/common/client.css">
+    <link rel="stylesheet" href="world.css">
+    <link rel="stylesheet" href="play.css">
+    <link rel="stylesheet" href="images.css">
+    <script defer src="/common/client.js"></script>
+    <script defer src="world.js"></script>
+    <script defer src="data.js"></script>
+    <script defer src="layout.js"></script>
+    <script defer src="play.js"></script>
+</head>
+<body>
+
+<div id="event_cards_ap" class="dialog">
+    <div class="dialog_header">Allied Event Cards</div>
+    <div class="dialog_x" onclick="hide_dialog('event_cards_ap')">&#x274c;</div>
+    <div class="dialog_body"></div>
+</div>
+
+<div id="event_cards_jp" class="dialog">
+    <div class="dialog_header">Japanese Event Cards</div>
+    <div class="dialog_x" onclick="hide_dialog('event_cards_jp')">&#x274c;</div>
+    <div class="dialog_body"></div>
+</div>
+
+<div id="vp_check" class="dialog">
+    <div class="dialog_header">Victory Points</div>
+    <div class="dialog_body"></div>
+    <div class="dialog_x" onclick="hide_dialog('vp_check')">&#x274c;</div>
+</div>
+
+<div id="elim_check" class="dialog">
+    <div class="dialog_header">Eliminated Units</div>
+    <div class="dialog_body"></div>
+    <div class="dialog_x" onclick="hide_dialog('elim_check')">&#x274c;</div>
+</div>
+
+<div id="pw_check" class="dialog">
+    <div class="dialog_header">Political Status</div>
+    <div class="dialog_body"></div>
+    <div class="dialog_x" onclick="hide_dialog('pw_check')">&#x274c;</div>
+</div>
+
+<div id="battle_info" class="dialog">
+    <div class="dialog_header">Battle info</div>
+    <div class="dialog_body"></div>
+    <div class="dialog_x" onclick="hide_dialog('battle_info')">&#x274c;</div>
+</div>
+
+<div id="tip" class="hide"></div>
+
+<header>
+    <div id="toolbar">
+        <details>
+            <summary><img src="/images/cog.svg"></summary>
+            <menu>
+                <li><label><input type=checkbox name="noroad">Default road markers</label>
+                <li><label><input type=checkbox name="nopath">Hide unit path</label>
+                <li><label><input type=checkbox name="fullcontrol">Vassal like control</label>
+                <li><label><input type=checkbox name="hidezoi">Hide ZOI</label>
+                <li><label><input type=checkbox name="full_log" onclick="show_full_log()">Show full log</label>
+                <li><a href="info/readme.html" target="_blank">Read me!</a>
+                <li><a href="https://gmtwebsiteassets.s3.us-west-2.amazonaws.com/nneots/EOTS+2025+Rules_v1.1.pdf"
+                       target="_blank">Rules</a>
+                <li><a href="info/charts.html" target="_blank">Charts</a>
+                <li><a href="info/cards.html?faction=ap" target="_blank" class="deck_href">Allied Deck</a>
+                <li><a href="info/cards.html?faction=jp" target="_blank" class="deck_href">Japanese Deck</a>
+            </menu>
+        </details>
+        <details id="info_menu">
+            <summary><img src="/images/wooden-sign.svg"></summary>
+            <menu>
+                <li onclick="toggle_dialog('event_cards','event_cards_jp')">
+                    <div>Inspect Japanese Cards</div>
+                <li onclick="toggle_dialog('event_cards','event_cards_ap')">
+                    <div>Inspect Allied Cards</div>
+                <li onclick="toggle_dialog('pw_check')" id="pw_check_button">
+                    <div>Inspect Political Status</div>
+                <li onclick="toggle_dialog('vp_check')" id="vp_check_button">
+                    <div>Inspect Victory Points</div>
+                <li onclick="toggle_dialog('elim_check')" id="elim_check_button">
+                    <div>Inspect Eliminated Units</div>
+            </menu>
+        </details>
+        <details id="supply_menu">
+            <summary><img src="/images/oil-drum.svg"></summary>
+            <menu>
+                <li onclick="check_unit_supply()">
+                    <div>Check Unit Supply</div>
+                <li onclick="check_distance()">
+                    <div>Check Distance</div>
+            </menu>
+        </details>
+        <button onclick="toggle_markers_and_pieces()"><img src="/images/earth-asia-oceania.svg"></button>
+    </div>
+</header>
+
+<aside>
+    <div id="roles"></div>
+    <div id="violations"></div>
+    <div id="log"></div>
+</aside>
+
+<main data-map-width="2550" data-map-height="1650">
+
+    <div id="mapwrap">
+        <div class="board" id="map">
+            <canvas id="canvas" width="2550" height="1650" class="hide-pieces"></canvas>
+        </div>
+    </div>
+
+    <div id="panels">
+        <div class="panel" id="active_cards">
+            <div class="panel-head">Current offensive</div>
+            <div class="panel-body"></div>
+        </div>
+        <div class="panel" id="jp_hand">
+            <div class="panel-head">Japan Hand</div>
+            <div class="panel-body"></div>
+        </div>
+
+        <div class="panel" id="ap_hand">
+            <div class="panel-head">Allied Hand</div>
+            <div class="panel-body"></div>
+        </div>
+
+    </div>
+
+</main>
+
+<footer id="status"></footer>
+
+</body>

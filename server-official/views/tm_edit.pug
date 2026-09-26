@@ -1,0 +1,167 @@
+//- vim:ts=4:sw=4:
+doctype html
+html(hx-boost="true")
+	head
+		include head
+		title= seed.seed_name
+		style.
+			input[type="text"], td { font-family: monospace }
+			article hr + p { font-style: normal }
+	body
+		include header
+		article
+			h1
+				a(href="/tm/seed/"+seed.seed_name)= seed.seed_name
+
+			form(method="post" action="/tm/edit")
+				input(type="hidden" name="seed_id" value=seed.seed_id)
+
+				p Seed name:
+					br
+					input(type="text" name="seed_name" value=seed.seed_name size=40)
+
+				p Level count
+					br
+					input(type="number" name="level_count" value=seed.level_count)
+
+				p
+					label
+						input(type="checkbox" name="is_open" value=1 checked=(!!seed.is_open))
+						| Open
+
+				h2 Timing
+
+				p Round stagger (number of days between each round start):
+					br
+					input(type="number" name="stagger" value=seed.stagger)
+
+				p Round deadline (max duration for each round in days):
+					br
+					input(type="number" name="deadline" value=seed.deadline)
+
+				h2 Game options
+
+				p Title:
+					br
+					select(name="title_id")
+						each title in TITLE_LIST
+							option(value=title.title_id selected=(title.title_id===seed.title_id))= title.title_id
+
+				if !seed.title_id
+					p.error No title selected!
+					return
+
+				- var rules = RULES[seed.title_id]
+				if Array.isArray(rules.scenarios)
+					if rules.scenarios.length > 1
+						p Scenario:
+							br
+							select(name="scenario")
+								each scenario in rules.scenarios
+									if scenario === seed.scenario
+										option(value=scenario selected)= scenario
+									else
+										option(value=scenario)= scenario
+					else
+						input(type="hidden" name="scenario" value=rules.scenarios[0])
+				else
+					p Scenario:
+						br
+						select(name="scenario")
+							each list, name in rules.scenarios
+								if name === ""
+									each scenario in list
+										if scenario === seed.scenario
+											option(value=scenario selected)= scenario
+										else
+											option(value=scenario)= scenario
+								else
+									optgroup(label=name)
+										each scenario in list
+											if scenario === seed.scenario
+												option(value=scenario selected)= scenario
+											else
+												option(value=scenario)= scenario
+
+				p Options (must be valid JSON object):
+					br
+					input(type="text" name="options" value=seed.options size=80)
+
+				h2 Round structure
+
+				p Possible <a href="/docs/tournament-setups.md">configurations</a> for #{seed.player_count} players:
+				ul
+					case seed.player_count
+						when 2
+							li round-robin, pool=3, match=4
+							li round-robin, pool=5, match=4/8 *
+							li round-robin, pool=7, match=6/12
+							li round-robin, pool=9, match=8/16
+							li round-robin, pool=4, match=3/6 (seq)
+							li round-robin, pool=6, match=5/10 (seq) *
+							li round-robin, pool=8, match=7/14 (seq)
+						when 3
+							li rbibd, pool=9, match=3/4 *
+							li rbibd, pool=15, match=6/7
+							li youden, pool=7, match=3 *
+							li youden, pool=4, match=3
+							li youden, pool=3, match=3
+							li golfer, pool=12, match=3/4
+							li golfer, pool=6, match=3
+						when 4
+							li rbibd, pool=16, match=4 *
+							li bibd, pool=9, match=8
+							li youden, pool=13, match=4 *
+							li youden, pool=7, match=4
+							li youden, pool=5, match=4
+							li youden, pool=4, match=4
+							li golfer, pool=8, match=4/5
+						when 5
+							li rbibd, pool=25, match=5/6 *
+							li youden, pool=21, match=5
+							li youden, pool=11, match=5, incidence=2
+						when 6
+							li bibd, pool=16, match=6 * (as sequential: 4 rounds, max conc x3)
+							li youden, pool=11, match=6 (as sequential: 3 rounds, max conc x3)
+							li youden, pool=31, match=6 (as sequential: 3 rounds, max conc x4)
+						when 7
+							li youden, pool=15, match=7 (as sequential: 3 rounds, max conc x3)
+
+				p Pool size:
+					br
+					input(type="number" name="pool_size" value=seed.pool_size)
+
+				p Match count:
+					br
+					input(type="number" name="match_count" value=seed.match_count)
+
+				p Structure:
+					br
+					label
+						input(type="radio" name="is_concurrent" value=1 checked=(!!seed.is_concurrent))
+						| Concurrent
+					br
+					label
+						input(type="radio" name="is_concurrent" value=0 checked=(!seed.is_concurrent))
+						| Sequential
+
+				if typeof preview === "string"
+					p.error= preview
+				else
+					p Round preview:
+						pre= preview.map((round,ix)=>(ix+1)+": " + round.map(match=>match.join("")).join(" ")).join("\n")
+
+					p Incidence matrix:
+						pre= incidence.join("\n")
+
+					p Match concurrency:
+						pre= concurrency.join("\n")
+
+					p Role repeats:
+						pre= repeats.join("\n")
+
+				hr
+
+				p
+					button(type="submit") Save
+

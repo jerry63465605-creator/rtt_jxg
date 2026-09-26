@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>卡牌效果对照（自动生成）</title>
+<style>
+	body { margin: 0; background: #1a1a1a; color: #eee; font: 14px/1.6 "Microsoft YaHei", sans-serif; }
+	h1 { margin: 18px 20px 6px; font-size: 20px; color: #ffd700; }
+	.sub { margin: 0 20px 14px; color: #888; font-size: 12px; }
+	.note { margin: 0 20px 16px; padding: 10px 14px; background: #2a2a2a; border-left: 4px solid #ffd700; font-size: 13px; }
+	.bar { margin: 0 20px 16px; }
+	.bar button { background: #333; color: #ccc; border: 1px solid #555; padding: 5px 12px; margin-right: 6px;
+		border-radius: 4px; cursor: pointer; font-size: 13px; }
+	.bar button.on { background: #ffd700; color: #222; border-color: #ffd700; font-weight: bold; }
+	table { border-collapse: collapse; margin: 0 20px 40px; }
+	tr.top td { vertical-align: top; padding: 14px; border-bottom: 2px solid #444; }
+	.card { text-align: center; }
+	.card img { width: 200px; display: block; border: 1px solid #555; border-radius: 4px; }
+	.card .cap { margin-top: 6px; font-size: 12px; color: #aaa; }
+	.card .noimg { width: 200px; height: 260px; line-height: 260px; border: 1px dashed #666;
+		color: #888; font-size: 12px; }
+	.meta { width: 210px; }
+	.meta .id { color: #888; font-size: 12px; }
+	.meta .name { font-size: 17px; font-weight: bold; color: #fff; margin: 2px 0 6px; }
+	.actor { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 12px; background: #444; }
+	.actor[data-a="英国"] { background: #2d5a8a; }
+	.actor[data-a="法国"] { background: #5a2d5a; }
+	.text { color: #bbb; font-size: 13px; margin: 8px 0; }
+	.trig { display: inline-block; background: #3a3a20; border: 1px solid #6a6a30;
+		color: #dd8; font-size: 11px; padding: 1px 7px; border-radius: 3px; margin: 6px 0; }
+	.impl { background: #242424; border: 1px solid #444; border-radius: 4px; padding: 8px 10px; font-size: 13px; }
+	.impl .no { color: #ff6b6b; font-weight: bold; }
+	.impl b { color: #7ec97e; }
+	.impl .k { color: #ffd700; }
+	.impl .sub2 { color: #999; font-size: 12px; }
+	details { margin-top: 6px; }
+	summary { cursor: pointer; color: #888; font-size: 12px; }
+	pre { background: #151515; border: 1px solid #333; padding: 8px; font-size: 11px;
+		overflow-x: auto; color: #9cf; max-width: 380px; }
+	#err { margin: 20px; padding: 14px; background: #4a1a1a; border-left: 4px solid #f44; display: none; }
+	#err pre { color: #faa; max-width: none; }
+</style>
+</head>
+<body>
+
+<h1>卡牌效果对照</h1>
+<div class="sub">
+	本页面<strong>实时读取</strong> <code>cards.js</code>（卡面数据）与
+	<code>rules.js</code>（效果配置 <code>EVENT_EFFECTS</code>）生成，
+	<strong>不会有手写内容与代码脱节</strong>。改动代码后刷新本页即可。
+</div>
+<div class="note">
+	左：卡图（看右上角图标确认类型）　右：从配置自动生成的当前实现<br>
+	<span class="k">黄色</span>=地区/参数，<b style="color:#7ec97e">绿色</b>=操作。红色表示尚未实现。
+</div>
+<div class="bar" id="bar"></div>
+<div id="err"><strong>加载失败</strong><pre id="errmsg"></pre></div>
+<table id="tbl"></table>
+
+<script>
+/*
+ * 在浏览器里加载 CommonJS 模块（data.js / cards.js / rules.js）。
+ *
+ * 为什么这么做：这三个文件都是给 Node 用的（require + module.exports），
+ * 浏览器不认识。但它们都是纯逻辑、不依赖 Node 专有 API，
+ * 所以补一个 require/module 的 shim 就能直接跑。
+ *
+ * 这样页面就能读到【真实的】EVENT_EFFECTS 配置，
+ * 而不是维护一份手写副本（手写副本必然会和代码脱节）。
+ */
+const MODULES = {}
+
+function runModule(name, code) {
+	const module = { exports: {} }
+	const require = (p) => {
+		const key = String(p).replace(/^\.\//, '')
+		if (!MODULES[key]) throw new Error('模块未加载: ' + p)
+		return MODULES[key]
+	}
+	const fn = new Function('module', 'exports', 'require', code)
+	fn(module, module.exports, require)
+	MODULES[name] = module.exports
+	return module.exports
+}
+
+async function loadAll() {
+	for (const name of ['data.js', 'cards.js', 'rules.js']) {
+		const res = await fetch(name, { cache: 'no-store' })
+		if (!res.ok) throw new Error('无法读取 ' + name + '（HTTP ' + res.status + '）')
+		runModule(name, await res.text())
+	}
+	return {
+		DATA: MODULES['data.js'],
+		CARDS: MODULES['cards.js'].CARDS || [],
+		TYPE_INFO: MODULES['cards.js'].CARD_TYPE_INFO || {},
+		I: MODULES['rules.js']._internal,
+	}
+}
+
+/* ---------- 渲染 ---------- */
+
+function esc(s) {
+	return String(s == null ? '' : s)
+		.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function descOfStep(st, ctx) {
+	const I = ctx.I
+	const nameOf = (id) => ctx.DATA.data.name_of(id)
+	let head = I.event_step_label(st)
+	const bits = []
+
+	if (st.op === 'ongoing') {
+		bits.push('标记 ' + esc(st.flag) + '（保护区：' +
+			(st.spaces || []).map(nameOf).join('、') + '）')
+	} else if (st.spaces && st.spaces.length) {
+		const names = st.spaces.map(id => esc(nameOf(id)) + '(' + id + ')')
+		if (st.pick > 1)
+			bits.push('从 <span class="k">' + names.join(' / ') +
+				'</span> 中选 <b>' + st.pick + '</b> 个，各执行一次')
+		else
+			bits.push('<span class="k">' + names.join(' / ') + '</span>' +
+				(names.length > 1 ? '　玩家选一' : ''))
+	} else {
+		bits.push('地区由规则决定（玩家在合法位置中选）')
+	}
+	if (st.grantSupply) bits.push('并授予本回合补给')
+	if (st.useNewPiece) bits.push('用刚创建的那支部队')
+
+	return head + ' ＠ ' + bits.join('，')
+}
+
+function implHtml(eff, ctx) {
+	if (!eff) return '<span class="no">（尚未实现）</span>'
+
+	const lines = []
+	if (eff.cost && eff.cost.discard)
+		lines.push('<span class="sub2">代价：弃置 ' + eff.cost.discard + ' 张手牌</span>')
+
+	if (eff.choice) {
+		eff.choice.forEach((steps, i) => {
+			const inner = steps.map(s => descOfStep(s, ctx)).join('　→　')
+			lines.push('<b>' + (i + 1) + '.</b> ' + inner)
+		})
+		lines.push('<span class="sub2">（以上 ' + eff.choice.length + ' 项，玩家选一项）</span>')
+	} else {
+		(eff.steps || []).forEach((s, i) => {
+			const pfx = (eff.steps.length > 1) ? '<b>' + (i + 1) + '.</b> ' : ''
+			lines.push(pfx + descOfStep(s, ctx))
+		})
+	}
+	return lines.join('<br>')
+}
+
+/* 类型中文标签（卡面 type 是大写英文，如 RESPONSE） */
+const TYPE_LABEL = { EVENT: '事件', EFFECT: '增强', RESPONSE: '响应', STATUS: '状态', ECON: '经济战', BASIC: '基本' }
+
+function trigChip(trig, ctx) {
+	if (!trig) return ''
+	const parts = ['时点：' + (trig.on || '?')]
+	if (trig.kind && trig.kind !== 'any') parts.push('类型 ' + trig.kind)
+	if (trig.phase) parts.push(ctx.I.phase_zh(trig.phase))
+	return '<div class="trig">' + esc(parts.join(' / ')) + '</div>'
+}
+
+/* 响应卡：读取 RESPONSE_EFFECTS（触发 on / actor）与 RESPONSE_EFFECT_IMPL（是否已接入效果） */
+function responseHtml(c, ctx) {
+	const re = ctx.I.RESPONSE_EFFECTS[String(c.id)]
+	const impl = ctx.I.RESPONSE_EFFECT_IMPL[String(c.id)]
+	const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+	const isPre = ctx.I.RESPONSE_PRE_CANCEL && ctx.I.RESPONSE_PRE_CANCEL.has(String(c.id))
+	const actor = re ? re.actor : (c.nation || '')
+	const implStatus = (typeof impl === 'function')
+		? '<span style="color:#7ec97e">效果已接入（RESPONSE_EFFECT_IMPL）</span>'
+		: '<span class="no">效果尚未接入（effect: null）</span>'
+	const trigType = re && re.trigger ? (re.trigger.on || '?') : (trig ? trig.on : '?')
+	return '<td class="meta">' +
+		'<div class="id">' + esc(c.id) + '　' + esc(c.deck) + '　类型 ' + esc(c.type) + '</div>' +
+		'<div class="name">' + esc(c.name) +
+			(actor ? ' <span class="actor" data-a="' + esc(actor) + '">' + esc(actor) + '</span>' : '') +
+		'</div>' +
+		'<div class="text">' + esc(c.text) + '</div>' +
+		'<div class="trig">响应触发：' + esc(trigType) +
+			(isPre ? '（拦截类：生效前可令其无效）' : '（事后类：事件发生后结算）') + '</div>' +
+		'<div class="impl">' + implStatus + '</div>' +
+		(re ? '<details><summary>RESPONSE_EFFECTS 原文</summary><pre>' +
+			esc(JSON.stringify(re, null, 1)) + '</pre></details>' : '') +
+		'</td>'
+}
+
+/*
+ * 经济战卡（2026-09-26）：读 ECON_CARDS 配置表。
+ *
+ * 【为什么单独一支】ECON 用独立的 ECON_CARDS 配置，
+ * 不走 card_effect_of()（那个只认 EVENT / ECHO）。
+ * 不单独处理的话，已实现的 ECON 会显示成红色"尚未实现"，与代码脱节。
+ */
+function econHtml(c, ctx) {
+	const cfg = ctx.I.econ_config_of(String(c.id))
+	const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+
+	let impl
+	if (!cfg) {
+		impl = '<span class="no">效果尚未实现（ECON_CARDS 无此卡）</span>'
+	} else {
+		const bits = ['<span style="color:#7ec97e">效果已接入（ECON_CARDS）</span>',
+			'标签 [' + esc(cfg.tag) + ']']
+		if (cfg.targets)
+			bits.push('打出方选目标：' + cfg.targets.map(esc).join(' / '))
+		if (cfg.chain) {
+			const sp = cfg.space != null
+				? ctx.DATA.data.name_of(cfg.space) : '?'
+			bits.push('受击方依次选择：' + cfg.chain.map(esc).join(' → ') +
+				'（地区：' + esc(sp) + '）')
+		}
+		impl = bits.join('　')
+	}
+	return '<td class="meta">' +
+		'<div class="id">' + esc(c.id) + '　' + esc(c.deck) +
+			'　类型 ' + esc(c.type) + '</div>' +
+		'<div class="name">' + esc(c.name) +
+			' <span class="actor" data-a="' + esc(c.nation || '') + '">' +
+				esc(c.nation || '') + '</span></div>' +
+		'<div class="text">' + esc(c.text) + '</div>' +
+		(trig ? trigChip(trig, ctx) : '') +
+		'<div class="impl">' + impl + '</div>' +
+		(cfg ? '<details><summary>ECON_CARDS 原文</summary><pre>' +
+			esc(JSON.stringify(cfg, null, 1)) + '</pre></details>' : '') +
+		'</td>'
+}
+
+/*
+ * 状态卡（2026-09-26）：读 STATUS_EFFECTS 配置表。
+ */
+function statusHtml(c, ctx) {
+	const cfg = ctx.I.status_config_of(String(c.id))
+	const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+
+	let impl
+	if (!cfg) {
+		impl = '<span class="no">效果尚未实现（STATUS_EFFECTS 无此卡）</span>'
+	} else {
+		const bits = ['<span style="color:#7ec97e">效果已接入（STATUS_EFFECTS）</span>']
+		if (cfg.ongoing) {
+			bits.push('持续：' + esc(cfg.ongoing.desc || cfg.ongoing.kind))
+			if (cfg.ongoing.kind === 'supply_point_and_markers')
+				bits.push('（地图改动，永久）')
+			else if (cfg.ongoing.kind === 'always_supplied' ||
+				cfg.ongoing.kind === 'free_french' ||
+				cfg.ongoing.kind === 'suppress_enemy_status')
+				bits.push('（光环，随卡）')
+		}
+		if (cfg.trigger) {
+			const t = cfg.trigger
+			const win = { play_start: '出牌阶段开始时', after_naval: '发起海战后',
+				build_army: '建设陆军时', after_ally_battle: '英/美发起战斗后' }[t.window] || t.window
+			bits.push('触发窗口：' + win)
+			if (t.once_per_turn) bits.push('（一回合一次）')
+			if (t.cost) {
+				const costBits = []
+				if (t.cost.skip_play) costBits.push('跳过出牌阶段')
+				if (t.cost.discard) costBits.push('弃 ' + t.cost.discard + ' 张')
+				if (t.cost.forgo_build_army) costBits.push('放弃建设陆军')
+				if (t.cost.lose_score) costBits.push('失 ' + t.cost.lose_score + ' 分')
+				if (costBits.length) bits.push('代价：' + costBits.join(' + '))
+			}
+			bits.push('效果：' + esc(t.desc || (t.effect && t.effect.kind) || '?'))
+		}
+		if (cfg.auto) {
+			bits.push('阶段自动：' + esc(cfg.auto.desc || cfg.auto.kind))
+		}
+		impl = bits.join('　')
+	}
+	return '<td class="meta">' +
+		'<div class="id">' + esc(c.id) + '　' + esc(c.deck) +
+			'　类型 ' + esc(c.type) + '</div>' +
+		'<div class="name">' + esc(c.name) +
+			' <span class="actor" data-a="' + esc(c.nation || '') + '">' +
+				esc(c.nation || '') + '</span></div>' +
+		'<div class="text">' + esc(c.text) + '</div>' +
+		(trig ? trigChip(trig, ctx) : '') +
+		'<div class="impl">' + impl + '</div>' +
+		(cfg ? '<details><summary>STATUS_EFFECTS 原文</summary><pre>' +
+			esc(JSON.stringify(cfg, null, 1)) + '</pre></details>' : '') +
+		'</td>'
+}
+
+function render(ctx, type) {
+	const tbl = document.getElementById('tbl')
+	const list = ctx.CARDS
+		.filter(c => type === 'ALL' || c.type === type)
+		.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+
+	tbl.innerHTML = list.map(c => {
+		/*
+		 * 【坑】cards.js 的 img 是【裸文件名】（如 sheet153_r2_c0.png）——
+		 * gen_module_cards.js 第 73 行用 replace(/^.*\//, "") 剥掉了目录前缀，
+		 * 图片实际放在模块的 cards/ 子目录里。
+		 * 所以引用时必须补上 "cards/"，与 play.js 的 card_image_url() 一致。
+		 * 直接写 src="c.img" 会得到 404。
+		 */
+		const imgUrl = c.img ? ('cards/' + c.img) : null
+		const cardCell = '<td class="card">' +
+			(imgUrl ? '<img src="' + esc(imgUrl) + '">' : '<div class="noimg">（无图）</div>') +
+			'<div class="cap">' + esc(c.id) + '</div></td>'
+
+		let metaCell
+		if (c.type === 'RESPONSE') {
+			metaCell = responseHtml(c, ctx)
+		} else if (c.type === 'ECON') {
+			metaCell = econHtml(c, ctx)   /* 2026-09-26：独立配置表，不走 card_effect_of */
+		} else if (c.type === 'STATUS') {
+			metaCell = statusHtml(c, ctx)  /* 2026-09-26：状态卡独立配置表 */
+		} else {
+			/*
+			 * 用【统一入口】card_effect_of()：
+			 * 事件卡(EVENT)与增强卡(ECHO)共用一套配置结构，
+			 * 分开取会让增强卡显示成"尚未实现"。
+			 */
+			const eff = ctx.I.card_effect_of(String(c.id))
+			const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+			metaCell = '<td class="meta">' +
+				'<div class="id">' + esc(c.id) + '　' + esc(c.deck) + '</div>' +
+				'<div class="name">' + esc(c.name) +
+					(eff ? ' <span class="actor" data-a="' + esc(eff.actor) + '">' + esc(eff.actor) + '</span>' : '') +
+				'</div>' +
+				'<div class="text">' + esc(c.text) + '</div>' +
+				(trig ? trigChip(trig, ctx) : '') +
+				'<div class="impl">' + implHtml(eff, ctx) + '</div>' +
+				(eff ? '<details><summary>配置原文</summary><pre>' +
+					esc(JSON.stringify(eff, null, 1)) + '</pre></details>' : '') +
+				'</td>'
+		}
+		return '<tr class="top">' + cardCell + metaCell + '</tr>'
+	}).join('')
+}
+
+function buildBar(ctx, current) {
+	const bar = document.getElementById('bar')
+	const counts = {}
+	ctx.CARDS.forEach(c => { counts[c.type] = (counts[c.type] || 0) + 1 })
+	/* 固定顺序：事件 / 增强 / 响应，其余按字母排，最后全部 */
+	const fixed = ['EVENT', 'EFFECT', 'RESPONSE']
+	const types = fixed.concat(
+		Object.keys(counts).filter(t => fixed.indexOf(t) < 0).sort())
+	types.push('ALL')
+
+	bar.innerHTML = types.map(t => {
+		const label = (t === 'ALL') ? '全部' :
+			(t + '　' + (TYPE_LABEL[t] || '') + ' (' + (counts[t] || 0) + ')')
+		return '<button data-t="' + t + '"' +
+			(t === current ? ' class="on"' : '') + '>' + esc(label.trim()) + '</button>'
+	}).join('')
+
+	bar.querySelectorAll('button').forEach(b => {
+		b.onclick = () => { current = b.dataset.t; buildBar(ctx, current); render(ctx, current) }
+	})
+}
+
+loadAll().then(ctx => {
+	/*
+	 * 默认 Tab：跟着本次开发重点走（2026-09-26 起做 STATUS 状态卡）。
+	 * 历史：RESPONSE -> STATUS（核验）-> ECON。
+	 */
+	buildBar(ctx, 'STATUS')
+	render(ctx, 'STATUS')
+}).catch(e => {
+	document.getElementById('err').style.display = 'block'
+	document.getElementById('errmsg').textContent = (e && e.stack) || String(e)
+})
+</script>
+
+</body>
+</html>

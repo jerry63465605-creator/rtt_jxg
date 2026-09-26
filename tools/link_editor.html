@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>RTT 地图连线工具</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font: 13px "Microsoft YaHei", system-ui, sans-serif; background: #1a1a1a; color: #ddd; }
+  #app { display: grid; grid-template-columns: 1fr 330px; height: 100vh; }
+
+  #stage { position: relative; overflow: auto; background: #0d0d0d; }
+  #canvasWrap { position: relative; width: fit-content; }
+  #mapImg { display: block; user-select: none; -webkit-user-drag: none; }
+  #overlay { position: absolute; left: 0; top: 0; }
+
+  .pt circle.dot { stroke: #000; stroke-width: 1.5; }
+  .pt.land circle.dot { fill: #ff3b30; }
+  .pt.sea  circle.dot { fill: #00d4ff; }
+  .pt.sel circle.dot { stroke: #fff; stroke-width: 3.5; }
+  .pt.pending circle.dot { stroke: #ff0; stroke-width: 3.5; }
+  /* 粘滞锚点：保持高亮，可连续连多条线 */
+  .pt.anchor circle.dot { stroke: #0ff; stroke-width: 4; }
+  .pt.anchor text { fill: #0ff; }
+  /* 已与锚点相连的点：淡青提示，避免重复连 */
+  .pt.connected circle.dot { stroke: #0aa; stroke-width: 3; }
+  /* 可见性锁定：锁定点淡显，相关线整体隐藏（.hidden 直接不渲染） */
+  .pt.locked circle.dot { fill: #444 !important; stroke: #777; stroke-width: 1; }
+  .pt.locked text { fill: #666; stroke-width: 2.5px; }
+  .pt.locked .hitc { cursor: pointer; }
+  .ln.hidden { display: none; }
+  .pt text { paint-order: stroke; stroke: #000; stroke-width: 3px; fill: #fff;
+    font: bold 11px "Microsoft YaHei", sans-serif; pointer-events: none; }
+  .hitc { fill: transparent; cursor: crosshair; }
+
+  .ln { cursor: pointer; }
+  .ln line { pointer-events: none; stroke-width: 2.5; }
+  .ln line.hit { stroke: transparent; stroke-width: 12; pointer-events: stroke; }
+
+  /* 普通连通：按 陆-陆 / 海-海 / 陆-海 三色区分 */
+  .ln line.normal.ll { stroke: #ffd24a; }   /* 陆—陆  金黄 */
+  .ln line.normal.ss { stroke: #35e0ff; }   /* 海—海  青蓝 */
+  .ln line.normal.ls { stroke: #b07cff; }   /* 陆—海  紫   */
+  /* 有限连通：虚线 */
+  .ln line.limited { stroke-dasharray: 8 5; }
+  .ln line.limited.ll { stroke: #ff9d2e; }  /* 陆—陆  橙 */
+  .ln line.limited.ss { stroke: #00b8d4; }  /* 海—海  深青 */
+  .ln line.limited.ls { stroke: #8a4dd6; }  /* 陆—海  深紫 */
+  /* 海峡动态连通：点线，颜色随"默认控制方" */
+  .ln line.strait { stroke: #ff44dd; stroke-dasharray: 2 6; stroke-width: 3.5; stroke-linecap: round; }
+  .ln line.strait.side-axis { stroke: #ff5533; }
+  .ln line.strait.side-allies { stroke: #44aaff; }
+  .ln.sel line { stroke: #fff !important; stroke-width: 4; }
+
+  #panel { border-left: 1px solid #333; display: flex; flex-direction: column; overflow: hidden; }
+  .sec { padding: 10px; border-bottom: 1px solid #333; flex: 0 0 auto; }
+  .sec.grow { flex: 1 1 auto; overflow-y: auto; }
+  .sec h3 { margin: 0 0 8px; font-size: 13px; color: #7cc; letter-spacing: 1px; }
+  button { background: #2a2a2a; color: #ddd; border: 1px solid #555; border-radius: 4px;
+    padding: 5px 9px; cursor: pointer; font-size: 12px; margin: 2px 2px 2px 0; }
+  button:hover { background: #3a3a3a; border-color: #888; }
+  button.on { background: #0a5; border-color: #0d8; color: #fff; }
+  button.on.axis { background: #a33; border-color: #d55; }
+  button.on.allies { background: #1560a8; border-color: #4a9; }
+  button.danger { border-color: #a33; }
+  select, input[type=text] { width: 100%; background: #111; color: #eee; border: 1px solid #555;
+    border-radius: 4px; padding: 5px; font-size: 13px; }
+  label { display: block; margin: 7px 0 3px; color: #999; font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer;
+    border-bottom: 1px solid #262626; font-size: 12px; }
+  .row:hover { background: #242424; }
+  .row.sel { background: #16405a; }
+  .row .swatch { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #000; flex: 0 0 auto; }
+  .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .tag { font-size: 10px; color: #888; }
+  #hint { padding: 8px 10px; background: #111; color: #888; font-size: 11px; line-height: 1.7;
+    border-top: 1px solid #333; flex: 0 0 auto; }
+  #stats { color: #6c6; font-size: 12px; }
+  .kbd { background: #333; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+  #zoomBar { position: absolute; left: 10px; top: 10px; z-index: 5;
+    background: rgba(0,0,0,.75); border: 1px solid #444; border-radius: 4px; padding: 4px 6px; }
+  #zoomBar button { padding: 2px 7px; }
+  #toast { position: fixed; left: 50%; bottom: 36px; transform: translateX(-50%);
+    background: #0a5; color: #fff; padding: 9px 18px; border-radius: 6px; font-size: 13px;
+    z-index: 9999; pointer-events: none; opacity: 0; transition: opacity .18s;
+    box-shadow: 0 3px 14px rgba(0,0,0,.6); }
+  .legend { display: flex; gap: 12px; font-size: 11px; color: #aaa; margin-top: 6px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 3px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="canvasWrap">
+      <img id="mapImg" alt="map">
+      <svg id="overlay"></svg>
+    </div>
+    <div id="zoomBar">
+      <button onclick="setZoom(0.3)">30%</button>
+      <button onclick="setZoom(0.45)">45%</button>
+      <button onclick="setZoom(0.7)">70%</button>
+      <button onclick="setZoom(1)">100%</button>
+      <span id="zoomLabel" style="margin-left:6px;color:#888"></span>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div class="sec">
+      <h3>模式</h3>
+      <button id="modeLink" class="on" onclick="setMode('link')">🔗 连线</button>
+      <button id="modeSelect" onclick="setMode('select')">👆 选择/删除线</button>
+      <button onclick="autoConnectNeighbors()" title="按格位中心距离自动连接最近的若干对">⚡ 自动连最近邻</button>
+      <button onclick="clearAllLinks()" class="danger">清空所有线</button>
+    </div>
+
+    <div class="sec">
+      <h3>线的类型</h3>
+      <button id="typeNormal" class="on" onclick="setLinkType('normal')">普通连通</button>
+      <button id="typeLimited" onclick="setLinkType('limited')">有限连通</button>
+      <button id="typeStrait" onclick="setLinkType('strait')">🚧 海峡连通</button>
+      <div id="limitBox" style="display:none;margin-top:8px">
+        <label>仅对哪一方连通？</label>
+        <select id="limitSide" onchange="onSideChange()">
+          <option value="axis">轴心国</option>
+          <option value="allies">同盟国</option>
+        </select>
+        <label>原因（可选）</label>
+        <input type="text" id="limitNote" placeholder="如：某张牌名" oninput="onNoteChange()">
+      </div>
+      <div id="straitBox" style="display:none;margin-top:8px">
+        <label>哪个海峡陆地？（控制者 = 使用方）</label>
+        <select id="straitSpace" onchange="onStraitSpaceChange()"></select>
+        <div id="straitInfo" style="font-size:11px;color:#888;margin-top:6px;line-height:1.6"></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#ffd24a"></i>陆—陆</span>
+        <span><i style="background:#35e0ff"></i>海—海</span>
+        <span><i style="background:#b07cff"></i>陆—海</span>
+        <span style="width:100%;height:0"></span>
+        <span><i style="background:#ffd24a"></i>实线 = 普通连通</span>
+        <span><i style="background:#ff9d2e;border-top:2px dashed #ff9d2e;height:0"></i>虚线 = 有限连通</span>
+        <span><i style="background:#f0f;border-top:2px dotted #f0f;height:0"></i>点线 = 🚧 海峡动态</span>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h3>当前锚点</h3>
+      <div id="pendingInfo" style="color:#777">
+        点一个格位 = <b style="color:#0ff">设为锚点</b>（青色高亮）<br>
+        之后连续点其它格位 = 逐个连线，锚点保持<br>
+        锚点：<b id="p1name" style="color:#0ff">—</b>
+      </div>
+      <div style="margin-top:8px">
+        <button onclick="clearAnchor()" style="width:100%">取消选中（或右键 / Esc）</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h3>🔒 已锁定（相关线隐藏） <span id="hideCount" style="color:#888"></span></h3>
+      <div id="hideList" style="max-height:150px;overflow-y:auto">
+        <div style="color:#666;font-size:11px;padding:4px 8px">（未锁定任何点）</div>
+      </div>
+      <div style="font-size:11px;color:#777;margin-top:6px;line-height:1.6">
+        <b>双击地图上的点</b> = 锁定/解锁<br>
+        锁定后，与该点相连的线全部隐藏；点本身变成灰色。
+      </div>
+      <button onclick="clearHides()" style="margin-top:4px">🔓 全部解锁</button>
+    </div>
+
+    <div class="sec grow">
+      <h3>连接列表 <span id="linkCount" style="color:#888"></span></h3>
+      <div id="linkList"></div>
+    </div>
+
+    <div class="sec" style="border-bottom:none">
+      <div id="stats"></div>
+      <div id="saveState" style="font-size:11px;color:#6c6;margin:6px 0">自动保存：已启用</div>
+      <button onclick="loadFromServer()" style="width:100%;background:#069;border-color:#0af;color:#fff">📂 读取项目 JSON</button>
+      <button onclick="saveToServer(true)" style="width:100%;margin-top:4px;background:#0a5;border-color:#0d8;color:#fff">💾 保存到项目 JSON</button>
+      <button onclick="exportJSON()" style="width:100%;margin-top:4px">⬇ 下载 JSON</button>
+    </div>
+
+    <div id="hint">
+      <span class="kbd">点格位</span> = 设为锚点 → <span class="kbd">连点其它格位</span> = 连续连线<br>
+      <span class="kbd">右键</span> 或 <span class="kbd">Esc</span> 或点空白 = 取消锚点<br>
+      <span class="kbd">双击点</span> = 锁定/解锁（隐藏该点所有线）<br>
+      <span class="kbd">选择模式</span> 下点线 = 删除该线 · <span class="kbd">Ctrl+滚轮</span> 缩放<br>
+      🚧 海峡连通 = 选海峡陆地后，点它隔开的<b>两片海域</b><br>
+      改完会自动写回 <code>out/spaces_calibrated.json</code>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const MAP_W = 4835, MAP_H = 1612;
+const MAP_FILE = "map.png";
+const SVG_NS = "http://www.w3.org/2000/svg";
+const LS_KEY = "rtt_qmsw_links_v1";
+
+let points = [];       // [{id, n, x, y, t, supply, home, strait, straitDefault}]
+let links = [];        // [{a:id, b:id, type:'normal'|'limited'|'strait', side:'axis'|'allies', note:''}]
+let nextPid = 1, nextLid = 1;
+
+let mode = "link";
+let linkType = "normal";
+let limitSide = "axis";
+let limitNote = "";
+let straitSpace = "";  // 当前选中的海峡陆地格位名
+let hiddenPts = new Set();  // 被锁定隐藏的点名（其相关线全部不显示）
+let anchor = null;     // 粘滞锚点：选中后保持，可连续连多条线（右键取消）
+let pending = [];      // 待连接的点 id（兼容旧逻辑，锚点模式下不再使用）
+let zoom = 0.3;
+let serverOK = false;
+let syncTimer = null;
+let clickTimer = null;   /* 单击延时器，用于区分单击连线与双击锁定 */
+
+const stage = document.getElementById("stage");
+const img = document.getElementById("mapImg");
+const svg = document.getElementById("overlay");
+
+/* ================= 服务器 IO ================= */
+async function checkServer() {
+  if (location.protocol === "file:") { serverOK = false; return; }
+  try { const r = await fetch("/api/load"); serverOK = r.ok; } catch { serverOK = false; }
+}
+
+async function loadFromServer(quiet) {
+  if (!serverOK) { if (!quiet) toast("请用 http://localhost:9000/link_editor.html 打开"); return false; }
+  try {
+    const r = await fetch("/api/load");
+    if (!r.ok) { if (!quiet) toast("服务器上没有数据文件"); return false; }
+    const d = await r.json();
+    points = (d.points || []).map(p => ({
+      id: nextPid++, n: p.name || p.n || "", x: p.x, y: p.y,
+      t: p.terrain || p.t || "land",
+      supply: !!p.supply, home: !!p.home, strait: !!p.strait,
+      straitDefault: p.strait_default || p.straitDefault || (p.strait ? "allies" : null),
+    }));
+    links = (d.links || []).map(l => ({
+      id: nextLid++,
+      a: l.a, b: l.b,
+      type: l.type || "normal",
+      side: l.side || null,
+      note: l.note || "",
+    }));
+    /* 修正：老数据用索引存？统一用点的"名字"锚定更稳 -> 这里用名字重建 */
+    if (d.links && d.links.length && typeof d.links[0].a === "string") {
+      links = d.links.map(l => ({
+        id: nextLid++,
+        a: points.findIndex(p => p.n === l.a) + 1,
+        b: points.findIndex(p => p.n === l.b) + 1,
+        type: l.type || "normal",
+        side: l.side || null,
+        note: l.note || "",
+      })).filter(l => l.a > 0 && l.b > 0);
+    } else if (d.links && d.links.length && d.points && d.points.length) {
+      /* 用索引+1 作为 id（点的 id 就是索引+1） */
+      links = d.links.map(l => ({ id: nextLid++, a: l.a, b: l.b, type: l.type || "normal", side: l.side || null, note: l.note || "" }));
+    }
+    if (!quiet) toast("已读取 " + points.length + " 个格位, " + links.length + " 条连接");
+    render();
+    return true;
+  } catch (e) { if (!quiet) toast("读取失败：" + e.message); return false; }
+}
+
+async function saveToServer(manual) {
+  if (!serverOK) { if (manual) toast("请用 http://localhost:9000/link_editor.html 打开"); return false; }
+  try {
+    const nameOf = (id) => { const p = points.find(x => x.id === id); return p ? p.n : null; };
+    const body = {
+      map: "quartermaster-sub-wars",
+      width: MAP_W, height: MAP_H,
+      updated: new Date().toISOString(),
+      points: points.map(p => ({
+        name: p.n, x: Math.round(p.x), y: Math.round(p.y),
+        terrain: p.t, supply: !!p.supply, home: !!p.home, strait: !!p.strait,
+        strait_default: p.strait ? (p.straitDefault || "allies") : null,
+      })),
+      /* 连接用"格位名"存，避免索引漂移 */
+      links: links.map(l => ({
+        a: nameOf(l.a), b: nameOf(l.b),
+        type: l.type, side: l.side || null, note: l.note || "",
+      })).filter(l => l.a && l.b),
+    };
+    const r = await fetch("/api/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      const el = document.getElementById("saveState");
+      const t = new Date();
+      el.style.color = "#6c6";
+      el.textContent = "已写入 " + t.toTimeString().slice(0, 8) + "  (" + points.length + " 格位 / " + links.length + " 连接)";
+      if (manual) toast("已保存到项目文件");
+      return true;
+    }
+    if (manual) toast("保存失败：" + (j.error || "未知"));
+    return false;
+  } catch (e) { if (manual) toast("保存失败：" + e.message); return false; }
+}
+
+function saveLocal() {
+  try {
+    const nameOf = (id) => { const p = points.find(x => x.id === id); return p ? p.n : null; };
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      links: links.map(l => ({ a: nameOf(l.a), b: nameOf(l.b), type: l.type, side: l.side, note: l.note })),
+      straitSpace: straitSpace,
+      hiddenPts: Array.from(hiddenPts),
+      updated: new Date().toISOString(),
+    }));
+  } catch { }
+  if (serverOK) { clearTimeout(syncTimer); syncTimer = setTimeout(() => saveToServer(false), 800); }
+}
+
+function loadLocal() {
+  try {
+    const s = localStorage.getItem(LS_KEY);
+    if (!s) return null;
+    const d = JSON.parse(s);
+    if (d.straitSpace) straitSpace = d.straitSpace;
+    if (Array.isArray(d.hiddenPts)) hiddenPts = new Set(d.hiddenPts);
+    return (d.links || []).map(l => ({
+      id: nextLid++,
+      a: points.findIndex(p => p.n === l.a) + 1,
+      b: points.findIndex(p => p.n === l.b) + 1,
+      type: l.type || "normal", side: l.side || null, note: l.note || "",
+    })).filter(l => l.a > 0 && l.b > 0);
+  } catch { return null; }
+}
+
+/* ================= 渲染 ================= */
+function applyZoom() {
+  img.style.width = (MAP_W * zoom) + "px";
+  img.style.height = (MAP_H * zoom) + "px";
+  svg.setAttribute("width", MAP_W * zoom);
+  svg.setAttribute("height", MAP_H * zoom);
+  svg.setAttribute("viewBox", "0 0 " + MAP_W + " " + MAP_H);
+  document.getElementById("zoomLabel").textContent = Math.round(zoom * 100) + "%";
+  render();
+}
+
+function setZoom(z) {
+  const cx = stage.scrollLeft + stage.clientWidth / 2;
+  const cy = stage.scrollTop + stage.clientHeight / 2;
+  const k = z / zoom;
+  zoom = z;
+  applyZoom();
+  stage.scrollLeft = cx * k - stage.clientWidth / 2;
+  stage.scrollTop = cy * k - stage.clientHeight / 2;
+}
+
+/* 判断连接类型：ll=陆-陆, ss=海-海, ls=陆-海 */
+function pairKind(pa, pb) {
+  if (pa.t === "land" && pb.t === "land") return "ll";
+  if (pa.t === "sea" && pb.t === "sea") return "ss";
+  return "ls";
+}
+
+/* 颜色表（与 CSS 保持一致） */
+const COLORS = {
+  normal:  { ll: "#ffd24a", ss: "#35e0ff", ls: "#b07cff" },
+  limited: { ll: "#ff9d2e", ss: "#00b8d4", ls: "#8a4dd6" },
+};
+
+function kindLabel(k) {
+  return k === "ll" ? "陆—陆" : k === "ss" ? "海—海" : "陆—海";
+}
+
+/* 海峡陆地格位列表（strait:true 的格位） */
+function straitSpaces() {
+  return points.filter(p => p.strait && p.t === "land");
+}
+
+/* 取某个海峡陆地格位的"默认控制方"（无部队时的兜底归属） */
+function straitDefaultSide(p) {
+  return p && p.straitDefault ? p.straitDefault : "allies";
+}
+
+/* 通过"格位名"找陆地的默认控制方 */
+function defaultSideByName(name) {
+  const p = points.find(x => x.n === name);
+  return straitDefaultSide(p);
+}
+
+/* 找以某个海峡陆地命名的那条海峡连线 */
+function straitLinkBySpace(name) {
+  return links.find(l => l.type === "strait" && l.note === name);
+}
+
+/* 刷新"海峡陆地"下拉框 */
+function refreshStraitSelect() {
+  const sel = document.getElementById("straitSpace");
+  if (!sel) return;
+  const list = straitSpaces();
+  const cur = straitSpace;
+  sel.innerHTML = "";
+  if (!list.length) {
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "（还没有标记 🚧 海峡的陆地格位）";
+    sel.appendChild(o);
+    straitSpace = "";
+    updateStraitInfo();
+    return;
+  }
+  for (const p of list) {
+    const o = document.createElement("option");
+    o.value = p.n;
+    o.textContent = p.n + "（" + (straitDefaultSide(p) === "axis" ? "默认轴心" : "默认同盟") + "）";
+    sel.appendChild(o);
+  }
+  if (!list.some(p => p.n === cur)) straitSpace = list[0].n;
+  sel.value = straitSpace;
+  updateStraitInfo();
+}
+
+function updateStraitInfo() {
+  const el = document.getElementById("straitInfo");
+  if (!el) return;
+  const p = points.find(x => x.n === straitSpace);
+  if (!p) { el.innerHTML = "请先在点位页给陆地标记 🚧 海峡属性。"; return; }
+  const linked = straitLinkBySpace(p.n);
+  const others = links.filter(l => l.type === "strait" && l.note !== p.n).map(l => l.note);
+  el.innerHTML =
+    "默认控制方：<b style=\"color:" + (straitDefaultSide(p) === "axis" ? "#ff5533" : "#44aaff") + "\">" +
+    (straitDefaultSide(p) === "axis" ? "轴心国" : "同盟国") + "</b><br>" +
+    "规则：该陆地格位上有任意一方部队时，即由该方控制此海峡。<br>" +
+    (linked
+      ? "<span style=\"color:#6c6\">已连线：" + linked.a + " — " + linked.b + "</span>"
+      : "<span style=\"color:#fa0\">尚未连线：请依次点海峡两侧的两片海域。</span>") +
+    (others.length ? "<br>其余海峡陆地：" + others.join("、") : "");
+}
+
+function onStraitSpaceChange() {
+  straitSpace = document.getElementById("straitSpace").value;
+  updateStraitInfo();
+}
+
+/* ================= 可见性锁定 ================= */
+/* 某个点是否被锁定隐藏 */
+function isHiddenPoint(p) {
+  return hiddenPts.has(p.n);
+}
+
+/* 某条线是否因两端任一被锁定而应隐藏 */
+function isHiddenLink(l) {
+  const pa = points.find(p => p.id === l.a);
+  const pb = points.find(p => p.id === l.b);
+  if (!pa || !pb) return false;
+  return isHiddenPoint(pa) || isHiddenPoint(pb);
+}
+
+/* 统计与某个点名相关的线数 */
+function linkCountOfPoint(name) {
+  return links.filter(l => {
+    const pa = points.find(q => q.id === l.a), pb = points.find(q => q.id === l.b);
+    return pa && pb && (pa.n === name || pb.n === name);
+  }).length;
+}
+
+/* 切换某个点的锁定状态 */
+function toggleHidePoint(name) {
+  if (hiddenPts.has(name)) hiddenPts.delete(name);
+  else hiddenPts.add(name);
+  saveLocal(); render();
+  toast(hiddenPts.has(name)
+    ? "🔒 已锁定「" + name + "」，隐藏 " + linkCountOfPoint(name) + " 条线"
+    : "🔓 已解锁「" + name + "」，恢复显示相关线");
+}
+
+/* 全部解锁 */
+function clearHides() {
+  if (!hiddenPts.size) { toast("当前没有锁定的点"); return; }
+  const n = hiddenPts.size;
+  hiddenPts.clear();
+  saveLocal(); render();
+  toast("已解锁全部 " + n + " 个点");
+}
+
+/* 刷新锁定点列表 */
+function renderHideList() {
+  const el = document.getElementById("hideList");
+  if (!el) return;
+  el.innerHTML = "";
+  document.getElementById("hideCount").textContent = hiddenPts.size ? "(" + hiddenPts.size + ")" : "";
+  if (!hiddenPts.size) {
+    el.innerHTML = '<div style="color:#666;font-size:11px;padding:4px 8px">（未锁定任何点）</div>';
+    return;
+  }
+  for (const name of hiddenPts) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = "🔒 " + name;
+    const cnt = document.createElement("span");
+    cnt.className = "tag";
+    cnt.textContent = linkCountOfPoint(name) + " 条";
+    const un = document.createElement("button");
+    un.textContent = "解锁";
+    un.style.cssText = "padding:1px 6px;margin:0";
+    un.onclick = (e) => { e.stopPropagation(); hiddenPts.delete(name); saveLocal(); render(); };
+    row.append(nm, cnt, un);
+    row.onclick = () => { const p = points.find(x => x.n === name); if (p) focusPoint(p.id); };
+    el.appendChild(row);
+  }
+}
+
+function render() {
+  svg.innerHTML = "";
+
+  /* 先画线（在点下面） */
+  for (const l of links) {
+    const pa = points.find(p => p.id === l.a);
+    const pb = points.find(p => p.id === l.b);
+    if (!pa || !pb) continue;
+    /* 可见性锁定：任一端被锁定，整条线不显示 */
+    if (isHiddenLink(l)) continue;
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "ln");
+    g.dataset.id = l.id;
+
+    const hit = document.createElementNS(SVG_NS, "line");
+    hit.setAttribute("class", "hit");
+    hit.setAttribute("x1", pa.x); hit.setAttribute("y1", pa.y);
+    hit.setAttribute("x2", pb.x); hit.setAttribute("y2", pb.y);
+    g.appendChild(hit);
+
+    const vis = document.createElementNS(SVG_NS, "line");
+    if (l.type === "strait") {
+      vis.setAttribute("class", "strait side-" + (l.side || "allies"));
+    } else {
+      vis.setAttribute("class", (l.type === "limited" ? "limited" : "normal") + " " + pairKind(pa, pb));
+    }
+    vis.setAttribute("x1", pa.x); vis.setAttribute("y1", pa.y);
+    vis.setAttribute("x2", pb.x); vis.setAttribute("y2", pb.y);
+    g.appendChild(vis);
+
+    /* 中点标注 */
+    if (l.type === "limited" || l.type === "strait") {
+      const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+      const t = document.createElementNS(SVG_NS, "text");
+      t.setAttribute("x", mx); t.setAttribute("y", my - 4);
+      t.setAttribute("text-anchor", "middle");
+      const col = l.type === "strait"
+        ? (l.side === "axis" ? "#ff5533" : "#44aaff")
+        : COLORS.limited[pairKind(pa, pb)];
+      t.setAttribute("style", "fill:" + col +
+        ";font:bold 11px sans-serif;paint-order:stroke;stroke:#000;stroke-width:3px");
+      t.textContent = l.type === "strait"
+        ? "🚧" + (l.note || "海峡")
+        : (l.side === "allies" ? "同盟" : "轴心") + (l.note ? "·" + l.note : "");
+      g.appendChild(t);
+    }
+
+    g.addEventListener("click", (e) => {
+      if (mode !== "select") return;
+      e.stopPropagation();
+      links = links.filter(x => x.id !== l.id);
+      saveLocal(); render();
+      toast("已删除连接 " + pa.n + " — " + pb.n);
+    });
+    svg.appendChild(g);
+  }
+
+  /* 再画点 */
+  const anchorPt = anchor === null ? null : points.find(p => p.id === anchor);
+  const anchorNbrs = new Set();
+  if (anchorPt) {
+    for (const l of links) {
+      if (l.a === anchor) anchorNbrs.add(l.b);
+      else if (l.b === anchor) anchorNbrs.add(l.a);
+    }
+  }
+  for (const p of points) {
+    const locked = isHiddenPoint(p);
+    const g = document.createElementNS(SVG_NS, "g");
+    const cls = "pt " + p.t +
+      (p.id === anchor ? " anchor" : (anchorNbrs.has(p.id) ? " connected" : "")) +
+      (pending.includes(p.id) && p.id !== anchor ? " pending" : "") +
+      (locked ? " locked" : "");
+    g.setAttribute("class", cls);
+    g.dataset.id = p.id;
+
+    const hit = document.createElementNS(SVG_NS, "circle");
+    hit.setAttribute("class", "hitc");
+    hit.setAttribute("cx", p.x); hit.setAttribute("cy", p.y); hit.setAttribute("r", 14);
+    g.appendChild(hit);
+
+    const dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("class", "dot");
+    dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y); dot.setAttribute("r", locked ? 4 : 6);
+    g.appendChild(dot);
+
+    const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("x", p.x + 10); t.setAttribute("y", p.y + 4);
+    let s = (p.n || "(无名)");
+    if (p.supply) s = "★" + s;
+    if (p.home) s = "⌂" + s;
+    if (p.strait) s = "🚧" + s;
+    t.textContent = (locked ? "🔒" : "") + s;
+    g.appendChild(t);
+
+    /* 右键点 = 取消锚点选中 */
+    g.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (anchor !== null) clearAnchor();
+      else toast("当前没有选中任何点");
+    });
+
+    /* 单击：连线（延迟执行，好让双击有机会取消它） */
+    g.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (mode !== "link") return;
+      clearTimeout(clickTimer);
+      const pid = p.id;
+      clickTimer = setTimeout(() => onPickForLink(pid), 220);
+    });
+
+    /* 双击点 = 切换可见性锁定（并撤销上面那次尚未执行的单击连线） */
+    g.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      clearTimeout(clickTimer);
+      /* 若这个点已是锚点，双击锁定后顺手取消锚点，避免"锁住还在连"的困惑 */
+      if (anchor === p.id) { anchor = null; pending = []; }
+      toggleHidePoint(p.n);
+    });
+    svg.appendChild(g);
+  }
+
+  renderLinkList();
+  renderStats();
+  renderPendingInfo();
+  renderHideList();
+}
+
+function renderStats() {
+  const n = points.length;
+  let ll = 0, ss = 0, ls = 0;
+  for (const l of links) {
+    const pa = points.find(p => p.id === l.a), pb = points.find(p => p.id === l.b);
+    if (!pa || !pb) continue;
+    const k = pairKind(pa, pb);
+    if (k === "ll") ll++; else if (k === "ss") ss++; else ls++;
+  }
+  const normal = links.filter(l => l.type === "normal").length;
+  const limited = links.filter(l => l.type === "limited").length;
+  const strait = links.filter(l => l.type === "strait").length;
+  const straitTotal = straitSpaces().length;
+  const covered = straitSpaces().filter(p => straitLinkBySpace(p.n)).length;
+  const hidden = links.filter(l => isHiddenLink(l)).length;
+  document.getElementById("stats").innerHTML =
+    `格位 ${n} · 连线 <b>${links.length}</b>` +
+    (hidden ? ` <span style="color:#888">(隐藏 ${hidden})</span>` : "") + `<br>` +
+    `普通 ${normal} / 有限 ${limited} / <span style="color:#ff44dd">海峡 ${strait}</span><br>` +
+    `<span style="color:#ffd24a">陆—陆 ${ll}</span> · ` +
+    `<span style="color:#35e0ff">海—海 ${ss}</span> · ` +
+    `<span style="color:#b07cff">陆—海 ${ls}</span><br>` +
+    `🚧 海峡已连 <b style="color:${covered === straitTotal ? "#6c6" : "#fa0"}">${covered}/${straitTotal}</b>`;
+  document.getElementById("linkCount").textContent =
+    "(" + (links.length - hidden) + "/" + links.length + ")";
+}
+
+function renderLinkList() {
+  const el = document.getElementById("linkList");
+  el.innerHTML = "";
+  const sorted = links.slice().sort((x, y) => {
+    const na = (points.find(p => p.id === x.a) || {}).n || "";
+    const nb = (points.find(p => p.id === y.a) || {}).n || "";
+    return na.localeCompare(nb, "zh");
+  });
+  for (const l of sorted) {
+    const pa = points.find(p => p.id === l.a), pb = points.find(p => p.id === l.b);
+    if (!pa || !pb) continue;
+    const k = pairKind(pa, pb);
+    const row = document.createElement("div");
+    row.className = "row";
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    if (l.type === "strait") {
+      sw.style.background = l.side === "axis" ? "#ff5533" : "#44aaff";
+      sw.style.borderRadius = "2px";
+    } else {
+      sw.style.background = COLORS[l.type === "limited" ? "limited" : "normal"][k];
+      if (l.type === "limited") sw.style.borderRadius = "2px";
+    }
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = pa.n + " — " + pb.n;
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = l.type === "strait"
+      ? "🚧 " + (l.note || "海峡") + "·默认" + (l.side === "axis" ? "轴心" : "同盟") + "·动态"
+      : kindLabel(k) + " · " +
+        (l.type === "limited" ? (l.side === "allies" ? "同盟" : "轴心") + (l.note ? "·" + l.note : "") : "普通");
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.style.cssText = "padding:1px 6px;margin:0";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      links = links.filter(x => x.id !== l.id);
+      saveLocal(); render();
+    };
+    row.append(sw, nm, tag, del);
+    row.onclick = () => { focusPair(l.a, l.b); };
+    el.appendChild(row);
+  }
+}
+
+function renderPendingInfo() {
+  const el = document.getElementById("p1name");
+  if (anchor === null) {
+    el.textContent = "—";
+    el.style.color = "#0ff";
+    el.style.textDecoration = "none";
+    return;
+  }
+  const p = points.find(x => x.id === anchor);
+  el.textContent = (p ? p.n : "—") + "（已连 " + linkCountOfPoint(p ? p.n : "") + " 条）";
+  el.style.color = "#0ff";
+}
+
+/* ================= 交互 ================= */
+function setMode(m) {
+  mode = m;
+  document.getElementById("modeLink").className = m === "link" ? "on" : "";
+  document.getElementById("modeSelect").className = m === "select" ? "on" : "";
+  stage.style.cursor = m === "link" ? "crosshair" : "default";
+}
+
+function setLinkType(t) {
+  linkType = t;
+  document.getElementById("typeNormal").className = t === "normal" ? "on" : "";
+  const bl = document.getElementById("typeLimited");
+  bl.className = t === "limited" ? "on" : "";
+  bl.classList.toggle("allies", t === "limited" && limitSide === "allies");
+  const bs = document.getElementById("typeStrait");
+  bs.className = t === "strait" ? "on" : "";
+  document.getElementById("limitBox").style.display = t === "limited" ? "block" : "none";
+  document.getElementById("straitBox").style.display = t === "strait" ? "block" : "none";
+  if (t === "strait") refreshStraitSelect();
+}
+
+function onSideChange() {
+  limitSide = document.getElementById("limitSide").value;
+  const bl = document.getElementById("typeLimited");
+  bl.classList.toggle("allies", limitSide === "allies");
+}
+
+function onNoteChange() {
+  limitNote = document.getElementById("limitNote").value;
+}
+
+/*
+ * 粘滞连线：点一个点 -> 成为锚点（青色高亮，不自动取消）
+ * 之后每点另一个点，就与锚点连一条线，锚点保持不变，可连续连多条
+ * 右键 / Esc / 点空白处 -> 取消锚点
+ */
+function onPickForLink(id) {
+  const p0 = points.find(x => x.id === id);
+
+  /* 被锁定的点不允许参与连线（避免连出看不见的线） */
+  if (p0 && isHiddenPoint(p0)) {
+    toast("「" + p0.n + "」已锁定，先解锁或用双击取消锁定");
+    return;
+  }
+
+  /* 没有锚点：当前点成为锚点 */
+  if (anchor === null) {
+    anchor = id;
+    pending = [id];
+    toast("锚点：「" + (p0 ? p0.n : "?") + "」→ 可连续点其它点连线（右键取消）");
+    render();
+    return;
+  }
+
+  /* 点的是锚点自己：单击不取消（避免误触），提示用右键 */
+  if (anchor === id) {
+    toast("「" + (p0 ? p0.n : "?") + "」已是锚点，右键可取消选中");
+    return;
+  }
+
+  /* 与锚点连线，锚点保持 */
+  addLink(anchor, id);
+  const pa = points.find(p => p.id === anchor);
+  const cnt = links.filter(l => {
+    const x = points.find(q => q.id === l.a), y = points.find(q => q.id === l.b);
+    return x && y && ((l.a === anchor && l.b === id) || (l.a === id && l.b === anchor));
+  }).length;
+  if (cnt) {
+    toast("已连接「" + (pa ? pa.n : "?") + "」—「" + (p0 ? p0.n : "?") +
+      "」，锚点保留（累计 " + linkCountOfPoint(pa ? pa.n : "") + " 条，右键取消）");
+  }
+}
+
+/* 取消锚点选中 */
+function clearAnchor(silent) {
+  if (anchor === null && !pending.length) return;
+  anchor = null;
+  pending = [];
+  render();
+  if (!silent) toast("已取消选中");
+}
+
+function addLink(a, b) {
+  const pa = points.find(p => p.id === a), pb = points.find(p => p.id === b);
+  if (!pa || !pb) return;
+
+  /* 海峡连通：必须连两片海域 */
+  if (linkType === "strait") {
+    if (!straitSpace) { toast("请先选择这条海峡所在的陆地格位"); return; }
+    if (pa.t !== "sea" || pb.t !== "sea") {
+      toast("海峡连通必须连在【两片海域】之间（当前含陆地）"); return;
+    }
+    const dup = straitLinkBySpace(straitSpace);
+    if (dup) {
+      const dn = confirmArmed("spot_" + straitSpace);
+      if (!dn) return;
+    }
+    /* 同一海峡只保留一条线，重连即替换 */
+    links = links.filter(l => !(l.type === "strait" && l.note === straitSpace));
+    const sd = defaultSideByName(straitSpace);
+    links.push({ id: nextLid++, a, b, type: "strait", side: sd, note: straitSpace });
+    saveLocal(); render();
+    toast("海峡「" + straitSpace + "」→ " + pa.n + " — " + pb.n +
+      "（默认" + (sd === "axis" ? "轴心" : "同盟") + "控制，随该陆地归属变化）");
+    return;
+  }
+
+  const key = a < b ? a + "-" + b : b + "-" + a;
+  const exist = links.find(l => (l.a < l.b ? l.a + "-" + l.b : l.b + "-" + l.a) === key);
+  if (exist) {
+    if (exist.type === linkType && exist.side === (linkType === "limited" ? limitSide : null)) {
+      toast("这条连接已存在"); return;
+    }
+    links = links.filter(l => l.id !== exist.id);
+  }
+  links.push({
+    id: nextLid++, a, b, type: linkType,
+    side: linkType === "limited" ? limitSide : null,
+    note: linkType === "limited" ? limitNote : "",
+  });
+  saveLocal(); render();
+  toast("已连接 " + pa.n + " — " + pb.n + (linkType === "limited" ? "（有限·" + (limitSide === "allies" ? "同盟" : "轴心") + "）" : ""));
+}
+
+function cancelPending() { clearAnchor(); }
+
+function focusPair(a, b) {
+  const pa = points.find(p => p.id === a), pb = points.find(p => p.id === b);
+  if (!pa || !pb) return;
+  const cx = (pa.x + pb.x) / 2 * zoom, cy = (pa.y + pb.y) / 2 * zoom;
+  stage.scrollTo({ left: cx - stage.clientWidth / 2, top: cy - stage.clientHeight / 2, behavior: "smooth" });
+}
+
+function focusPoint(id) {
+  const p = points.find(x => x.id === id);
+  if (!p) return;
+  stage.scrollTo({
+    left: p.x * zoom - stage.clientWidth / 2,
+    top: p.y * zoom - stage.clientHeight / 2,
+    behavior: "smooth",
+  });
+}
+
+/* ================= 自动连最近邻 ================= */
+function autoConnectNeighbors() {
+  const K = 3;  /* 每个点连最近的 K 个 */
+  let added = 0;
+  for (let i = 0; i < points.length; i++) {
+    const cand = [];
+    for (let j = 0; j < points.length; j++) {
+      if (i === j) continue;
+      const d = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
+      cand.push({ j, d });
+    }
+    cand.sort((a, b) => a.d - b.d);
+    for (let k = 0; k < Math.min(K, cand.length); k++) {
+      const a = points[i].id, b = points[cand[k].j].id;
+      const key = a < b ? a + "-" + b : b + "-" + a;
+      if (links.some(l => (l.a < l.b ? l.a + "-" + l.b : l.b + "-" + l.a) === key)) continue;
+      links.push({ id: nextLid++, a, b, type: "normal", side: null, note: "" });
+      added++;
+    }
+  }
+  saveLocal(); render();
+  toast("自动添加 " + added + " 条普通连接（需人工校正）");
+}
+
+function clearAllLinks() {
+  if (!confirmArmed("clear")) return;
+  links = [];
+  saveLocal(); render();
+  toast("已清空所有连接");
+}
+
+/* 双击确认（替代可能被屏蔽的 confirm） */
+let armed = {};
+function confirmArmed(k) {
+  if (armed[k]) { armed[k] = false; return true; }
+  armed[k] = true;
+  toast("再点一次确认（" + (k === "clear" ? "清空所有连接" : "重置") + "）");
+  setTimeout(() => { armed[k] = false; }, 3000);
+  return false;
+}
+
+/* ================= 键盘/缩放/平移 ================= */
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "Escape") clearAnchor();
+  if (e.key === "l") setMode("link");
+  if (e.key === "s") setMode("select");
+});
+
+/* 右键：取消锚点选中（在整张地图上生效，并屏蔽浏览器菜单） */
+svg.addEventListener("contextmenu", (e) => {
+  if (anchor === null) return;
+  e.preventDefault();
+  clearAnchor();
+});
+
+window.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  setZoom(Math.max(0.12, Math.min(2, zoom * (e.deltaY < 0 ? 1.12 : 0.89))));
+}, { passive: false });
+
+let panning = null;
+stage.addEventListener("pointerdown", (e) => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  panning = { x: e.clientX, y: e.clientY, sl: stage.scrollLeft, st: stage.scrollTop };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!panning) return;
+  stage.scrollLeft = panning.sl - (e.clientX - panning.x);
+  stage.scrollTop = panning.st - (e.clientY - panning.y);
+});
+window.addEventListener("pointerup", () => { panning = null; });
+
+svg.addEventListener("click", (e) => {
+  /* 点空白处 = 取消锚点选中 */
+  if (e.target === svg || e.target === img) clearAnchor(true);
+});
+
+/* ================= 导入导出 ================= */
+function exportJSON() {
+  const nameOf = (id) => { const p = points.find(x => x.id === id); return p ? p.n : null; };
+  const data = {
+    map: "quartermaster-sub-wars", width: MAP_W, height: MAP_H,
+    updated: new Date().toISOString(),
+    points: points.map(p => ({ name: p.n, x: Math.round(p.x), y: Math.round(p.y), terrain: p.t, supply: !!p.supply, home: !!p.home, strait: !!p.strait, strait_default: p.strait ? (p.straitDefault || "allies") : null })),
+    links: links.map(l => ({ a: nameOf(l.a), b: nameOf(l.b), type: l.type, side: l.side || null, note: l.note || "" })).filter(l => l.a && l.b),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "spaces_calibrated.json";
+  a.click();
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.opacity = "1";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = "0"; }, 1800);
+}
+
+/* ================= 启动 ================= */
+async function boot() {
+  await checkServer();
+  let ok = false;
+  if (serverOK) ok = await loadFromServer(true);
+  if (!ok) {
+    /* 回退：尝试读本地存的点位（link_editor 不自己定义点位，必须来自服务器或 map_pts.json） */
+    try {
+      const r = await fetch("map_pts.json");
+      if (r.ok) {
+        const d = await r.json();
+        points = (d.points || d).map(p => ({
+          id: nextPid++, n: p.name || p.n || "", x: p.x, y: p.y,
+          t: p.terrain || p.t || "land", supply: !!p.supply, home: !!p.home, strait: !!p.strait,
+        }));
+        ok = true;
+      }
+    } catch { }
+  }
+  if (!ok) {
+    toast("未能读取格位数据，请用 http://localhost:9000/link_editor.html 打开");
+    return;
+  }
+  const ll = loadLocal();
+  if (ll && ll.length) links = ll;
+  refreshStraitSelect();
+  render();
+  const ss = straitSpaces().length;
+  toast("已载入 " + points.length + " 个格位 · 🚧 海峡陆地 " + ss + " 个" +
+    (links.length ? " · 连接 " + links.length + " 条" : ""));
+}
+
+img.src = MAP_FILE;
+img.onload = () => { applyZoom(); boot(); };
+img.onerror = () => {
+  document.getElementById("stage").innerHTML =
+    '<div style="padding:40px;color:#f66;font-size:15px;line-height:2">❌ 地图图片加载失败' +
+    '<br>请确认 c:\\Users\\24968\\Desktop\\rtt\\tools\\map.png 存在</div>';
+};
+</script>
+</body>
+</html>

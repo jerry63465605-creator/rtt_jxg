@@ -1,0 +1,82 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title= title.title_name
+	body
+		include header
+		article
+
+			h1= title.title_name
+
+			div.logo
+				+gamecover(title.title_id)
+
+			if create_limit
+				p.error= create_limit
+			else if join_limit
+				p.error= join_limit
+
+			form(method="post" action="/create/"+title.title_id)
+				if Array.isArray(rules.scenarios)
+					if rules.scenarios.length > 1
+						p Scenario:
+							br
+							select(name="scenario")
+								each scenario in rules.scenarios
+									if scenario === rules.default_scenario
+										option(value=scenario selected)= scenario
+									else
+										option(value=scenario)= scenario
+					else
+						input(type="hidden" name="scenario" value=rules.scenarios[0])
+				else
+					p Scenario:
+						br
+						select(name="scenario")
+							each list, name in rules.scenarios
+								if name === ""
+									each scenario in list
+										if scenario === rules.default_scenario
+											option(value=scenario selected)= scenario
+										else
+											option(value=scenario)= scenario
+								else
+									optgroup(label=name)
+										each scenario in list
+											if scenario === rules.default_scenario
+												option(value=scenario selected)= scenario
+											else
+												option(value=scenario)= scenario
+
+				| !{ title.create_html }
+
+				if user
+					p Notice:
+						br
+						input(type="text" autocomplete="off" name="notice" size=45 placeholder="What are you looking for?")
+
+					p
+						label
+							input(type="checkbox" name="is_random" value="true")
+							| Random player roles
+
+					p
+						label
+							if join_limit
+								input(type="hidden" name="is_private" value="true")
+								input(type="checkbox" checked disabled)
+							else
+								input(type="checkbox" name="is_private" value="true")
+							| Private
+
+					p
+						if create_limit
+							button(type="submit" disabled) Create
+						else
+							button(type="submit") Create
+
+				else
+					p <a href="/login">Login</a> or <a href="/signup">sign up</a> to play.
+

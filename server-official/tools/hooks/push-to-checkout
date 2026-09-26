@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# git push-to-checkout hook to automatically precompress web assets
+
+echo hook push-to-checkout
+
+# original behavior from push-to-checkout.sample
+# ---
+commit=$1
+die () {
+	echo >&2 "$*"
+	exit 1
+}
+if ! git update-index -q --ignore-submodules --refresh
+then
+	die "Up-to-date check failed"
+fi
+if ! git diff-files --quiet --ignore-submodules --
+then
+	die "Working directory has unstaged changes"
+fi
+if git cat-file -e HEAD 2>/dev/null
+then
+	head=HEAD
+else
+	head=$(git hash-object -t tree --stdin </dev/null)
+fi
+if ! git diff-index --quiet --cached --ignore-submodules $head --
+then
+	die "Working directory has staged changes"
+fi
+if ! git read-tree -u -m "$commit"
+then
+	die "Could not update working tree to new HEAD"
+fi
+# ---
+
+# now enter work tree and update the files
+cd $GIT_WORK_TREE
+for F in $(git ls-files | grep -E "^.*\.(html|css|js|svg)$")
+do
+	if test "$F" -nt "$F.br" || test "$F" -ot "$F.br"
+	then
+		echo brotli -f "$F"
+		brotli -f "$F"
+	fi
+done

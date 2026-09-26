@@ -1,0 +1,58 @@
+//- vim:ts=4:sw=4:
+doctype html
+html(hx-boost="true")
+	head
+		include head
+		title Edit Tournaments
+	body
+		include header
+		article
+			h1 Edit Tournaments
+
+			table
+				thead
+					tr
+						th
+						th.r Ps
+						th.r Ms
+						th.r type
+						th
+						th Stg
+						th Dd
+				tbody
+					each seed in seeds
+						tr
+							if seed.title_id in TITLE_TABLE
+								td: a(href="/tm/edit/" + seed.seed_name)= seed.seed_name
+							else
+								td= seed.seed_name
+							td.r= seed.pool_size
+							td.r= seed.match_count
+							if seed.is_concurrent
+								td.r conc
+							else
+								td.r seq
+							if seed.is_open
+								td open
+							else
+								td ---
+							td.r= seed.stagger
+							td.r= seed.deadline
+
+			fieldset
+				legend New Tournament
+
+				form(method="post" action="/tm/edit/new")
+					p Seed name:
+						br
+						input(type="text" name="seed_name" value=("ut.TITLE."+new Date().toISOString().substring(0,10)) size=40)
+
+					p Title:
+						br
+						select(name="title_id")
+							each title in TITLE_LIST
+								option(value=title.title_id)= title.title_id
+
+					p
+						button(type="submit") Create
+

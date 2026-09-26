@@ -1,0 +1,55 @@
+deck,card_id,sheet,row,col,name_CN,type,ops,effect_CN,img_file,read
+CORE,15300,153,0,0,建设陆军,BASIC,,在相邻有补给的我方单位的陆地或本土建设1支陆军;,cards_sliced/sheet153_r0_c0.png,逐张
+CORE,15301,153,0,1,发起陆战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次陆战,cards_sliced/sheet153_r0_c1.png,逐张
+CORE,15302,153,0,2,建设海军,BASIC,,相邻有补给我方部队的海域建设海军,cards_sliced/sheet153_r0_c2.png,逐张
+CORE,15303,153,0,3,发起海战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次海战,cards_sliced/sheet153_r0_c3.png,逐张
+CORE,15304,153,0,4,空军力量,BASIC,,部署空军/夺取制空权/调度空军(三选一)调度空军不需要空军力量而需要弃1手牌,cards_sliced/sheet153_r0_c4.png,逐张
+CORE,15305,153,1,0,双十字系统,EFFECT,1,摸牌阶段开始时：随机选择并观看 2 张德国的手牌，将这些牌以任意顺序置于德国牌堆顶。,cards_sliced/sheet153_r1_c0.png,逐张
+CORE,15306,153,1,1,英联邦殖民地民兵,EFFECT,1,计分阶段开始时，弃置 2 张手牌：在<非洲北部>-<中东>-<东南亚>-<印度尼西亚>之一征召陆军。,cards_sliced/sheet153_r1_c1.png,逐张
+CORE,15307,153,1,2,自由法国海军,EFFECT,1,计分阶段开始时，弃置 2 张手牌：法国建设 1 支海军。,cards_sliced/sheet153_r1_c2.png,逐张
+CORE,15308,153,1,3,法国空军,EFFECT,1,空军阶段开始时：法国部署 1 支空军。,cards_sliced/sheet153_r1_c3.png,逐张
+CORE,15309,153,1,4,自由法国陆军,EFFECT,1,计分阶段开始时，弃置 2 张手牌：法国建设 1 支陆军。,cards_sliced/sheet153_r1_c4.png,逐张
+CORE,15310,153,1,5,法国外籍军团,EFFECT,1,计分阶段开始时，弃置 1 张手牌：法国在<非洲北部>-<非洲南部>-<马达加斯加>-<中东>-<东南亚>-<新几内亚>之一征召 1 支陆军。,cards_sliced/sheet153_r1_c5.png,逐张
+CORE,15311,153,1,6,马奇诺防线,EFFECT,1,任意时机，弃置 4 张手牌：<西欧>的法国陆军在本回合内不会被移除。,cards_sliced/sheet153_r1_c6.png,逐张
+CORE,15312,153,1,7,华沙起义,EFFECT,1,计分阶段开始时，弃置 2 张手牌：在<东欧>征召陆军。（卡底：华沙，起义！）,cards_sliced/sheet153_r1_c7.png,逐张
+CORE,15313,153,1,8,轰炸机军团,ECON,1,[轰炸行动]选择 德国 或 意大利，其损耗2张牌，每有1个英国空军，其损耗2张牌。,cards_sliced/sheet153_r1_c8.png,逐张
+CORE,15314,153,1,9,马耳他潜艇群,ECON,1,[潜艇行动]德国和意大利选择 损耗3张牌 或 移除其位于 <地中海> 的海军。,cards_sliced/sheet153_r1_c9.png,逐张
+CORE,15315,153,2,0,阿拉曼战役,EVENT,1,在<非洲北部>消灭1支敌方国家陆军。在<中东><非洲北部>之一征召陆军,cards_sliced/sheet153_r2_c0.png,逐张
+CORE,15316,153,2,1,佩塔尔二世即位,EVENT,1,在<巴尔干>消灭1支敌方国家陆军。在<巴尔干>征召陆军,cards_sliced/sheet153_r2_c1.png,逐张
+CORE,15317,153,2,2,史末资加强对英关系,EVENT,1,在<非洲南部>征召陆军,其在本回合内始终处于补给状态。以此陆军发起1次陆战,cards_sliced/sheet153_r2_c2.png,逐张
+CORE,15318,153,2,3,新加坡要塞化,EVENT,1,在<东南亚>征召陆军。在<南海>征召海军,cards_sliced/sheet153_r2_c3.png,逐张
+CORE,15319,153,2,4,增加英联邦支持,EVENT,1,在<澳大利亚><加拿大><印度>之一征召陆军,cards_sliced/sheet153_r2_c4.png,逐张
+CORE,15320,153,2,5,英国远征军,EVENT,1,在<北海>建设海军。在<西欧>建设陆军,cards_sliced/sheet153_r2_c5.png,逐张
+CORE,15321,153,2,6,低地国家自由军,EVENT,1,法国在<西欧>征召陆军 或 对<西欧>发起陆战,cards_sliced/sheet153_r2_c6.png,逐张
+CORE,15322,153,2,7,法国海军,EVENT,1,法国建设1支海军 或 发起1次海战,cards_sliced/sheet153_r2_c7.png,逐张
+CORE,15323,153,2,8,法国陆军,EVENT,1,法国建设1支陆军 或 发起1次陆战,cards_sliced/sheet153_r2_c8.png,逐张
+CORE,15324,153,2,9,荷属东印度,EVENT,1,法国在<南海>征召1支海军。法国在<印度尼西亚><新几内亚>征召陆军,cards_sliced/sheet153_r2_c9.png,逐张
+CORE,15325,153,3,0,莱茵河与多瑙河,EVENT,1,法国建设1支陆军。法国以此陆军发起1次陆战,cards_sliced/sheet153_r3_c0.png,逐张
+CORE,15326,153,3,1,自由法国同盟,EVENT,1,在<西欧><非洲北部><非洲南部>之二征召法国陆军,cards_sliced/sheet153_r3_c1.png,逐张
+CORE,15327,153,3,2,波兰地下国,EVENT,1,在<东欧>消灭1支敌方国家陆军,cards_sliced/sheet153_r3_c2.png,逐张
+CORE,15328,153,3,3,破译恩尼格码,RESPONSE,1,德国发动[状态卡]效果后:弃置该[状态卡],cards_sliced/sheet153_r3_c3.png,逐张
+CORE,15329,153,3,4,反潜战术,RESPONSE,1,[经济战]被打出时:使其无效,cards_sliced/sheet153_r3_c4.png,逐张
+CORE,15330,153,3,5,防御姿态,RESPONSE,1,补给状态的英国陆军被移除时:其在本回合内无法被移除,cards_sliced/sheet153_r3_c5.png,逐张
+CORE,15331,153,3,6,国士警卫队,RESPONSE,1,敌方国家在<不列颠>建设陆军后:消灭该陆军,cards_sliced/sheet153_r3_c6.png,逐张
+CORE,15332,153,3,7,皇家空军,RESPONSE,1,<不列颠><北海>的英国部队被移除时:使其在本回合内不会被移除,cards_sliced/sheet153_r3_c7.png,逐张
+CORE,15333,153,3,8,配给,RESPONSE,1,英国卡牌生效后:将其洗回牌堆,cards_sliced/sheet153_r3_c8.png,逐张
+CORE,15334,153,3,9,驱逐舰,RESPONSE,1,补给状态的英国或美国海军被移除时:使其在本回合内不会被移除,cards_sliced/sheet153_r3_c9.png,逐张
+CORE,15335,153,4,0,效忠吾王,RESPONSE,1,敌方国家在<澳大利亚><加拿大><印度>建设陆军后:消灭该陆军,cards_sliced/sheet153_r4_c0.png,逐张
+CORE,15336,153,4,1,法兰西爱国者加入同盟,RESPONSE,1,友方国家对<西欧><非洲南部><非洲北部><中东>发起陆战后:在战斗地区征召法国陆军,cards_sliced/sheet153_r4_c1.png,逐张
+CORE,15337,153,4,2,生命的飞跃,RESPONSE,1,法国陆军被移除时:其在本回合内无法被移除,cards_sliced/sheet153_r4_c2.png,逐张
+CORE,15338,153,4,3,反法西斯抵抗运动,STATUS,,跳过出牌阶段行动,弃置2张手牌:对<西欧>或<意大利>发起陆战,cards_sliced/sheet153_r4_c3.png,逐张
+CORE,15339,153,4,4,英国皇家海军,STATUS,,一回合一次,发起海战后,弃置2张手牌:发起1次海战,cards_sliced/sheet153_r4_c4.png,逐张
+CORE,15340,153,4,5,国家资源动员法,STATUS,,计分阶段:<加拿大><北大西洋>每有1支英国陆军或海军,获得1分,cards_sliced/sheet153_r4_c5.png,逐张
+CORE,15341,153,4,6,澳大利亚劳管局,STATUS,,放弃建设陆军:在<澳大利亚>征召陆军,cards_sliced/sheet153_r4_c6.png,逐张
+CORE,15342,153,4,7,印度宣布参战,STATUS,,放弃建设陆军:在<印度>征召陆军,cards_sliced/sheet153_r4_c7.png,逐张
+CORE,15343,153,4,8,霍巴特滑稽坦克,STATUS,,回合内,敌方国家的[状态卡]无效,cards_sliced/sheet153_r4_c8.png,逐张
+CORE,15344,153,4,9,法国流亡政府,STATUS,,打出后,法国在<不列颠>征召陆军。若<西欧>被敌方国家控制:法国的大本营改为<不列颠>,cards_sliced/sheet153_r4_c9.png,逐张
+CORE,15345,153,5,0,塞内加尔步兵团,STATUS,,<非洲南部>成为仅对法国的补给点并增加2个计分标记。跳过出牌阶段行动:法国在<非洲南部>征召陆军,cards_sliced/sheet153_r5_c0.png,逐张
+CORE,15346,153,5,1,自由法国,STATUS,,法国部队总是处于补给状态。英国或美国发起战斗后:法国对战斗地区发起1次战斗,cards_sliced/sheet153_r5_c1.png,逐张
+CORE,15347,153,5,2,波兰主权,STATUS,,<东欧>成为仅对英国的补给点。<东欧>增加1个计分标记。跳过出牌阶段行动:在<东欧>征召陆军,cards_sliced/sheet153_r5_c2.png,逐张
+CORE,15348,153,5,3,殖民帝国,STATUS,,出牌阶段开始时,<加拿大><印度><南非>每有1支英国陆军,可失去1分并执行1次:摸1张牌,cards_sliced/sheet153_r5_c3.png,逐张
+CORE,15349,153,5,4,奇袭塔兰托,ECON,1,[轰炸行动]选择3支<地中海>的意大利海军,将其移除,cards_sliced/sheet153_r5_c4.png,逐张待核
+SUPP,12501,125,0,1,皇冠上的明珠,EVENT,1,在<印度>消灭一支敌方国家陆军,cards_sliced/sheet125_r0_c1.png,来自sheet125
+SUPP,12502,125,0,2,告法国人民书,EVENT,1,法国建设1支陆军或发动1次陆战或建设1支海军或发动1次海战,cards_sliced/sheet125_r0_c2.png,来自sheet125
+SUPP,12503,125,0,3,通丁系统,RESPONSE,,法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战,cards_sliced/sheet125_r0_c3.png,来自sheet125
+SUPP,12504,125,0,4,抵抗万岁,RESPONSE,,法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战,cards_sliced/sheet125_r0_c4.png,来自sheet125

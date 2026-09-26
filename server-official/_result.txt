@@ -1,0 +1,8 @@
+step1: requiring better-sqlite3
+step2: opening db
+step3: reading schema.sql, bytes=29210
+step4: exec schema
+step5: query tables
+TABLES (45): blacklist_mail, blacklist_name, contacts, deleted_users, forum_search, forum_search_config, forum_search_content, forum_search_data, forum_search_docsize, forum_search_idx, game_chat, game_notes, game_replay, game_snap, game_state, games, logins, messages, news, players, posts, ratings, read_threads, threads, titles, tm_banned, tm_pools, tm_queue, tm_results, tm_rounds, tm_seeds, tm_tickets, tm_winners, tokens, unread_chats, unseen_games, user_about, user_first_seen, user_last_seen, user_may_debug, user_move_hist, user_password, user_timeout, users, webhooks
+VIEWS (22): contact_view, game_chat_view, game_export_view, game_replay_view, game_view, game_view_public, message_view, player_rating_view, player_view, post_view, rated_games_view, rating_view, thread_view, time_control_deadline_view, time_control_view, tm_pool_active_view, tm_pool_finished_view, tm_queue_view, user_dynamic_view, user_login_view, user_move_iqr_view, user_view
+DONE

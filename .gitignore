@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.local/
+.venv/
+
+# third-party mirror (not our module, large)
+server-mirror/
+
+# temp / scratch files at repo root
+_scan_mod*.js
+_scan_mod*.txt
+_t.txt
+_tmp_out*.txt
+_tt.txt
+editor_server.err
+editor_server.log
+preview.png
+
+# large binary
+pog.zip
+
+# logs
+*.log
+
+# local browser/automation caches
+.chrome-rtt/
+.playwright-cli/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

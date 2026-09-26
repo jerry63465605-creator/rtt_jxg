@@ -1,0 +1,26 @@
+<style>
+	.hide { display: none; }
+	.scenario_info { display: none; }
+	.scenario_info.show { display: block; }
+</style>
+
+<div class="scenario_info" id="Standard">
+<p>
+标准对局：轴心国 vs 同盟国，各操控多个国家的部队，围绕补给点展开争夺。
+</p>
+<p>
+<i>当前为骨架阶段：地图与连通性已就绪，卡牌与完整回合流程开发中。</i>
+</p>
+</div>
+
+<script>
+let scenario = document.querySelector("select[name='scenario']");
+if (scenario) {
+	scenario.onchange = function (evt) {
+		document.querySelectorAll(".scenario_info").forEach(e => e.classList.remove("show"));
+		let el = document.getElementById(scenario.value);
+		if (el) el.classList.add("show");
+	};
+	scenario.onchange();
+}
+</script>

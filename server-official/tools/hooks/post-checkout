@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# git post-checkout hook to automatically precompress web assets
+
+echo hook post-checkout
+
+for F in $(git ls-files | grep -E "^.*\.(html|css|js|svg)$")
+do
+	if test "$F" -nt "$F.br" || test "$F" -ot "$F.br"
+	then
+		echo brotli -f "$F"
+		brotli -f "$F"
+	fi
+done

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="118" height="118">
+<polygon points="85.5,104.9 112.0,59.0 85.5,13.1 32.5,13.1 6.0,59.0 32.5,104.9" fill="none" stroke="black" stroke-width="6"/>
+<polygon points="85.5,104.9 112.0,59.0 85.5,13.1 32.5,13.1 6.0,59.0 32.5,104.9" fill="none" stroke="royalblue" stroke-width="4">
+<animate attributeName="stroke" values="royalblue;skyblue;royalblue" dur="3s" repeatCount="indefinite"/>
+</polygon>
+</svg>

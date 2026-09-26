@@ -1,0 +1,74 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title Lobby
+		if user
+			meta(http-equiv="refresh" content=900)
+	body
+		include header
+		article.wide
+			h1 Lobby
+
+			p
+				a(href="/create") Create a new game
+
+			h2 Open
+			if open_games.length > 0
+				+gamelist(open_games)
+			else
+				p No open games.
+
+			if replacement_games.length > 0
+				h2 Open (missing players)
+				+gamelist(replacement_games)
+
+			if ENABLE_TOURNAMENTS
+				h2 Tournaments
+
+				table.tm.wide.striped
+					thead
+						tr
+							th(colspan=6) Registrations
+							td !{TM_ICON_QUEUE}
+					tbody
+						each seed in seeds
+							tr
+								if 1
+									td
+										a(href="/"+seed.title_id)
+											img(src="/"+seed.title_id+"/thumbnail.jpg")
+								td
+									a.black(href="/tm/seed/"+seed.seed_name)= seed.seed_name
+								td level #{seed.level}
+
+								if seed.queue_count
+									td #{seed.queue_count} queued
+								else
+									td
+								if seed.ticket_count > 0
+									td #{seed.ticket_count} tickets
+								else
+									td
+								if seed.is_queued
+									td !{TM_ICON_TICKET}
+								else
+									td
+								td
+									if !seed.is_open
+										i closed
+									else if seed.is_queued
+										a(href="/tm/withdraw/" + seed.seed_id + "/" + seed.level) Withdraw
+									else
+										a(href="/tm/register/" + seed.seed_id + "/" + seed.level) Register
+						else
+							tr
+								td You do not qualify for any tournaments.
+								td
+
+				p See <a href="/docs/tournaments.md">tournament information</a>.
+
+				if user && user.is_admin
+					p
+						a.mod(href="/tm/edit") EDIT TOURNAMENTS

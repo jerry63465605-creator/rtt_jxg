@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imperial Struggle - Read me!</title>
+<link rel="stylesheet" href="/fonts/fonts.css">
+<link rel="stylesheet" href="/style.css">
+<style>h1{text-align:center}body{max-width:50rem;margin:0 auto;}
+#hotkeys div {
+	margin: 8px 0;
+	text-indent: -30px;
+	padding-left: 30px;
+}
+</style>
+<body>
+<article>
+
+<h1>Imperial Struggle - Read me!</h1>
+
+<p>
+Module created by Brian Reynolds with Tor Andersson and Christophe Correia.
+<p>
+Rally the Troops engine by Tor Andersson.
+<br>
+Imperial Struggle board game designed by Jason Matthews and Ananda Gupta.
+<br>
+Used by permission from GMT Games.
+
+<h2>Hotkeys</h2>
+
+<div id="hotkeys" style="column-count: 3; column-gap: 20px; max-width: 1000px">
+
+<div>SHIFT = Hide counters</div>
+<div>SPACE = Show/Hide Counters</div>
+<div>ENTER = Toggle Chat</div>
+<div>ESC = Default View</div>
+<div>S = Toggle Score Summary</div>
+<div>Y = Toggle Final Scoring Summary</div>
+<div>E = Toggle Event Card Display</div>
+<div>F = Toggle French Ministry Display</div>
+<div>B = Toggle British Ministry Display</div>
+<div>L = Toggle Log Display</div>
+<div>A = Toggle "All Wars"</div>
+<div>M = Scroll to Map (Top)</div>
+<div>C = Scroll to Cards</div>
+<div>D = Scroll to Debt</div>
+<div>W = Scroll to War</div>
+<div>T = Toggle Score Summary Text Mode</div>
+<div>V = Toggle Verbosity</div>
+<div>Z = Toggle Zoom</div>
+
+</div>
+
+<h2>Recent Changes</h2>
+<br/>15-Sep-2026 - Fixed bug where Military Overruns (w/o bonus) could still remove two things    
+<br/>12-Sep-2026 - Can undo the "discard event" segment of Walpole if happen to click on the wrong card
+<br/>09-Jun-2026 - "Unflag" war tiles cannot be used to remove flags in spaces with conflict markers    
+<br/>23-Apr-2026 - Fixed some instances where Burke, Swift, Law, Acts of Union, and Falklands Crisis could improperly grant credit based on spaces with conflict markers.
+<br/>13-Apr-2026 - Pacte de Famille can be used to refresh any Europe advantages, not just ones currently controlled by active player.
+<br/>01-Apr-2026 - Huguenots can be placed before picking a tile (since it doesn't matter anyway)
+<br/>31-Mar-2026 - Improved 'Inspect Event Card' screen on desktop
+<br/>30-Mar-2026 - Minor cleanups in Sherlock Mode replays
+<br/>28-Mar-2026 - Voltaire fixed to not give TRP for spaces with conflict markers
+<br/>27-Mar-2026 - Event card list no longer displays extra duplicates
+<br/>26-Mar-2026 - Scoring Summary no longer incorrectly counts exhausted advantages toward East India Company bonus
+<br/>26-Mar-2026 - Tuned log colors to increase text contrast.
+<br/>24-Mar-2026 - Fancier scoring summaries.
+<br/>23-Mar-2026 - Enabled high-dpi @2x images for high resolution displays.
+<br/>23-Mar-2026 - Tightened up appearance of action and dirty highlights.
+<br/>23-Mar-2026 - Removed "tipsies" option that allowed putting tooltip image at the upper right.
+<br/>23-Mar-2026 - North American Trade ministry has more prominent log display when it procs (on par with other ministries)
+<br/>22-Mar-2026 - Improved context messages for trying to click on an unflag advantage when you only have a minor action.
+<br/>21-Mar-2026 - Fixed some instances where prompts would include stale headers
+<br/>19-Mar-2026 - Closed some esoteric loopholes where certain events would count conflict spaces when they shouldn't
+<br/>19-Mar-2026 - Show awards & demands in prompt line at start of turn
+<br/>19-Mar-2026 - San Agustin was missing from the 'Additional Territories' list for the American Revolution
+<br/>19-Mar-2026 - 'By Popular Request' - Confirmation step when foolishly placing a conflict on your own space.
+<br/>19-Mar-2026 - Fixed a flow where Choiseul would provide a squadron discount anyway even when player selected Don't Exhaust option
+<br/>19-Mar-2026 - Fixed some edge cases with Edmund Burke (where the combination of major and minor diplomatic points and moves outside of Europe confused the action point calculations)
+<br/>19-Mar-2026 - Fixed a display error in Seven Years War where it would look like a conflicted Spain was going to contribute war strength
+<br/>18-Mar-2026 - Correct spurious extra commas appearing in action points lists
+<br/>18-Mar-2026 - Minorca is NOT part of Spain, per Ananda. (So no Cardinal Ministers bonus from there)
+<br/>18-Mar-2026 - Prestige scoring is not considered in autovictory checks
+<br/>17-Mar-2026 - Second military points shift w/ Jacobites (in same action round) doesn't require a second click on ministry - will ask if you want military or diplomatic.
+<br/>17-Mar-2026 - North American Trade honors Econ bought on turn 6, if it's the first major Econ point you've received from a tile.
+<br/>17-Mar-2026 - Fixed prompt issue with Haitian Revolution (it was displaying opposite # of conflict markers for your bonus situation)
+<br/>17-Mar-2026 - Mediterranean Intrigue can place a conflict in Sardinia
+<br/>16-Mar-2026 - Can't flag a fort that you're only adjacent to from a conflicted market
+<br/>16-Mar-2026 - Fixed some bugs where it falsely claimed you didn't have a connection when using an advantage
+<br/>16-Mar-2026 - Closed loophole where Burke triggered an extra time from same original action
+<br/>16-Mar-2026 - Austro-Spanish Rivalry will work correctly for French when qualify for bonus but no spaces in Dutch Republic available for main effect
+<br/>15-Mar-2026 - Don't keep updating the theater levels for final war on turn 6 when it's already over -- just show the summary/results items
+<br/>15-Mar-2026 - Improved a somewhat confusing message when you click an unflag-discount in your minor action category and you've already used your minor action
+<br/>15-Mar-2026 - Fixed some display glitches with Atlantic Dominance (depending on which side you were playing it sometimes showed up as "hidden" or didn't add to the theater total in all the displays).
+<br/>15-Mar-2026 - Close a loophole where Choiseul was allowing two purchases when only having a minor military action.
+<br/>15-Mar-2026 - Jacobites can't use both functions on same action round
+<br/>14-Mar-2026 - Minorca counts as a prestige space for Cardinal Ministers
+<br/>14-Mar-2026 - Fixed some glitches in post-game reviews
+<br/>14-Mar-2026 - MINICUPS TOURNAMENTS ARE OPEN!!! GET IN THERE AND FIGHT FOR THE KING!!!
+<br/>13-Mar-2026 - Rules Correction: Edmund Burke can proc exactly twice (once for points sourced from your tile, once for points sourced from your event). North American Trade now behaves analogously.
+<br/>13-Mar-2026 - Fixed a missing prompt in Falklands Crisis w/ French Bonus
+<br/>12-Mar-2026 - Action Round headers in the log now mention the turn number (easier to figure out where you are when scrolling back through the log)
+<br/>12-Mar-2026 - Option added to warn with a popup if you skip playing an event when eligible (it defaults to on)
+<br/>12-Mar-2026 - Charles Hanbury Williams discount can be activated even when you only have contingent/restricted diplomatic points available in Europe
+<br/>12-Mar-2026 - Father le Loutre: bonus military points may be spent to buy a military tile (which must then be placed in a North America theatre)
+<br/>12-Mar-2026 - Jacobite Uprisings should not give VP for spaces with conflict markers in them
+<br/>11-Mar-2026 - Jacobite Uprisings: Ministry exhausts properly when its first ability is used. Fixed some issues with shifting spaces in Scotland/Ireland with Military action points.
+<br/>11-Mar-2026 - Improved highlighting of changed conflict markers and changed/added global demands
+<br/>11-Mar-2026 - La Gabelle: exhausting a ministry with it shouldn't trigger Pompadour/DuBarry
+<br/>11-Mar-2026 - Manually clicking a ministry to reveal it will no longer just assume you want to proceed to also exhausting the minister.
+<br/>11-Mar-2026 - USA-flagged territories show in blue on Final Scoring Summary
+<br/>10-Mar-2026 - Atlantic Dominance and Byng tokens are always face-up, so don't display a +2 in the unrevealed total which makes them look like they're being double-counted
+<br/>10-Mar-2026 - South Seas Speculation flow won't also exhaust your discount-minister without asking you first
+<br/>10-Mar-2026 - South Seas Speculation squadron discount can't be applied multiple times (!)
+<br/>10-Mar-2026 - Fixed a bug with using conquest points in naval spaces
+<br/>10-Mar-2026 - Fixed some subtle bugs with already-isolated markets during FR victory in American Revolution
+<br/>10-Mar-2026 - Damaged forts still protect markets from isolation, per 5.4.1 Play Note
+<br/>09-Mar-2026 - Closed a loophole in Antilles War that allowed conquering USA-flagged territories
+<br/>09-Mar-2026 - Native American Alliance & Loge des Neufs Soeurs do not exhaust the advantage you activate with them
+<br/>09-Mar-2026 - Native American Alliance BR bonus is allowed to activate advantages you *just* gained using the event's main power
+<br/>09-Mar-2026 - East India Company was incorrectly counting *exhausted* advantages.
+<br/>09-Mar-2026 - At beginning of a new era, your previous-era-ministries are no longer confusingly shown next to the new Event cards you're reviewing/selecting/discarding.
+<br/>09-Mar-2026 - Fixed bug where War of Polish Succession was giving British a shift in Russia even without qualifying for the bonus
+<br/>09-Mar-2026 - Scoring Summary and other subwindows update 'on the fly' as game advances (or review arrows go forwards/backwards)
+<br/>09-Mar-2026 - A bit more scoring review cleanup (including when the upper prompt showed the wrong name for demands)
+<br/>08-Mar-2026 - Sometimes on iOS the new ministries weren't appearing when it was time to choose.
+<br/>08-Mar-2026 - Fix some display glitches in the debt markers while reviewing scoring phase (the actual debt results were correct, but the markers were being displayed in odd places)
+<br/>08-Mar-2026 - Fix bug where when Jacobite Ministries removed from game, exhaustion markers sometimes 'slid' to the wrong ministry. Also adjusted Turgot a bit (to check debt level *before* debiting the debt being spent)
+<br/>08-Mar-2026 - Ministries w/o activatable abilities (e.g. John Law) no longer print a confusing warning when you manually click to reveal them.
+<br/>07-Mar-2026 - Rollover tooltips for top menu
+<br/>07-Mar-2026 - Misc minor bug fixes
+<br/>06-Mar-2026 - Rollover text for minister cards will now mention exhaustion if any
+<br/>06-Mar-2026 - New User Preference added to always use red to track map changes (even the changes made by France, which are by default displayed in blue)
+<br/>06-Mar-2026 - Rules bug fix - Naval Bastion requires a major military action point to activate
+<br/>06-Mar-2026 - Rules bug fix - it was still undercharging for seizing forts (two bugs in one else!) Fixed the second bug.
+<br/>06-Mar-2026 - Rules bug fix - it was making the wrong player act first during war theater resolution (for unflag and fort/naval tiles -- debt tiles order can't matter)
+<br/>06-Mar-2026 - Fixed a display bug where late in the game it might pretend to be charging you +1 for Haitian Revolution when removing a different conflict marker (it wasn't actually charging you, just trying to trick you in the log)
+<br/>06-Mar-2026 - Fixed a display bug on war mat where it would sometimes show a flag next to an alliance even though alliance had a conflict marker (actual war resolution was correct, but display was off)
+<br/>06-Mar-2026 - Fixed a display bug where it would sometimes say '00 Minor' or '10 Minor' when it really meant '1, 0 Minor'
+<br/>05-Mar-2026 - Tile Gallery page updated to cover the rest of the tiles
+<br/>05-Mar-2026 - Correct rollover text for War of Jenkins' Ear
+<br/>05-Mar-2026 - Corrected over/under charging for repairing/seizing forts
+<br/>05-Mar-2026 - Upcoming Investment Tile box added to help the tile-counters out there :)
+<br/>05-Mar-2026 - Allow unflagging-discount events to work when an event gives you action points in a category not on your investment tile
+<br/>05-Mar-2026 - Beveled marker graphics for Exhausted markers
+<br/>05-Mar-2026 - Some issues with replays corrected - there may be more please let me know
+<br/>04-Mar-2026 - Touch up display of naval costs in the log (display them *after* showing move, don't double-display)
+<br/>04-Mar-2026 - Prevented Jacobite Uprisings from creating spurious/meaningless extra announcements in the log
+<br/>04-Mar-2026 - Fixed problem where Gibraltar (d/b/a Naval Bastion) wasn't debiting the 1 Military cost
+<br/>04-Mar-2026 - Corrected some UI where contingent points in the category of investment tile's major action were being displayed on the other side of the minor action.
+<br/>04-Mar-2026 - Father le Loutre's special military action points can now be used to remove conflicts (in North America)
+<br/>04-Mar-2026 - Rules fix - Conflicts that don't grant strength because they are on neutral spaces aren't removed after war (even if they're in right theater for war)
+<br/>04-Mar-2026 - Rules fix - Global Demands are scored in order from top of chart (rather than e.g. in order they were drawn). Occasionally affects debt situation.
+<br/>04-Mar-2026 - Fixed bug that prevented French from receiving the bonus for War of the Polish Succession
+<br/>03-Mar-2026 - Steadier position of cards while zooming in on mobile devices
+<br/>03-Mar-2026 - Don't show horizontal/vertical scrollbars on scoring summary when not needed
+<br/>03-Mar-2026 - Don't reload whole browser window when using hotkey to change verbosity level
+<br/>03-Mar-2026 - 1.0!!! Party like it's 1789!!!!!!!!!
+<br/>03-Mar-2026 - Fix some broken 'review step' code
+<br/>03-Mar-2026 - Removed some last cheat keys and the like
+<br/>02-Mar-2026 - German Diplomacy, Silesia Negotiations, Italy Influence - tightened up rule enforcement
+<br/>02-Mar-2026 - War of Jenkins ear, French w/o bonus, will no longer falsely advertise a diplomatic point
+<br/>01-Mar-2026 - Ministry card lists now include Revolution Era cards even during Succession Era (so all ministries always inspectable)
+<br/>01-Mar-2026 - Reverted earlier change -- Bank of England CAN be used for debt limit before selecting an investment tile, per Ananda
+<br/>01-Mar-2026 - Cardinal Ministers don't give bonus points for spaces with conflict markers
+<br/>28-Feb-2026 - Consistent with rulebook, stick with the term "Ministry" vs. "Minister" (except for Richelieu and Mazarin of course...)
+<br/>26-Feb-2026 - War of Polish Succession unstuck for French playing it w/o bonus
+<br/>26-Feb-2026 - USA spaces weren't allowing flagging
+<br/>26-Feb-2026 - Robert Walpole's button corrected to "Draw Event" from "Buy Event"
+<br/>26-Feb-2026 - Edmund Burke will function every action round, and won't display weird messages when revealing him for the shift-Sons-of-Liberty discount
+<br/>26-Feb-2026 - Polish messaging for receipt of TRP-for-military-upgrade symbol on turn 6
+<br/>26-Feb-2026 - Shorten button names in Brief mode
+<br/>26-Feb-2026 - Atlantic Dominance requires reaching the minimum victory threshold (not just having the highest strength in the theater)
+<br/>26-Feb-2026 - Charles Hanbury Williams only applies in Prussia, German States, Russia
+<br/>25-Feb-2026 - Cook & Bougainville don't award fractional action points
+<br/>25-Feb-2026 - Changed visual paradigm for End Action Round button
+<br/>25-Feb-2026 - Changed format of how costs are shown
+<br/>25-Feb-2026 - Editing pass on log to get rid of mixed tenses (Log = past tense, Prompt = present tense. Future tense when an effect will last e.g. rest of round or rest of turn)
+<br/>25-Feb-2026 - Abbreviate "Action Points" to "AP" in main prompt, if verbosity is brief
+<br/>25-Feb-2026 - Fixed problem where war tiles & log entries were sometimes temporarily hidden during war resolution
+<br/>25-Feb-2026 - Some fixes w/ Byng being double-counted in the display (after theater already resolved)
+<br/>25-Feb-2026 - Stop it from flipping player names in the log after a bid-for-sides start results in a player swap
+<br/>25-Feb-2026 - Scoring summary was treating Voltaire as VPs instead of TRPs.
+<br/>25-Feb-2026 - Fixed "infinite conflicts" typo in Haitian Revolution
+<br/>22-Feb-2026 - No longer highlights advantages that you control but you don't have any of the kind of action points needed to activate them
+<br/>22-Feb-2026 - Don't let France accidentally 'undo' perma-Jacobites at beginning of Turn 5
+<br/>22-Feb-2026 - Atlantic Dominance is supposed to get placed on any victory, not just 3+
+<br/>22-Feb-2026 - Warn in log when Military Spending Overruns have no more legal targets.
+<br/>22-Feb-2026 - Warn in log when excess minor action points are forfeited.
+<br/>21-Feb-2026 - Don't allow Edmond Halley to discard event for TRP if no BR squadron is in Europe
+<br/>21-Feb-2026 - Don't reveal war tiles during bidding for sides
+<br/>21-Feb-2026 - Fixed final scoring error where it would add 1/2 a VP for debt
+<br/>21-Feb-2026 - BE CAREFUL OUT THERE - during military upgrades, I switched the flow to which-tile-to-remove (instead of which-to-keep), for consistency with other flows.
+<br/>21-Feb-2026 - Advantage names in all caps when labeling boxes. Easier to read the colored text.
+<br/>21-Feb-2026 - Fixed a bug where, following a war conquest, the margin of victory display for the war was incorrectly being updated with the results of the conquest.
+<br/>21-Feb-2026 - Revised European Panic prompt
+<br/>20-Feb-2026 - Clearer indication when choosing investments about who moves first & last in the round.
+<br/>20-Feb-2026 - Removed intrusive tooltips on mobile. Can manually inspect individual cards in event/ministry dialogs on mobile.
+<br/>20-Feb-2026 - Adjusted code for preferences, tooltips, and stacked counters (You shouldn't notice any changes; please alert me if you see any new oddities in those areas)
+<br/>20-Feb-2026 - Discovered I'd broken "end-of-round advantage reminders" and restored them
+<br/>19-Feb-2026 - Refactored reviews a bit. Fix for shipbuilding-discount advantage when getting autoreminded; also now fixed for clicking advantage first.
+<br/>18-Feb-2026 - Fix some Bidding UI, and fixed a problem where the bidder assigned the "French color" always got to bid first
+<br/>18-Feb-2026 - BID FOR SIDES! PRE-ASSIGN-TRP TO BRITAIN! OR EVEN FRANCE! WHEE!
+<br/>18-Feb-2026 - Removed an extra confirm-this-debt/trp-spend step that wasn't really necessary
+<br/>17-Feb-2026 - "Please Pardon Our Mess" - cleared up some clunky little bugs while upgrading data formats
+<br/>16-Feb-2026 - Fixed Jacobite Victory markers appearing spuriously early on
+<br/>16-Feb-2026 - BETA BEGINS!!! Tagging this the beginning of a real beta since we're effectively Feature Complete. Not that we won't think of more improvements, but the app is really feeling 'there'
+<br/>16-Feb-2026 - Starting to work on "storage space" optimizations -- so if you see any weeeeeird new bugs let me know right away :)
+<br/>16-Feb-2026 - A few straggler "flag misalignments" in wars fixed
+<br/>15-Feb-2026 - Added some little flags to the scoring summary
+<br/>15-Feb-2026 - Fix some bugs in the American Revolution
+<br/>15-Feb-2026 - Experimenting with always-on VP display (and different locations by platform)
+<br/>15-Feb-2026 - Exhaust Jacobite Uprisings cash-for-VPs ability when used (also display the messages in a ministry box instead of just plain log)
+<br/>15-Feb-2026 - Margin-of-victory indicators on war mats to show which tier of victory was won
+<br/>14-Feb-2026 - Austro-Spanish Rivalry now correctly removes a FR Bonus War Tile
+<br/>14-Feb-2026 - Score Summary can be toggled between "text" and "graphic" mode. T as a hotkey for that.
+<br/>14-Feb-2026 - La Gabelle should not trigger James Watt's bonus. Gabelle log box also fixed to not continue infinitely.
+<br/>14-Feb-2026 - Antilles War no longer tries to have you remove fractional amounts of squadrons
+<br/>14-Feb-2026 - Did a round of Scoring Summary improvements
+<br/>14-Feb-2026 - While choosing event cards at the beginning of an era, it shows the full ministry (to assist with decision-making)
+<br/>14-Feb-2026 - Some cases where Choiseul wouldn't want to spend his point to deploy a squadron have been corrected
+<br/>14-Feb-2026 - Stamp Act prompt string is no longer null
+<br/>14-Feb-2026 - Happy Valentine's Day! Voltaire now gives TRP like he's supposed to, instead of (oops) VP!
+<br/>13-Feb-2026 - Fixed race condition in Cook & Bougainville event
+<br/>13-Feb-2026 - Fixed a crash bug in the Gabelle event's reminder prompt
+<br/>13-Feb-2026 - So! There were some (BIG!) reshuffle bugs depending on where you hit the reshuffle. TL;DR you might start seeing more Revolution Era event cards!
+<br/>13-Feb-2026 - Fixed an Autovictory Bug in wars!
+<br/>13-Feb-2026 - Cleaned up the 'Spend Action Points or Activate Advantage / Ministry' prompt when you don't have a usable advantage (and/or a clickable ministry)
+<br/>13-Feb-2026 - Stop reminding people about place-conflict advantages when there's nowhere to put a conflict (or when only legal spaces are your own)
+<br/>13-Feb-2016 - Realigned alliance flags in 7YW/2 theater (Third Carnatic War)
+<br/>11-Feb-2016 - Improved and cleaned up the log during War Turns
+<br/>11-Feb-2026 - In war display, prior to a theater being revealed your own total of unrevealed tiles is now shown in parentheses (trying to make this less confusing)
+<br/>11-Feb-2026 - Improved Final Scoring Summary
+<br/>11-Feb-2026 - All bonus war tile rollovers were showing the "names" of the corresponding WSS French generals (descriptions were otherwise accurate, and now the names are fixed)
+<br/>11-Feb-2026 - Fixed 'Byng' tile not showing up and throwing browser errors
+<br/>11-Feb-2026 - Final Scoring Summary, per Dave's Wet Dream
+<br/>11-Feb-2026 - After WAS, checks if Jacobite Uprisings get added in mid-ministry-cycle
+<br/>11-Feb-2026 - Confirmations when trying to end your final action round of the turn w/o placing Huguenots, using Bank of England's debt limit, gaining Halley's TRP, or using Walpole.
+<br/>11-Feb-2026 - Caribbean Slave Revolts was always giving its bonus no matter what
+<br/>11-Feb-2026 - Rolled back code "cleanup" that caused a bug
+<br/>10-Feb-2026 - Award Phase - easier to read, easier to understand!
+<br/>10-Feb-2026 - Global Demand Phase - log is prettier with the tiles shown instead of text
+<br/>10-Feb-2026 - A few more reminders to use advantages
+<br/>10-Feb-2026 - Townshend Acts marker displays properly
+<br/> 9-Feb-2026 - "D" to scroll to Debt/TRP display (a/k/a General Records Track). Can also click on the upper right "debt & trps" line to get scrolled there
+<br/> 9-Feb-2026 - I've tried to get most ministry effects displaying inside the cute little "boxes" in the log, for better clarity/readability. Let me know if anything has gone wrong.
+<br/> 9-Feb-2026 - New World Huguenots ministry becomes exhausted when it is used
+<br/> 9-Feb-2026 - Action point symbols added to rollover text
+<br/> 8-Feb-2026 - Action point symbols added to prompt line & log
+<br/> 8-Feb-2026 - Touch up some "waiting for..." text
+<br/> 8-Feb-2026 - Queen Anne's War (flag alignment)
+<br/> 8-Feb-2026 - Consistently lowercase "conquest points"
+<br/> 8-Feb-2026 - Better whitespace / bolding when buying/placing bonus war tiles (and a few other places)
+<br/> 8-Feb-2026 - Fixed problem where Jacobite Uprisings couldn't be used to shift multiple spaces in same action round
+<br/> 8-Feb-2026 - Hide shortcuts on menu when playing on mobile
+<br/> 8-Feb-2026 - Better narration of debt limit overruns.
+<br/> 8-Feb-2026 - Corrected Scoring Review "prompts" that were saying the wrong demand name (log messages & actual scoring were already correct)
+<br/> 8-Feb-2026 - Corrected misaligned flags in theaters 1 & 3 of AWI
+<br/> 8-Feb-2026 - Log will acknowledge when theater loser *doesn't* refuse a conquest
+<br/> 5-Feb-2026 - Added a bunch of hotkeys (see above)
+<br/> 5-Feb-2026 - Fixed some crash bugs that were happening when watching/reviewing games
+<br/> 5-Feb-2026 - On mobile don't have the #-of-action-points-by-type "fold up" -- always display that part
+<br/> 5-Feb-2026 - Terser button names on mobile
+<br/> 5-Feb-2026 - Adjust screen positioning/sizing of card tracking & score summary screens on mobile
+<br/> 5-Feb-2026 - Clean up graphic artifacts on mobile
+<br/> 5-Feb-2026 - Edmund Burke no long gradually dribbles out an infinitely renewable supply of diplomatic points in Europe
+<br/> 5-Feb-2026 - Don't charge the +1 for seizing an enemy fort when we're only building one for the first time
+<br/> 4-Feb-2026 - Bank of England: polished an additional path for using the event card power (you can start from the ministry as well as starting from the event card)
+<br/> 4-Feb-2026 - Don't display reason game ended twice
+<br/> 4-Feb-2026 - Display Jacobite Victory/Defeat tokens on the turn track as well as near Scotland -- so you find them wherever you're hunting for them
+<br/> 4-Feb-2026 - Put a little green ♢ symbol next to the prestige indicator at the European award (to distinguish the two indicators slightly better)
+<br/> 4-Feb-2026 - Pact de Famille no longer refreshes advantages outside of Europe (and also ends the event properly)
+<br/> 4-Feb-2026 - Corrected some theaters that weren't counting (and removing) conflicts. WSS Theater 4 & 7YW Theater 2.
+<br/> 4-Feb-2026 - Remembers if a conquest was previously refused this round so it can charge 5 VP instead of 3 VP
+<br/> 4-Feb-2026 - Austro-Spanish Rivalry now properly removes a *bonus* war tile not a *basic* one
+<br/> 4-Feb-2026 - Player Aid Card and various original mats accessible from the menu
+<br/> 4-Feb-2026 - Rulebook and Playbook accessible from the menu
+<br/> 4-Feb-2026 - Menu option added for a scoring summary!
+<br/> 4-Feb-2026 - Menu added for examining all event cards (including discards & played events), all ministries, etc.
+<br/> 4-Feb-2026 - If a market changes control during a round, you can't chain from it 'even if you get it back later in the round'
+<br/> 3-Feb-2026 - Clicking on links in the log also flashes the target item on the screen (in addition to scrolling-to-the-thing)
+<br/> 3-Feb-2026 - Blank log lines added after standard moves (reflagging a space, deploying a navy) for better log readability. Let me know if others are needed.
+<br/> 3-Feb-2026 - Most underlined links in the log will now respond to clicking on them by scrolling that thing into view
+<br/> 3-Feb-2026 - If you set your Display/Log preference to 'Brief' then Britain/British will abbreviate to BR and France/French to FR throughout the log display
+<br/> 3-Feb-2026 - Will no longer spuriously display '0 Minor' in a category you never had minor action points in
+<br/> 3-Feb-2026 - Fix Acts of Union event
+<br/> 3-Feb-2026 - When displaying ALL war mats, earlier wars will show the winners/margins for each theater (but ONLY far wars completed *after* starting to run this version)
+<br/> 3-Feb-2026 - Added a checkbox to see ALL war mats at once (it's down by the war mats). Might try to find a way to add war totals from already-completed wars.
+<br/> 3-Feb-2026 - Adjusted some flag markers on war mats that were in wrong rows
+<br/> 3-Feb-2026 - Exhausted markers additionally placed on the map for advantages owned by players
+<br/> 2-Feb-2026 - Bank of England (and Condorcet) should now work for playing mismatched event cards
+<br/> 2-Feb-2026 - Revealed ministry cards are now visible to opponents (and observers) in the lower display
+<br/> 2-Feb-2026 - Improved rollover text for wartiles with functions (i.e. took Dave's suggestion)
+<br/> 2-Feb-2026 - Fixed saves corrupted by earlier naval bugs
+<br/> 1-Feb-2026 - Fixed a LOT of small squadron issues. (Quadruple Alliance, displacing squadrons, etc)
+<br/> 1-Feb-2026 - New World Huguenots ministry was not accepting clicks. Now it is.
+<br/> 1-Feb-2026 - Some edge cases with Edmund Burke and calculating total diplomatic points available
+<br/> 1-Feb-2026 - Scoring display fixed to reveal itself one region at a time again.
+<br/> 1-Feb-2026 - Choiseul no longer gives a diplomatic point rather than a military point when manually activated
+<br/> 1-Feb-2026 - Fix and patch horrible error I introduced when simplifying naval move display
+<br/> 1-Feb-2026 - Final scoring will now correctly award VPs for demands (won't think they're all "ties")
+<br/> 1-Feb-2026 - Final scoring was only awarding 2 VP for the *first* captured territory it came across
+<br/> 1-Feb-2026 - Massachusetts Bay flag cost corrected from 2 to 3
+<br/> 1-Feb-2026 - Fix for flows not realizing that Pitt the Elder and various others are applying their discounts
+<br/> 1-Feb-2026 - Fix if VP goes CRAZY out of range (congratulations, Christophe!)
+<br/>31-Jan-2026 - Correct buying Diplo/Econ points in turn 6 to mark player eligible to spend debt/trps on those categories
+<br/>30-Jan-2026 - Reminder to activate James Watt at end of first action round. Reminder to activate Pompadour & Barry when you use an advantage in Europe.
+<br/>30-Jan-2026 - Tightened up navy logging a bit and improved rollovers for spaces especially naval ones. Advantage rollovers explain "reason why you can't use this advantage right now"
+<br/>30-Jan-2026 - Fixed some problems where rollover images would return as unwanted artifacts in later rollovers.
+<br/>30-Jan-2026 - Better display for VP > 30 and VP < 0 ("Your winnings, sir...")
+<br/>30-Jan-2026 - Text distinguishes more between different spaces in same country (e.g. "Scotland - alliance")
+<br/>30-Jan-2026 - Fixed issue where Jonathan Swift & other "discount ministers" were sometimes ignored on first transaction after being revealed (in reminder flow)
+<br/>29-Jan-2026 - Squadrons animate between locations when they are moved
+<br/>29-Jan-2026 - Fix bug where repairing a fort unflagged it
+<br/>29-Jan-2026 - Award, Demand, and Investment tiles "deal out" rather than just insta-appearing in place
+<br/>29-Jan-2026 - Flags on demands & awards
+<br/>28-Jan-2026 - "Click X" type instructions display as "Tap X" instructions when playing on mobile
+<br/>28-Jan-2026 - "Waiting for France..." messages now give more information what the opponent is actually doing
+<br/>28-Jan-2026 - It wasn't showing the right number of conflict flags in some wars
+<br/>28-Jan-2026 - War review was sometimes skipping one player's opportunity to click through revealing war tiles for a theater, temporarily creating a map view that wasn't reflective of the real board
+<br/>28-Jan-2026 - When conquering a territory but asking opponent whether to permit conquest, mark the space touched-by-side so there will be user feedback
+<br/>28-Jan-2026 - Unflagging a market now removes the 'isolated' state from that space (so no-flag markets won't think they're "isolated")
+<br/>28-Jan-2026 - Fixed several bugs with Silk advantage and other similar advantages e.g. Rum that weren't firing
+<br/>28-Jan-2026 - Fixed bug where opposing naval squadrons could be displaced when only a minor military action was available
+<br/>28-Jan-2026 - Fix issue where Pitt the Elder didn't have his diplomatic event marked exhausted when activating it manually
+<br/>28-Jan-2026 - Fix Charles Hanbury Williams' missing button in the client
+<br/>28-Jan-2026 - Fix Native American Alliances (wasn't giving the economic points to the French properly)
+<br/>28-Jan-2026 - First pass at sorting investment tiles.
+<br/>28-Jan-2026 - Don't allow multiple advantages from same region in a single action round
+<br/>27-Jan-2026 - Don't give Atlantic Dominance if you don't at least meet the minimum tier of victory
+<br/>26-Jan-2026 - Lots of crash bugs fixed (Fuzzer passes)
+<br/>26-Jan-2026 - Military Upgrade reminder button on bar (when no other actions left), and scrolls you down to it
+<br/>23-Jan-2026 - Fixed Salon d'Hercule not being hooked up. Fixed a crash when activating certain advantages.
+<br/>23-Jan-2026 - Centered available ministries window when choosing new ministries
+<br/>23-Jan-2026 - Upper right window now shows debt / trp availability *separately* rather than summed
+<br/>23-Jan-2026 - Clear previous turns awards/demands from the display when beginning turn overview
+<br/>23-Jan-2026 - Don't unnecessarily exhaust Minister when merely clicking to reveal him
+<br/>23-Jan-2026 - Fixed bug where both players were sharing same Ministry Exhaustion array
+<br/>23-Jan-2026 - Removed "auto-cheat" for Event bonuses (you actually have to have the Ministry keywords again, haha!)
+<br/>22-Jan-2026 - ALPHA BEGINS -- Santa brought bugs!!! For you to find!!!
+
+
+<br>
+<br>
+
+<img style="display:block;margin:20px auto;" src="/imperial-struggle/tiles75/hex/warbasic_reverse_fr.png">

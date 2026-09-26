@@ -1,0 +1,103 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title= seed.seed_name
+		style.
+			#seed_info td { padding: 2px 10px }
+			#seed_info td:first-child { width: 80px }
+			#seed_info tr:first-child td { padding-top: 5px }
+			#seed_info tr:last-child td { padding-bottom: 5px }
+			table { margin: 1em 0 0.5em 0 }
+	body
+		include header
+		article
+			h1= seed.seed_name
+
+			div.logo
+				+gamecover(seed.title_id)
+
+			if error
+				p.error= error
+
+			table#seed_info.half
+				tr
+					td Format
+					td
+						a(href="/docs/tournaments.md") Mini Cup
+				if seed.scenario !== "Standard"
+					tr
+						td Scenario
+						td #{seed.scenario}
+				if seed.options !== "{}"
+					tr
+						td Options
+						td #{format_options(seed.options)}
+				tr
+					td Players
+					td #{seed.pool_size}
+				tr
+					td Matches
+					if (seed.is_concurrent)
+						td #{seed.match_count} concurrent
+					else
+						td #{seed.match_count} sequential
+
+				tr
+					td Stagger
+					td #{seed.stagger} days
+				tr
+					td Deadline
+					td #{seed.deadline} days per round
+
+				if seed.seed_notice
+					tr
+						td Notice
+						td
+							i= seed.seed_notice
+
+			if user && user.is_admin
+				p
+					a.mod(href="/tm/edit/"+seed.seed_name) EDIT
+
+			table.tm.wide.striped
+				thead
+					tr
+						th Registrations
+						th Players
+						th Tickets
+						th
+						th.r !{TM_ICON_QUEUE}
+				tbody
+					each queue,ix in queues
+						tr
+							- var tickets = may_join_seed_level(user.user_id, seed.seed_id, ix+1)
+
+							//td #{seed.seed_name}.#{ix+1}
+							td level #{ix+1}
+							if queue.length > 0
+								td!= queue.map(p => `<a class="black" href="/user/${p.name}">${p.name}</a>`).join(", ")
+							else
+								td
+
+							if tickets && ix > 0
+								td #{tickets} tickets
+							else
+								td
+
+							if queue.find(p => p.user_id === user.user_id)
+								td !{TM_ICON_TICKET}
+								td
+									a(href="/tm/withdraw/" + seed.seed_id + "/" + (ix+1)) Withdraw
+							else
+								if may_register && tickets > 0
+									td
+									td
+										a(href="/tm/register/" + seed.seed_id + "/" + (ix+1)) Register
+								else
+									td
+									td
+
+			+poollist(active_pools, "Active", TM_ICON_ACTIVE)
+			+poollist(finished_pools, "Finished", TM_ICON_FINISHED)

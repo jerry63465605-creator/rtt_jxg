@@ -1,0 +1,357 @@
+<DOCTYPE html>
+<meta name="viewport" content="width=1000">
+<title>Imperial Struggle - Tiles</title>
+<style>
+html {
+	background-color: slategray;
+	margin: 20px;
+}
+body {
+	text-align: center;
+	max-width: 1400px;
+	margin: 0 auto;
+}
+h2 {
+	background-color: #0002;
+	color: white;
+	padding: 4px;
+}
+
+img {
+	margin: 8px;
+}
+
+img.advantage.reverse { margin-right: 0 }
+img.advantage.reverse + img { margin-left: 0 }
+
+.square, .square-sm {
+	border-width: 2px;
+	border-style: solid;
+}
+
+.square.advantage { background-color: #6c6257; border-color: #8a7f74 #50463c #50463c #8a7f74; box-shadow: 0 0 0 1px #070300; }
+.square.investment { background-color: #906d90; border-color: #b490b4 #6d4c6d #6d4c6d #b490b4; box-shadow: 0 0 0 1px #100012; }
+.square.investment.reverse { background-color: #5b255e; border-color: #713973 #461049 #461049 #713973; box-shadow: 0 0 0 1px #0b0010; }
+
+.square-sm { background-color: #eddbbc; border-color: #fffddd #b3a284 #b3a284 #fffddd; box-shadow: 0 0 0 1px #1b0f00; }
+.square-sm.black { background-color: #444444; border-color: #595959 #303030 #303030 #595959; box-shadow: 0 0 0 1px #020202; }
+.square-sm.br { background-color: #b7392c; border-color: #dc5b4b #930f07 #930f07 #dc5b4b; box-shadow: 0 0 0 1px #280000; }
+.square-sm.fr { background-color: #0069a5; border-color: #3287c6 #004c85 #004c85 #3287c6; box-shadow: 0 0 0 1px #00002c; }
+
+.square-sm.flag_fr { background-color: #306e8e; border-color: #4f8dae #0b516f #0b516f #4f8dae; box-shadow: 0 0 0 1px #00031b; }
+.square-sm.flag_br { background-color: #964c40; border-color: #b7695c #762f25 #762f25 #b7695c; box-shadow: 0 0 0 1px #1b0000; }
+.square-sm.flag_usa { background-color: #b383a7; border-color: #deacd2 #895c7e #895c7e #deacd2; box-shadow: 0 0 0 1px #180013; }
+.square-sm.flag_spain { background-color: #e09b26; border-color: #ffcb60 #af6d00 #af6d00 #ffcb60; box-shadow: 0 0 0 1px #280000; }
+
+
+</style>
+
+<body>
+
+<h2> Investment Tiles </h2>
+<img class="investment reverse square" src="../tiles75/square/investment_reverse.webp">
+<img class="investment square" src="../tiles75/square/investment00_4e_2d.webp">
+<img class="investment square" src="../tiles75/square/investment01_4e_2d.webp">
+<img class="investment square" src="../tiles75/square/investment02_4e_2m.webp">
+<img class="investment square" src="../tiles75/square/investment03_4e_2m.webp">
+<img class="investment square" src="../tiles75/square/investment04_3e_2d.webp">
+<img class="investment square" src="../tiles75/square/investment05_3e_2m.webp">
+<img class="investment square" src="../tiles75/square/investment06_2e_2d.webp">
+<img class="investment square" src="../tiles75/square/investment07_2e_2m.webp">
+<img class="investment square" src="../tiles75/square/investment08_4d_2e.webp">
+<img class="investment square" src="../tiles75/square/investment09_4d_2e.webp">
+<img class="investment square" src="../tiles75/square/investment10_4d_2m.webp">
+<img class="investment square" src="../tiles75/square/investment11_4d_2m.webp">
+<img class="investment square" src="../tiles75/square/investment12_3d_2e.webp">
+<img class="investment square" src="../tiles75/square/investment13_3d_2m.webp">
+<img class="investment square" src="../tiles75/square/investment14_2d_2e.webp">
+<img class="investment square" src="../tiles75/square/investment15_2d_2m.webp">
+<img class="investment square" src="../tiles75/square/investment16_4m_2e.webp">
+<img class="investment square" src="../tiles75/square/investment17_4m_2e.webp">
+<img class="investment square" src="../tiles75/square/investment18_4m_2d.webp">
+<img class="investment square" src="../tiles75/square/investment19_4m_2d.webp">
+<img class="investment square" src="../tiles75/square/investment20_3m_2e.webp">
+<img class="investment square" src="../tiles75/square/investment21_3m_2d.webp">
+<img class="investment square" src="../tiles75/square/investment22_2m_2e.webp">
+<img class="investment square" src="../tiles75/square/investment23_2m_2d.webp">
+
+<h2> Advantage Tiles </h2>
+<img class="advantage reverse square" src="../tiles75/square/adv00r_baltic_trade.webp">
+<img class="advantage square" src="../tiles75/square/adv00f_baltic_trade.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv01r_central_europe_conflict.webp">
+<img class="advantage square" src="../tiles75/square/adv01f_central_europe_conflict.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv02r_german_diplomacy.webp">
+<img class="advantage square" src="../tiles75/square/adv02f_german_diplomacy.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv03r_italy_influence.webp">
+<img class="advantage square" src="../tiles75/square/adv03f_italy_influence.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv04r_mediterranean_intrigue.webp">
+<img class="advantage square" src="../tiles75/square/adv04f_mediterranean_intrigue.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv05r_naval_bastion.webp">
+<img class="advantage square" src="../tiles75/square/adv05f_naval_bastion.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv06r_silesia_negotiations.webp">
+<img class="advantage square" src="../tiles75/square/adv06f_silesia_negotiations.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv07r_algonquin_raids.webp">
+<img class="advantage square" src="../tiles75/square/adv07f_algonquin_raids.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv08r_fur_trade.webp">
+<img class="advantage square" src="../tiles75/square/adv08f_fur_trade.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv09r_iroquois_raids.webp">
+<img class="advantage square" src="../tiles75/square/adv09f_iroquois_raids.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv10r_patriot_agitation.webp">
+<img class="advantage square" src="../tiles75/square/adv10f_patriot_agitation.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv11r_wheat.webp">
+<img class="advantage square" src="../tiles75/square/adv11f_wheat.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv12r_fruit.webp">
+<img class="advantage square" src="../tiles75/square/adv12f_fruit.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv13r_letters_of_marque.webp">
+<img class="advantage square" src="../tiles75/square/adv13f_letters_of_marque.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv14r_pirate_havens.webp">
+<img class="advantage square" src="../tiles75/square/adv14f_pirate_havens.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv15r_rum.webp">
+<img class="advantage square" src="../tiles75/square/adv15f_rum.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv16r_slaving_contracts.webp">
+<img class="advantage square" src="../tiles75/square/adv16f_slaving_contracts.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv17r_power_struggle.webp">
+<img class="advantage square" src="../tiles75/square/adv17f_power_struggle.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv18r_raids_and_incursions.webp">
+<img class="advantage square" src="../tiles75/square/adv18f_raids_and_incursions.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv19r_separatist_wars.webp">
+<img class="advantage square" src="../tiles75/square/adv19f_separatist_wars.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv20r_silk.webp">
+<img class="advantage square" src="../tiles75/square/adv20f_silk.webp">
+<img class="advantage reverse square" src="../tiles75/square/adv21r_textiles.webp">
+<img class="advantage square" src="../tiles75/square/adv21f_textiles.webp">
+
+<h2> Award Markers </h2>
+<img class="black square-sm" src="../tiles75/square-sm/award_reverse.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award00_3.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award01_2.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award02_1.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award03_1.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award04_1trp.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award05_1trp.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award06_0trp.webp">
+<img class="black square-sm" src="../tiles75/square-sm/award07_0trp.webp">
+
+<h2> Demand Markers </h2>
+<img class="square-sm" src="../tiles75/square-sm/demand_reverse.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_cotton.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_fish.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_furs.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_spice.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_sugar.webp">
+<img class="square-sm" src="../tiles75/square-sm/demand_tobacco.webp">
+
+<h2> War Tiles (Basic) </h2>
+
+<img class="tile" src="../tiles75/hex/warbasic_reverse_fr.webp">
+<img class="tile" src="../tiles75/hex/warbasic00_fr_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic01_fr_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic02_fr_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic03_fr_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic04_fr_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic05_fr_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic06_fr_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic07_fr_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic08_fr_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic09_fr_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic10_fr_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic11_fr_0fort.webp">
+<img class="tile" src="../tiles75/hex/warbasic12_fr_0fort.webp">
+<img class="tile" src="../tiles75/hex/warbasic13_fr_neg1flag.webp">
+<img class="tile" src="../tiles75/hex/warbasic14_fr_neg1flag.webp">
+<img class="tile" src="../tiles75/hex/warbasic15_fr_neg1flag.webp">
+
+<br>
+<img class="tile" src="../tiles75/hex/warbasic_reverse_br.webp">
+<img class="tile" src="../tiles75/hex/warbasic16_br_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic17_br_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic18_br_2.webp">
+<img class="tile" src="../tiles75/hex/warbasic19_br_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic20_br_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic21_br_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic22_br_1.webp">
+<img class="tile" src="../tiles75/hex/warbasic23_br_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic24_br_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic25_br_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic26_br_0debt.webp">
+<img class="tile" src="../tiles75/hex/warbasic27_br_0fort.webp">
+<img class="tile" src="../tiles75/hex/warbasic28_br_0fort.webp">
+<img class="tile" src="../tiles75/hex/warbasic29_br_neg1flag.webp">
+<img class="tile" src="../tiles75/hex/warbasic30_br_neg1flag.webp">
+<img class="tile" src="../tiles75/hex/warbasic31_br_neg1flag.webp">
+
+<h2> War Tiles (WSS) </h2>
+<img class="tile" src="../tiles75/hex/war_wss_fr_reverse.webp">
+<img class="tile" src="../tiles75/hex/war00_wss_fr_vendome.webp">
+<img class="tile" src="../tiles75/hex/war01_wss_fr_de_villars.webp">
+<img class="tile" src="../tiles75/hex/war02_wss_fr_berwick.webp">
+<img class="tile" src="../tiles75/hex/war03_wss_fr_cadiz_refused.webp">
+<img class="tile" src="../tiles75/hex/war04_wss_fr_d_estrees.webp">
+<img class="tile" src="../tiles75/hex/war05_wss_fr_musketeers.webp">
+<img class="tile" src="../tiles75/hex/war06_wss_fr_d_artagnan.webp">
+<img class="tile" src="../tiles75/hex/war07_wss_fr_maison_du_roi.webp">
+<img class="tile" src="../tiles75/hex/war08_wss_fr_boufflers.webp">
+<img class="tile" src="../tiles75/hex/war09_wss_fr_de_tesse.webp">
+<img class="tile" src="../tiles75/hex/war10_wss_fr_crack_troops.webp">
+<img class="tile" src="../tiles75/hex/war11_wss_fr_ultima_ratio_regum.webp">
+<br>
+<img class="tile" src="../tiles75/hex/war_wss_br_reverse.webp">
+<img class="tile" src="../tiles75/hex/war12_wss_br_marlborough.webp">
+<img class="tile" src="../tiles75/hex/war13_wss_br_prince_eugene.webp">
+<img class="tile" src="../tiles75/hex/war14_wss_br_church.webp">
+<img class="tile" src="../tiles75/hex/war15_wss_br_galway.webp">
+<img class="tile" src="../tiles75/hex/war16_wss_br_rooke.webp">
+<img class="tile" src="../tiles75/hex/war17_wss_br_savoy_defects.webp">
+<img class="tile" src="../tiles75/hex/war18_wss_br_foot_guards.webp">
+<img class="tile" src="../tiles75/hex/war19_wss_br_united_parliament.webp">
+<img class="tile" src="../tiles75/hex/war20_wss_br_huguenot_rebels.webp">
+<img class="tile" src="../tiles75/hex/war21_wss_br_prize_hunting.webp">
+<img class="tile" src="../tiles75/hex/war22_wss_br_leopold.webp">
+<img class="tile" src="../tiles75/hex/war23_wss_br_louis_william.webp">
+
+
+<h2> War Tiles (WAS) </h2>
+<img class="tile" src="../tiles75/hex/war_was_fr_reverse.webp">
+<img class="tile" src="../tiles75/hex/war24_was_fr_frederick.webp">
+<img class="tile" src="../tiles75/hex/war25_was_fr_saxe.webp">
+<img class="tile" src="../tiles75/hex/war26_was_fr_bonnie_prince_charlie.webp">
+<img class="tile" src="../tiles75/hex/war27_was_fr_castries.webp">
+<img class="tile" src="../tiles75/hex/war28_was_fr_bourdonnais.webp">
+<img class="tile" src="../tiles75/hex/war29_was_fr_murray.webp">
+<img class="tile" src="../tiles75/hex/war30_was_fr_contades.webp">
+<img class="tile" src="../tiles75/hex/war31_was_fr_o_sullivan.webp">
+<img class="tile" src="../tiles75/hex/war32_was_fr_de_coigny.webp">
+<img class="tile" src="../tiles75/hex/war33_was_fr_nizams_favor.webp">
+<img class="tile" src="../tiles75/hex/war34_was_fr_lowendal.webp">
+<img class="tile" src="../tiles75/hex/war35_was_fr_von_schwerin.webp">
+<br>
+<img class="tile" src="../tiles75/hex/war_was_br_reverse.webp">
+<img class="tile" src="../tiles75/hex/war36_was_br_clive.webp">
+<img class="tile" src="../tiles75/hex/war37_was_br_stair.webp">
+<img class="tile" src="../tiles75/hex/war38_was_br_boscawen.webp">
+<img class="tile" src="../tiles75/hex/war39_was_br_francois_de_bussy.webp">
+<img class="tile" src="../tiles75/hex/war40_was_br_treaty_of_warsaw.webp">
+<img class="tile" src="../tiles75/hex/war41_was_br_warren.webp">
+<img class="tile" src="../tiles75/hex/war42_was_br_de_lorraine.webp">
+<img class="tile" src="../tiles75/hex/war43_was_br_king_george_ii.webp">
+<img class="tile" src="../tiles75/hex/war44_was_br_chaos_in_bavaria.webp">
+<img class="tile" src="../tiles75/hex/war45_was_br_hungarian_enthusiasm.webp">
+<img class="tile" src="../tiles75/hex/war46_was_br_lawrence.webp">
+<img class="tile" src="../tiles75/hex/war47_was_br_seckendorff.webp">
+
+<h2> War Tiles (7YW) </h2>
+<img class="tile" src="../tiles75/hex/war_7yw_fr_reverse.webp">
+<img class="tile" src="../tiles75/hex/war48_7yw_fr_castries.webp">
+<img class="tile" src="../tiles75/hex/war49_7yw_fr_montcalm.webp">
+<img class="tile" src="../tiles75/hex/war50_7yw_fr_bougainville.webp">
+<img class="tile" src="../tiles75/hex/war51_7yw_fr_coureurs_des_bois.webp">
+<img class="tile" src="../tiles75/hex/war52_7yw_fr_nawabs_rally.webp">
+<img class="tile" src="../tiles75/hex/war53_7yw_fr_villiers.webp">
+<img class="tile" src="../tiles75/hex/war54_7yw_fr_broglie.webp">
+<img class="tile" src="../tiles75/hex/war55_7yw_fr_lally.webp">
+<img class="tile" src="../tiles75/hex/war56_7yw_fr_beaujeu.webp">
+<img class="tile" src="../tiles75/hex/war57_7yw_fr_hadiks_raid.webp">
+<img class="tile" src="../tiles75/hex/war58_7yw_fr_chevert.webp">
+<img class="tile" src="../tiles75/hex/war59_7yw_fr_monongahela_ambush.webp">
+<br>
+<img class="tile" src="../tiles75/hex/war_7yw_br_reverse.webp">
+<img class="tile" src="../tiles75/hex/war60_7yw_br_clive.webp">
+<img class="tile" src="../tiles75/hex/war61_7yw_br_old_fritz.webp">
+<img class="tile" src="../tiles75/hex/war62_7yw_br_amherst.webp">
+<img class="tile" src="../tiles75/hex/war63_7yw_br_coote.webp">
+<img class="tile" src="../tiles75/hex/war64_7yw_br_morta_la_bestia.webp">
+<img class="tile" src="../tiles75/hex/war65_7yw_br_wolfe.webp">
+<img class="tile" src="../tiles75/hex/war66_7yw_br_granby.webp">
+<img class="tile" src="../tiles75/hex/war67_7yw_br_sepoy_veterans.webp">
+<img class="tile" src="../tiles75/hex/war68_7yw_br_damned_audacity.webp">
+<img class="tile" src="../tiles75/hex/war69_7yw_br_johnson.webp">
+<img class="tile" src="../tiles75/hex/war70_7yw_br_bradstreet.webp">
+<img class="tile" src="../tiles75/hex/war71_7yw_br_monckton.webp">
+
+<h2> War Tiles (AWI) </h2>
+<img class="tile" src="../tiles75/hex/war_awi_fr_reverse.webp">
+<img class="tile" src="../tiles75/hex/war72_awi_fr_lafayette.webp">
+<img class="tile" src="../tiles75/hex/war73_awi_fr_washington.webp">
+<img class="tile" src="../tiles75/hex/war74_awi_fr_arnold.webp">
+<img class="tile" src="../tiles75/hex/war75_awi_fr_east_river_wind.webp">
+<img class="tile" src="../tiles75/hex/war76_awi_fr_greene.webp">
+<img class="tile" src="../tiles75/hex/war77_awi_fr_von_steuben.webp">
+<img class="tile" src="../tiles75/hex/war78_awi_fr_de_grasse.webp">
+<img class="tile" src="../tiles75/hex/war79_awi_fr_rochambeau.webp">
+<img class="tile" src="../tiles75/hex/war80_awi_fr_bunker_hill.webp">
+<img class="tile" src="../tiles75/hex/war81_awi_fr_castelnau.webp">
+<img class="tile" src="../tiles75/hex/war82_awi_fr_morgans_rifles.webp">
+<img class="tile" src="../tiles75/hex/war83_awi_fr_de_suffren.webp">
+<br>
+<img class="tile" src="../tiles75/hex/war_awi_br_reverse.webp">
+<img class="tile" src="../tiles75/hex/war84_awi_br_coote.webp">
+<img class="tile" src="../tiles75/hex/war85_awi_br_rodney.webp">
+<img class="tile" src="../tiles75/hex/war86_awi_br_anglo_dutch_conflict.webp">
+<img class="tile" src="../tiles75/hex/war87_awi_br_carleton.webp">
+<img class="tile" src="../tiles75/hex/war88_awi_br_hessians.webp">
+<img class="tile" src="../tiles75/hex/war89_awi_br_howe.webp">
+<img class="tile" src="../tiles75/hex/war90_awi_br_cornplanter.webp">
+<img class="tile" src="../tiles75/hex/war91_awi_br_cornwallis.webp">
+<img class="tile" src="../tiles75/hex/war92_awi_br_brants_volunteers.webp">
+<img class="tile" src="../tiles75/hex/war93_awi_br_stuart.webp">
+<img class="tile" src="../tiles75/hex/war94_awi_br_andre.webp">
+<img class="tile" src="../tiles75/hex/war95_awi_br_arnolds_treason.webp">
+
+<h2> Special War Tiles </h2>
+<img class="tile" src="../tiles75/hex-sm/byng.webp">
+<img class="tile" src="../tiles75/hex-sm/byng_reverse.webp">
+<img class="tile" src="../tiles75/hex-sm/atlantic_dominance_br.webp">
+<img class="tile" src="../tiles75/hex-sm/atlantic_dominance_fr.webp">
+
+<h2> Conflict and Fort Markers </h2>
+<img class="tile" src="../tiles75/hex-sm/conflict.webp">
+<img class="tile" src="../tiles75/hex-sm/conflict_plus_one.webp">
+<img class="tile" src="../tiles75/hex-sm/fort_damaged.webp">
+
+<h2> Records and Turn Track Markers </h2>
+<img class="square-sm" src="../tiles75/square-sm/game_turn.webp">
+<img class="square-sm black" src="../tiles75/square-sm/victory_points.webp">
+<img class="square-sm br" src="../tiles75/square-sm/debt_br.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/debt_fr.webp">
+<img class="square-sm br" src="../tiles75/square-sm/debt_limit_br.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/debt_limit_fr.webp">
+<img class="square-sm" src="../tiles75/square-sm/treaty_points_br.webp">
+<img class="square-sm" src="../tiles75/square-sm/treaty_points_fr.webp">
+<img class="square-sm" src="../tiles75/square-sm/initiative_br.webp">
+<img class="square-sm" src="../tiles75/square-sm/initiative_fr.webp">
+
+<h2> Jacobite, Huguenot, and Townshend Acts Markers </h2>
+<img class="square-sm" src="../tiles75/square-sm/jacobite_victory.webp">
+<img class="square-sm" src="../tiles75/square-sm/jacobite_defeat.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/jacobite_victory_reverse.webp">
+<img class="square-sm br" src="../tiles75/square-sm/jacobite_defeat_reverse.webp">
+<img class="square-sm" src="../tiles75/square-sm/new_world_huguenots.webp">
+<img class="square-sm" src="../tiles75/square-sm/new_world_huguenots_spent.webp">
+<img class="square-sm" src="../tiles75/square-sm/townshend_acts.webp">
+<img class="square-sm" src="../tiles75/square-sm/townshend_acts_reverse.webp">
+
+<h2> Flags </h2>
+<img class="square-sm flag_fr" src="../tiles75/square-sm/flag_fr.webp">
+<img class="square-sm flag_br" src="../tiles75/square-sm/flag_br.webp">
+<img class="square-sm flag_spain" src="../tiles75/square-sm/flag_spain.webp">
+<img class="square-sm flag_usa" src="../tiles75/square-sm/flag_usa.webp">
+
+<h2> Squadrons </h2>
+<img src="../tiles75/hex/fleet_fr.webp">
+<img src="../tiles75/hex/fleet_br.webp">
+
+<h2> Exhausted Ministries and Advantages </h2>
+<img class="square-sm" src="../tiles75/square-sm/exhausted.webp">
+<img class="square-sm" src="../tiles75/square-sm/exhausted_reverse.webp">
+
+<h2> Action Round Markers </h2>
+<img class="square-sm br" src="../tiles75/square-sm/action_br_reverse.webp">
+<img class="square-sm br" src="../tiles75/square-sm/action_br_1.webp">
+<img class="square-sm br" src="../tiles75/square-sm/action_br_2.webp">
+<img class="square-sm br" src="../tiles75/square-sm/action_br_3.webp">
+<img class="square-sm br" src="../tiles75/square-sm/action_br_4.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/action_fr_reverse.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/action_fr_1.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/action_fr_2.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/action_fr_3.webp">
+<img class="square-sm fr" src="../tiles75/square-sm/action_fr_4.webp">

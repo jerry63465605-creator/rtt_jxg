@@ -1,0 +1,26 @@
+#!/bin/bash
+
+if [ -z "$1" ]
+then
+	echo usage: rtt-deploy-module TITLE or GIT-REPO
+	exit 1
+fi
+
+for R in $*
+do
+	M=$(basename $R .git)
+
+	if [ ! -d public/$M/.git ]
+	then
+		echo git clone $R
+		git clone $R public/$M || exit
+	else
+		echo reused $M
+	fi
+
+	git -C public/$M config receive.denyCurrentBranch updateInstead
+	git -C public/$M config core.hooksPath "$PWD"/tools/hooks
+	git -C public/$M hook run post-checkout
+
+	sqlite3 -batch db < public/$M/title.sql
+done

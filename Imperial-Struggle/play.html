@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+<meta name="theme-color" content="#444">
+<meta charset="UTF-8">
+<title>IMPERIAL STRUGGLE</title>
+<link id="favicon" rel="icon" href="favicon.svg">
+<link rel="stylesheet" href="/fonts/fonts.css">
+<link rel="stylesheet" href="/common/client.css">
+<link rel="stylesheet" href="world.css">
+<link rel="stylesheet" href="play.css">
+<script defer src="/common/client.js"></script>
+<script defer src="world.js"></script>
+<script defer src="data.js"></script>
+<script defer src="play.js"></script>
+</head>
+<body data-noanims="true">
+
+<div id="tip" hidden></div>
+<div id="mobile_tip" hidden onmousedown="_tip_blur_mobile_tip()" style="position:absolute; top: 50px; left: 50px;"></div>
+<div id="map_tip" hidden></div>
+
+<header>
+	<div id="toolbar">
+		<details id="tools_menu">
+			<summary><img src="/images/cog.svg"></summary>
+			<menu>
+				<li><label><input type=checkbox name="noanims">Turn off animations (saves phone battery)</label>
+				<li><label><input type=checkbox name="noflipsies">Don't flip exhausted advantage tiles</label>
+				<li><label><input type=checkbox name="downanddirty">Show unclaimed advantages face-down</label>
+				<li><label><input type=checkbox name="tracksies">Track map changes with colored outlines</label>
+				<li><label><input type=checkbox name="redsies">Use red to track changes (even by France)</label>
+				<li><label><input type=checkbox name="eventsies">Warn if you skip playing an event when eligible</label>
+				<li><label><input type=checkbox name="scoresies">Plain text summary windows</label>
+				<li class="separator">
+				<li class="disabled">Log & Prompt Verbosity
+				<li><label for="short"><input type="radio" id="short" name="actionverbosity" value="short">Brief</label>
+				<li><label for="medium"><input type="radio" id="medium" name="actionverbosity" value="medium" checked>Normal</label>
+				<li><label for="long"><input type="radio" id="long" name="actionverbosity" value="long" checked>Verbose</label>
+				<li class="separator">
+				<li><a href="info/readme.html" target="_blank">Read me & Recent Changes</a>
+			</menu>
+		</details>
+		<details id="info_menu">
+			<summary><img src="/images/wooden-sign.svg"></summary>
+			<menu>
+				<li onclick="toggle_window('event_card_dialog')">
+					<div class="hotkey">E</div>
+					<div>Inspect Event Cards</div>
+				<li onclick="toggle_window('french_ministry_dialog')">
+					<div class="hotkey">F</div>
+					<div>Inspect French Ministry</div>
+				<li onclick="toggle_window('british_ministry_dialog')">
+					<div class="hotkey">B</div>
+					<div>Inspect British Ministry</div>
+				<li class="separator">
+				<li onclick="toggle_window('scoring_summary_dialog')">
+					<div class="hotkey">S</div>
+					<div>Scoring Summary</div>
+				<li onclick="toggle_window('final_scoring_summary_dialog')">
+					<div class="hotkey">Y</div>
+					<div>Final Scoring Summary</div>
+				<li class="separator">
+				<li onclick="scroll_to_map()">
+					<div class="hotkey">M</div>
+					<div>Scroll to map</div>
+				<li onclick="scroll_to_cards()">
+					<div class="hotkey">C</div>
+					<div>Scroll to cards</div>
+				<li onclick="scroll_to_debt()">
+					<div class="hotkey">D</div>
+					<div>Scroll to debt</div>
+				<li onclick="scroll_to_war()">
+					<div class="hotkey">W</div>
+					<div>Scroll to war</div>
+				<li>
+					<div class="hotkey">A</div>
+					<div><label><input type=checkbox name="allwars">Show ALL war mats</label></div>
+				<li class="separator">
+<li><a rel=noreferrer href="https://gmtwebsiteassets.s3-us-west-2.amazonaws.com/impstruggle/ImpStr_Living_Rules_7-26-20.pdf" target="_blank">Rulebook</a>
+<li><a rel=noreferrer href="https://gmtwebsiteassets.s3-us-west-2.amazonaws.com/impstruggle/ImpStr_Living_Playbook_7-26-20.pdf" target="_blank">Playbook</a>
+<li><a rel=noreferrer href="https://gmtwebsiteassets.s3-us-west-2.amazonaws.com/impstruggle/IS_Living_Main_PAC_7-26-20.pdf" target="_blank">Player Aid</a>
+<li><a href="/imperial-struggle/info/cards.html" target="_blank">Card Gallery</a>
+<li><a href="/imperial-struggle/info/tiles.html" target="_blank">Tile Gallery</a>
+			</menu>
+		</details>
+
+		<button id="world_button" onclick="toggle_markers()"><img src="/images/earth-africa-europe.svg"></button>
+	</div>
+</header>
+
+<aside>
+	<div id="roles"></div>
+	<div id="vp_desktop"></div>
+	<div id="log"></div>
+</aside>
+
+<main>
+
+	<div id="top"></div>
+
+	<div id="mapwrap">
+		<div class="board" id="map">
+			<div id="demand_highlight" hidden></div>
+		</div>
+	</div>
+
+	<div class="panel autohide" id="all_ministries">
+		<div class="panel-head" id="ministries_title">Choose from Available Ministries</div>
+		<div class="panel-body"></div>
+	</div>
+
+	<div id="panels-top"></div>
+
+	<div id="panels">
+		<div class="panel" id="played">
+			<div class="panel-head">Played</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel" id="available_investment_tiles">
+			<div class="panel-head">Available Investment Tiles</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel" id="used_investment_tiles">
+			<div class="panel-head">Used Investment Tiles</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel" id="upcoming_investment_tiles">
+			<div class="panel-head">Upcoming Investment Tiles</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel fr" id="advantage_fr">
+			<div class="panel-head">Advantage Tiles</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel fr" id="ministry_fr">
+			<div class="panel-head">Ministry</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel fr" id="events_fr">
+			<div class="panel-head">Event Cards</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel br" id="advantage_br">
+			<div class="panel-head">Advantage Tiles</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel br" id="ministry_br">
+			<div class="panel-head">Ministry</div>
+			<div class="panel-body"></div>
+		</div>
+
+		<div class="panel br" id="events_br">
+			<div class="panel-head">Event Cards</div>
+			<div class="panel-body"></div>
+		</div>
+	</div>
+
+	<div id="panels-bottom"></div>
+
+	<div id="war_wss" class="board war war-wss"></div>
+	<div id="war_was" class="board war war-was"></div>
+	<div id="war_7yw" class="board war war-7yw"></div>
+	<div id="war_awi" class="board war war-awi"></div>
+	<div id="war"></div>
+
+</main>
+
+<footer id="status" style="max-width:800px;"></footer>
+
+</body>

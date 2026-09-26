@@ -1,0 +1,13 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title= title
+	body
+		include header
+		article!= body
+			if footer
+				each warning in footer
+					hr
+					p.error= footer

@@ -1,0 +1,193 @@
+//- vim:ts=4:sw=4:
+doctype html
+html
+	head
+		include head
+		title ##{game.game_id} - #{game.title_name}
+		style.
+			table { width: clamp(240px, 100%, 400px); }
+			table.active td { background-color: lightyellow }
+			table.invite td { background-color: honeydew }
+			table.empty td { background-color: aliceblue }
+			#game_info td { padding: 2px 10px }
+			#game_info td:first-child { width: 80px }
+			#game_info tr:first-child td { padding-top: 5px }
+			#game_info tr:last-child td { padding-bottom: 5px }
+			.blacklist { color: brown; }
+			.buttons { text-align: right; min-height: 24px; }
+			.buttons a { margin-left: 12px; }
+			.seen { float: right; color: #0008; font-style: italic }
+		script.
+			const game = !{JSON.stringify(game)}
+			const players = !{JSON.stringify(players)}
+		script(src="/join.js")
+	body
+		include header
+		article
+			if icon
+				h1 <span class="icon">!{icon}</span> ##{game.game_id} - #{game.title_name}
+			else
+				h1 ##{game.game_id} - #{game.title_name}
+
+			div.logo
+				+gamecover(game.title_id)
+
+			p.error#error
+
+			if limit && game.status < 1
+				p.error= limit
+
+			table#game_info
+				if game.pool_name
+					tr
+						td Tournament
+						td <a href="/tm/pool/#{game.pool_name}">#{game.pool_name}</a>
+
+				if game.scenario !== "Standard"
+					tr
+						td Scenario
+						td #{game.scenario}
+
+				if !game.is_match
+					if game.human_options !== "None"
+						tr
+							td Options
+							td #{game.human_options}
+					if game.notice
+						tr
+							td Notice
+							td #{game.notice}
+
+				tr
+					if game.status === 0
+						if game.is_match
+							td Starting
+						else
+							td Created
+					else
+						td Started
+					if game.owner_id
+						td #{human_date(game.ctime)} by <a href="/user/#{game.owner_name}">#{game.owner_name}</a>
+					else
+						td #{human_date(game.ctime)}
+
+				if game.status >= 1
+					tr
+						td Moves
+						td #{game.moves}
+
+				if game.status === 1
+					if game.mtime
+						tr
+							td Last move
+							td #{human_date(game.mtime)}
+
+				if game.status <= 1
+					if game.xtime
+						tr
+							td Deadline
+							td #{human_date(game.xtime)}
+
+				if game.status >= 2
+					tr
+						if game.did_timeout
+							td Timeout
+						else if game.did_resign
+							td Resigned
+						else
+							td Finished
+						td #{human_date(game.mtime)}
+					tr
+						td Result
+						td #{game.result}
+
+			case game.status
+				when 0
+					if game.is_ready
+						p Waiting to start.
+					else
+						p Waiting for players to join.
+				when 1
+					p <a href="/!{game.title_id}/play.html?game=!{game.game_id}">Watch</a>
+				when 2
+					p <a href="/!{game.title_id}/play.html?game=!{game.game_id}">Review</a>
+				when 3
+					p Archived.
+
+			each role,ix in roles
+				- var player = players.find(p => p.role === role)
+				- var player_class = player ? (player.is_active ? "active" : player.is_invite ? "invite" : "") : "empty"
+				table(class=player_class)
+					thead: tr: th #{role}
+					tbody: tr: td
+						if player
+							if player.is_invite
+								if player.user_id === user.user_id
+									div &#xbb; <i>#{player.name} - you are invited</i>
+								else
+									div <i><a class="black" href="/user/#{player.name}">#{player.name}</a> is invited</i>
+										span.seen seen #{human_date(player.atime)}
+							else
+								if player.user_id === user.user_id
+									div &#xbb; #{player.name}
+								else
+									div <a class="black" href="/user/#{player.name}">#{player.name}</a>
+										span.seen seen #{human_date(player.atime)}
+
+							if blacklist && blacklist.includes(player.user_id)
+								div.blacklist
+									i You have blacklisted this player!
+
+							div.buttons
+								if player.user_id === user.user_id
+									if player.is_invite
+										<a href="javascript:role_decline('#{role}')">Decline</a>
+										<a href="javascript:role_accept('#{role}')">Accept</a>
+									else
+										if may_part
+											<a href="javascript:role_part('#{role}')">Leave</a>
+										if game.status === 1 || game.status === 2
+											<a href="/!{game.title_id}/play.html?game=!{game.game_id}&role=!{encodeURIComponent(role)}">Play</a>
+								else
+									if may_kick
+										<a href="javascript:role_kick('#{role}')">Kick</a>
+						else
+							div
+								i Empty
+							if !game.is_match && game.status < 2
+								div.buttons
+									if game.owner_id === user.user_id
+										<a href="javascript:role_invite('#{role}')">Invite</a>
+									if may_join
+										<a href="javascript:role_join('#{role}')">Join</a>
+
+			p
+				if may_rewind
+					button(onclick="game_rewind()") Rewind
+				if may_delete
+					button(onclick="game_delete()") Delete
+				if may_start
+					button(onclick="game_start()") Start
+
+			if user
+				dialog(id="invite")
+					div Invite a friend:
+					div
+						input(id="invite_user" type="text" list="friends" onchange=`send_invite()`)
+						datalist(id="friends")
+							if friends
+								each who in friends
+									option= who
+					div
+						button(onclick=`send_invite()`) Invite
+						button(onclick="hide_invite()") Cancel
+
+			if game.status > 0 && user.is_admin
+				fieldset.mod
+					legend ADMIN
+					each snap in rewind
+						div
+							<a class="mod" href="/api/rewind/#{game.game_id}/#{snap.snap_id}">REWIND #{snap.snap_id}</a> - #{snap.state} - #{snap.active}
+					if DEBUG
+						div
+							<a class="mod" href="/api/clone/#{game.game_id}">CLONE</a>

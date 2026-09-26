@@ -1,0 +1,1173 @@
+{
+ "map": "quartermaster-sub-wars",
+ "width": 4835,
+ "height": 1612,
+ "updated": "2026-09-21T13:01:19.697Z",
+ "points": [
+  {
+   "name": "冰岛",
+   "x": 94,
+   "y": 115,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "不列颠",
+   "x": 548,
+   "y": 223,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "亚速尔",
+   "x": 133,
+   "y": 529,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北欧",
+   "x": 955,
+   "y": 105,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "东欧",
+   "x": 1046,
+   "y": 360,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "西欧",
+   "x": 543,
+   "y": 504,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "罗斯",
+   "x": 1247,
+   "y": 181,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "波罗的海",
+   "x": 1032,
+   "y": 180,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "莫斯科",
+   "x": 1278,
+   "y": 290,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "中亚",
+   "x": 1628,
+   "y": 511,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "黑海",
+   "x": 1387,
+   "y": 582,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "巴尔干",
+   "x": 970,
+   "y": 507,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "意大利",
+   "x": 829,
+   "y": 586,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "黑海",
+   "x": 1150,
+   "y": 550,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "非洲北部",
+   "x": 760,
+   "y": 735,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "中东",
+   "x": 1280,
+   "y": 705,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "北海",
+   "x": 354,
+   "y": 338,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "西伯利亚",
+   "x": 1986,
+   "y": 184,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国西部",
+   "x": 2109,
+   "y": 692,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "蒙古",
+   "x": 2219,
+   "y": 496,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国东北",
+   "x": 2511,
+   "y": 532,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "中国东部",
+   "x": 2349,
+   "y": 787,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "菲律宾",
+   "x": 2588,
+   "y": 1073,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "海参崴",
+   "x": 2758,
+   "y": 134,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "阿拉斯加",
+   "x": 3482,
+   "y": 58,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "加拿大",
+   "x": 4090,
+   "y": 169,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "美国",
+   "x": 4015,
+   "y": 442,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "中太平洋",
+   "x": 3058,
+   "y": 946,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南大西洋",
+   "x": 353,
+   "y": 1248,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "拉丁美洲",
+   "x": 4199,
+   "y": 1054,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": true
+  },
+  {
+   "name": "非洲南部",
+   "x": 683,
+   "y": 1081,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "非洲东部",
+   "x": 1058,
+   "y": 1060,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "马达加斯加",
+   "x": 1167,
+   "y": 1390,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "阿拉伯海",
+   "x": 1397,
+   "y": 1073,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度",
+   "x": 1807,
+   "y": 817,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度洋",
+   "x": 1877,
+   "y": 1365,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东南亚",
+   "x": 2174,
+   "y": 927,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南海",
+   "x": 2494,
+   "y": 1163,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "印度尼西亚",
+   "x": 2436,
+   "y": 1244,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东海",
+   "x": 2561,
+   "y": 830,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "新几内亚",
+   "x": 2839,
+   "y": 1156,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "澳大利亚",
+   "x": 2756,
+   "y": 1394,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "南太平洋",
+   "x": 3038,
+   "y": 1384,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "德国",
+   "x": 860,
+   "y": 374,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "乌克兰",
+   "x": 1214,
+   "y": 444,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "地中海",
+   "x": 1004,
+   "y": 662,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "日本",
+   "x": 2732,
+   "y": 694,
+   "terrain": "land",
+   "supply": true,
+   "home": true,
+   "strait": false
+  },
+  {
+   "name": "硫磺岛",
+   "x": 2929,
+   "y": 766,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北太平洋",
+   "x": 3233,
+   "y": 438,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "夏威夷",
+   "x": 3462,
+   "y": 770,
+   "terrain": "land",
+   "supply": true,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "新西兰",
+   "x": 3232,
+   "y": 1486,
+   "terrain": "land",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "东太平洋",
+   "x": 3728,
+   "y": 1034,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  },
+  {
+   "name": "北大西洋",
+   "x": 4401,
+   "y": 676,
+   "terrain": "sea",
+   "supply": false,
+   "home": false,
+   "strait": false
+  }
+ ],
+ "links": [
+  {
+   "a": "冰岛",
+   "b": "北海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "冰岛",
+   "b": "不列颠",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "不列颠",
+   "b": "北海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "不列颠",
+   "b": "西欧",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "不列颠",
+   "b": "德国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "亚速尔",
+   "b": "北海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "北欧",
+   "b": "波罗的海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "北欧",
+   "b": "德国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "东欧",
+   "b": "巴尔干",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "东欧",
+   "b": "波罗的海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "东欧",
+   "b": "德国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "西欧",
+   "b": "北海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "西欧",
+   "b": "意大利",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "罗斯",
+   "b": "莫斯科",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "罗斯",
+   "b": "波罗的海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "罗斯",
+   "b": "乌克兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "莫斯科",
+   "b": "乌克兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "莫斯科",
+   "b": "东欧",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中亚",
+   "b": "黑海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中亚",
+   "b": "中东",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "黑海",
+   "b": "中东",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "黑海",
+   "b": "乌克兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "黑海",
+   "b": "黑海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "巴尔干",
+   "b": "地中海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "巴尔干",
+   "b": "意大利",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "意大利",
+   "b": "地中海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "黑海",
+   "b": "乌克兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "黑海",
+   "b": "巴尔干",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "非洲北部",
+   "b": "地中海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中东",
+   "b": "黑海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中东",
+   "b": "乌克兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "西伯利亚",
+   "b": "蒙古",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "西伯利亚",
+   "b": "中亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "西伯利亚",
+   "b": "中国西部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国西部",
+   "b": "蒙古",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国西部",
+   "b": "东南亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国西部",
+   "b": "中国东部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "蒙古",
+   "b": "中国东北",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "蒙古",
+   "b": "中国东部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国东北",
+   "b": "中国东部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国东部",
+   "b": "东海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国东部",
+   "b": "东南亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "菲律宾",
+   "b": "南海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "菲律宾",
+   "b": "东海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "海参崴",
+   "b": "中国东北",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "海参崴",
+   "b": "北太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "阿拉斯加",
+   "b": "北太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "阿拉斯加",
+   "b": "加拿大",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "阿拉斯加",
+   "b": "美国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "加拿大",
+   "b": "美国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "加拿大",
+   "b": "北大西洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "美国",
+   "b": "北大西洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "美国",
+   "b": "拉丁美洲",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中太平洋",
+   "b": "硫磺岛",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中太平洋",
+   "b": "新几内亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南大西洋",
+   "b": "非洲南部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南大西洋",
+   "b": "非洲北部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南大西洋",
+   "b": "非洲东部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "拉丁美洲",
+   "b": "北大西洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "拉丁美洲",
+   "b": "东太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "非洲南部",
+   "b": "非洲北部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "非洲南部",
+   "b": "非洲东部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "非洲东部",
+   "b": "阿拉伯海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "非洲东部",
+   "b": "马达加斯加",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "马达加斯加",
+   "b": "阿拉伯海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "马达加斯加",
+   "b": "非洲南部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "阿拉伯海",
+   "b": "中东",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度",
+   "b": "中国西部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度",
+   "b": "东南亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度洋",
+   "b": "东南亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度洋",
+   "b": "印度",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度洋",
+   "b": "阿拉伯海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南海",
+   "b": "印度尼西亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南海",
+   "b": "东海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "东海",
+   "b": "日本",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "新几内亚",
+   "b": "澳大利亚",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "新几内亚",
+   "b": "南太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "澳大利亚",
+   "b": "南太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "澳大利亚",
+   "b": "南海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南太平洋",
+   "b": "新西兰",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "德国",
+   "b": "巴尔干",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "德国",
+   "b": "意大利",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "乌克兰",
+   "b": "东欧",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "硫磺岛",
+   "b": "东海",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "北太平洋",
+   "b": "夏威夷",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "北太平洋",
+   "b": "硫磺岛",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "夏威夷",
+   "b": "东太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "夏威夷",
+   "b": "中太平洋",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "东太平洋",
+   "b": "美国",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "南大西洋",
+   "b": "亚速尔",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中亚",
+   "b": "莫斯科",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中亚",
+   "b": "中国西部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "中国西部",
+   "b": "中东",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "印度",
+   "b": "中东",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "北海",
+   "b": "非洲北部",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  },
+  {
+   "a": "阿拉伯海",
+   "b": "地中海",
+   "type": "limited",
+   "side": "allies",
+   "note": "非洲海峡"
+  },
+  {
+   "a": "地中海",
+   "b": "北海",
+   "type": "limited",
+   "side": "allies",
+   "note": "非洲海峡"
+  },
+  {
+   "a": "德国",
+   "b": "西欧",
+   "type": "normal",
+   "side": null,
+   "note": ""
+  }
+ ]
+}

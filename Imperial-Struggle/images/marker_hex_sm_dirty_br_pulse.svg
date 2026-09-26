@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="528" height="480">
+<path fill="crimson" d="M396.0,468.6 528.0,240.0 396.0,11.4 132.0,11.4 0.0,240.0 132.0,468.6z">
+<animate attributeName="fill" values="crimson;salmon;crimson" dur="3s" repeatCount="indefinite"/>
+</path>
+</svg>

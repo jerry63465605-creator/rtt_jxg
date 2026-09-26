@@ -1,0 +1,25 @@
+const data = require("./data.js")
+
+const POLITICAL = 0
+const MARKET    = 1
+const NAVAL     = 2
+const TERRITORY = 3
+const FORT      = 4
+
+const lout = [
+	"green,90,90",
+	"yellow,76,76",
+	"blue,84,84",
+	"orange,74,74",
+	"purple,84,84",
+]
+
+for (var it of data.spaces) {
+	var size = it.type
+	console.log(`${it.layout},${lout[it.type]}`)
+}
+
+for (var it of data.advantages) {
+	var size = it.type
+	console.log(`${it.name},cyan,80,80`)
+}

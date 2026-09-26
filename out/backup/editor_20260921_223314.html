@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>RTT 地图标定工具</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font: 13px "Microsoft YaHei", system-ui, sans-serif; background: #1a1a1a; color: #ddd; }
+  #app { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
+
+  /* ===== 左：地图区 ===== */
+  #stage { position: relative; overflow: auto; background: #0d0d0d; }
+  #canvasWrap { position: relative; width: fit-content; }
+  #mapImg { display: block; user-select: none; -webkit-user-drag: none; }
+  #overlay { position: absolute; left: 0; top: 0; }
+
+  .pt { cursor: pointer; }
+  .pt circle.hit { fill: transparent; }
+  .pt circle.dot { stroke: #000; stroke-width: 1.5; }
+  .pt.land circle.dot { fill: #ff3b30; }
+  .pt.sea  circle.dot { fill: #00d4ff; }
+  .pt.sel circle.dot { stroke: #fff; stroke-width: 3; }
+  .pt text { paint-order: stroke; stroke: #000; stroke-width: 3px; fill: #fff;
+    font: bold 12px "Microsoft YaHei", sans-serif; pointer-events: none; }
+
+  /* ===== 右：面板 ===== */
+  #panel { border-left: 1px solid #333; display: flex; flex-direction: column; }
+  .sec { padding: 10px; border-bottom: 1px solid #333; }
+  .sec h3 { margin: 0 0 8px; font-size: 13px; color: #7cc; letter-spacing: 1px; }
+  button { background: #2a2a2a; color: #ddd; border: 1px solid #555; border-radius: 4px;
+    padding: 5px 9px; cursor: pointer; font-size: 12px; margin: 2px 2px 2px 0; }
+  button:hover { background: #3a3a3a; border-color: #888; }
+  button.on { background: #0a5; border-color: #0d8; color: #fff; }
+  button.danger { border-color: #a33; }
+  button.danger:hover { background: #622; }
+  input[type=text] { width: 100%; background: #111; color: #eee; border: 1px solid #555;
+    border-radius: 4px; padding: 5px 7px; font-size: 13px; }
+  input[type=text]:focus { outline: none; border-color: #0af; }
+  label { display: block; margin: 6px 0 2px; color: #999; font-size: 12px; }
+  #list { flex: 1; overflow-y: auto; }
+  .row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer;
+    border-bottom: 1px solid #262626; font-size: 12px; }
+  .row:hover { background: #242424; }
+  .row.sel { background: #16405a; }
+  .row .swatch { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; border: 1px solid #000; }
+  .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .tag { font-size: 10px; color: #888; }
+  #hint { padding: 8px 10px; background: #111; color: #888; font-size: 11px; line-height: 1.6; border-top: 1px solid #333; }
+  #stats { color: #6c6; font-size: 12px; }
+  .kbd { background: #333; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+  #zoomBar { position: absolute; left: 10px; top: 10px; z-index: 5;
+    background: rgba(0,0,0,.7); border: 1px solid #444; border-radius: 4px; padding: 4px 6px; }
+  #zoomBar button { padding: 2px 7px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="canvasWrap">
+      <img id="mapImg" alt="map">
+      <svg id="overlay"></svg>
+    </div>
+    <div id="zoomBar">
+      <button onclick="setZoom(0.35)">35%</button>
+      <button onclick="setZoom(0.5)">50%</button>
+      <button onclick="setZoom(0.75)">75%</button>
+      <button onclick="setZoom(1)">100%</button>
+      <span id="zoomLabel" style="margin-left:6px;color:#888"></span>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div class="sec">
+      <h3>模式</h3>
+      <button id="modeSelect" class="on" onclick="setMode('select')">选择/移动</button>
+      <button id="modeAddLand" onclick="setMode('addLand')">＋加点(陆地)</button>
+      <button id="modeAddSea" onclick="setMode('addSea')">＋加点(海域)</button>
+    </div>
+
+    <div class="sec">
+      <h3>选中点</h3>
+      <div id="noSel" style="color:#777">未选中。点击地图上的点，或点击列表。</div>
+      <div id="editBox" style="display:none">
+        <label>中文名称</label>
+        <input type="text" id="inpName" oninput="renameSelected(this.value)" placeholder="如：德国">
+        <label>地形</label>
+        <div>
+          <button id="btnLand" onclick="setTerrain('land')">陆地</button>
+          <button id="btnSea" onclick="setTerrain('sea')">海域</button>
+        </div>
+        <label>属性</label>
+        <div>
+          <button id="btnSupply" onclick="toggleFlag('supply')">★ 补给点</button>
+          <button id="btnHome" onclick="toggleFlag('home')">🏠 大本营</button>
+        </div>
+        <label>位置 (地图像素)</label>
+        <div style="display:flex;gap:4px">
+          <input type="text" id="inpX" style="width:50%" onchange="moveSelected(parseFloat(this.value),null)">
+          <input type="text" id="inpY" style="width:50%" onchange="moveSelected(null,parseFloat(this.value))">
+        </div>
+        <div style="margin-top:8px">
+          <button class="danger" onclick="deleteSelected()">删除此点</button>
+          <button onclick="clearSelection()">取消选中</button>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <button onclick="addAtViewCenter()">在视图中心加点</button>
+      </div>
+    </div>
+
+    <div class="sec" style="display:flex;justify-content:space-between;align-items:center">
+      <span id="stats"></span>
+      <span>
+        <button onclick="toggleLabels()" id="btnLabels" class="on">显示名称</button>
+      </span>
+    </div>
+
+    <div id="list"></div>
+
+    <div class="sec" style="border-top:1px solid #333;border-bottom:none">
+      <button onclick="exportJSON()" style="width:100%;background:#0a5;border-color:#0d8;color:#fff;padding:8px">导出 JSON</button>
+      <button onclick="importJSON()" style="width:100%;margin-top:4px">导入 JSON</button>
+      <input type="file" id="fileInput" accept=".json" style="display:none" onchange="onFileChosen(event)">
+      <button onclick="resetAll()" style="width:100%;margin-top:4px" class="danger">重置为初始数据</button>
+    </div>
+
+    <div id="hint">
+      <span class="kbd">点击点</span> 选中 · <span class="kbd">拖动点</span> 移动 · <span class="kbd">Delete</span> 删除<br>
+      <span class="kbd">在空白处点击</span> 取消选中（选择模式下）<br>
+      <span class="kbd">Ctrl+滚轮</span> 缩放 · <span class="kbd">中键拖动</span> 平移<br>
+      导出后把 JSON 发给 AI 即可。
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= 数据 ================= */
+const MAP_FILE = "map.png";   /* 与 editor.html 同目录 */
+const MAP_W = 4835, MAP_H = 1612;
+
+/* 初始点位（来自 AI 识别结果，待人工修正） */
+const INITIAL = [
+  { n: "冰岛",     x:  94, y: 115, t: "land" },
+  { n: "不列颠",   x: 548, y: 223, t: "land", supply: true, home: true },
+  { n: "北海",     x: 133, y: 529, t: "sea" },
+  { n: "波罗的海", x: 904, y: 231, t: "sea" },
+  { n: "北欧",     x: 955, y: 105, t: "land" },
+  { n: "德国",     x:1046, y: 360, t: "land", supply: true, home: true },
+  { n: "西欧",     x: 543, y: 504, t: "land", supply: true, home: true },
+  { n: "东欧",     x:1247, y: 181, t: "land" },
+  { n: "罗斯",     x:1032, y: 180, t: "land" },
+  { n: "莫斯科",   x:1278, y: 290, t: "land", supply: true, home: true },
+  { n: "乌克兰",   x:1628, y: 511, t: "land", supply: true },
+  { n: "黑海",     x:1387, y: 582, t: "sea" },
+  { n: "地中海",   x: 970, y: 507, t: "sea" },
+  { n: "意大利",   x: 829, y: 586, t: "land", supply: true, home: true },
+  { n: "巴尔干",   x:1150, y: 550, t: "land" },
+  { n: "非洲北部", x: 760, y: 735, t: "land", supply: true },
+  { n: "中东",     x:1280, y: 705, t: "land", supply: true },
+  { n: "亚速尔",   x: 354, y: 338, t: "land" },
+  { n: "西伯利亚", x:1986, y: 184, t: "land" },
+  { n: "中亚",     x:2109, y: 692, t: "land" },
+  { n: "蒙古",     x:2219, y: 496, t: "land" },
+  { n: "中国东北", x:2511, y: 532, t: "land" },
+  { n: "中国西部", x:2349, y: 787, t: "land", supply: true },
+  { n: "中国东部", x:2588, y:1073, t: "land", supply: true, home: true },
+  { n: "海参崴",   x:2758, y: 134, t: "land" },
+  { n: "日本",     x:2750, y:1458, t: "land", supply: true, home: true },
+  { n: "东海",     x:2831, y:1095, t: "sea" },
+  { n: "阿拉斯加", x:3482, y:  58, t: "land" },
+  { n: "加拿大",   x:4090, y: 169, t: "land", supply: true },
+  { n: "美国",     x:4015, y: 442, t: "land", supply: true, home: true },
+  { n: "夏威夷",   x:3354, y: 287, t: "land", supply: true },
+  { n: "硫磺岛",   x:3095, y:1357, t: "land", supply: true },
+  { n: "北太平洋", x:3536, y: 862, t: "sea" },
+  { n: "中太平洋", x:3058, y: 946, t: "sea" },
+  { n: "东太平洋", x:4459, y:1074, t: "sea" },
+  { n: "南太平洋", x:4071, y:1316, t: "sea" },
+  { n: "北大西洋", x:4490, y: 488, t: "sea" },
+  { n: "南大西洋", x: 353, y:1248, t: "sea" },
+  { n: "拉丁美洲", x:4199, y:1054, t: "land" },
+  { n: "加勒比海", x: 700, y:1000, t: "sea" },
+  { n: "非洲南部", x: 683, y:1081, t: "land", supply: true },
+  { n: "非洲东部", x:1058, y:1060, t: "land" },
+  { n: "马达加斯加", x:1167, y:1390, t: "land" },
+  { n: "阿拉伯海", x:1397, y:1073, t: "sea" },
+  { n: "印度",     x:1807, y: 817, t: "land", supply: true },
+  { n: "印度洋",   x:1877, y:1365, t: "sea" },
+  { n: "东南亚",   x:2174, y: 927, t: "land", supply: true },
+  { n: "南海",     x:2494, y:1163, t: "sea" },
+  { n: "印度尼西亚", x:2436, y:1244, t: "land" },
+  { n: "菲律宾",   x:2561, y: 830, t: "land" },
+  { n: "新几内亚", x:2839, y:1156, t: "land" },
+  { n: "澳大利亚", x:2756, y:1394, t: "land", supply: true },
+  { n: "新西兰",   x:3038, y:1384, t: "land" }
+];
+
+/* ================= 状态 ================= */
+let points = [];
+let nextId = 1;
+let selectedId = null;
+let mode = "select";
+let zoom = 0.35;
+let showLabels = true;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+const stage = document.getElementById("stage");
+const img = document.getElementById("mapImg");
+const svg = document.getElementById("overlay");
+
+function clone(a) { return JSON.parse(JSON.stringify(a)); }
+
+function loadInitial() {
+  points = INITIAL.map(p => ({ id: nextId++, ...clone(p) }));
+  selectedId = null;
+  render();
+}
+
+/* ================= 渲染 ================= */
+function applyZoom() {
+  img.style.width = (MAP_W * zoom) + "px";
+  img.style.height = (MAP_H * zoom) + "px";
+  svg.setAttribute("width", MAP_W * zoom);
+  svg.setAttribute("height", MAP_H * zoom);
+  svg.setAttribute("viewBox", "0 0 " + MAP_W + " " + MAP_H);
+  document.getElementById("zoomLabel").textContent = Math.round(zoom * 100) + "%";
+  render();
+}
+
+function setZoom(z) {
+  const cx = stage.scrollLeft + stage.clientWidth / 2;
+  const cy = stage.scrollTop + stage.clientHeight / 2;
+  const k = z / zoom;
+  zoom = z;
+  applyZoom();
+  stage.scrollLeft = cx * k - stage.clientWidth / 2;
+  stage.scrollTop = cy * k - stage.clientHeight / 2;
+}
+
+function render() {
+  svg.innerHTML = "";
+  for (const p of points) {
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "pt " + p.t + (p.id === selectedId ? " sel" : ""));
+    g.dataset.id = p.id;
+
+    const hit = document.createElementNS(SVG_NS, "circle");
+    hit.setAttribute("class", "hit");
+    hit.setAttribute("cx", p.x); hit.setAttribute("cy", p.y); hit.setAttribute("r", 16);
+    g.appendChild(hit);
+
+    const dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("class", "dot");
+    dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y); dot.setAttribute("r", 7);
+    g.appendChild(dot);
+
+    if (showLabels) {
+      const t = document.createElementNS(SVG_NS, "text");
+      t.setAttribute("x", p.x + 12); t.setAttribute("y", p.y + 5);
+      let s = p.n || "(无名)";
+      if (p.supply) s = "★" + s;
+      if (p.home) s = "⌂" + s;
+      t.textContent = s;
+      g.appendChild(t);
+    }
+
+    /* 拖动 */
+    hit.addEventListener("pointerdown", onPointDown);
+    g.addEventListener("pointerdown", onPointDown);
+    /* 选择 */
+    g.addEventListener("click", (e) => { e.stopPropagation(); selectPoint(p.id); });
+    svg.appendChild(g);
+  }
+  renderList();
+  renderStats();
+}
+
+function renderStats() {
+  const n = points.length;
+  const land = points.filter(p => p.t === "land").length;
+  const sea = points.filter(p => p.t === "sea").length;
+  const sup = points.filter(p => p.supply).length;
+  document.getElementById("stats").textContent = `共 ${n} 点 (陆 ${land} / 海 ${sea}) ★${sup}`;
+}
+
+function renderList() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  for (const p of points) {
+    const row = document.createElement("div");
+    row.className = "row" + (p.id === selectedId ? " sel" : "");
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = p.t === "land" ? "#ff3b30" : "#00d4ff";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = (p.supply ? "★" : "") + (p.home ? "⌂" : "") + (p.n || "(无名)");
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = Math.round(p.x) + "," + Math.round(p.y);
+    row.append(sw, nm, tag);
+    row.onclick = () => selectPoint(p.id);
+    list.appendChild(row);
+  }
+}
+
+/* ================= 交互 ================= */
+function setMode(m) {
+  mode = m;
+  for (const b of ["modeSelect", "modeAddLand", "modeAddSea"])
+    document.getElementById(b).classList.remove("on");
+  document.getElementById(m === "select" ? "modeSelect" : m === "addLand" ? "modeAddLand" : "modeAddSea").classList.add("on");
+  stage.style.cursor = m === "select" ? "default" : "crosshair";
+}
+
+function selectPoint(id) {
+  selectedId = id;
+  const p = points.find(x => x.id === id);
+  const box = document.getElementById("editBox");
+  const no = document.getElementById("noSel");
+  if (p) {
+    box.style.display = "block"; no.style.display = "none";
+    document.getElementById("inpName").value = p.n || "";
+    document.getElementById("inpX").value = Math.round(p.x);
+    document.getElementById("inpY").value = Math.round(p.y);
+    document.getElementById("btnLand").className = p.t === "land" ? "on" : "";
+    document.getElementById("btnSea").className = p.t === "sea" ? "on" : "";
+    document.getElementById("btnSupply").className = p.supply ? "on" : "";
+    document.getElementById("btnHome").className = p.home ? "on" : "";
+  } else {
+    box.style.display = "none"; no.style.display = "block";
+  }
+  render();
+}
+
+function clearSelection() { selectPoint(null); }
+
+function renameSelected(v) {
+  const p = points.find(x => x.id === selectedId);
+  if (!p) return;
+  p.n = v;
+  render();
+}
+
+function setTerrain(t) {
+  const p = points.find(x => x.id === selectedId);
+  if (!p) return;
+  p.t = t;
+  selectPoint(p.id);
+}
+
+function toggleFlag(f) {
+  const p = points.find(x => x.id === selectedId);
+  if (!p) return;
+  p[f] = !p[f];
+  selectPoint(p.id);
+}
+
+function moveSelected(x, y) {
+  const p = points.find(x => x.id === selectedId);
+  if (!p) return;
+  if (x !== null && !isNaN(x)) p.x = x;
+  if (y !== null && !isNaN(y)) p.y = y;
+  render();
+}
+
+function deleteSelected() {
+  const p = points.find(x => x.id === selectedId);
+  if (!p) return;
+  if (!confirm("删除「" + (p.n || "(无名)") + "」？")) return;
+  points = points.filter(x => x.id !== selectedId);
+  selectPoint(null);
+}
+
+function addAtViewCenter() {
+  const rect = stage.getBoundingClientRect();
+  const wx = (stage.scrollLeft + rect.width / 2) / zoom;
+  const wy = (stage.scrollTop + rect.height / 2) / zoom;
+  addPoint(wx, wy, "land");
+}
+
+function addPoint(x, y, t) {
+  const p = { id: nextId++, n: "", x: Math.round(x), y: Math.round(y), t };
+  points.push(p);
+  selectPoint(p.id);
+  setMode("select");
+}
+
+/* 拖动 */
+let drag = null;
+function onPointDown(e) {
+  const g = e.currentTarget.closest(".pt");
+  if (!g) return;
+  if (mode !== "select") return;
+  const id = Number(g.dataset.id);
+  const p = points.find(x => x.id === id);
+  if (!p) return;
+  drag = { id, dx: p.x - e.offsetX / zoom, dy: p.y - e.offsetY / zoom, moved: false };
+  e.currentTarget.setPointerCapture(e.pointerId);
+  e.stopPropagation();
+}
+img.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const r = img.getBoundingClientRect();
+  const p = points.find(x => x.id === drag.id);
+  if (!p) return;
+  p.x = Math.round((e.clientX - r.left) / zoom);
+  p.y = Math.round((e.clientY - r.top) / zoom);
+  drag.moved = true;
+  render();
+});
+img.addEventListener("pointerup", () => {
+  if (drag) { if (drag.moved) selectPoint(drag.id); drag = null; }
+});
+document.addEventListener("pointerup", () => { drag = null; });
+
+/* 点击空白 */
+svg.addEventListener("click", (e) => {
+  if (mode === "addLand" || mode === "addSea") {
+    const r = img.getBoundingClientRect();
+    const x = (e.clientX - r.left) / zoom;
+    const y = (e.clientY - r.top) / zoom;
+    addPoint(x, y, mode === "addLand" ? "land" : "sea");
+    return;
+  }
+  if (e.target === svg || e.target === img) clearSelection();
+});
+
+/* 键盘 */
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "Delete" || e.key === "Backspace") { deleteSelected(); e.preventDefault(); }
+  if (e.key === "Escape") clearSelection();
+  if (e.key === "1") setMode("select");
+  if (e.key === "2") setMode("addLand");
+  if (e.key === "3") setMode("addSea");
+});
+
+function toggleLabels() {
+  showLabels = !showLabels;
+  document.getElementById("btnLabels").className = showLabels ? "on" : "";
+  render();
+}
+
+/* 缩放 */
+window.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const z = Math.max(0.15, Math.min(2, zoom * (e.deltaY < 0 ? 1.12 : 0.89)));
+  setZoom(z);
+}, { passive: false });
+
+/* 中键平移 */
+let panning = null;
+stage.addEventListener("pointerdown", (e) => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  panning = { x: e.clientX, y: e.clientY, sl: stage.scrollLeft, st: stage.scrollTop };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!panning) return;
+  stage.scrollLeft = panning.sl - (e.clientX - panning.x);
+  stage.scrollTop = panning.st - (e.clientY - panning.y);
+});
+window.addEventListener("pointerup", () => { panning = null; });
+
+/* ================= 导入导出 ================= */
+function exportJSON() {
+  const data = { map: "quartermaster-sub-wars", width: MAP_W, height: MAP_H, points: points.map(p => ({ name: p.n, x: p.x, y: p.y, terrain: p.t, supply: !!p.supply, home: !!p.home })) };
+  const txt = JSON.stringify(data, null, 1);
+  const blob = new Blob([txt], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "spaces_calibrated.json";
+  a.click();
+  /* 同时弹出文本框便于复制 */
+  console.log(txt);
+}
+
+function importJSON() { document.getElementById("fileInput").click(); }
+function onFileChosen(ev) {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      points = d.points.map(p => ({ id: nextId++, n: p.name || p.n || "", x: p.x, y: p.y, t: p.terrain || p.t || "land", supply: !!p.supply, home: !!p.home }));
+      selectPoint(null);
+    } catch (err) { alert("JSON 解析失败: " + err.message); }
+  };
+  r.readAsText(f);
+}
+
+function resetAll() {
+  if (!confirm("重置为初始识别结果？当前修改将丢失。")) return;
+  loadInitial();
+}
+
+/* ================= 启动 ================= */
+img.src = MAP_FILE;
+img.onload = () => { applyZoom(); loadInitial(); };
+img.onerror = () => {
+  document.getElementById("stage").innerHTML =
+    '<div style="padding:40px;color:#f66;font-size:15px;line-height:2">' +
+    '❌ 地图图片加载失败。<br><br>' +
+    '请确认以下文件存在：<br>' +
+    '<code style="background:#222;padding:2px 6px;border-radius:3px">c:\\Users\\24968\\Desktop\\rtt\\tools\\map.png</code><br><br>' +
+    '如果文件不在，请从 TTS 缓存目录复制：<br>' +
+    '<code style="background:#222;padding:2px 6px;border-radius:3px;font-size:11px">C:\\Users\\24968\\Documents\\My Games\\Tabletop Simulator\\Mods\\Images\\httpssteamusercontent...88514.png</code>' +
+    '</div>';
+};
+</script>
+</body>
+</html>

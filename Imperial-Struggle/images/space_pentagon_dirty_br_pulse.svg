@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="114" height="114">
+<polygon points="87.0,98.3 105.5,41.2 57.0,6.0 8.5,41.2 27.0,98.3" fill="none" stroke="black" stroke-width="6"/>
+<polygon points="87.0,98.3 105.5,41.2 57.0,6.0 8.5,41.2 27.0,98.3" fill="none" stroke="crimson" stroke-width="4">
+<animate attributeName="stroke" values="crimson;salmon;crimson" dur="3s" repeatCount="indefinite"/>
+</polygon>
+</svg>

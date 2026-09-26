@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<!-- vim:set nowrap: -->
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=content, viewport-fit=cover">
+	<meta name="theme-color" content="#444">
+	<meta charset="UTF-8">
+	<title>PATHS OF GLORY</title>
+	<link rel="icon" href="favicon.png">
+	<link rel="stylesheet" href="/fonts/fonts.css">
+	<link rel="stylesheet" href="/common/client.css">
+	<link rel="stylesheet" href="play.css">
+	<link rel="stylesheet" href="images.css">
+	<link rel="stylesheet" href="colors.css">
+	<script defer src="/common/client.js"></script>
+	<script defer src="data.js"></script>
+	<script defer src="layout.js"></script>
+	<script defer src="play.js"></script>
+</head>
+<body class="bevel">
+
+<menu id="card_popup" hidden>
+	<li class="title">CARD
+	<li class="separator">
+	<li data-action="play_event"> &#x1f3b4;&#xfe0e; &nbsp; 事件
+	<li data-action="play_ops"> &#x1f500;&#xfe0e; &nbsp; 行动点数
+	<li data-action="play_sr"> &#x1f682;&#xfe0e; &nbsp; 战略调整
+	<li data-action="play_rps"> &#x1f3ed;&#xfe0e; &nbsp; 补员点数
+</menu>
+
+<menu id="activation_popup" hidden>
+	<li class="title">ACTIVATE
+	<li class="separator">
+	<li data-action="activate_move"> 移动
+	<li data-action="activate_attack"> 进攻
+	<li data-action="activate_attack_mutiny"> 进攻（法军兵变）
+</menu>
+
+<div id="score" class="dialog" hidden>
+	<div class="dialog_header">Score Summary</div>
+	<div class="dialog_x" onclick="hide_dialog('score')">&#x274c;</div>
+	<div class="dialog_body"></div>
+</div>
+
+<div id="cp_card_dialog" class="dialog" hidden>
+	<div class="dialog_header">Central Power Cards</div>
+	<div class="dialog_x" onclick="hide_dialog('cp_card_dialog')">&#x274c;</div>
+	<div class="dialog_body"></div>
+</div>
+
+<div id="ap_card_dialog" class="dialog" hidden>
+	<div class="dialog_header">Allied Power Cards</div>
+	<div class="dialog_x" onclick="hide_dialog('ap_card_dialog')">&#x274c;</div>
+	<div class="dialog_body"></div>
+</div>
+
+<header>
+	<div id="toolbar">
+		<details>
+			<summary><img src="/images/cog.svg"></summary>
+			<menu>
+				<li><a href="info/rules.html" target="_blank">规则</a>
+				<li><a href="info/pac.html" target="_blank">辅助卡</a>
+				<li><a href="info/cards_ap.html" target="_blank">协约国卡牌</a>
+				<li><a href="info/cards_cp.html" target="_blank">同盟国卡牌</a>
+
+			</menu>
+		</details>
+		<details id="stack_menu">
+			<summary><img src="/images/stack.svg"></summary>
+			<menu>
+				<li class="unchecked" id="mouse_focus" onclick="set_mouse_focus()"> 自动拆开堆叠
+				<li class="separator">
+				<li class="unchecked" id="style_bevel" onclick="set_style('bevel')"> 算子风格一
+				<li class="unchecked" id="style_flat" onclick="set_style('flat')"> 算子风格二
+			</menu>
+		</details>
+		<details id="info_menu">
+			<summary><img src="/images/wooden-sign.svg"></summary>
+			<menu>
+				<li onclick="show_score_summary()"> 胜利点数查询
+				<li class="separator">
+				<li onclick="send_query('cp_cards')"> CP牌堆构成
+				<li onclick="send_query('ap_cards')"> AP牌堆构成
+				<li class="separator">
+				<li class="reinforcements" onclick="to_reinforcements()"> 增援面板
+			</menu>
+		</details>
+		<details id="supply_menu">
+			<summary><img src="/images/oil-drum.svg"></summary>
+			<menu>
+				<li onclick="flag_supply_warnings()" id="flag_supply_warning_menu"> 放置断补标记
+				<li onclick="propose_rollback()" id="propose_rollback_menu"> 时间回溯
+				<li class="separator">
+				<li onclick="send_query('cp_supply')"> 展示CP补给
+				<li onclick="send_query('ap_supply')"> 展示AP补给
+			</menu>
+		</details>
+		<button id="piece_button" onclick="toggle_counters()"><img src="/images/earth-america.svg"></button>
+	</div>
+</header>
+
+<aside>
+	<div id="roles">
+		<div class="role" id="role_Allied_Powers">
+			<div class="role_name">Allied Powers</div>
+			<div class="role_stat" id="ap_hand"></div>
+			<div class="role_user">-</div>
+		</div>
+		<div class="role" id="role_Central_Powers">
+			<div class="role_name">Central Powers</div>
+			<div class="role_stat" id="cp_hand"></div>
+			<div class="role_user">-</div>
+		</div>
+	</div>
+	<div id="turn_info">
+		<div id="ap_deck_size" onclick="send_query('ap_cards')"></div>
+		<div id="cp_deck_size" onclick="send_query('cp_cards')"></div>
+		<div id="violations"></div>
+	</div>
+	<div id="log"></div>
+</aside>
+
+<div id="tooltip" hidden></div>
+
+<main data-max-zoom="2" onclick="hide_popup_menu()">
+	<div id="mapwrap">
+		<div id="map">
+			<div id="spaces"></div>
+			<div id="markers">
+				<div class="marker neutral it" id="neutral_it"></div>
+				<div class="marker neutral bu" id="neutral_bu"></div>
+				<div class="marker neutral gr" id="neutral_gr"></div>
+				<div class="marker neutral ro" id="neutral_ro"></div>
+				<div class="marker neutral tu" id="neutral_tu"></div>
+				<div id="ne_limit_markers">
+					<div class="marker ne_limit br_ne_sr"></div>
+					<div class="marker ne_limit cp_ne_sr"></div>
+					<div class="marker ne_limit ru_ne_sr"></div>
+					<div class="marker ne_limit ru_ne_move"></div>
+				</div>
+			</div>
+			<div id="pieces">
+				<div id="focus" class="hide"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="panel-list">
+
+		<div id="cc-list" class="hide">
+
+			<div class="panel">
+				<div class="panel-head">Combat Cards</div>
+				<div class="panel-body" id="combat_cards"></div>
+			</div>
+
+			<div class="panel">
+				<div class="panel-head">Unused Combat Cards</div>
+				<div class="panel-body" id="unused_combat_cards"></div>
+			</div>
+
+		</div>
+
+		<div class="panel">
+			<div class="panel-head">Hand</div>
+			<div class="panel-body" id="cards"></div>
+		</div>
+		<div id="active_card_zone" class="hide">
+			<div class="panel">
+				<div class="panel-head">Active Cards</div>
+				<div class="panel-body" id="active_cards"></div>
+			</div>
+		</div>
+
+		<div id="reinforcements_wrap">
+			<div id="reinforcements"></div>
+		</div>
+	</div>
+</main>
+
+<footer id="status"></footer>
+
+<dialog id="propose_rollback_dialog" class="modal-dialog">
+	<h3>Propose Rollback</h3>
+	<p>To correct for missed supply warnings, it may be necessary to roll the game back to an earlier action round.</p>
+	<p>If your opponent agrees to the rollback proposal, the game will be reset to the chosen point.</p>
+	<p>This action cannot be undone.</p>
+	<form id="propose_rollback_form">
+		<label for="rollback_checkpoint">Roll back to:</label>
+		<br>
+		<select name="checkpoint" id="rollback_checkpoint" onchange="update_rollback_dialog()">
+		</select>
+	</form>
+	<div id="propose_rollback_details"></div>
+	<div class="rollback_buttons">
+		<button onclick="propose_rollback_cancel(event)">Cancel</button>
+		<button onclick="propose_rollback_submit(event)">Submit</button>
+	</div>
+</dialog>
+
+<dialog id="review_rollback_dialog" class="modal-dialog">
+	<h3>Review Rollback Proposal</h3>
+	<p>Your opponent has proposed a rollback to an earlier action round.</p>
+	<p>Review the details below and choose whether to accept or reject the proposal.</p>
+	<div id="review_rollback_details"></div>
+	<div class="rollback_buttons">
+		<button onclick="review_rollback_cancel(event)">Cancel</button>
+		<button onclick="review_rollback_accept(event)">Accept</button>
+		<button onclick="review_rollback_reject(event)">Reject</button>
+	</div>
+</dialog>
+
+</body>
