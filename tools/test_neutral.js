@@ -420,6 +420,80 @@ console.log('=== 17. 幂等性：重复 end_neutral 只生效一次 ===')
 	eq(g.neutral_reason['苏联'], '第一次', '17.3 原因不被覆盖')
 }
 
+console.log('=== 18. 苏联结束中立：打出事件 17817（进攻是最好的防守）===')
+console.log('=== 18A. 顺序：先结束中立+触发大清洗，再建战斗预算（无大清洗时）===')
+{
+	/*
+	 * 莫斯科(★,补给点) 放苏联陆军 s1（可发起）。
+	 * 罗斯（邻接莫斯科）放德国陆军 g1（被进攻目标）。
+	 * 苏联手牌放 17817#1，当前回合=苏联、出牌阶段。
+	 * 期望：打出后①苏联结束中立；②尚未建立战斗预算（顺序要求：先处理中立/大清洗）；
+	 *      ③su_17817_pending 置位；然后 su_17817_proceed 建立对德预算（候选含罗斯）。
+	 */
+	const g = fresh()
+	placeInSupply(g, '苏联', 'army', '莫斯科', 's1')
+	place(g, '德国', 'army', SP('罗斯'), 'g1')
+	ok(d.spaces[SP('莫斯科')].connections.indexOf(SP('罗斯')) >= 0,
+		'18.0 莫斯科邻接罗斯（前提）')
+
+	g.hands['苏联'] = ['17817#1']
+	g.current_nation = '苏联'
+	g.turn_phase = 'play'
+	I.set_skip_turn_guard(true)
+	R.action(g, 'Allies', 'play_card', { card: '17817#1' })
+	I.set_skip_turn_guard(false)
+
+	eq(I.is_neutral(g, '苏联'), false, '18.1 打出 17817 后苏联结束中立')
+	ok(!g.event_budget, '18.2 打出后【尚未】建立战斗预算（顺序：大清洗优先）')
+	ok(!!g.su_17817_pending, '18.3 17817 进入待结算（su_17817_pending）')
+	eq(g.su_purge_offer || false, false, '18.4 无大清洗时 su_purge_offer 为假')
+
+	/* 经 su_17817_proceed 才建立对德战斗预算 */
+	R.action(g, 'Allies', 'su_17817_proceed', {})
+	ok(!!(g.event_budget && g.event_budget.against === '德国'),
+		'18.5 su_17817_proceed 后生成对德战斗预算', g.event_budget && g.event_budget.against)
+	const targs = (I.event_battle_targets && g.event_budget)
+		? I.event_battle_targets(g, g.event_budget) : []
+	ok(targs.indexOf(SP('罗斯')) >= 0, '18.6 罗斯在战斗候选中', targs)
+}
+
+console.log('=== 18B. 大清洗联动：桌上有 17850 时，先给大清洗机会，消费后自动建预算 ===')
+{
+	const g = fresh()
+	placeInSupply(g, '苏联', 'army', '莫斯科', 's1')
+	place(g, '德国', 'army', SP('罗斯'), 'g1')
+	/* 桌面放《大清洗》17850，手牌含 17817 + 一张状态卡(17848)用于大清洗打出 */
+	g.table['苏联'] = g.table['苏联'] || []
+	g.table['苏联'].push('17850#1')
+	g.hands['苏联'] = ['17817#1', '17848#1']
+	g.current_nation = '苏联'
+	g.turn_phase = 'play'
+	I.set_skip_turn_guard(true)
+	R.action(g, 'Allies', 'play_card', { card: '17817#1' })
+	I.set_skip_turn_guard(false)
+
+	eq(I.is_neutral(g, '苏联'), false, '18.7 打出 17817 后结束中立')
+	eq(g.su_purge_offer, true, '18.8 桌上有大清洗 → su_purge_offer 为真')
+	ok(!g.event_budget, '18.9 打出后战斗预算仍未建（大清洗优先）')
+
+	/* 消费大清洗：弃置 17850，打出 1 张状态卡 17848 → 应自动建立 17817 预算 */
+	R.action(g, 'Allies', 'su_purge_play', { card: '17848#1' })
+	eq(g.su_purge_offer, false, '18.10 大清洗消费后 su_purge_offer 清除')
+	ok(!g.su_17817_pending, '18.11 预算建立后 su_17817_pending 清除')
+	ok(!!(g.event_budget && g.event_budget.against === '德国'),
+		'18.12 大清洗后自动生成对德战斗预算', g.event_budget && g.event_budget.against)
+	const targs = (I.event_battle_targets && g.event_budget)
+		? I.event_battle_targets(g, g.event_budget) : []
+	ok(targs.indexOf(SP('罗斯')) >= 0, '18.13 罗斯在战斗候选中', targs)
+	ok((g.discard['苏联'] || []).indexOf('17850#1') >= 0, '18.14 《大清洗》已弃置')
+}
+
+{
+	/* 反例：苏联未打出 17817 时仍中立 */
+	const g = fresh()
+	eq(I.is_neutral(g, '苏联'), true, '18.15 基线苏联仍中立')
+}
+
 console.log('\n' + '='.repeat(50))
 console.log('通过 ' + pass + ' / 失败 ' + fail)
 if (fail) {

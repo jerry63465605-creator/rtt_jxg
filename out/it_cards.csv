@@ -1,0 +1,73 @@
+deck,card_id,sheet,row,col,name_CN,type,ops,effect_CN,img_file,read
+CORE,17700,177,0,0,建设陆军,BASIC,,在相邻有补给的我方单位的陆地或本土建设1支陆军,cards_sliced/sheet177_r0_c0.png,沿用英国组文本（卡面无文本区）
+CORE,17701,177,0,1,发起陆战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次陆战,cards_sliced/sheet177_r0_c1.png,沿用英国组文本（卡面无文本区）
+CORE,17702,177,0,2,建设海军,BASIC,,相邻有补给我方部队的海域建设海军,cards_sliced/sheet177_r0_c2.png,沿用英国组文本（卡面无文本区）
+CORE,17703,177,0,3,发起海战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次海战,cards_sliced/sheet177_r0_c3.png,沿用英国组文本（卡面无文本区）
+CORE,17704,177,0,4,空军力量,BASIC,,部署空军/夺取制空权/调度空军(三选一)调度空军不需要空军力量而需要弃1手牌,cards_sliced/sheet177_r0_c4.png,沿用英国组文本（卡面无文本区）
+CORE,17705,177,0,5,波尔多潜艇基地,EFFECT,1,德国打出[潜艇行动]时：使其损耗数加3。,cards_sliced/sheet177_r0_c5.png,逐张
+CORE,17706,177,0,6,意大利完成航母,EFFECT,1,出牌阶段开始时，损耗1张牌：在海域部署或调度1支空军。,cards_sliced/sheet177_r0_c6.png,逐张
+CORE,17707,177,0,7,意大利皇家海军司令部,EFFECT,1,计分阶段开始时：场上每有1支意大利海军，获得1分。,cards_sliced/sheet177_r0_c7.png,逐张
+CORE,17708,177,0,8,意大利皇家空军,EFFECT,1,成为[经济战]目标时，移除1支空军：不执行损耗。,cards_sliced/sheet177_r0_c8.png,逐张
+CORE,17709,177,0,9,黄金广场改变,EFFECT,1,计分阶段开始时：在<中东>征召陆军。,cards_sliced/sheet177_r0_c9.png,逐张
+CORE,17710,177,1,0,索马里兰,EFFECT,1,计分阶段开始时：在<非洲东部>征召陆军。,cards_sliced/sheet177_r1_c0.png,逐张
+CORE,17711,177,1,1,维希法国殖民地,EFFECT,1,敌方国家在<非洲北部><非洲南部><中东><马达加斯加><东南亚>建设、征召或消灭，对上述地区发起陆战后：其损耗2张牌。,cards_sliced/sheet177_r1_c1.png,逐张
+CORE,17712,177,1,2,爱尔兰起义,ECON,1,英国损耗3张牌。,cards_sliced/sheet177_r1_c2.png,逐张
+CORE,17713,177,1,3,第十驱逐舰队,ECON,1,英国损耗2张牌。<地中海>或相邻海域每有1个未被同盟国控制，获得1分。,cards_sliced/sheet177_r1_c3.png,逐张
+CORE,17714,177,1,4,皇家海军封锁航路,ECON,1,英国损耗2张牌。场上每有1支意大利海军，获得1分。,cards_sliced/sheet177_r1_c4.png,逐张
+CORE,17715,177,1,5,派克行动,ECON,1,若<乌克兰>2区域内有英国陆军：苏联损耗2张牌，英国失去2分。,cards_sliced/sheet177_r1_c5.png,逐张
+CORE,17716,177,1,6,控制苏伊士运河,ECON,1,若<非洲北部><中东>都被友方控制：英国损耗3张牌，意大利获得3分。,cards_sliced/sheet177_r1_c6.png,逐张
+CORE,17717,177,1,7,大力神行动,EVENT,1,在<地中海>征召德国和意大利海军。,cards_sliced/sheet177_r1_c7.png,逐张
+CORE,17718,177,1,8,德国非洲军团,EVENT,1,在<非洲北部>征召德国陆军。在<地中海>征召德国海军。,cards_sliced/sheet177_r1_c8.png,逐张
+CORE,17719,177,1,9,德国增援反击,EVENT,1,在<意大利>消灭1支敌方国家陆军。德国在<意大利>征召陆军。,cards_sliced/sheet177_r1_c9.png,逐张
+CORE,17720,177,2,0,德国支援希腊战场,EVENT,1,在<巴尔干>消灭1支敌方国家陆军。德国在<巴尔干>征召陆军。,cards_sliced/sheet177_r2_c0.png,逐张
+CORE,17721,177,2,1,钢铁条约,EVENT,1,打出1张[响应卡]。德国打出1张[状态卡]。,cards_sliced/sheet177_r2_c1.png,逐张
+CORE,17722,177,2,2,华夫脱党,EVENT,1,在<非洲北部>消灭1支敌方国家陆军。若相邻地区没有英国陆军：在<非洲北部>征召1支陆军。,cards_sliced/sheet177_r2_c2.png,逐张
+CORE,17723,177,2,3,进攻共产国际,EVENT,1,在<乌克兰><罗斯>征召陆军。,cards_sliced/sheet177_r2_c3.png,逐张
+CORE,17724,177,2,4,札萨·汗,EVENT,1,在<中东>消灭1支敌方国家陆军。若相邻地区没有英国陆军：在<中东>征召1支陆军。,cards_sliced/sheet177_r2_c4.png,逐张
+CORE,17725,177,2,5,掠夺,EVENT,1,每有1个意大利控制的友方大本营之外的地区，获得1分。上述地区失去1个计分标记。,cards_sliced/sheet177_r2_c5.png,逐张
+CORE,17726,177,2,6,西班牙蓝色师,EVENT,1,暗牌弃置1张苏联的暗置响应。,cards_sliced/sheet177_r2_c6.png,逐张
+CORE,17727,177,2,7,西班牙国,EVENT,1,在<西欧><非洲北部>之一征召陆军。在<北海><地中海>之一建设海军。,cards_sliced/sheet177_r2_c7.png,逐张
+CORE,17728,177,2,8,意属东非,EVENT,1,在<非洲东部>建设陆军。<非洲东部>增加1个计分标记。,cards_sliced/sheet177_r2_c8.png,逐张
+CORE,17729,177,2,9,卡佩里尼 UIT 24 伊 503,EVENT,1,所有友方玩家依次从弃牌堆随机选择1张牌并检视，选择 打出该[战略卡][状态卡][经济战] 或 将其置于牌堆顶 或 将其弃置。,cards_sliced/sheet177_r2_c9.png,逐张
+CORE,17730,177,3,0,贝尔萨列里神射手团,RESPONSE,1,<巴尔干>或相邻地区的意大利陆军被攻击时：使其在本次战斗中不会被移除。,cards_sliced/sheet177_r3_c0.png,逐张
+CORE,17731,177,3,1,不可思议行动,RESPONSE,1,苏联建设陆军后，若相邻地区有英国或美国陆军：消灭建设的陆军。,cards_sliced/sheet177_r3_c1.png,逐张
+CORE,17732,177,3,2,德国军事顾问,RESPONSE,1,出牌阶段开始时：选择场上1张德国[状态卡]，本回合内你可以使用该卡。,cards_sliced/sheet177_r3_c2.png,逐张
+CORE,17733,177,3,3,卡西诺山,RESPONSE,1,<意大利>的友方陆军被攻击时：使其在本回合内不会被移除。,cards_sliced/sheet177_r3_c3.png,逐张
+CORE,17734,177,3,4,罗马尼亚增援,RESPONSE,1,补给状态的德国陆军被移除后：在所处地区征召意大利陆军。,cards_sliced/sheet177_r3_c4.png,逐张
+CORE,17735,177,3,5,山地特种兵,RESPONSE,1,<意大利>或相邻地区的意大利陆军被攻击时：使其在本次战斗中不会被移除。,cards_sliced/sheet177_r3_c5.png,逐张
+CORE,17736,177,3,6,王牌飞行员,RESPONSE,1,成为[轰炸行动]目标时：本回合[轰炸行动]对意大利无效。,cards_sliced/sheet177_r3_c6.png,逐张
+CORE,17737,177,3,7,以逸待劳,RESPONSE,1,敌方国家在<意大利>相邻地区建设或征召陆军后：在<意大利>征召德国和意大利陆军。,cards_sliced/sheet177_r3_c7.png,逐张
+CORE,17738,177,3,8,殖民地游击队,RESPONSE,1,敌方国家在<拉丁美洲><马达加斯加>建设或征召陆军后：消灭该陆军。,cards_sliced/sheet177_r3_c8.png,逐张
+CORE,17739,177,3,9,巴尔干资源,STATUS,,计分阶段：若<巴尔干>有意大利陆军，获得1分。,cards_sliced/sheet177_r3_c9.png,逐张
+CORE,17740,177,4,0,反共情绪,STATUS,,计分阶段：<乌克兰><罗斯>每有1支意大利陆军，获得1分。,cards_sliced/sheet177_r4_c0.png,逐张
+CORE,17741,177,4,1,海王,STATUS,,计分阶段：场上每有1支意大利海军，获得1分。,cards_sliced/sheet177_r4_c1.png,逐张
+CORE,17742,177,4,2,拉丁世界,STATUS,,<拉丁美洲>成为仅对意大利的补给点。可放弃建设陆军：在<拉丁美洲>征召陆军。,cards_sliced/sheet177_r4_c2.png,逐张
+CORE,17743,177,4,3,尚未收复的意大利,STATUS,,计分阶段：若<西欧>被友方控制，获得1分。,cards_sliced/sheet177_r4_c3.png,逐张
+CORE,17744,177,4,4,土耳其开放海峡,STATUS,,<黑海>和<地中海><巴尔干>和<中东>仅对友方国家相邻。计分阶段：若<中东>相邻地区没有敌方国家海军，获得1分。,cards_sliced/sheet177_r4_c4.png,逐张
+CORE,17745,177,4,5,维希法国,STATUS,,计分阶段：若<西欧>无人控制，获得2分。若<西欧>仅被德国控制，获得1分。,cards_sliced/sheet177_r4_c5.png,逐张
+CORE,17746,177,4,6,耀武,STATUS,,跳过出牌阶段行动，损耗2张牌：发起1次陆战。,cards_sliced/sheet177_r4_c6.png,逐张
+CORE,17747,177,4,7,西班牙控制直布罗陀,STATUS,,<北海>和<地中海><非洲北部>和<西欧>仅对友方国家相邻。计分阶段：若<非洲北部>和相邻地区没有敌方国家陆军，获得1分。,cards_sliced/sheet177_r4_c7.png,逐张
+CORE,17748,177,4,8,意大利殖民地帝国,STATUS,,计分阶段：<中东><非洲>每有1个地区被友方控制，获得1分。,cards_sliced/sheet177_r4_c8.png,逐张
+CORE,17749,177,4,9,轴心协定,STATUS,,一回合一次，敌方国家部队因友方效果在其大本营或相邻地区被攻击或消灭时：获得1分。,cards_sliced/sheet177_r4_c9.png,逐张
+SUPP,16700,167,0,0,一日之狮,EFFECT,1,敌方国家打出[增强卡]时，损耗1张牌：使其无效。,cards_sliced/sheet167_r0_c0.png,逐张
+SUPP,16701,167,0,1,意大利万岁,EFFECT,1,出牌阶段开始时：本回合出牌阶段行动2次，但只能打出[战略卡]。,cards_sliced/sheet167_r0_c1.png,逐张
+SUPP,16702,167,0,2,埃塞俄比亚战争后勤,EVENT,1,在<非洲北部>建设陆军。对<非洲东部>发起陆战 或 在<非洲东部>建设陆军。,cards_sliced/sheet167_r0_c2.png,逐张
+SUPP,16703,167,0,3,罗马尼亚铁卫团,EVENT,1,在<巴尔干>征召陆军。德国可弃置1张手牌：其摸1张牌。,cards_sliced/sheet167_r0_c3.png,逐张
+PRELUDE,11300,113,0,0,入侵阿尔巴尼亚,PRELUDE,,[紧张度+1] 在<巴尔干>征召陆军。[失去2分] <巴尔干>增加1个计分标记。,cards_sliced/sheet113_r0_c0.png,逐张
+PRELUDE,11301,113,0,1,入侵埃塞俄比亚,PRELUDE,,[紧张度+1] 在<非洲东部>征召陆军。,cards_sliced/sheet113_r0_c1.png,逐张
+PRELUDE,11302,113,0,2,反共产国际协定,PRELUDE,,[紧张度+1] 苏联损耗4张前奏牌，意大利获得1分。,cards_sliced/sheet113_r0_c2.png,逐张
+PRELUDE,11303,113,0,3,十二群岛基地,PRELUDE,,[紧张度+1] 在<地中海>征召1支海军。[若英国弃置1张手牌] 失去3分。,cards_sliced/sheet113_r0_c3.png,逐张
+PRELUDE,11304,113,0,4,空军军团,PRELUDE,,[紧张度+1] 所有敌方国家损耗2张前奏牌。德国可打出前奏手牌中的[秃鹰军团]。,cards_sliced/sheet113_r0_c4.png,逐张
+PRELUDE,11305,113,0,5,罗马梦,PRELUDE,,<地中海>或相邻地区每有1支意大利部队，获得1分。[紧张度+1] 获得3分。,cards_sliced/sheet113_r0_c5.png,逐张
+PRELUDE,11306,113,0,6,美国优先,PRELUDE,,[紧张度-1] [除非美国弃置1张手牌] 获得3分。,cards_sliced/sheet113_r0_c6.png,逐张
+PRELUDE,11307,113,0,7,西班牙志愿军,PRELUDE,,[紧张度+1] 苏联损耗1张前奏牌。苏联可打出手牌中的[西班牙志愿军]。[若之前或此次未打出] 苏联损耗3张前奏牌。,cards_sliced/sheet113_r0_c7.png,逐张
+PRELUDE,11308,113,0,8,罗马协定,PRELUDE,,[紧张度-1] 在<非洲北部>征召陆军。,cards_sliced/sheet113_r0_c8.png,逐张
+PRELUDE,11309,113,0,9,西班牙政变,PRELUDE,,[紧张度+1] 获得1分。检视前奏牌堆，选择并打出其中的[空军军团]或[西班牙志愿军]。,cards_sliced/sheet113_r0_c9.png,逐张
+PRELUDE,11310,113,1,0,维也纳仲裁,PRELUDE,,[紧张度+1] <巴尔干>增加1个计分标记。[失去2分] 在<巴尔干>征召陆军。,cards_sliced/sheet113_r1_c0.png,逐张
+PRELUDE,11311,113,1,1,维托里奥·维内托,ARMAMENT,,计分阶段开始时：在<地中海>建设1支海军。,cards_sliced/sheet113_r1_c1.png,逐张
+PRELUDE,11312,113,1,2,布雷舰,ARMAMENT,,敌方国家在<地中海>建设海军后：消灭该海军。,cards_sliced/sheet113_r1_c2.png,逐张
+PRELUDE,11313,113,1,3,第四海岸,ARMAMENT,,计分阶段开始时：在<非洲北部>征召1支陆军。,cards_sliced/sheet113_r1_c3.png,逐张
+PRELUDE,11314,113,1,4,黑衫军,ARMAMENT,,计分阶段开始时：在<意大利>建设1支陆军。,cards_sliced/sheet113_r1_c4.png,逐张
+PRELUDE,11315,113,1,5,罗马尼亚军团国,ARMAMENT,,计分阶段开始时：在<巴尔干>消灭1支敌方国家陆军。,cards_sliced/sheet113_r1_c5.png,逐张
+PRELUDE,11316,113,1,6,伊拉克独立运动,ARMAMENT,,计分阶段开始时，若<中东>没有敌方国家陆军：英国损耗4张牌。,cards_sliced/sheet113_r1_c6.png,逐张
+PRELUDE,11317,113,1,7,皇家殖民地部队,ARMAMENT,,计分阶段开始时：在<非洲东部>建设1支陆军。,cards_sliced/sheet113_r1_c7.png,逐张

@@ -1,0 +1,87 @@
+deck,card_id,sheet,row,col,name_CN,type,ops,effect_CN,img_file,read
+CORE,17500,175,0,0,建设陆军,BASIC,,在相邻有补给的我方单位的陆地或本土建设1支陆军,cards_sliced/sheet175_r0_c0.png,沿用英国组文本（卡面无文本区）
+CORE,17501,175,0,1,发起陆战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次陆战,cards_sliced/sheet175_r0_c1.png,沿用英国组文本（卡面无文本区）
+CORE,17502,175,0,2,建设海军,BASIC,,相邻有补给我方部队的海域建设海军,cards_sliced/sheet175_r0_c2.png,沿用英国组文本（卡面无文本区）
+CORE,17503,175,0,3,发起海战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次海战,cards_sliced/sheet175_r0_c3.png,沿用英国组文本（卡面无文本区）
+CORE,17504,175,0,4,空军力量,BASIC,,部署空军/夺取制空权/调度空军(三选一)调度空军不需要空军力量而需要弃1手牌,cards_sliced/sheet175_r0_c4.png,沿用英国组文本（卡面无文本区）
+CORE,17505,175,0,5,P-51 野马,EFFECT,1,打出[轰炸行动]时：其要求地区内每有1支美国空军，损耗数加2。,cards_sliced/sheet175_r0_c5.png,逐张
+CORE,17506,175,0,6,沉睡的巨人,EFFECT,1,在<太平洋>建设海军后，损耗1张牌：在相邻地区建设1支部队。,cards_sliced/sheet175_r0_c6.png,逐张
+CORE,17507,175,0,7,伦敦上空的鹰,EFFECT,1,空军阶段开始时：英国部署1支空军。,cards_sliced/sheet175_r0_c7.png,逐张
+CORE,17508,175,0,8,太平洋基地,EFFECT,1,计分阶段开始时，损耗1张牌：在<中太平洋>相邻地区征召1支陆军。,cards_sliced/sheet175_r0_c8.png,逐张
+CORE,17509,175,0,9,王牌飞行员帕皮·博因顿,EFFECT,1,计分阶段开始时，损耗1张牌：在<中太平洋>或相邻地区部署1支空军。,cards_sliced/sheet175_r0_c9.png,逐张
+CORE,17510,175,1,0,我们的政治哲学,EFFECT,1,弃牌阶段开始时，损耗2张牌：英国检视其弃牌堆，选择并打出1张[响应卡]。,cards_sliced/sheet175_r1_c0.png,逐张
+CORE,17511,175,1,1,美国陆军游骑兵,EFFECT,1,部署或调度空军后，损耗1张牌：在相邻地区消灭1支敌方国家陆军。,cards_sliced/sheet175_r1_c1.png,逐张
+CORE,17512,175,1,2,战俘,EFFECT,1,计分阶段开始时：本回合内每有过1支敌方部队被移除，获得1分。,cards_sliced/sheet175_r1_c2.png,逐张
+CORE,17513,175,1,3,战时生产委员会,EFFECT,1,美国[状态卡]生效后，损耗1张牌：本回合内该[状态卡]可多发动1次。,cards_sliced/sheet175_r1_c3.png,逐张
+CORE,17514,175,1,4,飞虎队,EFFECT,1,空军阶段开始时：中国部署1支飞机 或 中国发起1次夺取制空权。,cards_sliced/sheet175_r1_c4.png,逐张
+CORE,17515,175,1,5,B-24 解放者,ECON,1,[轰炸行动]若<意大利>2地区内有美国陆军：意大利损耗5张牌。,cards_sliced/sheet175_r1_c5.png,逐张
+CORE,17516,175,1,6,B-26 掠夺者,ECON,1,[轰炸行动]选择1个大本营2地区内有美国陆军的敌方国家：其损耗4张牌。,cards_sliced/sheet175_r1_c6.png,逐张
+CORE,17517,175,1,7,B-29 超级堡垒,ECON,1,[轰炸行动]若<德国>2地区内有美国陆军：德国损耗6张牌。,cards_sliced/sheet175_r1_c7.png,逐张
+CORE,17518,175,1,8,SBD 无畏,ECON,1,[轰炸行动]若<日本>2地区内有美国海军：日本损耗4张牌。,cards_sliced/sheet175_r1_c8.png,逐张
+CORE,17519,175,1,9,燃烧弹轰炸,ECON,1,[轰炸行动]选择1个大本营1地区内有美国部队的敌方国家：其损耗8张牌。,cards_sliced/sheet175_r1_c9.png,逐张
+CORE,17520,175,2,0,石油禁运,ECON,1,所有敌方玩家依次选择：损耗2张牌 或 移除场上1支其的部队。,cards_sliced/sheet175_r2_c0.png,逐张
+CORE,17521,175,2,1,杜立特空袭,ECON,1,[轰炸行动]若<日本>3地区内有补给状态的美国海军：获得3分，日本损耗1张牌。,cards_sliced/sheet175_r2_c1.png,逐张
+CORE,17522,175,2,2,小男孩&胖子,ECON,1,若场上有[曼哈顿计划]，选择1个大本营相邻地区有美国空军的国家级：其损耗7张牌，移除1支位于其大本营的陆军，美国获得2分。,cards_sliced/sheet175_r2_c2.png,逐张
+CORE,17523,175,2,3,抗日战争相持阶段,ECON,1,场上每有1支中国部队，日本损耗2张牌。,cards_sliced/sheet175_r2_c3.png,逐张
+CORE,17524,175,2,4,进击的巴顿,EVENT,1,在<西欧>建设陆军。对相邻地区发起1次陆战。,cards_sliced/sheet175_r2_c4.png,逐张
+CORE,17525,175,2,5,巴西远征军,EVENT,1,在<拉丁美洲>建设陆军。在<南大西洋>建设海军。,cards_sliced/sheet175_r2_c5.png,逐张
+CORE,17526,175,2,6,民主兵工厂,EVENT,1,英国按任意顺序执行：建设1支海军 及 建设1支陆军。,cards_sliced/sheet175_r2_c6.png,逐张
+CORE,17527,175,2,7,瓜达尔卡纳尔岛,EVENT,1,在<新西兰>征召陆军。在相邻地区建设海军。,cards_sliced/sheet175_r2_c7.png,逐张
+CORE,17528,175,2,8,广阔的资源,EVENT,1,检视弃牌堆并选择1张牌，将其打出。,cards_sliced/sheet175_r2_c8.png,逐张
+CORE,17529,175,2,9,摩尔曼斯克运输船队,EVENT,1,苏联在<罗斯>征召1支陆军。苏联建设1支陆军。,cards_sliced/sheet175_r2_c9.png,逐张
+CORE,17530,175,3,0,代号：Magic,EVENT,1,选择并暗牌弃置1张暗置的日本响应。,cards_sliced/sheet175_r3_c0.png,逐张
+CORE,17531,175,3,1,现购自运政策,EVENT,1,美国结束中立。选择1个友方国家，在该国家的大本营或相邻地区征召1支该国家的部队。,cards_sliced/sheet175_r3_c1.png,逐张
+CORE,17532,175,3,2,战区移动,EVENT,1,移除1支美国陆军或海军：按任意顺序执行：建设1支海军 及 建设1支陆军。,cards_sliced/sheet175_r3_c2.png,逐张
+CORE,17533,175,3,3,珍珠港部署舰队,EVENT,1,在<夏威夷>征召陆军。在相邻地区建设海军。,cards_sliced/sheet175_r3_c3.png,逐张
+CORE,17534,175,3,4,揍一顿再谈判,EVENT,1,在<太平洋>建设1支海军。以此海军发起1次海战。,cards_sliced/sheet175_r3_c4.png,逐张
+CORE,17535,175,3,5,租借法案,EVENT,1,选择1个自己之外的友方国家，其打出1张手牌，摸1张牌。,cards_sliced/sheet175_r3_c5.png,逐张
+CORE,17536,175,3,6,滇缅公路,EVENT,1,若<东南亚>有友方国家陆军：在<中国东部><中国西部>之一消灭1支敌方国家陆军 或 中国在上述地区之一征召1支陆军。,cards_sliced/sheet175_r3_c6.png,逐张
+CORE,17537,175,3,7,美国人民同情中国,EVENT,1,中国增加1支陆军后备。中国建设1支陆军。,cards_sliced/sheet175_r3_c7.png,逐张
+CORE,17538,175,3,8,登陆作战,STATUS,,一回合一次，发起陆战后，若战斗地区相邻补给状态的美国海军，可损耗1张牌：在战斗地区建设陆军。,cards_sliced/sheet175_r3_c8.png,逐张
+CORE,17539,175,3,9,常设联合国防委员会,STATUS,,<加拿大>的英国陆军总是处于补给状态。跳过出牌阶段行动，弃置1张[建设陆军]：在<加拿大>征召英国陆军。,cards_sliced/sheet175_r3_c9.png,逐张
+CORE,17540,175,4,0,航空母舰,STATUS,,一回合一次，发起海战后，可损耗1张牌：在战斗地区建设海军。,cards_sliced/sheet175_r4_c0.png,逐张
+CORE,17541,175,4,1,工业巨头,STATUS,,一回合一次，打出[战略卡]后，可损耗2张牌：将其洗入牌堆。,cards_sliced/sheet175_r4_c1.png,逐张
+CORE,17542,175,4,2,空中堡垒,STATUS,,[轰炸行动]的地区要求增加1地区。一回合一次，打出[轰炸行动]后，损耗1张牌：打出1张[轰炸行动]。,cards_sliced/sheet175_r4_c2.png,逐张
+CORE,17543,175,4,3,雷达,STATUS,,一回合一次，美国海军被攻击时，可损耗2张牌：使其在本次战斗中不会被移除。,cards_sliced/sheet175_r4_c3.png,逐张
+CORE,17544,175,4,4,美国海军陆战队,STATUS,,在<太平洋>建设海军后，可损耗1张牌：对相邻地区发起1次陆战。,cards_sliced/sheet175_r4_c4.png,逐张
+CORE,17545,175,4,5,曼哈顿计划,STATUS,,弃牌阶段：若弃置了手牌，获得1分。,cards_sliced/sheet175_r4_c5.png,逐张
+CORE,17546,175,4,6,铆钉女工,STATUS,,弃牌阶段开始时：可选择1或2张手牌，将其以任意顺序置于牌堆底。,cards_sliced/sheet175_r4_c6.png,逐张
+CORE,17547,175,4,7,人工港,STATUS,,一回合一次，建设海军后，可损耗1张牌：在相邻地区建设1支陆军。,cards_sliced/sheet175_r4_c7.png,逐张
+CORE,17548,175,4,8,胜利花园,STATUS,,[资源再分配]时：弃置手牌数改为1。,cards_sliced/sheet175_r4_c8.png,逐张
+CORE,17549,175,4,9,盟军远征部队最高司令部,STATUS,,英国、法国、美国可以英国、法国、美国的部队连接补给线。英国、法国、美国的海军可以英国、法国、美国的陆军作为港口。,cards_sliced/sheet175_r4_c9.png,逐张
+CORE,17550,175,5,0,先进造船厂,STATUS,,一回合一次，建设海军后，可损耗1张牌：建设1支海军。,cards_sliced/sheet175_r5_c0.png,逐张
+CORE,17551,175,5,1,战时国债,STATUS,,[资源再分配]时：可在弃牌堆搜寻卡牌。,cards_sliced/sheet175_r5_c1.png,逐张
+CORE,17552,175,5,2,战时生产,STATUS,,一回合一次，建设陆军后，可损耗1张牌：建设1支陆军。,cards_sliced/sheet175_r5_c2.png,逐张
+CORE,17553,175,5,3,抗日义勇军,STATUS,,中国建设或征召，中国部队被发起战斗后：日本弃置1张手牌，损耗1张牌。,cards_sliced/sheet175_r5_c3.png,逐张
+CORE,17554,175,5,4,重庆国民政府,STATUS,,若<中国东部>被敌方占领，中国的大本营改为<中国西部>。<中国西部>成为对中国的补给点并增加1个计分标记。跳过出牌阶段行动：中国在<中国西部>征召陆军。,cards_sliced/sheet175_r5_c4.png,逐张
+CORE,17555,175,5,5,大萧条的余波,STATUS,,打出[事件卡][状态卡]时：弃置1张手牌。结束中立时，弃置此牌：<美国>增加1个计分标记。,cards_sliced/sheet175_r5_c5.png,逐张
+SUPP,16300,163,0,0,火炬行动,EVENT,1,按任意顺序执行：在<非洲北部>或相邻地区建设1支部队。对<非洲北部>发起1次陆战。,cards_sliced/sheet163_r0_c0.png,逐张
+SUPP,16301,163,0,1,太平洋舰队,EVENT,1,对<太平洋>之一发起1次海战。在<太平洋>之一建设1支海军。,cards_sliced/sheet163_r0_c1.png,逐张
+SUPP,16302,163,0,2,诺曼底登陆,EVENT,1,在<北海>建设1支海军。对<西欧>发起1次陆战。,cards_sliced/sheet163_r0_c2.png,逐张
+SUPP,16303,163,0,3,中途岛海战,EVENT,1,日本的[响应卡]在本回合中无法触发。对<中太平洋>发起1次海战。,cards_sliced/sheet163_r0_c3.png,逐张
+SUPP,16304,163,0,4,中国远征军,STATUS,,<东南亚>的中国陆军被移除后：中国在相邻地区之一征召陆军。打出后：中国在<东南亚>征召陆军。,cards_sliced/sheet163_r0_c4.png,逐张
+SUPP,16800,168,0,0,艾森豪威尔陆军上将,EFFECT,1,建设陆军后：建设1支陆军。,cards_sliced/sheet168_r0_c0.png,逐张
+SUPP,16801,168,0,1,哈尔西海军上将,EFFECT,1,发起海战后：发起1次海战。,cards_sliced/sheet168_r0_c1.png,逐张
+SUPP,16802,168,0,2,麦克阿瑟陆军上将,EFFECT,1,发起陆战后：发起1次陆战。,cards_sliced/sheet168_r0_c2.png,逐张
+SUPP,16803,168,0,3,尼米兹海军上将,EFFECT,1,建设海军后：建设1支海军。,cards_sliced/sheet168_r0_c3.png,逐张
+SUPP,16804,168,0,4,花园口决堤,EFFECT,1,敌对国家占领<中国东部>时，损耗2张牌：消灭占领的陆军。,cards_sliced/sheet168_r0_c4.png,逐张
+SUPP,16805,168,0,5,B-25 米切尔,ECON,1,[轰炸行动]选择1个大本营2地区内有{美国}海军的敌方国家：其损耗4张牌。打出后：置入英国手牌，改为{英国}。,cards_sliced/sheet168_r0_c5.png,逐张
+SUPP,16806,168,0,6,大规模部署,EVENT,1,在<东太平洋>及相邻地区征召1支陆军和1支海军。,cards_sliced/sheet168_r0_c6.png,逐张
+PRELUDE,17200,172,0,0,蒂泽德使团,PRELUDE,,打出1张前奏手牌。[英国弃置1张手牌] 打出前奏牌堆顶的牌。,cards_sliced/sheet172_r0_c0.png,逐张
+PRELUDE,17201,172,0,1,隔离演说,PRELUDE,,[紧张度+1] 所有敌方国家损耗1张前奏牌。获得1分。[除非任一敌方国家弃置1张手牌] 美国结束中立。,cards_sliced/sheet172_r0_c1.png,逐张
+PRELUDE,17202,172,0,2,两洋海军法案,PRELUDE,,[紧张度+1] 建设1支海军。,cards_sliced/sheet172_r0_c2.png,逐张
+PRELUDE,17203,172,0,3,美国中立法案,PRELUDE,,[紧张度-1] 获得3分。,cards_sliced/sheet172_r0_c3.png,逐张
+PRELUDE,17204,172,0,4,振兴公共事业,PRELUDE,,[持续][大萧条]检视牌堆前10张牌，选择并打出1张[状态卡]。打出[事件卡]后，可弃置[大萧条]和手牌共3张：打出1张[状态卡]。,cards_sliced/sheet172_r0_c4.png,逐张
+PRELUDE,17205,172,0,5,整顿经济,PRELUDE,,[持续][大萧条]<美国>增加1个计分标记。计分阶段开始时，可弃置[大萧条]和手牌共3张：弃置[大萧条的余波]。,cards_sliced/sheet172_r0_c5.png,逐张
+PRELUDE,17206,172,0,6,炉边谈话,PRELUDE,,打出1张[大萧条]。获得1分。[弃置1张手牌] 检视前奏牌堆，选择并打出1张[大萧条]。,cards_sliced/sheet172_r0_c6.png,逐张
+PRELUDE,17207,172,0,7,民间资源保护,PRELUDE,,[持续][大萧条]检视前奏牌堆，选择并打出1张[军备卡]。[军备卡][资源再分配]时，可弃置[大萧条]和手牌共2张：额外找出1张[战略卡]。,cards_sliced/sheet172_r0_c7.png,逐张
+PRELUDE,17208,172,0,8,南京保卫战,PRELUDE,,[紧张度+1] 日本损耗3张前奏牌。[除非日本弃置1张手牌] 紧张度+2。,cards_sliced/sheet172_r0_c8.png,逐张
+PRELUDE,17209,172,0,9,淞沪会战,PRELUDE,,[紧张度+1] 日本损耗3张前奏牌。[除非日本弃置1张手牌] 日本损耗3张前奏牌。,cards_sliced/sheet172_r0_c9.png,逐张
+PRELUDE,17210,172,1,0,武汉会战,PRELUDE,,[紧张度+1] 日本损耗3张前奏牌。[除非日本弃置1张手牌] 日本损耗3张牌。,cards_sliced/sheet172_r1_c0.png,逐张
+ARMAMENT,17211,172,1,1,北卡罗来纳级,ARMAMENT,,计分阶段开始时：在<夏威夷>相邻地区征召1支海军。,cards_sliced/sheet172_r1_c1.png,逐张
+ARMAMENT,17212,172,1,2,菲律宾侦察兵,ARMAMENT,,计分阶段开始时：在<菲律宾>征召1支陆军。,cards_sliced/sheet172_r1_c2.png,逐张
+ARMAMENT,17213,172,1,3,企业号航空母舰,ARMAMENT,,发起或被发起海战后：在战斗地区建设1支海军。,cards_sliced/sheet172_r1_c3.png,逐张
+ARMAMENT,17214,172,1,4,生产令,ARMAMENT,,摸牌阶段开始时：增加1支空军后备。部署1支空军。,cards_sliced/sheet172_r1_c4.png,逐张
+ARMAMENT,17215,172,1,5,国民革命军,ARMAMENT,,计分阶段开始时：中国发起1次陆战。,cards_sliced/sheet172_r1_c5.png,逐张
+ARMAMENT,17216,172,1,6,花园口决堤,ARMAMENT,,敌方国家在<中国东部>建设或征召陆军后：消灭该陆军。,cards_sliced/sheet172_r1_c6.png,逐张
+ARMAMENT,17217,172,1,7,自由轮,ARMAMENT,,计分阶段开始时：英国建设1支陆军。,cards_sliced/sheet172_r1_c7.png,逐张

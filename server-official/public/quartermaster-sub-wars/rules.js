@@ -189,9 +189,42 @@ function add_neighbor(tbl, side, from, to) {
 function get_connections(game, s, side, snap) {
 	const tbl = snap || game.limited_connections
 	const lc = tbl && tbl[side]
-	if (lc && lc[s]) return lc[s]
-	const sp = data.spaces[s]
-	return sp ? sp.connections : []
+	let conns = (lc && lc[s]) ? lc[s] : (() => { const sp = data.spaces[s]; return sp ? sp.connections : [] })()
+	/* 15254 战争海军：北海/波罗的海仅对轴心国相邻（对所有来源生效，含缓存） */
+	if (game.status_aura && game.status_aura.sea_axis_only && game.status_aura.sea_axis_only.indexOf(s) >= 0) {
+		conns = conns.filter(nb => {
+			const nsp = data.spaces[nb]
+			if (!nsp) return false
+			if (nsp.terrain === 'sea') return true
+			const axisThere = Object.keys(game.location || {}).some(p =>
+				game.location[p] === nb && game.piece_nation[p] && faction_of_nation(game.piece_nation[p]) === 'axis')
+			return axisThere
+		})
+	}
+	/* 【2026-10-06】本回合临时邻接（如 17823 千岛群岛：本回合<海参崴><日本>仅对苏联相邻）。
+	 * game.temp_connections = [{a, b, side}]，仅对指定阵营 side 生效，且只在设置当回合有效
+	 * （用 game.temp_connections_turn 标记，跨回合自动作废，无需显式清理）。 */
+	if (game.temp_connections && game.temp_connections.length) {
+		const turnOk = game.temp_connections_turn === game.turn
+		if (turnOk) {
+			for (const tc of game.temp_connections) {
+				if (tc.side && tc.side !== side) continue
+				if (tc.a === s && conns.indexOf(tc.b) < 0) conns = conns.concat([tc.b])
+				if (tc.b === s && conns.indexOf(tc.a) < 0) conns = conns.concat([tc.a])
+			}
+		}
+	}
+	/* 【2026-10-08】17744/17747 永久成对邻接：与 temp_connections 同构，
+	 * 但【没有】回合校验 —— 打出后常驻生效（玩家口径：卡不会离场，不实现撤销）。
+	 * game.status_connections = [{a, b, side}]，side 为阵营（'axis'）时仅轴心国可走。 */
+	if (game.status_connections && game.status_connections.length) {
+		for (const sc of game.status_connections) {
+			if (sc.side && sc.side !== side) continue
+			if (sc.a === s && conns.indexOf(sc.b) < 0) conns = conns.concat([sc.b])
+			if (sc.b === s && conns.indexOf(sc.a) < 0) conns = conns.concat([sc.a])
+		}
+	}
+	return conns
 }
 
 /* 便利：不带阵营的普通连通 */
@@ -264,7 +297,7 @@ function is_adjacent(game, a, b, side, snap) {
  * 第一个参数若是 number，按老式单参调用处理（内部已全部改完，
  * 保留兼容只是为了防止外部/测试残留调用静默拿到错误结果）。
  */
-function is_supply_point(game, space, faction) {
+function is_supply_point(game, space, faction, nation) {
 	if (typeof game === 'number') {
 		/* 老签名：is_supply_point(space) */
 		space = game
@@ -277,17 +310,34 @@ function is_supply_point(game, space, faction) {
 	const ov = game && game.supply_override && game.supply_override[space]
 	if (!ov) return base
 
-	if (faction == null) {
-		/* 宽松查询：至少一个阵营视为补给点就算 */
-		if (ov.axis === true || ov.allies === true) return true
-		/* 两个阵营都被显式关掉 -> 确定不是补给点 */
-		if (ov.axis === false && ov.allies === false) return false
-		/* 部分未定 -> 回落地图标定 */
-		return base
+	/*
+	 * 【国家维度】(2026-10-08 玩家口径)：
+	 * 补给点"仅对某国"必须是【国家】粒度，不能退化成阵营
+	 * （否则 17742「仅对意大利」会让德国/日本部队也白拿补给）。
+	 * ov.nations = { 国家名: true|false }，优先级【高于】阵营维度。
+	 */
+	const hasNations = ov.nations && Object.keys(ov.nations).length > 0
+
+	/* ① 精确匹配：国家维度 */
+	if (nation != null && ov.nations && ov.nations[nation] !== undefined)
+		return !!ov.nations[nation]
+
+	if (faction != null) {
+		/* ② 只设了国家维度（没设任何阵营维度）时，
+		 *    阵营查询【不成立】且【不回落】地图默认 —— 否则"仅对意大利"会被同阵营他国拿到。 */
+		if (hasNations && ov.axis === undefined && ov.allies === undefined) return false
+		const v = ov[faction]
+		return (v === undefined) ? base : !!v
 	}
 
-	const v = ov[faction]
-	return (v === undefined) ? base : !!v
+	/* ③ 宽松查询（faction 省略）：任一维度为"是"就算补给点 */
+	if (ov.axis === true || ov.allies === true) return true
+	if (hasNations && Object.keys(ov.nations).some(k => ov.nations[k] === true)) return true
+	/* 阵营被显式关掉且无国家维度 -> 确定不是 */
+	if (ov.axis === false && ov.allies === false && !hasNations) return false
+	/* 有显式"否"的国家设置但没匹配到任何"是" -> 不是 */
+	if (hasNations) return false
+	return base
 }
 
 /*
@@ -299,11 +349,31 @@ function set_supply_point(game, space, faction, value) {
 	game.supply_override = game.supply_override || {}
 	game.supply_override[space] = game.supply_override[space] || {}
 	const v = !!value
+	/*
+	 * 【2026-10-09 回归修复】阵营名大小写归一。
+	 *
+	 * AXIS/ALLIES 常量是【小写】'axis'/'allies'，但历史调用存在
+	 * 'Axis' / 'Allies'（首字母大写）的写法。加国家维度分支后，
+	 * 这类大写值既不等于 AXIS 也不等于 ALLIES，会【误落进国家维度分支】，
+	 * 写成 ov.nations['Axis'] —— 阵营维度一个都没写。
+	 * 于是 is_supply_point 的「只设了国家维度 -> return false」把它判成
+	 * 「不是补给点」，补给点对全阵营失效。
+	 * 症状：日本 _smoke_jp_effect.js 的 S2=null（carrierAt 造不出第二个补给海域）。
+	 *
+	 * 修法：比较前先 toLowerCase，写回时也用归一化后的键。
+	 */
+	const fl = (faction == null) ? null : String(faction).toLowerCase()
 	if (faction == null) {
 		game.supply_override[space].axis = v
 		game.supply_override[space].allies = v
+	} else if (fl === AXIS || fl === ALLIES) {
+		/* 阵营维度（既有行为，键统一小写） */
+		game.supply_override[space][fl] = v
 	} else {
-		game.supply_override[space][faction] = v
+		/* 【国家维度】(2026-10-08)：faction 传的是【国家名】而非阵营，
+		 * 写入 ov.nations，使补给点只对这一个国家生效。 */
+		game.supply_override[space].nations = game.supply_override[space].nations || {}
+		game.supply_override[space].nations[faction] = v
 	}
 	return game.supply_override[space]
 }
@@ -348,11 +418,17 @@ function list_supply_points(game) {
 		const axis = is_supply_point(game, sp.id, AXIS)
 		const allies = is_supply_point(game, sp.id, ALLIES)
 		if (!axis && !allies) continue
+		const ovNations = (game && game.supply_override && game.supply_override[sp.id]
+			&& game.supply_override[sp.id].nations) || null
 		out.push({
 			id: sp.id,
 			name: sp.name,
 			axis: axis,
 			allies: allies,
+			/* 【国家维度】(2026-10-08)：列出"仅对某国"的国家名单，供 UI/调试查看 */
+			nations: ovNations
+				? Object.keys(ovNations).filter(k => ovNations[k] === true)
+				: null,
 			base: !!sp.supply,
 			overridden: !!(game && game.supply_override && game.supply_override[sp.id]),
 		})
@@ -382,6 +458,32 @@ function compute_supply(game, conn_snap) {
 		;(bySpace[loc] = bySpace[loc] || []).push(pid)
 	}
 
+	/*
+	 * 1b. 注入【虚拟陆军】光环（15444 等"视为有陆军"）。
+	 *     仅作为普通部队参与补给传播，【不】提供补给源——
+	 *     补给需从相邻海上的本国海军（再连回本土基地）传递过来。
+	 *     临时写入 game.location / piece_nation / piece_type，
+	 *     函数返回前（见末尾 vArmyPids 清理）统一删除，
+	 *     避免被 resolve_supply 当成真实部队误删。
+	 */
+	const auraArmy = (game.status_aura && game.status_aura.virtual_army) || {}
+	const vArmyPids = []
+	for (const sp of Object.keys(auraArmy)) {
+		/*
+		 * 【2026-10-06 修正】若该地区被其他国家（敌方阵营）占领，
+		 * 虚拟陆军光环不生效（15444 丘克群岛在<硫磺岛>被占时即如此）。
+		 * 动态判定放在这里，可同时覆盖"打出时已被占"与"打出后被夺回"两种情况。
+		 */
+		if (space_enemy_occupied(game, Number(sp), auraArmy[sp])) continue
+		const pid = '__varmy_' + sp
+		game.location[pid] = Number(sp)
+		game.piece_nation[pid] = auraArmy[sp]
+		game.piece_type[pid] = 'army'
+		bySpace[Number(sp)] = bySpace[Number(sp)] || []
+		bySpace[Number(sp)].push(pid)
+		vArmyPids.push(pid)
+	}
+
 	const in_supply = {}
 	const sources = {}
 
@@ -396,7 +498,9 @@ function compute_supply(game, conn_snap) {
 	for (const [loc, pids] of Object.entries(bySpace)) {
 		for (const pid of pids) {
 			const f = faction_of_nation(game.piece_nation[pid])
-			if (!is_supply_point(game, Number(loc), f)) continue
+			/* 【国家维度】(2026-10-08)：同时传【国家名】，
+			 * 让"仅对某国"的补给点对同阵营他国【不】生效。 */
+			if (!is_supply_point(game, Number(loc), f, game.piece_nation[pid])) continue
 			in_supply[pid] = true
 			sources[pid] = 'base'
 		}
@@ -441,6 +545,35 @@ function compute_supply(game, conn_snap) {
 			if (game.piece_nation[pid] !== nat) continue
 			in_supply[pid] = true
 			sources[pid] = 'aura'
+		}
+	}
+
+	/*
+	 * 2d. 光环：指定空间内指定国部队【总是】处于补给状态（8601 远东共和国）。
+	 *     与 2c（整国免疫）不同，这里按【格位+国家】精确匹配，
+	 *     只让该空间内的特定国部队免移除（例如<海参崴>的日本陆军）。
+	 */
+	const auraSpaceImmune = (game.status_aura && game.status_aura.space_immune) || {}
+	for (const sp of Object.keys(auraSpaceImmune)) {
+		const nat = auraSpaceImmune[sp]
+		for (const pid of (bySpace[Number(sp)] || [])) {
+			if (game.piece_nation[pid] !== nat) continue
+			in_supply[pid] = true
+			sources[pid] = 'aura'
+		}
+	}
+
+	/*
+	 * 【2026-09-30 德国增强 15207 空投补给】本回合内所有德国部队处于补给状态。
+	 * 复用 echo_mod_active（仅在德国本国回合生效，回合（轮）结束后自动过期）。
+	 */
+	if (echo_mod_active(game, 'all_german_supplied')) {
+		for (const pid of Object.keys(game.location)) {
+			if (game.location[pid] == null) continue
+			if (game.piece_nation[pid] === '德国') {
+				in_supply[pid] = true
+				if (!sources[pid]) sources[pid] = 'echo'
+			}
 		}
 	}
 
@@ -508,6 +641,13 @@ function compute_supply(game, conn_snap) {
 		}
 	}
 
+	/* 清理注入的虚拟陆军（不污染 game.location，防止被 resolve_supply 误删） */
+	for (const pid of vArmyPids) {
+		delete game.location[pid]
+		delete game.piece_nation[pid]
+		delete game.piece_type[pid]
+	}
+
 	return { in_supply, sources }
 }
 
@@ -564,6 +704,11 @@ function resolve_supply(game, nation) {
 			piece_nation: d.nation, piece_type: d.type, space: d.space, reason: 'supply',
 			was_supplied: d.supplied,
 		}, false)
+		/* 【2026-10-10】16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
+		game.last_piece_removed = { nation: d.nation, type: d.type, space: d.space, reason: 'supply', piece: d.pid }
+		arm_status_instant(game, 'piece_removed', d.nation, d.space)
+		/* 16304 中国远征军：让权美国选相邻地区征召 */
+		offer_us_china_delegate(game, d.space, d.nation, d.type)
 	}
 	resolve_supply.last_protected = protectedIds
 	return removed
@@ -698,10 +843,18 @@ function draw_cards(game, nation, n) {
 
 /* 把牌从手牌移到弃牌堆 */
 function discard_card(game, nation, card_id) {
+	/* 惰性初始化：部分国家（如委托国 中国/法国）的 hands/discard 在 setup 时
+	 * 未必建数组，直接访问会崩溃。这里确保存在（与 setup 的 {} 模型一致）。 */
+	if (!game.hands[nation]) game.hands[nation] = []
 	const i = game.hands[nation].indexOf(card_id)
 	if (i < 0) return false
 	game.hands[nation].splice(i, 1)
+	if (!game.discard[nation]) game.discard[nation] = []
 	game.discard[nation].push(card_id)
+	/* 【2026-10-06】17847 消耗战：苏联[建设陆军]进入弃牌堆后计分 */
+	try { su_attrition_score(game, nation, card_id) } catch (e) {}
+	/* 【2026-10-10】17545 曼哈顿计划：美国弃牌阶段弃置手牌后计分 */
+	try { us_discard_score(game, nation, card_id) } catch (e) {}
 	return true
 }
 
@@ -715,28 +868,66 @@ function discard_card(game, nation, card_id) {
  *     · 损耗 -> 抽牌堆顶自动磨掉（无选择，纯随机）
  *   经济战卡（15313/15314）用的都是"损耗"。
  *
- * 牌堆不足时洗回弃牌堆继续（与 draw_cards 同一套 seed 口径，保持可复现）；
- * 牌堆与弃牌堆都耗尽则提前结束，返回【实际】损耗的牌（数量可能 < n）。
+ * 【2026-09-29 玩家口径 · 牌库耗尽的通用规则（所有国家通用）】
+ *
+ *   1. **牌库为空时：不抽牌、不洗牌** —— 损耗过程中牌堆空了就【直接停止】，
+ *      【不】像 draw_cards 那样把弃牌堆洗回来继续损耗。
+ *   2. **主动损耗**（自己支付代价）：牌库不足 N 张时【无法使用】，即不能发动。
+ *   3. **被动损耗**（被别国经济战损耗）：能损耗几张就损耗几张，
+ *      【差额每张扣 1 分】（扣被损耗国所属阵营的分数）。
+ *      例：牌库 1 张，被损耗 3 -> 实际损耗 1，扣 2 分。
+ *
+ * 本函数是【纯损耗】：不洗牌、不扣分，返回实际损耗掉的牌（length 可能 < n）。
+ * 扣分与"主动可否发动"分别见 attrition_passive() / can_attrite()。
+ *
+ * 与 draw_cards 的区别要分清（易混）：
+ *   draw_cards  牌堆空 -> 【洗回】弃牌堆继续抽（正常摸牌机制）
+ *   attrition   牌堆空 -> 【停止】，绝不洗回（磨掉的牌就是没了）
  */
 function attrition_cards(game, nation, n) {
 	init_nation_deck(game, nation)
 	const lost = []
 	for (let i = 0; i < n; i++) {
-		if (!game.decks[nation].length) {
-			if (!game.discard[nation].length) break   /* 无牌可损耗 */
-			game.shuffle_count[nation] = (game.shuffle_count[nation] || 0) + 1
-			game.decks[nation] = shuffle_deterministic(
-				game.discard[nation],
-				(game.seed || 1) + game.shuffle_count[nation] + nation_hash(nation))
-			game.discard[nation] = []
-			game.log.push(nation + ' 牌堆耗尽，弃牌堆洗回（第 ' +
-				game.shuffle_count[nation] + ' 次）')
-		}
+		/* 牌库为空：不抽牌、不洗牌，直接停止 */
+		if (!game.decks[nation].length) break
 		const id = game.decks[nation].shift()
 		game.discard[nation].push(id)
+		/* 【2026-10-06】17847 消耗战：苏联[建设陆军]进入弃牌堆后计分 */
+		try { su_attrition_score(game, nation, id) } catch (e) {}
 		lost.push(id)
 	}
 	return lost
+}
+
+/*
+ * 【被动】损耗：被【别国】效果（经济战等）要求损耗时使用。
+ *
+ * 新口径：牌库不足时【差额每张扣 1 分】。
+ * 返回实际损耗的牌数组（可直接用 .length），并在数组上附
+ * `.attrition_short` = 差额（已扣分），兼容既有用 .length 的调用点。
+ */
+function attrition_passive(game, nation, n) {
+	const lost = attrition_cards(game, nation, n)
+	const short = n - lost.length
+	if (short > 0) {
+		const fc = faction_of_nation(nation)
+		if (fc) game.score[fc] = (game.score[fc] || 0) - short
+		lost.attrition_short = short
+		game.log.push('【' + nation + '】牌库不足：需损耗 ' + n + ' 张，实际 ' +
+			lost.length + ' 张，' + (fc || '本方') + ' 扣 ' + short + ' 分')
+	} else {
+		lost.attrition_short = 0
+	}
+	return lost
+}
+
+/*
+ * 【主动】损耗可行性：自己支付"损耗 N 张"代价前必须检查。
+ * 牌库不足 N 张 -> 【无法发动】（玩家口径 2）。
+ */
+function can_attrite(game, nation, n) {
+	init_nation_deck(game, nation)
+	return (game.decks[nation] || []).length >= n
 }
 
 /*
@@ -794,7 +985,148 @@ function navies_in_space(game, nation, space) {
 /* 地中海（data.js spaces：id 46，terrain=sea） */
 const MEDITERRANEAN_SPACE = 46
 
+/* 统计某国在某地块（adj=true 含相邻）的指定类型棋子数（日本经济战复用） */
+function count_units(game, nation, spaceName, types, adj) {
+	const id = space_id(spaceName)
+	if (id == null) return 0
+	let n = 0
+	const chk = (sp) => { for (const p of pieces_on(game, sp))
+		if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++ }
+	chk(id)
+	if (adj) for (const nb of (data.spaces[id].connections || [])) chk(nb)
+	return n
+}
+
+/* 统计某国在指定地块半径 dist（含本格与距离为 1..dist 的相邻传播）内的指定类型棋子数。
+   例：dist=2 时，本格 + 相邻 + 相邻之相邻 都计入（日本 15418「中国西部2地区内」）。 */
+function count_units_radius(game, nation, spaceName, types, dist) {
+	const start = space_id(spaceName)
+	if (start == null) return 0
+	const seen = new Set([start])
+	let frontier = [start]
+	for (let d = 0; d < dist; d++) {
+		const nxt = []
+		for (const sp of frontier)
+			for (const nb of (data.spaces[sp].connections || []))
+				if (!seen.has(nb)) { seen.add(nb); nxt.push(nb) }
+		frontier = nxt
+	}
+	let n = 0
+	for (const sp of seen)
+		for (const p of pieces_on(game, sp))
+			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
+	return n
+}
+
 const ECON_CARDS = {
+
+	/* ===== 德国经济战卡（2026-09-27） ===== */
+	'15217': {
+		tag: '潜艇行动',
+		targets: ['英国', '美国', '苏联'],
+		run(game, actor, target) {
+			const lost = attrition_passive(game, target, 3)
+			add_axis_score(game, 2)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
+		},
+	},
+	'15218': {
+		tag: '潜艇行动',
+		targets: ['英国', '美国'],
+		run(game, actor, target) {
+			const k = de_units_near(game, '印度洋', ['army'])
+			if (!k) return { ok: true, desc: '印度洋相邻地区无德国陆军，无效果' }
+			const lost = attrition_passive(game, target, 2 * k)
+			add_axis_score(game, 2)
+			return { ok: true, desc: '印度洋相邻有 ' + k + ' 支德国陆军，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
+		},
+	},
+	'15219': {
+		tag: '潜艇行动',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const k = de_units_near(game, '北海', ['army', 'navy', 'air'])
+			if (!k) return { ok: true, desc: '北海及相邻地区无德国部队，无效果' }
+			const lost = attrition_passive(game, target, k)
+			add_axis_score(game, k)
+			return { ok: true, desc: '北海及相邻有 ' + k + ' 支德国部队，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 ' + k + ' 分' }
+		},
+	},
+	'15220': {
+		tag: '潜艇行动',
+		targets: ['苏联'],
+		run(game, actor, target) {
+			const k = de_units_near(game, '北欧', ['army', 'navy', 'air'])
+			if (!k) return { ok: true, desc: '北欧及相邻地区无德国部队，无效果' }
+			const lost = attrition_passive(game, target, k)
+			add_axis_score(game, k)
+			return { ok: true, desc: '北欧及相邻有 ' + k + ' 支德国部队，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 ' + k + ' 分' }
+		},
+	},
+	'15221': {
+		tag: '潜艇行动',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const id = space_id('亚速尔')
+			let k = 0
+			if (id != null) {
+				for (const nb of (data.spaces[id].connections || [])) {
+					const controlled = pieces_on(game, nb).some(p =>
+						faction_of_nation(game.piece_nation[p]) === ALLIES)
+					if (!controlled) k++
+				}
+			}
+			if (!k) return { ok: true, desc: '亚速尔相邻地区均被同盟国控制，无效果' }
+			const lost = attrition_passive(game, target, 2 * k)
+			add_axis_score(game, k)
+			return { ok: true, desc: '亚速尔相邻有 ' + k + ' 个未被同盟国控制的地区，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 ' + k + ' 分' }
+		},
+	},
+	'15222': {
+		tag: '潜艇行动',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const k = de_units_in_sea(game, '德国', ['army', 'navy', 'air'])
+			if (!k) return { ok: true, desc: '海域中无德国部队，无效果' }
+			const lost = attrition_passive(game, target, 2 * k)
+			add_axis_score(game, k)
+			return { ok: true, desc: '海域中有 ' + k + ' 支德国部队，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 ' + k + ' 分' }
+		},
+	},
+	'15223': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			if (de_units_in(game, '西欧', ['army']) < 1)
+				return { ok: true, desc: '西欧无德国陆军，无效果' }
+			const lost = attrition_passive(game, target, 1)
+			add_axis_score(game, 3)
+			return { ok: true, desc: '西欧有德国陆军，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 3 分' }
+		},
+	},
+	'15224': {
+		tag: '北方行动',
+		targets: ['苏联'],
+		run(game, actor, target) {
+			const ok = de_controlled(game, '北欧', '德国') && de_controlled(game, '罗斯', '德国')
+			if (!ok) return { ok: true, desc: '北欧或罗斯未被德国控制，无效果' }
+			const lost = attrition_passive(game, target, 4)
+			add_axis_score(game, 2)
+			return { ok: true, desc: '北欧、罗斯均被德国控制，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
+		},
+	},
+	'14501': {
+		tag: '',
+		targets: ['苏联'],
+		run(game, actor, target) {
+			const ok = de_controlled(game, '乌克兰', '德国') && de_controlled(game, '中亚', '德国')
+			if (!ok) return { ok: true, desc: '乌克兰或中亚未被德国控制，无效果' }
+			const lost = attrition_passive(game, target, 4)
+			add_axis_score(game, 2)
+			return { ok: true, desc: '乌克兰、中亚均被德国控制，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
+		},
+	},
+
 	'15313': {
 		tag: '轰炸行动',
 		/* 打出方需先选定目标国 */
@@ -806,7 +1138,7 @@ const ECON_CARDS = {
 		run(game, actor_nation, target) {
 			const k = air_piece_count(game, actor_nation)
 			const n = 2 + 2 * k
-			const lost = attrition_cards(game, target, n)
+			const lost = attrition_passive(game, target, n)
 			const short = lost.length < n
 			return {
 				ok: true, target: target, airs: k, n: n, actual: lost.length,
@@ -844,7 +1176,8 @@ const ECON_CARDS = {
 		 */
 		answer(game, nation, answer) {
 			if (!answer || answer.choice === 'attrite') {
-				const lost = attrition_cards(game, nation, 3)
+				/* 受击方选择"损耗"：属【被动】损耗 -> 不足扣分类 */
+				const lost = attrition_passive(game, nation, 3)
 				return {
 					ok: true, choice: 'attrite',
 					desc: nation + ' 选择损耗 ' + lost.length + ' 张牌',
@@ -870,6 +1203,1029 @@ const ECON_CARDS = {
 			}
 		},
 	},
+
+	/* ===== 日本经济战卡（2026-10-06） ===== */
+	'15414': {
+		tag: '',
+		targets: ['苏联'],
+		run(game, actor, target) {
+			const k = count_units(game, '日本', '东海', ['army', 'navy', 'air'], false)
+				+ count_units(game, '日本', '北太平洋', ['army', 'navy', 'air'], false)
+			const lost = attrition_passive(game, target, 1)
+			add_axis_score(game, k)
+			return { ok: true, desc: '东海/北太平洋共 ' + k + ' 支日本部队，日本+' + k +
+				'分，' + target + '损耗 ' + lost.length + ' 张' }
+		},
+	},
+	'15415': {
+		tag: '',
+		targets: ['日本'],
+		run(game, actor, target) {
+			add_axis_score(game, 1)
+			return { ok: true, desc: '日本+1分（可选：回手本卡 / 弃置≤3张手牌）' }
+		},
+		/*
+		 * 结算挂起可选窗口（用户 2026-10-06 裁定）：
+		 * 「可弃置3张手牌：置入手牌」= 一整个可选动作——
+		 *   弃牌是【条件/代价】（弃恰好 3 张手牌），回手是【效果】（本卡回手牌）。
+		 * 二者绑定：付完代价才触发回手；可整体跳过。
+		 * 注意：必须在 discard_card 之后调用，此时本卡已在 game.discard[actor]。
+		 */
+		post(game, card_id, actor) {
+			game.pending_balloon = { card: card_id, actor: actor }
+		},
+	},
+	'15416': {
+		tag: '潜艇行动',
+		targets: ['美国'],
+		run(game, actor, target) {
+			const k = count_units(game, '日本', '东太平洋', ['navy'], true)
+			const lost = attrition_passive(game, target, 2)
+			add_axis_score(game, 2 * k)
+			return { ok: true, desc: '东太平洋及相邻共 ' + k + ' 支日本海军，日本+' + (2 * k) +
+				'分，' + target + '损耗 ' + lost.length + ' 张' }
+		},
+	},
+	'15417': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const k = count_units(game, '日本', '印度洋', ['navy'], true)
+			const lost = attrition_passive(game, target, 2)
+			add_axis_score(game, 2 * k)
+			return { ok: true, desc: '印度洋及相邻共 ' + k + ' 支日本海军，日本+' + (2 * k) +
+				'分，' + target + '损耗 ' + lost.length + ' 张' }
+		},
+	},
+	'15418': {
+		tag: '',
+		targets: ['美国'],
+		run(game, actor, target) {
+			const k = count_units_radius(game, '日本', '中国西部', ['air'], 2)
+			const lost = attrition_passive(game, target, 2)
+			add_axis_score(game, k)
+			return { ok: true, desc: '中国西部2地区内共 ' + k + ' 支日本空军，日本+' + k +
+				'分，' + target + '损耗 ' + lost.length + ' 张' }
+		},
+	},
+	'7901': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const seId = space_id('东南亚')
+			const armySE = count_units(game, '日本', '东南亚', ['army'], false)
+			let navyAdj = 0
+			if (seId != null) for (const nb of (data.spaces[seId].connections || []))
+				for (const p of pieces_on(game, nb))
+					if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy') navyAdj++
+			if (armySE > 0 && navyAdj > 0) {
+				const lost = attrition_passive(game, target, 2)
+				add_axis_score(game, 2)
+				return { ok: true, desc: '东南亚有日陆军且相邻有日海军：' + target +
+					'损耗 ' + lost.length + ' 张，日本+2分' }
+			}
+			return { ok: true, desc: '条件不满足（需东南亚有日陆军且相邻有日海军），无效果' }
+		},
+	},
+
+	/* ===== 意大利经济战卡（2026-10-09） =====
+	 * 5 张全带★ -> 打出后触发意大利国家技能（STARRED_CARDS 已登记 17712-17716）。
+	 * 意大利属轴心，加分一律 add_axis_score。
+	 */
+	'17712': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const lost = attrition_passive(game, target, 3)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
+		},
+	},
+	'17713': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const lost = attrition_passive(game, target, 2)
+			const k = count_uncontrolled_seas_near(game, '地中海', ALLIES)
+			add_axis_score(game, k)
+			return {
+				ok: true,
+				desc: target + ' 损耗 ' + lost.length + ' 张牌；<地中海>及相邻海域中未被同盟国控制的 ' +
+					k + ' 个，意大利获得 ' + k + ' 分',
+			}
+		},
+	},
+	'17714': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			const lost = attrition_passive(game, target, 2)
+			const k = count_units_all(game, '意大利', ['navy'])
+			add_axis_score(game, k)
+			return {
+				ok: true,
+				desc: target + ' 损耗 ' + lost.length + ' 张牌；场上每有 1 支意大利海军（' +
+					k + ' 支），意大利获得 ' + k + ' 分',
+			}
+		},
+	},
+	'17715': {
+		tag: '',
+		/* 苏联是受损方；英国是失分方（两者不同） */
+		targets: ['苏联'],
+		run(game, actor, target) {
+			const k = count_units_radius(game, '英国', '乌克兰', ['army'], 2)
+			if (!k) return { ok: true, desc: '<乌克兰>2 地区内无英国陆军，无效果' }
+			const lost = attrition_passive(game, target, 2)
+			lose_score(game, '英国', 2)
+			return {
+				ok: true,
+				desc: '<乌克兰>2 地区内有英国陆军：' + target + ' 损耗 ' + lost.length +
+					' 张牌，英国失去 2 分',
+			}
+		},
+	},
+	'17716': {
+		tag: '',
+		targets: ['英国'],
+		run(game, actor, target) {
+			/* 「友方控制」= 轴心任意国（与 17743/17748 同一口径） */
+			const ok = controlled_by_faction(game, '非洲北部', AXIS) &&
+				controlled_by_faction(game, '中东', AXIS)
+			if (!ok) return { ok: true, desc: '<非洲北部><中东>未都被友方控制，无效果' }
+			const lost = attrition_passive(game, target, 3)
+			add_axis_score(game, 3)
+			return {
+				ok: true,
+				desc: target + ' 损耗 ' + lost.length + ' 张牌，意大利获得 3 分',
+			}
+		},
+	},
+
+	/* ===== 美国经济战卡（2026-10-09） =====
+	 * 美国属同盟，加分一律 add_allied_score。
+	 * 17516/17519/17522/16805 需要【动态 targets】，见本文件 targets_fn 扩展处
+	 * （本批次未实现，见 docs/pitfalls.md 待办）。
+	 */
+	'17515': {
+		tag: '轰炸行动',
+		targets: ['意大利'],
+		run(game, actor, target) {
+			if (count_units_radius(game, '美国', '意大利', ['army'], 2) < 1)
+				return { ok: true, desc: '<意大利>2 地区内无美国陆军，无效果' }
+			const lost = attrition_passive(game, target, 5)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
+		},
+	},
+	'17517': {
+		tag: '轰炸行动',
+		targets: ['德国'],
+		run(game, actor, target) {
+			if (count_units_radius(game, '美国', '德国', ['army'], 2) < 1)
+				return { ok: true, desc: '<德国>2 地区内无美国陆军，无效果' }
+			const lost = attrition_passive(game, target, 6)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
+		},
+	},
+	'17518': {
+		tag: '轰炸行动',
+		targets: ['日本'],
+		run(game, actor, target) {
+			if (count_units_radius(game, '美国', '日本', ['navy'], 2) < 1)
+				return { ok: true, desc: '<日本>2 地区内无美国海军，无效果' }
+			const lost = attrition_passive(game, target, 4)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
+		},
+	},
+	'17521': {
+		tag: '轰炸行动',
+		targets: ['日本'],
+		run(game, actor, target) {
+			const k = count_units_radius_supplied(game, '美国', '日本', ['navy'], 3)
+			if (!k) return { ok: true, desc: '<日本>3 地区内无处于补给状态的美国海军，无效果' }
+			const lost = attrition_passive(game, target, 1)
+			add_allied_score(game, 3)
+			return {
+				ok: true,
+				desc: '<日本>3 地区内有 ' + k + ' 支补给状态的美国海军：美国获得 3 分，' +
+					target + ' 损耗 ' + lost.length + ' 张牌',
+			}
+		},
+	},
+	'17523': {
+		tag: '',
+		targets: ['日本'],
+		run(game, actor, target) {
+			/* 中国是美国的代表团（delegate_of_nation），部队国别仍记为「中国」 */
+			const k = count_units_all(game, '中国', ['army', 'navy', 'air'])
+			const n = 2 * k
+			const lost = n ? attrition_passive(game, target, n) : []
+			return {
+				ok: true,
+				desc: '场上中国部队 ' + k + ' 支，' + target + ' 损耗 ' + lost.length + ' 张牌',
+			}
+		},
+	},
+}
+
+
+/* ===== 经济战通用辅助函数（2026-10-09 新增） ===== */
+
+/* 统计某国在【全场所有地区】的指定类型棋子数。
+   用于 17714「场上每有 1 支意大利海军」、17523「场上每有 1 支中国部队」。 */
+function count_units_all(game, nation, types) {
+	let n = 0
+	for (let i = 1; i < data.spaces.length; i++) {
+		if (!data.spaces[i]) continue
+		for (const p of pieces_on(game, i))
+			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
+	}
+	return n
+}
+
+/* 某国失去 n 分（写其所属阵营）。与 add_axis_score/add_allied_score 反向。
+   注意：这里【不】走 minus_score 的 mark_play_done —— 那是出牌阶段动作，
+   本函数是卡牌效果的扣分，不消耗出牌名额。 */
+function lose_score(game, nation, n) {
+	const f = faction_of_nation(nation)
+	if (!f || !n) return
+	game.score[f] = (game.score[f] || 0) - n
+}
+
+/* 某地区是否被指定【阵营】控制（场上存在该阵营任意国部队）。
+   「友方控制」口径：友方 = 同阵营任意国（与 17743/17748 一致）。 */
+function controlled_by_faction(game, spaceName, faction) {
+	const id = space_id(spaceName)
+	if (id == null) return false
+	return pieces_on(game, id).some(p => faction_of_nation(game.piece_nation[p]) === faction)
+}
+
+/* 统计【某海域及其相邻海域】中，未被指定阵营控制的海域个数。
+   17713「<地中海>或相邻海域每有 1 个未被同盟国控制」。
+   仿 15221（亚速尔相邻未控制计数）。 */
+function count_uncontrolled_seas_near(game, spaceName, faction) {
+	const id = space_id(spaceName)
+	if (id == null) return 0
+	const seas = [id]
+	for (const nb of (data.spaces[id].connections || [])) {
+		const sp = data.spaces[nb]
+		if (sp && sp.terrain === 'sea') seas.push(nb)
+	}
+	let n = 0
+	for (const sp of seas) {
+		const ctrl = pieces_on(game, sp).some(p => faction_of_nation(game.piece_nation[p]) === faction)
+		if (!ctrl) n++
+	}
+	return n
+}
+
+/* 同 count_units_radius，但只统计【处于补给状态】的单位。
+   17521「<日本>3 地区内有补给状态的美国海军」。 */
+function count_units_radius_supplied(game, nation, spaceName, types, dist) {
+	const start = space_id(spaceName)
+	if (start == null) return 0
+	const sup = compute_supply(game)
+	const seen = new Set([start])
+	let frontier = [start]
+	for (let d = 0; d < dist; d++) {
+		const nxt = []
+		for (const sp of frontier)
+			for (const nb of (data.spaces[sp].connections || []))
+				if (!seen.has(nb)) { seen.add(nb); nxt.push(nb) }
+		frontier = nxt
+	}
+	let n = 0
+	for (const sp of seen)
+		for (const p of pieces_on(game, sp))
+			if (game.piece_nation[p] === nation &&
+				types.indexOf(game.piece_type[p]) >= 0 &&
+				sup.in_supply[p]) n++
+	return n
+}
+
+
+/* ===== 德国卡牌：通用辅助函数（2026-09-27 新增） ===== */
+function de_units_in(game, spaceName, types) {
+	const id = space_id(spaceName)
+	if (id == null) return 0
+	let n = 0
+	for (const p of pieces_on(game, id))
+		if (types.indexOf(game.piece_type[p]) >= 0) n++
+	return n
+}
+function de_units_near(game, spaceName, types) {
+	const id = space_id(spaceName)
+	if (id == null) return 0
+	let n = de_units_in(game, spaceName, types)
+	for (const nb of (data.spaces[id].connections || []))
+		for (const p of pieces_on(game, nb))
+			if (types.indexOf(game.piece_type[p]) >= 0) n++
+	return n
+}
+function de_controlled(game, spaceName, nation) {
+	const id = space_id(spaceName)
+	if (id == null) return false
+	return pieces_on(game, id).some(p => game.piece_nation[p] === nation)
+}
+function de_units_in_sea(game, nation, types) {
+	let n = 0
+	for (let i = 1; i < data.spaces.length; i++) {
+		const sp = data.spaces[i]
+		if (!sp || sp.terrain !== 'sea') continue
+		for (const p of pieces_on(game, i))
+			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
+	}
+	return n
+}
+function add_axis_score(game, n) {
+	if (!n) return
+	game.score[AXIS] = (game.score[AXIS] || 0) + n
+}
+function add_allied_score(game, n) {
+	if (!n) return
+	game.score[ALLIES] = (game.score[ALLIES] || 0) + n
+}
+function de_army_spaces(game, nation) {
+	const out = []
+	for (const p in game.piece_nation)
+		if (game.piece_nation[p] === nation && game.piece_type[p] === 'army' && game.location[p] != null)
+			out.push(game.location[p])
+	return out
+}
+function de_is_controlled(game, space, nation) {
+	return pieces_on(game, space).some(p => game.piece_nation[p] === nation)
+}
+function de_soviet_armies_near_german(game) {
+	const gArmy = {}
+	for (const p in game.piece_nation)
+		if (game.piece_nation[p] === '德国' && game.piece_type[p] === 'army' && game.location[p] != null)
+			gArmy[game.location[p]] = true
+	const out = []
+	for (const p in game.piece_nation) {
+		if (game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army' && game.location[p] != null) {
+			const sp = game.location[p]
+			if ((data.spaces[sp].connections || []).some(nb => gArmy[nb])) out.push(p)
+		}
+	}
+	return out
+}
+/*
+ * ============================================================
+ * 【2026-09-30】额外打出 extra_play
+ *
+ * 卡面原文：「…可打出 1 张手牌」「可打出 1 张[北方行动]」「可打出 1 张以此法抽到的牌」。
+ *
+ * 玩家口径（2026-09-30）：出牌阶段【正常那一次】执行完之后，可以【再】打一张，
+ *   并在日志里记成「因《XX》的额外打出」。
+ *
+ * 设计要点（必须遵守，否则会重蹈"服务端替玩家选牌"的覆辙）：
+ *   · 只记录【权利】，【不】替玩家挑牌、也不排序自动打出
+ *     —— 旧实现 de_try_play_one 直接挑第一张能打的打出去，
+ *       玩家完全没有选择权（如《进攻美国》被多打了一个），已废弃。
+ *   · 只在【出牌阶段】生效：下一次出牌把它消耗掉；推进阶段 / 换国家则作废。
+ *   · 不重复占名额：名额早已被那张来源卡占掉。
+ *   · filter 决定能打什么：
+ *       'hand'  —— 任意手牌
+ *       'north' —— 卡面带 [北方行动] 的牌
+ *       'drawn' —— ep.cards 里指定的那些（如《战略规划》抽到的牌）
+ * ============================================================
+ */
+
+/* 卡面带 [北方行动] 标签的德国卡（out/de_cards.csv 核对） */
+const NORTH_OPS_FACES = ['15211', '15220', '15224', '15241', '15249']
+
+function is_north_ops_card(card_id) {
+	return NORTH_OPS_FACES.indexOf(String(inst_card_id(card_id))) >= 0
+}
+
+/* 授予一次额外打出的权利（同一时刻只保留一次） */
+function grant_extra_play(game, nation, source_id, source_name, opt) {
+	opt = opt || {}
+	game.extra_play = {
+		nation: nation,
+		source: String(source_id),
+		source_name: source_name,
+		filter: opt.filter || 'hand',
+		cards: opt.cards || null,
+		count: opt.count || 1,
+		turn: game.turn || 1,
+		/*
+		 * 【2026-10-01】英国国家技能在【摸牌阶段(draw)】授予，
+		 * 而 draw 是本回合【最后一个阶段】—— 若 phase 仍写死 'play'，
+		 * 本回合已无 play 阶段可打，下回合 turn 又变了，
+		 * 技能等于【永远用不了】。故允许调用方指定生效阶段，默认仍是出牌阶段。
+		 */
+		phase: opt.phase || 'play',
+	}
+	const what = extra_play_filter_desc(game.extra_play)
+	game.log.push('【' + nation + '】因《' + source_name + '》获得额外打出：可再打出 ' + what)
+	return game.extra_play
+}
+
+function extra_play_filter_desc(ep) {
+	if (ep.filter === 'north') return '1 张[北方行动]'
+	if (ep.filter === 'drawn')
+		return '1 张以此法抽到的牌（' + (ep.cards || []).length + ' 张可选）'
+	if (ep.filter === 'status') return '1 张状态卡（国家技能）'
+	/* 【2026-10-01】英国国家技能：事件牌或状态卡 */
+	if (ep.filter === 'event_status') return '1 张事件牌或状态卡（国家技能）'
+	/* 【2026-10-04】日本国家技能：响应牌（打出后暗置） */
+	if (ep.filter === 'response') return '1 张响应牌（暗置于桌面，国家技能）'
+	/* 【2026-10-07】意大利国家技能：状态卡或经济战卡 */
+	if (ep.filter === 'status_econ') return '1 张状态卡或经济战卡（国家技能）'
+	return '1 张手牌'
+}
+
+/* 该国此刻是否有额外打出的权利 */
+function has_extra_play(game, nation) {
+	const ep = game.extra_play
+	if (!ep || ep.nation !== nation) return false
+	if (ep.phase !== (game.turn_phase || 'play')) return false
+	if (ep.turn != null && ep.turn !== game.turn) return false
+	return (ep.count || 0) > 0
+}
+
+/* 这张卡是否能用作额外打出 */
+function extra_play_allows(game, nation, card_id) {
+	if (!has_extra_play(game, nation)) return false
+	const ep = game.extra_play
+	if (ep.filter === 'north') return is_north_ops_card(card_id)
+	if (ep.filter === 'drawn') {
+		/*
+		 * 【2026-09-30 bug 修复】ep.cards 里存的是【实例 id】（带 #n），
+		 * 而这里拿到的 card_id 早已被 inst_card_id 去过后缀，
+		 * 直接 indexOf 会【永远不相等】—— 抽到的牌反而打不出来
+		 * （15239 战略规划就是这样失效的）。两边都归一到卡面 id 再比。
+		 */
+		const ids = (ep.cards || []).map(x => String(inst_card_id(x)))
+		return ids.indexOf(String(card_id)) >= 0
+	}
+	/* 【2026-09-30】国家技能（德国）：只能额外打出 1 张【状态卡】 */
+	if (ep.filter === 'status')
+		return (is_card_type(card_id, 'STATUS'))
+	/*
+	 * 【2026-10-01】国家技能（英国）：只能额外打出 1 张【事件牌或状态牌】。
+	 * ⚠ 必须显式处理 —— 若漏掉这个分支，会落到末尾的 `return true`，
+	 *   变成"任何手牌都能额外打出"，与卡面口径不符。
+	 */
+	if (ep.filter === 'event_status')
+		return is_card_type(card_id, 'STATUS') || is_card_type(card_id, 'EVENT')
+	/*
+	 * 【2026-10-04】国家技能（日本）：只能额外打出 1 张【响应牌】
+	 * （打出后背面向上暗置于桌面）。同样必须显式处理，理由同上。
+	 */
+	if (ep.filter === 'response')
+		return is_card_type(card_id, 'RESPONSE')
+	/* 【2026-10-07】意大利国家技能：状态卡或经济战卡 */
+	if (ep.filter === 'status_econ')
+		return is_card_type(card_id, 'STATUS') || is_card_type(card_id, 'ECON')
+	return true
+}
+
+/*
+ * 某张卡面 id 是否属于指定类型。
+ *
+ * ⚠ 这里必须用 CARD_BY_ID 而不是 inst_card：extra_play_allows 收到的
+ *   card_id 是【卡面 id】（没 #n），inst_card 对这种 id 不一定能查到。
+ */
+function is_card_type(card_id, type) {
+	const c = CARD_BY_ID[String(card_id)]
+	return !!c && c.type === type
+}
+
+/* 消耗一次额外打出的权利 */
+function consume_extra_play(game, nation) {
+	const ep = game.extra_play
+	if (!ep || ep.nation !== nation) return
+	ep.count = (ep.count || 1) - 1
+	if (ep.count <= 0) game.extra_play = null
+}
+
+/* 回合 / 阶段切换时的清理 */
+function clear_extra_play(game) { game.extra_play = null }
+
+/* ============================================================
+ * 【2026-09-30】国家技能
+ *
+ * 每国一个，德国先实现（其余国家的清单与触发时机待玩家给出）：
+ *
+ *   德国：一回合一次，当【带星牌】打出并效果结算后，
+ *         可损耗 1 张牌，从手牌打出 1 张【状态卡】。
+ *
+ * 设计取向：
+ *   · 做成【可选的机会窗口】（national_skill_offer），不是挂起 ——
+ *     "可以"用也可以不用，硬挂起会把可选能力变成强制流程；
+ *     一旦执行了别的动作就视为放弃（offer 自动失效）。
+ *   · 代价是【损耗】（抽牌堆顶 1 张直接进弃牌堆），付不起就不能用。
+ *   · 打出的状态卡走【额外打出】的已有通道（filter='status'）：
+ *     不占出牌名额、日志记为"因《德国国家技能》的额外打出"。
+ *   · 服务端不替玩家决定要不要用 —— 只负责判断"能不能用"。
+ * ============================================================ */
+
+const NATIONAL_SKILL = {
+	'德国': {
+		name: '德国国家技能',
+		trigger: 'star_resolved',      /* ★卡效果结算后 */
+		cost: { attrition: 1 },
+		grant: { filter: 'status' },
+	},
+	/*
+	 * 【2026-10-01 玩家口径】英国国家技能：
+	 *   触发：英国【抽牌后】
+	 *   代价：自选【弃 3 张手牌】（与"损耗"不同 —— 弃置是玩家从手牌里挑）
+	 *   效果：从手牌打出 1 张【事件牌或状态牌】（走额外打出通道，不占出牌名额）
+	 */
+	'英国': {
+		name: '英国国家技能',
+		trigger: 'draw',
+		cost: { discard: 3 },
+		grant: { filter: 'event_status' },
+	},
+	/*
+	 * 【2026-10-04 玩家口径】日本国家技能：
+	 *   触发：【计分阶段】
+	 *   条件：手里的【响应牌】不止 1 张（即 >= 2 张）
+	 *   代价：弃 1 张【响应牌】（cost.filter='response' 限定类型）
+	 *   效果：额外【打出并暗置】1 张【响应牌】（不占出牌名额）
+	 *
+	 * 与英国的差异（别套用）：
+	 *   · 英国代价是"弃任意 3 张"，日本是"弃 1 张【指定类型】的响应牌"
+	 *     -> 故 cost 需要 filter 字段，UI 也要按类型过滤可弃的牌；
+	 *   · 英国效果是"打出事件/状态卡"，日本是"暗置响应牌"
+	 *     -> 打出后进入 game.table_responses（背面朝上），不进弃牌堆。
+	 *   · 可用性还要保证"弃掉 1 张后仍剩至少 1 张可暗置"，
+	 *     即手牌响应数必须 >= 2，否则付了代价却没牌可暗置。
+	 */
+	'日本': {
+		name: '日本国家技能',
+		trigger: 'scoring',
+		cost: { discard: 1, filter: 'response' },
+		grant: { filter: 'response' },
+		/* 手牌中该类型牌的最少张数（低于此值不给窗口，避免付代价却没得用） */
+		min_hand_of_type: 2,
+		/*
+		 * 【2026-10-05 玩家优化】one_step：一次弹窗同时选
+		 *   「要弃的响应牌」+「要暗置打出的响应牌」，一步提交完成。
+		 * 原来的两步（先弃 -> 拿到额外打出权 -> 再点手牌打出）太繁琐。
+		 *   · 英国仍是两步（弃 3 张后打出事件/状态卡，目标类型不同，保留原流程）
+		 *   · 日本一步到位：cost 与 grant 都是响应牌，可在同一个弹窗里全选完
+		 */
+		one_step: true,
+	},
+	/*
+	 * 【2026-10-06】苏联国家技能（玩家口径）：
+	 *   触发：苏联【计分阶段】
+	 *   代价：弃 1 张【建造陆军】（BASIC 基础行军卡，type=BASIC、name=建设陆军）
+	 *   效果：暗置（背面向上）打出 1 张【响应牌】（走 facedown_response 通道，
+	 *         进入 game.table_responses，不占出牌名额，
+	 *         日志记为"因《苏联国家技能》的暗置打出"）。
+	 *   one_step：与日本同款，一个弹窗同时选「要弃的建造陆军」+「要暗置打出的响应牌」，
+	 *         一次提交完成（use_national_skill 的 one_step 分支 -> discard_and_facedown）。
+	 *   可用性：手牌里有 >=1 张建造陆军（付代价）且 >=1 张响应牌（暗置打出）。
+	 */
+	'苏联': {
+		name: '苏联国家技能',
+		trigger: 'scoring',
+		cost: { discard: 1, filter: 'build' },
+		grant: { filter: 'response' },
+		one_step: true,
+	},
+	/*
+	 * 【2026-10-07 玩家口径】意大利国家技能：
+	 *   触发：意大利【★卡效果结算后】（同德国 trigger='star_resolved'）
+	 *   代价：减 2 分（扣己方阵营胜利点，可负，总是付得起 —— 见 use_national_skill 的 points 分支）
+	 *   效果：额外打出 1 张【状态卡或经济战卡】（走额外打出通道，不占出牌名额）
+	 *   限制：一回合一次（national_skill_used[nation]===game.turn 已保证）
+	 */
+	'意大利': {
+		name: '意大利国家技能',
+		trigger: 'star_resolved',
+		cost: { points: 2 },
+		grant: { filter: 'status_econ' },
+	},
+	'美国': {
+		name: '美国国家技能',
+		trigger: 'star_resolved',
+		cost: { attrition: 1 },
+		grant: { filter: 'status' },
+	},
+}
+
+/*
+ * 带★的卡（卡面 id -> true）—— 多国国家技能的触发条件（德国 / 意大利 / 美国）。
+ *
+ * 【2026-09-30 玩家确认版】共 8 张（全部是 EVENT）：
+ *   15225 阿登闪击战 / 15226 巴巴罗萨 / 15230 海狮计划 /
+ *   15232 巴尔干军政府 / 15235 强制征兵 / 15237 土耳其加入轴心国 /
+ *   6600 伊朗加入轴心国 / 14503 提尔比茨号
+ *
+ * 玩家同时纠正：6601 大德意志帝国【不带】★（OCR 任务文档的推测错了）。
+ *
+ * ⚠ 这是【唯一】需要维护的清单，改这里即可，不用动任何其它代码。
+ *   （数据层 CSV / cards.js 里没有记录星标，ops 列全空。）
+ */
+const STARRED_CARDS = {
+	'15225': true,   /* 阿登闪击战 */
+	'15226': true,   /* 巴巴罗萨 */
+	'15230': true,   /* 海狮计划 */
+	'15232': true,   /* 巴尔干军政府 */
+	'15235': true,   /* 强制征兵 */
+	'15237': true,   /* 土耳其加入轴心国 */
+	'6600': true,    /* 伊朗加入轴心国 */
+	'14503': true,   /* 提尔比茨号 */
+	/* —— 意大利★卡（玩家 2026-10-08 口径）——
+	 * 用途：意大利国家技能 trigger='star_resolved'（打出★卡结算后触发）。
+	 * ECON 5（全带★）+ 17717-17721 + 17726 + 17732 + 17737 + 增援 16703。 */
+	'17712': true, '17713': true, '17714': true, '17715': true, '17716': true,
+	'17717': true, '17718': true, '17719': true, '17720': true, '17721': true,
+	'17726': true, '17732': true, '17737': true,
+	'16703': true,
+	/* —— 美国★卡（玩家 2026-10-10 口径）——
+	 * 用途：美国国家技能 trigger='star_resolved'（打出★卡结算后触发，一回合一次）。
+	 * 17520/17523=ECON, 17526/17529/17530/17531/17535/17536/17537=EVENT,
+	 * 16304/17553/17554=STATUS。其中 17554 的状态效果执行时也触发该技能。 */
+	'16304': true, '17520': true, '17523': true, '17526': true, '17529': true,
+	'17530': true, '17531': true, '17535': true, '17536': true, '17537': true,
+	'17553': true, '17554': true,
+}
+
+function is_starred_card(card_id) {
+	return !!STARRED_CARDS[String(inst_card_id(card_id))]
+}
+
+/*
+ * 能不能用：① 本回合还没用过 ② 有这个技能 ③ 付得起损耗
+ *          ④ 手里确实有状态卡（否则用了也没东西可打 = 误导玩家）
+ *
+ * 注意 ④ —— 这是"服务端不替玩家做选择"的另一面：
+ * 明知道没得选就不要给按钮（与 ECON / 脚本卡的"候选为空就跳过"同口径）。
+ */
+/*
+ * 【2026-10-01】代价是否付得起 —— 支持两种代价：
+ *   · attrition: N  -> 【损耗】（抽牌堆顶 N 张直接进弃牌堆，无选择）
+ *   · discard:  N  -> 【弃置】（玩家从【自己的手牌】里挑 N 张丢掉）
+ *   · points:   N  -> 【减 N 分】（扣己方阵营胜利点，可负，总是付得起 —— 无需校验）
+ *   ⚠ 三者语义完全不同：损耗是随机磨牌库，弃置是玩家主动选牌，减分直接改 game.score。
+ */
+function national_skill_cost_ok(game, nation, cfg) {
+	const cost = cfg && cfg.cost || {}
+	if (cost.attrition && !can_attrite(game, nation, cost.attrition)) return false
+	if (cost.discard) {
+		/*
+		 * 【2026-10-04】代价限定类型时（日本：必须弃【响应牌】），
+		 * 要按类型过滤后再比数量 —— 只比手牌总数会让"手里没有响应牌"
+		 * 也被判成付得起。
+		 */
+		const hand = game.hands[nation] || []
+		const pool = cost.filter
+			? hand.filter(id => national_skill_grant_ok(cfg, id, cost.filter))
+			: hand
+		if (pool.length < cost.discard) return false
+		/*
+		 * 日本：弃 1 张响应后还要能【暗置 1 张响应】，
+		 * 所以该类型的牌必须不止 1 张（min_hand_of_type，默认 2），
+		 * 否则会出现"付了代价却没牌可暗置"。
+		 */
+		const needMin = (cfg && cfg.min_hand_of_type) || 0
+		if (needMin > 0 && pool.length < needMin) return false
+	}
+	return true
+}
+
+function national_skill_usable(game, nation) {
+	const cfg = NATIONAL_SKILL[nation]
+	if (!cfg) return false
+	game.national_skill_used = game.national_skill_used || {}
+	if (game.national_skill_used[nation] === game.turn) return false
+	if (!national_skill_cost_ok(game, nation, cfg)) return false
+	const hand = game.hands[nation] || []
+	/* 手上必须有符合授予范围的牌，否则"额外打出"无从谈起 */
+	if (!hand.some(id => national_skill_grant_ok(cfg, id))) return false
+	/*
+	 * 【2026-10-01】弃置代价的额外检查：弃完之后【还得剩下至少 1 张可打的牌】。
+	 * 否则玩家付了 3 张代价却发现没牌可打 —— 这是亏本买卖，
+	 * 服务端不替玩家做这种决定，干脆不给窗口。
+	 *   可行 <=> 手牌总数 N >= discard + 1
+	 *   （因为要弃的 3 张里最多能包含 (e-1) 张目标牌，
+	 *     故需 (N-e) + (e-1) >= 3，即 N >= 4）
+	 */
+	const cost = cfg.cost || {}
+	if (cost.discard && hand.length <= cost.discard) return false
+	return true
+}
+
+/*
+ * 【2026-10-06】牌类型过滤的【唯一】实现。
+ *
+ * 抽出来的原因：同一个 filter 语义过去散落在三处
+ * （国家技能 national_skill_grant_ok / ECHO 代价 / 增强卡 armed 代价），
+ * 各写各的 switch，新增一种 filter 要改三处且容易漏。
+ * 现在三处都调用它，口径必然一致。
+ *
+ * ⚠ is_card_type 不接受实例 id（'15412#3'），必须先 inst_card_id 归一。
+ */
+function filter_matches_card(card_id, filter) {
+	const fid = String(inst_card_id(card_id))
+	switch (filter) {
+		/* 注意：用 is_card_type(卡面 id, 类型名)，没有 card_type_of 这个函数 */
+		case 'status': return is_card_type(fid, 'STATUS')
+		case 'event_status': return is_card_type(fid, 'EVENT') || is_card_type(fid, 'STATUS')
+		/* 【2026-10-04】日本国家技能 / 日本增强卡：响应牌 */
+		case 'response': return is_card_type(fid, 'RESPONSE')
+		/* 【2026-10-06】苏联国家技能：建造陆军（BASIC 基础卡，name=建设陆军） */
+		case 'build': return is_card_type(fid, 'BASIC') && inst_card(fid).name === '建设陆军'
+		case 'north': return is_north_ops_card(card_id)
+		/* 【2026-10-07】意大利国家技能：状态卡或经济战卡 */
+		case 'status_econ': return is_card_type(fid, 'STATUS') || is_card_type(fid, 'ECON')
+		default: return true
+	}
+}
+
+/*
+ * 这张卡是否符合该国技能"授予"的打出范围。
+ *
+ * filterOverride：显式指定 filter（代价与效果的牌类型可能不同，
+ *   例如日本：代价弃【响应牌】，效果也是暗置【响应牌】，但将来可能不同），
+ *   不传则用 cfg.grant.filter。
+ */
+function national_skill_grant_ok(cfg, card_id, filterOverride) {
+	const grant = cfg && cfg.grant || {}
+	const filter = filterOverride || grant.filter
+	/* 'drawn' 需要比对来源卡清单，无法用纯类型判断 */
+	if (filter === 'drawn') {
+		const ids = ((grant.cards) || []).map(x => String(inst_card_id(x)))
+		return ids.indexOf(String(inst_card_id(card_id))) >= 0
+	}
+	return filter_matches_card(card_id, filter)
+}
+
+/*
+ * 【2026-10-06】校验 + 执行「暗置打出 1 张牌」（背面向上置桌面）。
+ *
+ * 两个入口共用（避免口径分叉）：
+ *   · 日本国家技能（use_national_skill 的 one_step 分支）
+ *   · 日本增强卡 15412《御前会议》
+ * 复用暗置原子 facedown_response（手牌 -> table_responses）。
+ */
+function jp_facedown_play(game, nation, playCard, filter) {
+	const hand = game.hands[nation] || []
+	if (playCard == null)
+		return {
+			ok: false,
+			reason: '还需要选 1 张要打出的' + (filter === 'response' ? '响应牌' : '牌'),
+		}
+	if (hand.indexOf(playCard) < 0)
+		return { ok: false, reason: '要打出的牌不在手中：' + playCard }
+	if (filter && !filter_matches_card(playCard, filter)) {
+		const nm = (inst_card(playCard) || {}).name || playCard
+		return {
+			ok: false,
+			reason: '《' + nm + '》不在可打出的范围内（需' +
+				(filter === 'response' ? '响应牌' : filter) + '）',
+		}
+	}
+	const fr = facedown_response(game, nation, playCard, 'hand')
+	if (!fr.ok) return { ok: false, reason: '打出失败：' + fr.reason }
+	return {
+		ok: true,
+		desc: '暗置打出《' + ((inst_card(playCard) || {}).name || '牌') + '》',
+	}
+}
+
+/*
+ * 【2026-10-06】一步式「弃 N 张代价 + 暗置打出 1 张」原子。
+ *
+ * 与 jp_facedown_play 的关系：
+ *   本函数 = 校验代价 + 付代价 + 调 jp_facedown_play。
+ *   15412 的代价由 resolve_event_card 的通用代价段先付掉，
+ *   所以 15412 只用 jp_facedown_play；国家技能两步都由本函数完成。
+ *
+ * 服务端【永不】替玩家挑牌：drop 不对/数量不够就直接拒绝。
+ */
+function discard_and_facedown(game, nation, dropIds, playCard, costSpec, grantFilter) {
+	const hand = game.hands[nation] || []
+	const ids = (dropIds || []).slice()
+	const need = (costSpec && costSpec.discard) || 0
+	const costFilter = (costSpec && costSpec.filter) || null
+	const typeName = costFilter === 'response' ? '响应牌' : '手牌'
+
+	if (need && ids.length !== need)
+		return {
+			ok: false,
+			reason: '需要先选 ' + need + ' 张代价牌（当前 ' + ids.length + ' 张）',
+		}
+	for (const id of ids) {
+		if (hand.indexOf(id) < 0)
+			return { ok: false, reason: '所选代价牌不在手中：' + id }
+		if (costFilter && !filter_matches_card(id, costFilter))
+			return {
+				ok: false,
+				reason: '代价牌类型不符（需' +
+					(costFilter === 'response' ? '响应牌' : costFilter) + '）：' + id,
+			}
+	}
+	/* 同一张牌不能既作代价又打出 */
+	if (playCard != null && ids.indexOf(playCard) >= 0)
+		return { ok: false, reason: '不能把同一张牌既作代价又打出（请选不同的两张' + typeName + '）' }
+
+	for (const id of ids) discard_card(game, nation, id)
+	const r = jp_facedown_play(game, nation, playCard, grantFilter)
+	if (!r.ok) return r
+	return {
+		ok: true,
+		desc: '弃置 ' + ids.length + ' 张' + typeName + '，' + r.desc,
+	}
+}
+
+/*
+ * 【2026-10-06】"选择 1 支【无补给】的部队"的候选（15411 夜间运输）。
+ *
+ * 无补给的判定与补给阶段【同源】：直接读 compute_supply().in_supply，
+ * 不自己重写遍历（见 rtt-atomic-operations 铁律）。
+ *
+ * spec = { nation, types:['army','navy'], supplied:false }
+ *   supplied:false -> 只要无补给的；true -> 只要补给中的；省略 -> 不限
+ */
+function pick_unit_candidates(game, spec) {
+	const inSup = (compute_supply(game) || {}).in_supply || {}
+	const want = (spec && spec.types) || ['army', 'navy']
+	const nation = spec && spec.nation
+	const out = []
+	for (const p of Object.keys(game.location || {})) {
+		if (game.location[p] == null) continue
+		if (nation && game.piece_nation[p] !== nation) continue
+		if (want.indexOf(game.piece_type[p]) < 0) continue
+		const supplied = !!inSup[p]
+		if (spec && spec.supplied === false && supplied) continue
+		if (spec && spec.supplied === true && !supplied) continue
+		out.push(p)
+	}
+	return out.sort((a, b) => String(a).localeCompare(String(b)))
+}
+
+/*
+ * 一张卡【打出并效果结算完毕后】调用：
+ * 若这张卡带★且本国技能可用 -> 给出机会窗口。
+ * 其余情况一律清掉旧的 offer（避免跨卡残留）。
+ */
+/*
+ * 【2026-10-01】国家技能的【统一开窗入口】。
+ *
+ * 每国技能的触发时机不同（见 NATIONAL_SKILL[].trigger）：
+ *   · 'star_resolved' -> ★卡结算后（德国）
+ *   · 'draw'          -> 抽牌后（英国）
+ *
+ * 调用方只负责在"对应事件发生的那一刻"调用本函数；
+ * 是否真的开窗由 national_skill_usable 决定（一回合一次 + 付得起 + 有得打）。
+ *
+ * 只对本国【当前行动国】开窗（onwer 即 nation）。
+ */
+function maybe_offer_national_skill(game, nation, trigger) {
+	const cfg = NATIONAL_SKILL[nation]
+	if (!cfg || cfg.trigger !== trigger) {
+		game.national_skill_offer = null
+		return game
+	}
+	if (!national_skill_usable(game, nation)) {
+		game.national_skill_offer = null
+		return game
+	}
+	game.national_skill_offer = {
+		nation: nation,
+		trigger: trigger,
+		source: cfg.name,
+		source_name: cfg.name,
+		cost: cfg.cost,
+		grant: cfg.grant,
+	}
+	const c = cfg.cost || {}
+	const n = c.discard || c.attrition || 0
+	/* 代价文案（含类型限定，如日本"弃 1 张响应牌"） */
+	const costText = c.discard
+		? ('弃置 ' + n + ' 张' + (c.filter === 'response' ? '响应牌' : (c.filter === 'build' ? '建造陆军' : '手牌')))
+		: ('损耗 ' + n + ' 张牌')
+	/* 效果文案 */
+	let grantText = '1 张状态卡'
+	if (cfg.grant && cfg.grant.filter === 'event_status') grantText = '1 张事件牌或状态卡'
+	else if (cfg.grant && cfg.grant.filter === 'response') grantText = '1 张响应牌（暗置）'
+	game.log.push('【' + nation + '】可发动' + cfg.name + '：' + costText + '，额外打出 ' + grantText)
+	return game
+}
+
+function after_card_resolved(game, nation, card_id) {
+	/* 德国：带★的卡打出并效果结算后给窗口；其余情况清掉旧 offer */
+	if (!card_id || !is_starred_card(card_id)) {
+		game.national_skill_offer = null
+		return game
+	}
+	return maybe_offer_national_skill(game, nation, 'star_resolved')
+}
+
+function clear_national_skill_offer(game) {
+	if (game) game.national_skill_offer = null
+}
+
+/*
+ * 实际使用国家技能。
+ *
+ * 两种模式（由 cfg.one_step 决定）：
+ *   · 两步（英国等）：付代价 -> 授予【额外打出权】，玩家随后点手牌打出。
+ *        arg.drop = 要弃的牌
+ *   · 一步（日本，2026-10-05 玩家优化）：同一个弹窗里同时选
+ *        「要弃的响应牌」+「要暗置打出的响应牌」，【一次提交完成】，
+ *        不再授予额外打出权（因为已经直接打出去了）。
+ *        arg.drop = 要弃的牌；arg.play = 要打出的牌
+ */
+function use_national_skill(game, nation, drop, playCard) {
+	const offer = game.national_skill_offer
+	if (!offer || offer.nation !== nation) {
+		game.log.push('当前不能使用国家技能')
+		return game
+	}
+	const cfg = NATIONAL_SKILL[nation]
+	if (!cfg) return game
+	if (!national_skill_usable(game, nation)) {
+		game.log.push('【' + nation + '】' + cfg.name +
+			'不可用（本回合已用过 / 付不起代价 / 手上没有可打的牌）')
+		return game
+	}
+
+	/* ================= 一步模式（日本） ================= */
+	if (cfg.one_step) {
+		/*
+		 * 【2026-10-06】校验与执行全部交给共用原子 discard_and_facedown：
+		 * 日本增强卡 15412《御前会议》走的是同一套语义
+		 * （"弃 1 张响应 + 暗置打出 1 张响应"），两处必须同源。
+		 */
+		const r = discard_and_facedown(game, nation, drop, playCard, cfg.cost,
+			(cfg.grant && cfg.grant.filter) || null)
+		if (!r.ok) {
+			game.log.push('【' + nation + '】' + cfg.name + '：' + r.reason)
+			return game
+		}
+		game.national_skill_used = game.national_skill_used || {}
+		game.national_skill_used[nation] = game.turn
+		game.log.push('【' + nation + '】使用' + cfg.name + '：' + r.desc)
+		clear_national_skill_offer(game)
+		return game
+	}
+	/* ================= 两步模式（英国等） ================= */
+
+	const cost = cfg.cost || {}
+	let paid = ''
+	if (cost.discard) {
+		/* 弃置：玩家从【自己的手牌】里挑 N 张丢掉 */
+		const ids = (drop || []).slice()
+		if (ids.length !== cost.discard) {
+			game.log.push('需要先选 ' + cost.discard + ' 张手牌作为代价（当前 ' + ids.length + ' 张）')
+			return game
+		}
+		const hand = game.hands[nation] || []
+		for (const id of ids)
+			if (hand.indexOf(id) < 0) {
+				game.log.push('所选代价牌不在手中：' + id)
+				return game
+			}
+		/*
+		 * 【2026-10-04】代价限定类型时（日本：必须弃【响应牌】），
+		 * 服务端【再校验一遍】类型 —— 客户端已按类型过滤可弃的牌，
+		 * 但这里要防住直接发 action / 旧客户端 / 脚本绕过。
+		 */
+		if (cost.filter) {
+			for (const id of ids) {
+				if (!national_skill_grant_ok(cfg, id, cost.filter)) {
+					game.log.push('代价牌类型不符（需' +
+						(cost.filter === 'response' ? '响应牌' : cost.filter) + '）：' + id)
+					return game
+				}
+			}
+		}
+		for (const id of ids) discard_card(game, nation, id)
+		paid = '弃置 ' + ids.length + ' 张' +
+			(cost.filter === 'response' ? '响应牌' : '手牌')
+	} else if (cost.attrition) {
+		/* 损耗：抽牌堆顶 N 张直接进弃牌堆，无选择 */
+		const ar = attrition_cards(game, nation, cost.attrition)
+		paid = '损耗 ' + ar.length + ' 张牌'
+	} else if (cost.points) {
+		/* 减分：扣己方阵营胜利点（可负，总是付得起） */
+		const fc = faction_of_nation(nation)
+		if (fc) {
+			game.score[fc] = (game.score[fc] || 0) - cost.points
+			paid = '减 ' + cost.points + ' 分'
+		}
+	}
+	game.national_skill_used = game.national_skill_used || {}
+	game.national_skill_used[nation] = game.turn
+	/*
+	 * 【2026-10-01】额外打出权的【生效阶段】= 当前阶段。
+	 * 英国在摸牌阶段授予 -> 必须能在摸牌阶段当场打出，否则本回合就过去了。
+	 */
+	const grantOpt = Object.assign({}, cfg.grant, { phase: game.turn_phase || 'play' })
+	grant_extra_play(game, nation, 'skill.' + nation, cfg.name, grantOpt)
+	game.log.push('【' + nation + '】使用' + cfg.name + '：' + paid +
+		'，可额外打出 1 张' + extra_play_filter_desc(game.extra_play))
+	clear_national_skill_offer(game)
+	return game
 }
 
 function econ_config_of(card_id) {
@@ -907,6 +2263,12 @@ function econ_remove_piece(game, space, piece) {
 		was_supplied: wasSupplied,
 	}, false)
 
+	/* 16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
+	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'econ', piece: piece }
+	arm_status_instant(game, 'piece_removed', vNation, space)
+	/* 16304 中国远征军：让权美国选相邻地区征召 */
+	offer_us_china_delegate(game, space, vNation, vType)
+
 	return { ok: true, removed: piece, killed_airs: killedAirs }
 }
 
@@ -937,6 +2299,573 @@ function econ_waiting_nation(game) {
 	const pe = game.pending_econ
 	if (!pe) return null
 	return pe.chain[pe.step] || null
+}
+
+/* ============================================================
+ * 【2026-09-27】高速公路（15228，德国卡组）
+ *
+ * 设计（玩家确认）：先收回所有德国陆军，再根据移除数量让玩家【逐一选择】建设位置，
+ * 每次走真实 build_piece（写 game.last_built，打开「建设陆军后」时点，可触发
+ * 15247/15248 等 after_build_army 状态/响应）。每次选择必须合法（处于补给中的德国
+ * 可建陆军地区）。用独立 action resolve_autobahn 驱动，避免与 play_card 的"弃牌堆/
+ * 出牌名额"逻辑纠缠（ECON 同理，见 resolve_econ）。
+ * ============================================================ */
+
+function autobahn_handle(game, nation, card_id, arg, timing) {
+	const c = inst_card(card_id)
+	/* ① 统计每个地区德军陆军数量（bySpace 的键是数字 space id，作对象键会变成字符串，
+	 *    故访问 game 时统一转回 Number，避免 pieces_on 的 === 匹配失效） */
+	/* 打出即占出牌阶段名额（与玩家预期"打出即占名额"一致）；卡进入弃牌堆。
+	 * 收回全部德军陆军并挂起逐一选位重建——复用通用 railroad_recall。 */
+	discard_card(game, nation, card_id)
+	if (!timing) mark_play_done(game, nation)
+	const rr = railroad_recall(game, '德国', timing)
+	if (!rr.pending) {
+		game.log.push('【' + nation + '】打出《' + c.name + '》—— 无德国陆军可收回')
+		return game
+	}
+	game.log.push('【' + nation + '】打出《' + c.name + '》—— 已收回 ' + rr.total +
+		' 支德军陆军，请依次选择建设位置（剩余 ' + rr.total + ' 次）')
+	return game
+}
+
+function autobahn_resolve(game, nation, arg) {
+	const pa = game.pending_autobahn
+	if (!pa) {
+		game.log.push('当前没有进行中的高速公路')
+		return game
+	}
+	if (nation !== pa.actor) {
+		game.log.push('只有【' + pa.actor + '】能选择建设位置')
+		return game
+	}
+	const sp = Number(arg && arg.space)
+	if (!sp) {
+		game.log.push('请选择一个建设位置')
+		return game
+	}
+	/* 每次建设都必须合法（处于补给中的本国可建陆军地区） */
+	const chk = can_build_at(game, pa.actor, sp, 'army')
+	if (!chk.ok) {
+		game.log.push('不能在 ' + data.name_of(sp) + ' 建设陆军：' + chk.reason)
+		return game
+	}
+	const r = build_piece(game, pa.actor, 'army', sp)
+	if (!r.ok) {
+		game.log.push('在 ' + data.name_of(sp) + ' 建设陆军失败：' + r.reason)
+		return game
+	}
+	pa.remaining--
+	refresh(game)
+	if (pa.remaining > 0) {
+		game.log.push((pa.actor === '苏联' ? '西伯利亚大铁路：已在 ' : '高速公路：已在 ') +
+			data.name_of(sp) + ' 建设 1 支陆军，剩余 ' +
+			pa.remaining + ' 次')
+	} else {
+		game.pending_autobahn = null
+		game.log.push('高速公路：全部 ' + pa.total + ' 支陆军已重建完成')
+	}
+	return game
+}
+/* 【2026-10-06】通用"收回某国全部陆军 → 挂起逐一选位重建"机制。
+ * 德国 15228 高速公路 与 苏联 17827 西伯利亚大铁路 共用同一套
+ * pending_autobahn / resolve_autobahn / autobahn_targets 管线，仅持有国 who 不同。
+ * 抽出此 helper 避免两套平行实现。 */
+function railroad_recall(game, who, timing) {
+	const ids = Object.keys(game.location || {}).filter(p =>
+		game.piece_nation[p] === who && game.piece_type[p] === 'army')
+	let n = 0
+	for (const p of ids) { remove_piece(game, who, p); n++ }
+	if (n === 0)
+		return { ok: true, pending: false, total: 0, desc: '无' + who + '陆军可收回' }
+	game.pending_autobahn = { remaining: n, total: n, actor: who, timing: !!timing }
+	return {
+		ok: true, pending: true, total: n,
+		desc: '收回 ' + n + ' 支' + who + '陆军，按任意顺序建设',
+	}
+}
+
+/* 【2026-10-06】17825 铁托游击队：在<巴尔干>建设英/苏陆军。
+ * 由于 build 必须在 eliminate 清掉巴尔干(敌)后才合法，且 event_card_needs
+ * 会预检导致卡死，这里直接以 run 步骤在步骤顺序执行时建设。 */
+function su_tito_build(game, who) {
+	const sp = space_ids_of(['巴尔干'])[0]
+	const chk = can_build_at(game, who, sp, 'army')
+	if (!chk.ok)
+		return { ok: false, desc: '无法在<巴尔干>建设' + who + '陆军：' + chk.reason }
+	const r = build_piece(game, who, 'army', sp)
+	if (!r.ok) return { ok: false, desc: r.reason }
+	return { ok: true, desc: who + '在<巴尔干>建设 1 支陆军' }
+}
+
+/* ============================================================
+ * 【2026-09-30】多步脚本卡（pending_script）
+ *
+ * 这三张卡的每一步都【依赖上一步的结果】，用 steps 模型表达不了
+ * （steps 是"把参数一次性填完再执行"，而这里是"抽到什么才知道能弃什么"），
+ * 所以做成显式的阶段机 —— 与 autobahn / econ 的独立 action 模式同款。
+ *
+ *   · 15229 生产构思  检视牌堆 -> 选 1 张[状态卡]打出 -> 洗混牌堆
+ *   · 15239 战略规划  检视牌堆选 2 张抽取 -> 弃 1 张手牌 -> 洗混牌堆
+ *                    -> 可额外打出 1 张【以此法抽到的牌】
+ *   · 14503 提尔比茨号 让权给【英国】：从桌面暗置的英国响应中选 1 张暗弃
+ *   · 7900  竭泽而渔  弃 4 张手牌 -> 检视【弃牌堆】选 1 张置入手牌
+ *                    （2026-10-06：与 15239 同款两步结构，候选源换成弃牌堆）
+ *
+ * 三个不变的前提：
+ *   ① 卡在【打出瞬间】就进弃牌堆并占名额（后续步骤都是这张卡的结果，
+ *      不是另一次出牌）—— 与 autobahn_handle 同口径；
+ *   ② 服务端【永远不】替玩家挑牌：候选为空就直接跳过该阶段，绝不随机、绝不取第一张；
+ *   ③ 只有【被指定回答国】能提交 resolve_script，且期间禁止其它动作
+ *      （否则会出现"挂着却被别的操作顶掉"）。
+ * ============================================================ */
+
+/*
+ * 哪些卡走【多步脚本】流程 -> 脚本 kind。
+ * 与 cards.js 的卡面 id 对应；新增同类卡在这里加一行即可。
+ */
+const SCRIPT_CARD_KIND = {
+	'15229': 'play_status_from_deck',
+	'15239': 'draw_pick_discard',
+	'14503': 'uk_facedown_discard',
+	'7900': 'discard_pay_pick',
+}
+
+/* 当前该回答的国家（Kind 决定是打出者还是指定的对手） */
+function script_answer_nation(game) {
+	const ps = game.pending_script
+	if (!ps) return null
+	return (ps.kind === 'uk_facedown_discard') ? ps.answer_nation : ps.actor
+}
+
+/*
+ * 建立 / 清除 script 挂起。
+ * 14503 需要【让权】（把操作权翻给英国），否则英国界面不会出现选项
+ * （R22 的教训：不让权的话"挂着"和"没发生"看起来一模一样）。
+ * 归还时机写在本函数的 ps === null 分支里，由 script_clear 调用。
+ */
+function set_pending_script(game, ps) {
+	game.pending_script = ps
+	if (!ps) {
+		if (game.script_return_active) {
+			game.active = game.script_return_active
+			game.script_return_active = null
+		}
+		return null
+	}
+	if (ps.kind === 'uk_facedown_discard') {
+		const f = faction_of_nation(ps.answer_nation)
+		const role = f === ALLIES ? ALLIES_ROLE : (f === AXIS ? AXIS_ROLE : null)
+		if (role && game.active !== role) {
+			if (!game.script_return_active) game.script_return_active = game.active
+			game.active = role
+		}
+	}
+	return ps
+}
+
+function script_clear(game) {
+	game.pending_script = null
+	return set_pending_script(game, null)
+}
+
+/*
+ * 各阶段该做什么。
+ *   pick    —— 从【本国牌堆】挑 N 张（15229/15239）
+ *             或从【本国弃牌堆】挑 N 张（7900 第 2 步）
+ *   discard —— 从【本国手牌】挑 N 张弃置（15239 第 2 步 / 7900 第 1 步）
+ *   answer  —— 让权：从【英国桌面暗置的响应卡】挑 1 张暗弃（14503）
+ */
+function script_step_kind(ps) {
+	if (!ps) return 'done'
+	if (ps.kind === 'draw_pick_discard') {
+		if (ps.stage === 1) return 'pick'
+		if (ps.stage === 2) return 'discard'
+		return 'done'
+	}
+	/* 【2026-10-06】7900：先弃（付代价）后取，与卡面顺序一致 */
+	if (ps.kind === 'discard_pay_pick') {
+		if (ps.stage === 1) return 'discard'
+		if (ps.stage === 2) return 'pick'
+		return 'done'
+	}
+	if (ps.kind === 'play_status_from_deck') return ps.stage === 1 ? 'pick' : 'done'
+	if (ps.kind === 'uk_facedown_discard') return ps.stage === 1 ? 'answer' : 'done'
+	return 'done'
+}
+
+/* 某阶段的可选牌（实例 id 数组），候选不符合卡面要求时不为空 */
+function script_raw_candidates(game, ps) {
+	const who = ps.kind === 'uk_facedown_discard' ? ps.answer_nation : ps.actor
+	if (script_step_kind(ps) === 'answer') {
+		const wantSide = faction_of_nation(who)
+		const all = game.table_responses || []
+		const british = all.filter(r => r.owner_side === wantSide && (() => {
+			const c = inst_card(r.card_id)
+			return !!c && c.type === 'RESPONSE' && (c.nation === who || !c.nation)
+		})())
+		/*
+		 * 兜底：一张"英国国籍"的响应都没有时也要能执行
+		 * （桌面上可能只有其它同盟国打出的响应）。
+		 */
+		if (british.length) return british.map(r => r.card_id)
+		return all.filter(r => r.owner_side === wantSide &&
+			inst_card(r.card_id) && inst_card(r.card_id).type === 'RESPONSE')
+			.map(r => r.card_id)
+	}
+	/*
+	 * 【2026-10-06】7900《竭泽而渔》：pick 的候选是【本国弃牌堆】。
+	 *
+	 * ⚠ 本卡在 script_start 里已经 discard_card 进弃牌堆（不变式①），
+	 *   必须把它自己排除 —— 否则玩家可以把《竭泽而渔》再捞回手里，
+	 *   等于白嫖（弃 4 张换回自己）。
+	 */
+	if (ps.kind === 'discard_pay_pick' && script_step_kind(ps) === 'pick') {
+		const pile = game.discard[who] || []
+		return pile.filter(id => id !== ps.source_inst)
+	}
+	/* pick：本国牌堆（15229 要求 [状态卡]） */
+	init_nation_deck(game, who)
+	const deck = game.decks[who] || []
+	if (!ps.filter || !ps.filter.type) return deck.slice()
+	return deck.filter(id => {
+		const c = inst_card(id)
+		return !!c && c.type === ps.filter.type
+	})
+}
+
+/* 实例 id -> 客户端可直接渲染的卡对象（含 img，否则卡图白屏） */
+function card_info(id) {
+	const faceId = inst_card_id(id)
+	const c = CARD_BY_ID[faceId]
+	if (!c) return { id: id, card_id: faceId, name: '?', type: '?' }
+	return {
+		id: id, card_id: faceId, name: c.name, type: c.type,
+		nation: c.nation, img: c.img, ops: c.ops, text: c.text,
+	}
+}
+
+/* 本阶段【实际要选几张】——牌堆不足时按剩余数量，不让玩家卡在"还没选够" */
+function script_pick_need(ps, cands) {
+	return Math.min(ps.need_pick || 0, cands.length)
+}
+
+function script_prompt(ps) {
+	if (ps.kind === 'play_status_from_deck')
+		return '《' + ps.source_name + '》：从牌堆选择 1 张[状态卡]打出'
+	if (ps.kind === 'draw_pick_discard') {
+		if (script_step_kind(ps) === 'pick')
+			return '《' + ps.source_name + '》：检视牌堆，选择 2 张牌抽入手牌'
+		if (script_step_kind(ps) === 'discard')
+			return '《' + ps.source_name + '》：选择 1 张手牌弃置'
+	}
+	if (ps.kind === 'uk_facedown_discard')
+		return '《' + ps.source_name + '》：选择 1 张桌面上的英国响应暗牌弃置'
+	/* 【2026-10-06】7900 竭泽而渔：先弃 4 张，再从弃牌堆挑 1 张 */
+	if (ps.kind === 'discard_pay_pick') {
+		if (script_step_kind(ps) === 'discard')
+			return '《' + ps.source_name + '》：选择 ' + (ps.need_discard || 0) +
+				' 张手牌弃置'
+		if (script_step_kind(ps) === 'pick')
+			return '《' + ps.source_name + '》：检视弃牌堆，选择 1 张置入手牌'
+	}
+	return '《' + ps.source_name + '》结算中'
+}
+
+/*
+ * 15229《生产构思》：把选中的状态卡【打出】（放桌面 + 生效），然后洗混牌堆。
+ */
+function script_play_picked(game, ps, picks) {
+	const who = ps.actor
+	const deck = game.decks[who] || []
+	for (const id of picks) {
+		const i = deck.indexOf(id)
+		if (i < 0) continue
+		deck.splice(i, 1)
+		const c = inst_card(id)
+		if (c && c.type === 'STATUS') {
+			game.table[who] = game.table[who] || []
+			game.table[who].push(id)
+			apply_status_ongoing(game, id, who)
+			game.log.push('【' + who + '】从牌堆打出状态卡《' + c.name + '》')
+		} else {
+			game.discard[who].push(id)
+			game.log.push('【' + who + '】从牌堆弃置《' + (c ? c.name : id) + '》')
+		}
+	}
+	shuffle_deck(game, who)
+	game.log.push('【' + who + '】洗混牌堆')
+}
+
+/*
+ * 15239《战略规划》的阶段推进。
+ *
+ * 每一步结束后都要问"下一步还有没有得做"：
+ *   · 牌堆空  -> 跳过抽牌阶段（不随机替代）
+ *   · 手牌空  -> 跳过弃牌阶段（没得弃）
+ * 跳过规则确保了服务端永远不替玩家做选择。
+ */
+function script_advance_15239(game, ps) {
+	while (true) {
+		const k = script_step_kind(ps)
+		if (k === 'pick') {
+			if (script_raw_candidates(game, ps).length) break
+			ps.stage = 2
+			continue
+		}
+		if (k === 'discard') {
+			if ((game.hands[ps.actor] || []).length) break
+			ps.stage = 3
+			continue
+		}
+		break
+	}
+	if (script_step_kind(ps) === 'done') {
+		shuffle_deck(game, ps.actor)
+		game.log.push('【' + ps.actor + '】洗混牌堆')
+		/*
+		 * 额外打出：只能是【以此法抽到的牌】里还在手上的那些
+		 * （第 2 步可能已经把其中一张弃掉了）。
+		 */
+		const left = ps.drawn.filter(id => (game.hands[ps.actor] || []).indexOf(id) >= 0)
+		if (left.length)
+			grant_extra_play(game, ps.actor, ps.source, ps.source_name,
+				{ filter: 'drawn', cards: left })
+		else
+			game.log.push('【' + ps.actor + '】抽到的牌已不在手上，无法额外打出')
+		script_clear(game)
+		return true
+	}
+	return false
+}
+
+/*
+ * 【2026-10-06】7900《竭泽而渔》的阶段推进 —— 与 script_advance_15239
+ * 同款结构："每一步结束后都问下一步还有没有得做"。
+ *
+ *   手牌不够弃（除本卡外不足 need_discard 张）-> 跳过弃牌阶段
+ *   弃牌堆为空                                -> 跳过取牌阶段
+ * 跳过规则确保服务端【永远不】替玩家挑牌（没得挑就跳过，不随机、不取第一张）。
+ */
+function script_advance_7900(game, ps) {
+	while (true) {
+		const k = script_step_kind(ps)
+		if (k === 'discard') {
+			const pool = (game.hands[ps.actor] || []).filter(id => id !== ps.source_inst)
+			if (pool.length >= (ps.need_discard || 0)) break
+			ps.stage = 2
+			continue
+		}
+		if (k === 'pick') {
+			if (script_raw_candidates(game, ps).length) break
+			ps.stage = 3
+			continue
+		}
+		break
+	}
+	if (script_step_kind(ps) === 'done') {
+		script_clear(game)
+		return true
+	}
+	return false
+}
+
+/* 打出一张脚本卡：卡立刻离手、占名额，然后进入第 1 阶段 */
+function script_start(game, nation, card_id, timing, kind) {
+	const c = inst_card(card_id)
+	const faceId = String(inst_card_id(card_id))
+	const ps = {
+		kind: kind,
+		actor: nation,
+		answer_nation: '英国',
+		source: faceId,
+		source_name: c ? c.name : faceId,
+		/*
+		 * 【2026-10-06】source_inst = 本卡的【实例 id】。
+		 * 7900 的候选就是弃牌堆，而本卡在下面 discard_card 后也进了弃牌堆，
+		 * 必须靠它把自己排除（见 script_raw_candidates），
+		 * 否则玩家可以把《竭泽而渔》自己再捞回手里 —— 弃 4 张换回自己 = 白嫖。
+		 */
+		source_inst: card_id,
+		stage: 1,
+		total: 1,
+		need_pick: 0,
+		need_discard: 0,
+		drawn: [],
+		timing: !!timing,
+	}
+	if (kind === 'play_status_from_deck') {
+		ps.total = 1
+		ps.need_pick = 1
+		ps.filter = { type: 'STATUS' }
+	} else if (kind === 'draw_pick_discard') {
+		ps.total = 3
+		ps.need_pick = 2
+		ps.need_discard = 1
+	} else if (kind === 'uk_facedown_discard') {
+		ps.total = 1
+		ps.need_pick = 1
+	} else if (kind === 'discard_pay_pick') {
+		ps.total = 2
+		ps.need_discard = 4
+		ps.need_pick = 1
+	}
+
+	discard_card(game, nation, card_id)
+	if (!timing) mark_play_done(game, nation)
+	game.log.push('【' + nation + '】打出《' + ps.source_name + '》')
+
+	set_pending_script(game, ps)
+
+	/* 候选为空 -> 直接走完（服务端不替玩家挑，没得挑就跳过） */
+	if (kind === 'draw_pick_discard') {
+		if (script_advance_15239(game, ps)) return game
+	} else if (kind === 'discard_pay_pick') {
+		if (script_advance_7900(game, ps)) return game
+	} else if (!script_raw_candidates(game, ps).length) {
+		if (kind === 'play_status_from_deck') {
+			shuffle_deck(game, nation)
+			game.log.push('牌堆中没有[状态卡]，仅洗混牌堆')
+		} else {
+			game.log.push('【' + ps.answer_nation + '】桌面上没有暗置的响应卡，无效果')
+		}
+		script_clear(game)
+		return game
+	}
+	game.log.push(script_prompt(ps))
+	return game
+}
+
+/*
+ * 玩家提交选择。
+ *   arg.pick    = [实例 id, ...]  选牌（牌堆 / 桌面暗置响应）
+ *   arg.discard = 实例 id         弃置手牌
+ */
+function script_resolve(game, nation, arg) {
+	const ps = game.pending_script
+	if (!ps) {
+		game.log.push('当前没有进行中的结算')
+		return game
+	}
+	const who = script_answer_nation(game)
+	if (nation !== who) {
+		game.log.push('只有【' + who + '】能回答《' + ps.source_name + '》的结算')
+		return game
+	}
+	const k = script_step_kind(ps)
+
+	if (k === 'pick' || k === 'answer') {
+		const cands = script_raw_candidates(game, ps)
+		const need = script_pick_need(ps, cands)
+		const picks = ((arg && arg.pick) || []).map(String)
+		for (const id of picks) {
+			if (cands.indexOf(id) < 0) {
+				game.log.push('《' + ps.source_name + '》：' + id + ' 不是合法候选')
+				return game
+			}
+		}
+		if (picks.length !== need) {
+			game.log.push('《' + ps.source_name + '》：需要选 ' + need + ' 张牌，当前选了 ' +
+				picks.length + ' 张')
+			return game
+		}
+		if (k === 'answer') {
+			/*
+			 * 14503 提尔比茨号：暗牌弃置 ——  PUBLIC 日志【不能】暴露是哪张
+			 * （德国只知道"英国弃了 1 张响应"，内容不明）。
+			 */
+			const id = picks[0]
+			const list = game.table_responses || []
+			const i = list.findIndex(x => String(x.card_id) === id)
+			if (i >= 0) list.splice(i, 1)
+			const c = inst_card(id)
+			const ownerNation = (c && c.nation && game.discard[c.nation]) ? c.nation : ps.answer_nation
+			game.discard[ownerNation] = game.discard[ownerNation] || []
+			game.discard[ownerNation].push(id)
+			game.log.push('【' + ps.answer_nation + '】暗牌弃置了 1 张桌面上的响应卡（内容不明）')
+			script_clear(game)
+			return game
+		}
+		if (ps.kind === 'play_status_from_deck') {
+			script_play_picked(game, ps, picks)
+			script_clear(game)
+			return game
+		}
+		/*
+		 * 【2026-10-06】7900 竭泽而渔：从【弃牌堆】把选中的牌置入手牌。
+		 * 与 draw_pick_discard 的唯一差别就是来源（pile 而不是 deck）。
+		 */
+		if (ps.kind === 'discard_pay_pick') {
+			const pile = game.discard[ps.actor] || []
+			game.hands[ps.actor] = game.hands[ps.actor] || []
+			for (const id of picks) {
+				const i = pile.indexOf(id)
+				if (i >= 0) pile.splice(i, 1)
+				game.hands[ps.actor].push(id)
+				ps.drawn.push(id)
+			}
+			game.log.push('【' + ps.actor + '】从弃牌堆将 ' + picks.length +
+				' 张牌置入手牌：' +
+				picks.map(id => '《' + ((inst_card(id) || {}).name || id) + '》').join('、'))
+			ps.stage = 3
+			if (script_advance_7900(game, ps)) return game
+			game.log.push(script_prompt(ps))
+			return game
+		}
+		/* draw_pick_discard：抽进手牌 */
+		const deck = game.decks[ps.actor] || []
+		game.hands[ps.actor] = game.hands[ps.actor] || []
+		for (const id of picks) {
+			const i = deck.indexOf(id)
+			if (i >= 0) deck.splice(i, 1)
+			game.hands[ps.actor].push(id)
+			ps.drawn.push(id)
+		}
+		game.log.push('【' + ps.actor + '】抽出 ' + picks.length + ' 张牌：' +
+			picks.map(id => { const c = inst_card(id); return '《' + (c ? c.name : id) + '》' }).join('、'))
+		ps.stage = 2
+		if (script_advance_15239(game, ps)) return game
+		game.log.push(script_prompt(ps))
+		return game
+	}
+
+	if (k === 'discard') {
+		/*
+		 * 【2026-10-06】数量改为按 ps.need_discard（15239 = 1 张，
+		 * 7900 = 4 张）。arg.discard 兼容【单值】与【数组】两种写法：
+		 * 旧的德国卡客户端发单值，7900 发数组。
+		 */
+		const need = ps.need_discard || 1
+		const raw = arg && arg.discard
+		const ids = (Array.isArray(raw) ? raw : (raw != null ? [raw] : [])).map(String)
+		if (!ids.length) {
+			game.log.push('请选择 ' + need + ' 张要弃置的手牌')
+			return game
+		}
+		const hand = game.hands[ps.actor] || []
+		for (const id of ids) {
+			if (hand.indexOf(id) < 0) {
+				game.log.push('《' + ps.source_name + '》：该牌不在手牌中（' + id + '）')
+				return game
+			}
+		}
+		if (ids.length !== need) {
+			game.log.push('《' + ps.source_name + '》：需要弃置 ' + need +
+				' 张手牌，当前选了 ' + ids.length + ' 张')
+			return game
+		}
+		for (const id of ids) discard_card(game, ps.actor, id)
+		game.log.push('【' + ps.actor + '】弃置 ' + ids.length + ' 张手牌')
+		ps.stage = (ps.kind === 'discard_pay_pick') ? 2 : 3
+		if (ps.kind === 'discard_pay_pick') {
+			if (script_advance_7900(game, ps)) return game
+		} else if (script_advance_15239(game, ps)) return game
+		game.log.push(script_prompt(ps))
+		return game
+	}
+
+	game.log.push('《' + ps.source_name + '》没有待回答的内容')
+	return game
 }
 
 /* ============================================================
@@ -984,6 +2913,7 @@ const STATUS_EFFECTS = {
 	'15340': {
 		auto: {
 			phase: 'scoring',
+			trigger_nation: '英国',
 			kind: 'score_per_unit',
 			spaces: ['加拿大', '北大西洋'],
 			nation: '英国',
@@ -1085,11 +3015,1173 @@ const STATUS_EFFECTS = {
 			repeat: 'per_unit',
 			cost: { lose_score: 1 },
 			effect: { kind: 'draw', n: 1 },
-			count_by: { spaces: ['加拿大', '印度', '南非'], nation: '英国', type: 'army' },
+			/*
+			 * 【2026-09-28 R30】卡面写的是 <南非>，但地图数据里没有「南非」，
+			 * 本体名是「非洲南部」(id=31)。用错误名会导致 id_of() 解析失败，
+			 * 计数永远为 0 -> 该卡看似"无法触发"。这里必须写本体名。
+			 * （卡面显示文本仍保留原文，见 docs/pitfalls.md R30）
+			 */
+			count_by: { spaces: ['加拿大', '印度', '非洲南部'], nation: '英国', type: 'army' },
 			desc: '出牌阶段开始时，加拿大/印度/南非每有 1 支英国陆军，可失去 1 分摸 1 张牌',
 		},
 	},
-}
+
+
+
+
+	/* ================= 苏联状态卡（2026-10-06）================= */
+	/* 说明：苏联状态卡机制大多复用既有通用件（apply_status_ongoing / arm_status_instant /
+	 * 自动计分循环），不写硬编码国家判断；新增的少量语义（home_override 通用化、
+	 * remove_supply_and_marker、play_start 征召中国陆军）见 rules.js 对应注释。 */
+
+	/* ---- 17838 什维尔尼克疏散委员会：苏联陆军总是补给 ---- */
+	'17838': {
+		ongoing: {
+			kind: 'always_supplied', nation: '苏联',
+			desc: '苏联陆军总是处于补给状态（光环，随卡）',
+		},
+		desc: '什维尔尼克疏散委员会',
+	},
+
+	/* ---- 17839 加盟国：控制地区计分 ---- */
+	'17839': {
+		auto: {
+			phase: 'scoring', trigger_nation: '苏联', kind: 'run',
+			run(game, nation) {
+				/* 计分阶段：东欧/中亚/罗斯/乌克兰 每有 1 个被苏联控制，得 1 分 */
+				let b = 0
+				for (const sp of ['东欧', '中亚', '罗斯', '乌克兰'])
+					if (de_controlled(game, sp, '苏联')) b++
+				return b
+			},
+			desc: '计分阶段：东欧/中亚/罗斯/乌克兰 每有 1 个被苏联控制，获得 1 分',
+		},
+		desc: '加盟国',
+	},
+
+	/* ---- 17840 焦土作战：乌克兰去补给 + 减标记（永久）---- */
+	'17840': {
+		ongoing: {
+			kind: 'remove_supply_and_marker',
+			spaces: [{ space: '乌克兰', markers: 1 }],
+			desc: '乌克兰不再为任何国家提供补给，并减少 1 个计分标记（永久）',
+		},
+		desc: '焦土作战',
+	},
+
+	/* ---- 17845 迁都古比雪夫：大本营改判 + 西伯利亚补给/标记 + 莫斯科移除 ---- */
+	'17845': {
+		ongoing: {
+			kind: 'home_override',
+			home_override: { nation: '苏联', to: '西伯利亚' },
+			supply_point_and_markers: { space: '西伯利亚', only: '苏联', markers: 1 },
+			remove_supply_and_marker: [{ space: '莫斯科', markers: 1 }],
+			desc: '苏联大本营迁至西伯利亚；西伯利亚成为仅对苏联的补给点+1标记；莫斯科移除补给点-1标记',
+		},
+		desc: '迁都古比雪夫',
+	},
+
+	/* ---- 17554 重庆国民政府：中国大本营改判 + 中国西部补给点/标记 + play_start 征召中国陆军，并触发美国技能 ---- */
+	'17554': {
+		ongoing: {
+			kind: 'home_override',
+			home_override: {
+				nation: '中国', to: '中国西部',
+				cond: { space: '中国东部', enemy: true },
+			},
+			supply_point_and_markers: { space: '中国西部', only: '中国', markers: 1 },
+			desc: '若中国东部被敌方占领，中国大本营改为中国西部；中国西部成为仅对中国的补给点并增加1个计分标记',
+		},
+		trigger: {
+			window: 'play_start',
+			cost: { skip_play: true },
+			desc: '跳过出牌阶段行动：中国在<中国西部>征召陆军（并触发美国国家技能）',
+			run(game, ctx) {
+				const sp = space_id('中国西部')
+				if (sp == null) return { ok: false, reason: '地区未配置' }
+				const r = recruit_piece(game, '中国', 'army', sp)
+				if (!r.ok) return { ok: false, reason: r.reason }
+				refresh(game)
+				/* 17554 效果执行时也能触发美国国家技能（一回合一次由 national_skill_usable 内部 guard） */
+				after_card_resolved(game, '美国', '17554')
+				return { ok: true, desc: '中国在' + data.name_of(sp) + ' 征召陆军' }
+			},
+		},
+		desc: '重庆国民政府',
+	},
+
+	/* ---- 17545 曼哈顿计划：弃牌阶段弃置手牌后美国 +1 分（us_discard_score 钩子，无窗口） ---- */
+	'17545': {
+		desc: '曼哈顿计划：弃牌阶段弃置手牌后，美国获得 1 分（一回合一次）',
+	},
+
+	/* ---- 17548 胜利花园：资源再分配弃置手牌数改为 1（resource_swap 钩子，无窗口） ---- */
+	'17548': {
+		desc: '胜利花园：资源再分配时，弃置手牌数改为 1',
+	},
+
+	/* ---- 17551 战时国债：资源再分配可在弃牌堆搜寻基本卡（resource_swap 钩子，无窗口） ---- */
+	'17551': {
+		desc: '战时国债：资源再分配时，可在弃牌堆搜寻基本卡',
+	},
+
+	/* ---- 17546 铆钉女工：弃牌阶段开始时，选 1–2 张手牌以任意顺序置于牌堆底 ---- */
+	'17546': {
+		trigger: {
+			window: 'discard_start',
+			desc: '弃牌阶段开始时：可选择 1 或 2 张手牌，以任意顺序置于牌堆底',
+			run(game, ctx) {
+				const me = '美国'
+				const arg = (ctx && ctx.arg) || {}
+				const hand = (game.hands[me] || [])
+				const pe = game.pending_echo
+				/* Step 1：玩家选第 1 张 */
+				if (pe && pe.card === '17546' && pe.step === 'first') {
+					const pick = arg.pick
+					if (!pick || hand.indexOf(pick) < 0)
+						return { ok: false, reason: '所选卡不在手牌内' }
+					const rest = hand.filter(x => x !== pick)
+					game.pending_echo = {
+						card: '17546', kind: 'status', step: 'second', first: pick,
+						title: '铆钉女工：再选 1 张（或选「只放这张」完成）',
+						candidates: rest.map(id => obj_of(id)),
+						allowDone: true,
+					}
+					return { pending: true, need: 'su_pick' }
+				}
+				/* Step 2：玩家选第 2 张或「只放这张」 */
+				if (pe && pe.card === '17546' && pe.step === 'second') {
+					let put = [pe.first]
+					if (!arg.done) {
+						const pick = arg.pick
+						if (!pick || hand.indexOf(pick) < 0 || pick === pe.first)
+							return { ok: false, reason: '所选卡不在剩余手牌内' }
+						put.push(pick)
+					}
+					/* 从手牌移除，按所选顺序置于牌堆底（draw 用 shift 从牌堆头抽，尾端即牌底） */
+					for (const id of put) {
+						const i = (game.hands[me] || []).indexOf(id)
+						if (i >= 0) game.hands[me].splice(i, 1)
+					}
+					game.decks[me] = game.decks[me] || []
+					for (const id of put) game.decks[me].push(id)
+					game.pending_echo = null
+					refresh(game)
+					return { ok: true, desc: '将 ' + put.length + ' 张手牌以所择顺序置于牌堆底' }
+				}
+				/* 首次进入：初始化第 1 步 */
+				if (!hand.length) {
+					game.pending_echo = null
+					return { ok: true, skip: true, desc: '无手牌可置于牌堆底' }
+				}
+				game.pending_echo = {
+					card: '17546', kind: 'status', step: 'first',
+					title: '铆钉女工：选 1 张手牌置于牌堆底（可再选第 2 张，或选「只放这张」）',
+					candidates: hand.map(id => obj_of(id)),
+					allowDone: true,
+				}
+				return { pending: true, need: 'su_pick' }
+			},
+		},
+		desc: '铆钉女工',
+	},
+
+	/* ---- 16304 中国远征军（增援）：打出后中国在<东南亚>征召陆军；
+	 *      <东南亚>的中国陆军被移除后：中国在相邻地区之一征召陆军 ---- */
+	'16304': {
+		ongoing: {
+			on_play: { recruit: [{ nation: '中国', type: 'army', space: '东南亚' }] },
+			desc: '打出后：中国在<东南亚>征召陆军',
+		},
+		desc: '中国远征军',
+		/*
+		 * 移除反应不走 status trigger（那样只能在美国自己的回合点），
+		 * 改为【让权挂起】：在 4 个移除派发点调用 offer_us_china_delegate()
+		 * 翻转 active 给美国，由美国点地图选相邻地区，动作 resolve_china_delegate 结算。
+		 * 这样【自己或其他人回合】都能触发。
+		 */
+	},
+
+	/* ---- 17555 大萧条的余波：存在即生效。
+	 *   ① 打出[事件卡][状态卡]时：弃置 1 张手牌（待实现，见 play_card）。
+	 *   ② 美国结束中立时，若此卡在桌面 → 一次性机会：弃置此牌，<美国>增加 1 个计分标记
+	 *      （见 end_neutral 设置 game.us_depression_offer + us_depression_use 动作）。 ---- */
+	'17555': {
+		desc: '大萧条的余波',
+	},
+
+	/* ---- 17553 抗日义勇军★：中国建设/征召 或 中国部队被发起战斗后：日本弃1手牌 + 损耗1 ----
+	 * 让权给日本玩家自己弃牌（挂起 us_japan_delegate），参考 16703 it_delegate 模式。 */
+	'17553': {
+		ongoing: {
+			kind: 'watch_us_japan',
+			desc: '中国建设或征召、中国部队被发起战斗后：让权日本——弃置1张手牌并损耗1张',
+		},
+		desc: '抗日义勇军',
+	},
+
+	/* ---- 17543 雷达：美国海军被移除时（被攻击后），可损耗2张：使其本回合内不会被移除 ---- */
+	'17543': {
+		trigger: {
+			window: 'piece_removed',
+			once_per_turn: true,
+			cost: { attrition: 2 },
+			desc: '一回合一次，美国海军被移除时：损耗2张牌，使其本回合内不会被移除（还原）',
+			run(game, ctx) {
+				const lp = game.last_piece_removed
+				if (!lp || lp.nation !== '美国' || lp.type !== 'navy' || lp.piece == null)
+					return { ok: false, reason: '仅当美国海军被移除后发动' }
+				/* 还原该海军（与英国响应 15334 驱逐舰同款：restore_piece + protect） */
+				restore_piece(game, lp)
+				register_modifier(game, {
+					key: 'protect', nation: '美国', type: 'navy',
+					spaces: [lp.space], untilTurn: game.turn,
+				})
+				game.last_piece_removed = null
+				refresh(game)
+				return { ok: true, desc: '美国海军在' + data.name_of(lp.space) + ' 不被移除（已还原）' }
+			},
+		},
+		desc: '雷达',
+	},
+
+	/* ---- 17541 工业巨头：打出[战略卡]后，损耗2张：将刚打出的那张[战略卡]洗入牌堆 ---- */
+	'17541': {
+		trigger: {
+			window: 'after_play_basic',
+			once_per_turn: true,
+			cost: { attrition: 2 },
+			desc: '一回合一次，打出[战略卡]后，损耗2张牌：将刚打出的该[战略卡]洗入牌堆',
+			run(game, ctx) {
+				const lb = game.last_basic_played
+				if (!lb || lb.nation !== ctx.nation)
+					return { ok: false, reason: '本回合没有刚打出的[战略卡]' }
+				const cid = lb.card
+				/* 从【弃牌堆】捞回刚打出的那张牌（基本卡打出后进弃牌堆） */
+				const disc = game.discard[ctx.nation] || []
+				const di = disc.indexOf(cid)
+				if (di < 0)
+					return { ok: false, reason: '该[战略卡]已不在弃牌堆（可能已被置回手牌）' }
+				disc.splice(di, 1)
+				game.decks[ctx.nation] = game.decks[ctx.nation] || []
+				game.decks[ctx.nation].push(cid)
+				shuffle_deck(game, ctx.nation)
+				const fc = inst_card(cid)
+				game.last_basic_played = null
+				refresh(game)
+				return { ok: true, desc: '将《' + (fc ? fc.name : cid) + '》洗入牌堆' }
+			},
+		},
+		desc: '工业巨头',
+	},
+
+	/* ---- 17538 登陆作战：发起陆战后，若战斗地区相邻补给态美国海军，损耗1张，在战斗地区建设陆军 ---- */
+	'17538': {
+		trigger: {
+			window: 'after_land', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，发起陆战后，若战斗地区相邻处于补给状态的美国海军，损耗1张：在战斗地区建设1支陆军',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space
+					: (game.last_battle ? game.last_battle.space : null)
+				if (sp == null) return { ok: false, reason: '本回合尚未发起陆战' }
+				const inSup = compute_supply(game).in_supply
+				let hasNavy = false
+				for (const nb of get_connections(game, sp)) {
+					for (const p of pieces_on(game, nb)) {
+						if (game.piece_nation[p] === '美国' && game.piece_type[p] === 'navy' && inSup[p]) { hasNavy = true; break }
+					}
+					if (hasNavy) break
+				}
+				if (!hasNavy) return { ok: false, reason: '战斗地区不相邻处于补给状态的美国海军' }
+				let r = build_piece(game, '美国', 'army', sp)
+				if (!r.ok) {
+					for (const nb of get_connections(game, sp)) {
+						const ss = data.spaces[nb]
+						if (ss && ss.terrain !== 'sea' && can_build_at(game, '美国', nb, 'army').ok) { r = build_piece(game, '美国', 'army', nb); break }
+					}
+				}
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(sp) + ' 建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '登陆作战',
+	},
+
+	/* ---- 17539 常设联合国防委员会：加拿大英国陆军常补给 + 跳过出牌弃1张[建设陆军]在加拿大征召英陆军 ---- */
+	'17539': {
+		ongoing: {
+			kind: 'space_immune', space: '加拿大', nation: '英国',
+			desc: '<加拿大>的英国陆军总是处于补给状态（免移除）',
+		},
+		trigger: {
+			window: 'play_start',
+			cost: { skip_play: true, discard: 1, only: 'BASIC' },
+			effect: { kind: 'recruit', nation: '英国', type: 'army', space: '加拿大' },
+			desc: '跳过出牌阶段行动，弃置1张[建设陆军]：在<加拿大>征召英国陆军',
+		},
+		desc: '常设联合国防委员会',
+	},
+
+	/* ---- 17540 航空母舰：发起海战后，损耗1张，在战斗地区建设1支海军 ---- */
+	'17540': {
+		trigger: {
+			window: 'after_naval', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，发起海战后，损耗1张：在战斗地区建设1支海军',
+			run(game, ctx) {
+				const lb = game.last_battle
+				if (!lb || lb.kind !== 'sea') return { ok: false, reason: '本回合尚未发起海战' }
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : lb.space
+				let r = build_piece(game, '美国', 'navy', sp)
+				if (!r.ok) {
+					for (const nb of get_connections(game, sp)) {
+						const ss = data.spaces[nb]
+						if (ss && ss.terrain === 'sea' && can_build_at(game, '美国', nb, 'navy').ok) { r = build_piece(game, '美国', 'navy', nb); break }
+					}
+				}
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(sp) + ' 建设海军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '航空母舰',
+	},
+
+	/* ---- 17552 战时生产：建设陆军后，损耗1张，建设1支陆军 ---- */
+	'17552': {
+		trigger: {
+			window: 'after_build_army', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，建设陆军后，损耗1张：建设1支陆军',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				const r = build_piece(game, '美国', 'army', sp)
+				refresh(game)
+				return { ok: true, desc: ctx.nation + ' 在' + data.name_of(sp) + ' 再建设1支陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '战时生产',
+	},
+
+	/* ---- 17544 美国海军陆战队：在<太平洋>建设海军后，损耗1张，对相邻地区发起1次陆战 ---- */
+	'17544': {
+		trigger: {
+			window: 'after_build_navy', cost: { attrition: 1 },
+			desc: '在<太平洋>建设海军后，损耗1张：对相邻地区发起1次陆战',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				if (data.name_of(sp) !== '太平洋')
+					return { ok: false, reason: '仅当在<太平洋>建设海军后发动' }
+				return status_launch_battle(game, ctx.nation, sp, ctx.arg, 'land', get_connections(game, sp))
+			},
+		},
+		desc: '美国海军陆战队',
+	},
+
+	/* ---- 17547 人工港：建设海军后，损耗1张，相邻地区建设1支陆军 ---- */
+	'17547': {
+		trigger: {
+			window: 'after_build_navy', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，建设海军后，损耗1张：在相邻地区建设1支陆军',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				const tgt = get_connections(game, sp).find(nb => {
+					const ss = data.spaces[nb]
+					return ss && ss.terrain !== 'sea' && can_build_at(game, '美国', nb, 'army').ok
+				})
+				if (tgt == null) return { ok: true, desc: '相邻无可建设陆地，未建设' }
+				const r = build_piece(game, '美国', 'army', tgt)
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(tgt) + ' 建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '人工港',
+	},
+
+	/* ---- 17550 先进造船厂：建设海军后，损耗1张，建设1支海军 ---- */
+	'17550': {
+		trigger: {
+			window: 'after_build_navy', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，建设海军后，损耗1张：建设1支海军',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				const tgt = get_connections(game, sp).find(nb => {
+					const ss = data.spaces[nb]
+					return ss && ss.terrain === 'sea' && can_build_at(game, '美国', nb, 'navy').ok
+				})
+				if (tgt == null) return { ok: true, desc: '相邻无可建设海域，未建设' }
+				const r = build_piece(game, '美国', 'navy', tgt)
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(tgt) + ' 建设海军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '先进造船厂',
+	},
+
+	/* ---- 17849 中国人民解放军：中国部队常补给 + 出牌阶段征召中国陆军 ---- */
+	'17849': {
+		ongoing: {
+			kind: 'always_supplied', nation: '中国',
+			desc: '中国部队始终处于补给状态（光环，随卡）',
+		},
+		trigger: {
+			window: 'play_start',
+			repeat: 'per_unit',
+			cost: { skip_play: true },
+			effect: { kind: 'recruit', nation: '中国', type: 'army', space: '中国' },
+			count_by: { spaces: ['中国', '蒙古'], nation: '中国', type: 'army' },
+			desc: '跳过出牌阶段行动：在中国/蒙古之一征召中国陆军',
+		},
+		desc: '中国人民解放军',
+	},
+
+	/* ---- 17841 近卫军：play_start，弃2张手牌，从弃牌堆打出1张[建设陆军] ---- */
+	'17841': {
+		trigger: {
+			window: 'play_start',
+			cost: { discard: 2 },
+			desc: '跳过出牌阶段行动，弃置2张手牌：打出1张弃牌堆中的[建设陆军]',
+			run(game, ctx) {
+				const me = ctx.nation
+				/* 弃牌堆里找一张 BASIC（[建设陆军]）作模板 */
+				const pile = game.discard[me] || []
+				const basic = pile.find(id => is_card_type(String(inst_card_id(id)), 'BASIC'))
+				if (basic == null) return { ok: false, reason: '弃牌堆中没有[建设陆军]' }
+				const sp = space_id(ctx.arg && ctx.arg.space)
+				if (sp == null) return { ok: false, reason: '请选择建设地区' }
+				const r = build_piece(game, me, 'army', sp)
+				if (!r.ok) return { ok: false, reason: r.reason }
+				refresh(game)
+				return { ok: true, desc: me + ' 从弃牌堆打出[建设陆军]，在' + data.name_of(sp) + ' 建设1支陆军' }
+			},
+		},
+		desc: '近卫军',
+	},
+
+	/* ---- 17842 喀秋莎：after_land，弃1张手牌，对战斗地区再发起1次陆战 ---- */
+	'17842': {
+		trigger: {
+			window: 'after_land',
+			once_per_turn: true,
+			cost: { discard: 1 },
+			desc: '一回合一次，发起陆战后，弃置1张手牌：对战斗地区发起1次陆战',
+			run(game, ctx) {
+				return status_launch_battle(game, ctx.nation, ctx.ctx.space, ctx.arg, 'land', [ctx.ctx.space])
+			},
+		},
+		desc: '喀秋莎',
+	},
+
+	/* ---- 17843 量与质兼得：after_build_army，弃1张[建设陆军]，再建设1支陆军 ---- */
+	'17843': {
+		trigger: {
+			window: 'after_build_army',
+			cost: { discard: 1, only: 'BASIC' },
+			desc: '建设陆军后，弃置1张[建设陆军]：建设1支陆军',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				const r = recruit_piece(game, ctx.nation, 'army', sp)
+				if (!r.ok) return { ok: false, reason: r.reason }
+				refresh(game)
+				return { ok: true, desc: ctx.nation + ' 在' + data.name_of(sp) + ' 再建设1支陆军' }
+			},
+		},
+		desc: '量与质兼得',
+	},
+
+	/* ---- 17846 坦克运输：after_build_army，弃1张[建设陆军]，以此陆军发起1次陆战 ---- */
+	'17846': {
+		trigger: {
+			window: 'after_build_army',
+			cost: { discard: 1, only: 'BASIC' },
+			desc: '建设陆军后，弃置1张[建设陆军]：以此陆军发起1次陆战',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				return status_launch_battle(game, ctx.nation, sp, ctx.arg, 'land', get_neighbors(sp))
+			},
+		},
+		desc: '坦克运输',
+	},
+
+	/* ---- 17848 正面攻击：after_land，弃2张手牌，对战斗地区或相邻地区发起1次陆战 ---- */
+	'17848': {
+		trigger: {
+			window: 'after_land',
+			once_per_turn: true,
+			cost: { discard: 2 },
+			desc: '一回合一次，发起陆战后，弃置2张手牌：对战斗地区或相邻地区发起1次陆战',
+			run(game, ctx) {
+				const sp = ctx.ctx.space
+				const allowed = [sp, ...get_neighbors(sp)]
+				return status_launch_battle(game, ctx.nation, sp, ctx.arg, 'land', allowed)
+			},
+		},
+		desc: '正面攻击',
+	},
+
+	/* ---- 17844 女性义务兵役：存在即生效。打出[建设陆军]后，该[建设陆军]置回手牌（可循环）。
+	 *      效果在 play_card 的 BASIC 分支（c.name==='建设陆军' && table_has(…,17844)）实现。 ---- */
+	'17844': {
+		desc: '女性义务兵役',
+	},
+
+	/* ---- 17847 消耗战：存在即生效。苏联[建设陆军]进入弃牌堆后，苏联阵营 +1 分（一回合一次）。
+	 *      效果在 discard_card / attrition_cards 末尾的 su_attrition_score() 实现。 ---- */
+	'17847': {
+		desc: '消耗战',
+	},
+
+	/* ---- 17850 大清洗：存在即生效。
+	 *   ① 苏联桌面有此卡时无法执行[资源再分配]（见 resource_swap 顶部拦截）。
+	 *   ② 苏联结束中立时，若此卡在桌面 → 一次性机会：弃置此牌并打出 1 张[状态卡]
+	 *      （见 end_neutral 设置 game.su_purge_offer + su_purge_play 动作）。 ---- */
+	'17850': {
+		desc: '大清洗',
+	},
+
+	/* ---- 17901 工业心脏（苏联增援）：
+	 *   ongoing：<罗斯>增加 1 个计分标记（永久，随卡；A4① 不撤销，marker_only 不加补给点）。
+	 *   trigger：一回合一次，在<罗斯>建设陆军后 → 在<罗斯>相邻陆地建设 1 支苏联陆军。
+	 *      触发机制见 arm_status_instant('after_build_army', …)：仅武装同阵营持有国桌面，
+	 *      故 17901 在苏联桌面时只会在 ALLIES 国家于罗斯建设后武装；run 内再以 space==罗斯 二次确认。 ---- */
+	'17901': {
+		ongoing: {
+			kind: 'marker_only',
+			space: '罗斯',
+			only: '苏联',
+			markers: 1,
+			desc: '<罗斯>增加 1 个计分标记',
+		},
+		trigger: {
+			window: 'after_build_army',
+			once_per_turn: true,
+			desc: '在<罗斯>建设陆军后：在相邻地区建设 1 支陆军',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_built && game.last_built.space)
+				if (sp == null) return { ok: false, reason: '未指定建设地区' }
+				if (data.name_of(sp) !== '罗斯') return { ok: false, reason: '仅当在<罗斯>建设陆军后发动' }
+				const nbrs = get_neighbors(sp)
+				const tgt = nbrs.find(nb => {
+					const ss = data.spaces[Number(nb)]
+					return ss && ss.terrain !== 'sea' && can_build_at(game, '苏联', Number(nb), 'army').ok
+				})
+				if (tgt == null) return { ok: true, desc: '<罗斯>相邻无可建设陆军地区，未建设' }
+				const r = build_piece(game, '苏联', 'army', Number(tgt))
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(Number(tgt)) + '建设 1 支陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			},
+		},
+		desc: '工业心脏',
+	},
+
+	/* ================= 德国状态卡（2026-09-27）================= */
+
+	'15241': {
+		auto: { phase: 'scoring', trigger_nation: '德国', kind: 'run',
+			run(game, nation) {
+				let b = 0
+				if (de_units_in(game, '波罗的海', ['navy'], '德国') >= 1) b++
+				if (de_units_in(game, '北欧', ['army'], '德国') >= 1) b++
+				return b
+			},
+			desc: '计分阶段：<波罗的海>有德国海军+1；<北欧>有德国陆军+1' },
+	},
+
+	'15242': {
+		trigger: {
+			window: 'play_start',
+			cost: { skip_play: true, discard: 1 },
+			desc: '跳过出牌，弃1张手牌：在<德国>消灭1支敌方陆军，并可损耗1张在<德国>征召陆军',
+			run(game, ctx) {
+				const sp = space_id('德国')
+				const r1 = eliminate_piece(game, '德国', sp)
+				/*
+				 * 【2026-09-29】牌库不足 1 张时【无法损耗】-> 也就不能征召
+				 * （主动损耗牌库不够就不能用）。消灭敌方陆军不受影响。
+				 */
+				if (!can_attrite(game, '德国', 1)) {
+					refresh(game)
+					return { ok: true, desc: '在<德国>消灭1支敌方陆军' + (r1.ok ? '' : '（无）') +
+						'，但牌库为空无法损耗，故未征召' }
+				}
+				const lost = attrition_cards(game, '德国', 1)
+				const r2 = recruit_piece(game, '德国', 'army', sp)
+				refresh(game)
+				return { ok: true, desc: '在<德国>消灭1支敌方陆军' + (r1.ok ? '' : '（无）') +
+					'，损耗' + lost.length + '张并征召1支陆军' + (r2.ok ? '' : '（' + r2.reason + '）') }
+			} },
+	},
+
+	'15243': {
+		react: { when: 'attacked', space: '西欧', attrition: 3,
+			desc: '<西欧>友方陆军被攻击时，攻击方损耗3张牌' },
+	},
+
+	'15244': {
+		auto: { phase: 'scoring', trigger_nation: '德国', kind: 'run',
+			run(game, nation) {
+				let b = 0
+				for (const sp of ['罗斯', '乌克兰', '中亚'])
+					b += de_units_in(game, sp, ['army'], '德国')
+				return b
+			},
+			desc: '计分阶段：<罗斯><乌克兰><中亚>每有1支德国陆军+1' },
+	},
+
+	'15245': {
+		trigger: {
+			window: 'after_land', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，发起陆战后损耗1张：在战斗地区或相邻地区发起1次陆战',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_battle ? game.last_battle.space : null)
+				if (sp == null) return { ok: false, reason: '本回合尚未发起陆战' }
+				let target = sp
+				const nbrs = get_connections(game, sp, 'axis').map(Number)
+				const enemySp = nbrs.find(nb => pieces_on(game, nb).some(p => faction_of_nation(game.piece_nation[p]) !== 'axis'))
+				if (enemySp != null) target = enemySp
+				const from = de_adj_army_in_supply(game, target, '德国')
+				if (from == null) return { ok: true, desc: '无相邻补给德军陆军，未发动' }
+				const r = do_battle(game, '德国', target, 0, 'land', { from: from })
+				refresh(game)
+				return { ok: true, desc: '对' + data.name_of(target) + '发起陆战' + (r.ok ? '' : '（' + r.reason + '）') }
+			} },
+	},
+
+	'15246': {
+		react: { when: 'econ_target', tag: '轰炸行动', reduce_attrition: 3, air_suppress_space: '德国',
+			desc: '敌国对<德国>发起陆战时无法使用飞机；成为[轰炸行动]目标时损耗数减3' },
+	},
+
+	'15247': {
+		trigger: {
+			window: 'after_build_army', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，建设陆军后损耗1张：对相邻地区发起1次陆战',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_built && game.last_built.space)
+				if (sp == null) return { ok: false, reason: '未指定建设地区' }
+				const nbrs = get_connections(game, sp, 'axis').map(Number)
+				const enemySp = nbrs.find(nb => pieces_on(game, nb).some(p => faction_of_nation(game.piece_nation[p]) !== 'axis'))
+				if (enemySp == null) return { ok: true, desc: '相邻无敌方地区，未发动' }
+				const from = de_adj_army_in_supply(game, enemySp, '德国')
+				if (from == null) return { ok: true, desc: '无相邻补给德军陆军，未发动' }
+				const r = do_battle(game, '德国', enemySp, 0, 'land', { from: from })
+				refresh(game)
+				return { ok: true, desc: '对' + data.name_of(enemySp) + '发起陆战' + (r.ok ? '' : '（' + r.reason + '）') }
+			} },
+	},
+
+	'15248': {
+		trigger: {
+			window: 'after_build_army', once_per_turn: true, cost: { attrition: 2 },
+			desc: '一回合一次，建设陆军后损耗2张：在相邻地区建设1支陆军',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_built && game.last_built.space)
+				if (sp == null) return { ok: false, reason: '未指定建设地区' }
+				const nbrs = get_connections(game, sp, 'axis').map(Number)
+				const tgt = nbrs.find(nb => { const ss = data.spaces[nb]; return ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok })
+				if (tgt == null) return { ok: true, desc: '相邻无可建设陆地，未建设' }
+				const r = build_piece(game, '德国', 'army', tgt)
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(tgt) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			} },
+	},
+
+	'15249': {
+		react: { when: 'econ_used', tag: ['北方行动', '潜艇行动'], add_attrition: 1, add_score: 1,
+			extra_if_space_army: { space: '北欧', nation: '德国', add_attrition: 1 },
+			desc: '[北方行动]/[潜艇行动]被使用时：损耗数+1，得分+1；若<北欧>有德国陆军再+1' },
+	},
+
+	'15250': {
+		react: { when: 'attacked', has_army: '德国', attrition: 2,
+			desc: '德国陆军被攻击时，攻击方损耗2张牌' },
+	},
+
+	'15251': {
+		react: { when: 'econ_target', tag: '轰炸行动', attacker_attrition: 3,
+			desc: '成为[轰炸行动]目标时，来源国家损耗3张牌' },
+	},
+
+	'15252': {
+		react: { when: 'attacked', space: '德国', attrition: 3,
+			desc: '<德国>友方陆军被攻击时，攻击方损耗3张牌' },
+	},
+
+	'15253': {
+		trigger: {
+			window: 'after_land', once_per_turn: true, cost: { attrition: 1 },
+			desc: '一回合一次，发起陆战后损耗1张：在战斗地区建设1支陆军',
+			run(game, ctx) {
+				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_battle ? game.last_battle.space : null)
+				if (sp == null) return { ok: false, reason: '本回合尚未发起陆战' }
+				let r = build_piece(game, '德国', 'army', sp)
+				if (!r.ok) {
+					const nbrs = get_connections(game, sp, 'axis').map(Number)
+					for (const nb of nbrs) {
+						const ss = data.spaces[nb]
+						if (ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok) { r = build_piece(game, '德国', 'army', nb); break }
+					}
+				}
+				refresh(game)
+				return { ok: true, desc: '在' + data.name_of(sp) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			} },
+	},
+
+	'15254': {
+		ongoing: { kind: 'axis_only_seas', spaces: ['北海', '波罗的海'],
+			desc: '<北海><波罗的海>仅对轴心国相邻；若<波罗的海>无敌国海军可经其连接补给' },
+	},
+
+	'15255': {
+		trigger: {
+			window: 'play_start',
+			cost: { skip_play: true },
+			desc: '跳过出牌阶段，损耗2张牌：建设1支陆军',
+			run(game, ctx) {
+				/*
+				 * 【2026-09-29】"损耗 2 张牌"是本卡的【代价】——牌库不足则无法发动
+				 * （玩家口径：主动损耗牌库不够就不能用）。
+				 */
+				if (!can_attrite(game, '德国', 2))
+					return { ok: false, reason: '牌库不足 2 张，无法损耗（无法发动）' }
+				const lost = attrition_cards(game, '德国', 2)
+				const home = effective_home_base(game, '德国')
+				const cands = []
+				if (home != null) get_connections(game, home, 'axis').map(Number).forEach(nb => {
+					const ss = data.spaces[nb]
+					if (ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok) cands.push(nb)
+				})
+				const tgt = cands[0]
+				if (tgt == null) return { ok: true, desc: '无德控陆地可建设（损耗' + lost.length + '张）' }
+				const r = build_piece(game, '德国', 'army', tgt)
+				refresh(game)
+				return { ok: true, desc: '损耗' + lost.length + '张，在' + data.name_of(tgt) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+			} },
+	},
+
+	'6601': {
+		ongoing: { kind: 'marker_if_controlled', space: '德国', require: ['西欧', '德国', '东欧'], markers: 1,
+			desc: '打出时若<西欧><德国><东欧>被友方控制，<德国>增加1个计分标记' },
+		auto: { phase: 'scoring', trigger_nation: '德国', kind: 'run',
+			run(game, nation) { return de_units_in(game, '东欧', ['army'], '德国') >= 1 ? 1 : 0 },
+			desc: '计分阶段：若<东欧>有德国陆军+1' },
+	},
+
+	/* ---- 15444 丘克群岛（日本 STATUS，2026-10-06）---- */
+	'15444': {
+		ongoing: { kind: 'virtual_army', space: '硫磺岛', nation: '日本',
+			desc: '<硫磺岛>视为有日本陆军（非补给源，补给经邻海传递）' },
+		auto: { phase: 'scoring', trigger_nation: '日本', kind: 'run',
+			run(game, nation) {
+				const id = space_id('硫磺岛')
+				if (id == null) return 0
+				const nbs = (data.spaces[id].connections || [])
+				const all = nbs.length > 0 && nbs.every(s =>
+					pieces_on(game, s).some(p => game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy'))
+				return all ? 1 : 0
+			},
+			desc: '计分阶段：<硫磺岛>相邻地区都有日本海军+1' },
+	},
+
+	/* ---- 8601 远东共和国（日本 STATUS，2026-10-06）---- */
+	'8601': {
+		ongoing: { kind: 'space_immune', space: '海参崴', nation: '日本',
+			desc: '<海参崴>日本陆军总是处于补给状态（免移除）' },
+		auto: { phase: 'scoring', trigger_nation: '苏联', affects: '苏联', kind: 'run',
+			run(game, nation) {
+				const id = space_id('海参崴')
+				if (id == null) return 0
+				const hasArmy = (sid) => pieces_on(game, sid).some(p =>
+					game.piece_nation[p] === '日本' && game.piece_type[p] === 'army')
+				if (hasArmy(id)) return -1
+				for (const nb of (data.spaces[id].connections || []))
+					if (hasArmy(nb)) return -1
+				return 0
+			},
+			desc: '苏联计分阶段：<海参崴>或相邻有日本陆军，苏方-1' },
+			},
+
+			/* ---- 15439 北进论（日本 STATUS，2026-10-06）---- */
+			'15439': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const id = space_id('海参崴')
+					if (id == null) return 0
+					const sps = [id, ...((data.spaces[id].connections) || [])]
+					let n = 0
+					for (const sp of sps)
+						for (const p of pieces_on(game, sp))
+							if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'army') n++
+					return n
+				},
+				desc: '计分阶段：<海参崴>及相邻每有1支日本陆军+1' },
+			},
+
+			/* ---- 15440 大东亚共荣圈（日本 STATUS，2026-10-06）---- */
+			'15440': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'score_per_unit',
+				spaces: ['印度尼西亚', '新几内亚', '东南亚'], nation: '日本', types: ['army'], per: 1,
+				desc: '计分阶段：<印度尼西亚><新几内亚><东南亚>每有1支日本陆军+1' },
+			},
+
+			/* ---- 15441 绝对国防圈（日本 STATUS，2026-10-06）---- */
+			'15441': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					let n = 0
+					for (const p of Object.keys(game.location)) {
+						if (game.location[p] == null) continue
+						if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy') n++
+					}
+					return n >= 3 ? 1 : 0
+				},
+				desc: '计分阶段：场上至少3支日本海军+1' },
+			},
+
+			/* ---- 15442 控制南洋诸岛（日本 STATUS，2026-10-06）---- */
+			'15442': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const id = space_id('中太平洋')
+					if (id == null) return 0
+					return pieces_on(game, id).some(p =>
+						game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy') ? 1 : 0
+				},
+				desc: '计分阶段：<中太平洋>有日本海军+1' },
+			},
+
+			/* ---- 15443 前进基地（日本 STATUS，2026-10-06）---- */
+			'15443': {
+			ongoing: { kind: 'supply_point_and_markers', space: '马达加斯加', only: '日本', markers: 1,
+				desc: '马达加斯加成为仅对日本的补给点并增加1个计分标记（永久）' },
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const id = space_id('东太平洋')
+					if (id == null) return 0
+					const sps = [id, ...((data.spaces[id].connections) || [])]
+					for (const sp of sps)
+						if (pieces_on(game, sp).some(p =>
+							game.piece_nation[p] === '日本' && game.piece_type[p] === 'army')) return 2
+					return 0
+				},
+				desc: '计分阶段：<东太平洋>相邻地区有日本陆军+2' },
+			},
+
+			/* ---- 15445 商船安全运输（日本 STATUS，2026-10-06）---- */
+			'15445': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const id = space_id('夏威夷')
+					if (id == null) return 0
+					return space_enemy_occupied(game, id, '日本') ? 0 : 1
+				},
+				desc: '计分阶段：<夏威夷>无敌方陆军+1' },
+			},
+
+			/* ---- 15446 太平洋共荣圈（日本 STATUS，2026-10-06）---- */
+			'15446': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const id = space_id('东太平洋')
+					if (id == null) return 0
+					const sps = [id, ...((data.spaces[id].connections) || [])]
+					let n = 0
+					for (const sp of sps)
+						for (const p of pieces_on(game, sp))
+							if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'army') n++
+					return n
+				},
+				desc: '计分阶段：<东太平洋>相邻每有1支日本陆军+1' },
+			},
+
+			/* ---- 15447 帝国之野望（日本 STATUS，2026-10-06）---- */
+			'15447': {
+			auto: { phase: 'scoring', trigger_nation: '日本', affects: '日本', kind: 'run',
+				run(game) {
+					const has = (nm) => {
+						const id = space_id(nm)
+						return id != null && pieces_on(game, id).some(p =>
+							game.piece_nation[p] === '日本' && game.piece_type[p] === 'army')
+					}
+					return (has('硫磺岛') || has('菲律宾')) ? 1 : 0
+				},
+				desc: '计分阶段：<硫磺岛>或<菲律宾>有日本陆军+1' },
+				},
+
+				/* ============================================================
+				* 意大利状态牌（STATUS 17739-17749，2026-10-08）
+				*
+				* 玩家口径（2026-10-08 确认）：
+				*   · 17743/17748「被友方控制」= 轴心任意国（德/意/日）
+				*   · 17741「场上海军」= 全场所有地区，无地区限制
+				*   · 17745「无人控制」= 无任何部队棋子；「仅被德国控制」= 有德国部队且无其它国部队
+				*   · 17739 是"有则 +1"的布尔判定，不是按棋子数累加
+				*   · 17748 按【地区数】计（每地区最多 +1），不是按棋子数
+				* ============================================================ */
+
+				/* ---- 17739 巴尔干资源：计分阶段 <巴尔干> 有意大利陆军 +1（布尔，不累加）---- */
+				'17739': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+					run(game) {
+						const id = space_id_of('巴尔干')
+						if (id == null) return 0
+						return pieces_on(game, id).some(p =>
+							game.piece_nation[p] === '意大利' && game.piece_type[p] === 'army') ? 1 : 0
+					},
+					desc: '计分阶段：<巴尔干>有意大利陆军+1' },
+				},
+
+				/* ---- 17740 反共情绪：<乌克兰><罗斯> 每有 1 支意大利陆军 +1 ---- */
+				'17740': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'score_per_unit',
+					spaces: ['乌克兰', '罗斯'], nation: '意大利', types: ['army'], per: 1,
+					desc: '计分阶段：<乌克兰><罗斯>每有1支意大利陆军+1' },
+				},
+
+				/* ---- 17741 海王：场上每有 1 支意大利海军 +1（全场，无地区限制）---- */
+				'17741': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+					run(game) {
+						let n = 0
+						for (const p of Object.keys(game.location)) {
+							if (game.location[p] == null) continue
+							if (game.piece_nation[p] === '意大利' && game.piece_type[p] === 'navy') n++
+						}
+						return n
+					},
+					desc: '计分阶段：场上每有1支意大利海军+1' },
+				},
+
+				/* ---- 17743 尚未收复的意大利：<西欧> 被轴心国控制 +1 ---- */
+				'17743': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+					run(game) {
+						const id = space_id_of('西欧')
+						if (id == null) return 0
+						return pieces_on(game, id).some(p =>
+							faction_of_nation(game.piece_nation[p]) === 'axis') ? 1 : 0
+					},
+					desc: '计分阶段：<西欧>被轴心国控制+1' },
+				},
+
+				/* ---- 17745 维希法国：<西欧> 无人控制 +2；仅被德国控制 +1 ---- */
+				'17745': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+					run(game) {
+						const id = space_id_of('西欧')
+						if (id == null) return 0
+						const ps = pieces_on(game, id)
+						if (!ps.length) return 2                    /* 无人控制 */
+						const allGer = ps.every(p => game.piece_nation[p] === '德国')
+						return allGer ? 1 : 0                       /* 仅被德国控制 */
+					},
+					desc: '计分阶段：<西欧>无人控制+2；仅被德国控制+1' },
+				},
+
+				/* ---- 17748 意大利殖民地帝国：<中东><非洲> 每有 1 个地区被轴心国控制 +1 ---- */
+				'17748': {
+				auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+					run(game) {
+						let n = 0
+						/* 「非洲」是泛称，必须展开为非洲北部/南部/东部（REGION_GROUPS） */
+						for (const sp of space_ids_expand(['中东', '非洲']))
+							if (pieces_on(game, sp).some(p =>
+								faction_of_nation(game.piece_nation[p]) === 'axis')) n++
+						return n
+					},
+					desc: '计分阶段：<中东><非洲>每有1个地区被轴心国控制+1' },
+					},
+
+					/* ---- 17742 拉丁世界 ----
+					* 卡面：<拉丁美洲>成为仅对意大利的补给点。可放弃建设陆军：在<拉丁美洲>征召陆军。
+					* 玩家口径（2026-10-08）：参考 15347 波兰主权。
+					* 注意：卡面【未】要求加计分标记，故不写 markers（与 15345/15347 不同）。
+					* 补给点"仅对"经 faction_of_nation 落到轴心阵营（与 15345 only:'法国' 同款退化）。
+					*/
+					'17742': {
+					ongoing: {
+						kind: 'supply_point_and_markers',
+						space: '拉丁美洲', only: '意大利',
+						desc: '拉丁美洲成为仅对意大利的补给点（永久）',
+					},
+					trigger: {
+						window: 'build_army',
+						cost: { forgo_build_army: true },
+						effect: { kind: 'recruit', nation: '意大利', type: 'army', space: '拉丁美洲' },
+						desc: '放弃建设陆军，改为在拉丁美洲征召陆军',
+					},
+					},
+
+					/* ---- 17744 土耳其开放海峡 ----
+					* 卡面：<黑海>和<地中海><巴尔干>和<中东>仅对友方国家相邻。
+					*       计分阶段：若<中东>相邻地区没有敌方国家海军，获得1分。
+					* 玩家口径：实际不会离场 -> 简单实现（只写不撤，永久）。
+					* "仅对友方" = 轴心任意国（沿用 17743/17748 口径）。
+					*/
+					'17744': {
+					ongoing: {
+						kind: 'pair_adjacency',
+						pairs: [['黑海', '地中海'], ['巴尔干', '中东']], only: 'axis',
+						desc: '<黑海>-<地中海>、<巴尔干>-<中东> 仅对轴心国相邻（永久）',
+					},
+					auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+						run(game) {
+							const mid = space_id_of('中东')
+							if (mid == null) return 0
+							/* 中东是陆地，自身不可能停海军；含自身只为与 17747 口径一致 */
+							const zone = [mid].concat(get_connections(game, mid, 'axis') || [])
+							for (const sp of zone)
+								for (const p of pieces_on(game, sp))
+									if (game.piece_type[p] === 'navy' &&
+										faction_of_nation(game.piece_nation[p]) === 'allies') return 0
+							return 1
+						},
+						desc: '计分阶段：<中东>及相邻地区没有敌方海军+1' },
+					},
+
+					/* ---- 17747 西班牙控制直布罗陀 ----
+					* 卡面：<北海>和<地中海><非洲北部>和<西欧>仅对友方国家相邻。
+					*       计分阶段：若<非洲北部>和相邻地区没有敌方国家陆军，获得1分。
+					*/
+					'17747': {
+					ongoing: {
+						kind: 'pair_adjacency',
+						pairs: [['北海', '地中海'], ['非洲北部', '西欧']], only: 'axis',
+						desc: '<北海>-<地中海>、<非洲北部>-<西欧> 仅对轴心国相邻（永久）',
+					},
+					auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
+						run(game) {
+							const na = space_id_of('非洲北部')
+							if (na == null) return 0
+							const zone = [na].concat(get_connections(game, na, 'axis') || [])
+							for (const sp of zone)
+								for (const p of pieces_on(game, sp))
+									if (game.piece_type[p] === 'army' &&
+										faction_of_nation(game.piece_nation[p]) === 'allies') return 0
+							return 1
+						},
+						desc: '计分阶段：<非洲北部>及相邻地区没有敌方陆军+1' },
+					},
+
+					/* ---- 17746 耀武 ----
+					* 卡面：跳过出牌阶段行动，损耗2张牌：发起1次陆战。
+					*/
+					'17746': {
+					trigger: {
+						window: 'play_start',
+						cost: { skip_play: true, attrition: 2 },
+						effect: { kind: 'battle', battle: 'land' },
+						desc: '跳过出牌阶段行动，损耗2张牌：发起1次陆战',
+					},
+					},
+					}
+
+					function de_adj_army_in_supply(game, space, nation) {
+		/* 复用最小原子 battle_initiators（相邻 + 补给 + 陆/海军），只取陆军 */
+		for (const it of battle_initiators(game, nation, space))
+			if (it.type === 'army') return it.id
+		return null
+	}
+
+	function target2(sp){ return sp }
+
+	function auto_fire_status(game, window, ctx) {
+		if (game.__status_firing) return
+		game.__status_firing = true
+		try {
+			for (const n in (game.table || {})) {
+				if (faction_of_nation(n) !== 'axis') continue
+				for (const cid of (game.table[n] || [])) {
+					const c = inst_card(cid)
+					if (!c || c.nation !== '德国') continue
+					const cfg = status_config_of(cid)
+					if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
+					if (!status_active(game, cid, n)) continue
+					if (cfg.trigger.once_per_turn && (game.status_used || {})[cid] === freq_key(game)) continue
+					const ready = status_window_ready(game, n, cid, cfg.trigger, { auto: true })
+					if (!ready.ok) continue
+					const tr = cfg.trigger
+					if (tr.cost) {
+						/*
+						 * 【2026-09-29】自动发动同样受"主动损耗必须牌库够"约束：
+						 * 牌库不足则【跳过】本次自动发动（不损耗、不结算效果）。
+						 */
+						if (tr.cost.attrition && !can_attrite(game, n, tr.cost.attrition)) {
+							game.log.push('《' + (c.name || '状态卡') + '》需损耗 ' +
+								tr.cost.attrition + ' 张牌，牌库不足，本次不自动发动')
+							continue
+						}
+						if (tr.cost.attrition) attrition_cards(game, n, tr.cost.attrition)
+						if (tr.cost.lose_score) { const fc = faction_of_nation(n); if (fc) game.score[fc] = (game.score[fc] || 0) - tr.cost.lose_score }
+						if (tr.cost.skip_play) { game.skip_play_done = game.skip_play_done || {}; game.skip_play_done[n] = game.turn }
+					}
+					const r = (typeof tr.run === 'function')
+						? tr.run(game, { nation: n, card_id: cid, ctx: ctx || {}, arg: {} })
+						: run_status_effect(game, n, cid, tr, {})
+					if (r && r.ok && tr.once_per_turn) { game.status_used = game.status_used || {}; game.status_used[cid] = freq_key(game) }
+					game.log.push('【' + n + '】自动发动《' + (c.name || '状态卡') + '》' + (r && r.desc ? '—— ' + r.desc : ''))
+					refresh(game)
+				}
+			}
+		} finally { delete game.__status_firing }
+		return game
+	}
+
+	function status_on_attacked(game, space, attacker, kind) {
+		for (const n in (game.table || {})) {
+			for (const cid of (game.table[n] || [])) {
+				const c = inst_card(cid)
+				if (!c || c.nation !== '德国') continue
+				const cfg = status_config_of(cid)
+				if (!cfg || !cfg.react || cfg.react.when !== 'attacked') continue
+				if (!status_active(game, cid, n)) continue
+				const rc = cfg.react
+				if (rc.space && space_id(rc.space) !== space) continue
+				if (rc.has_army && !pieces_on(game, space).some(p => game.piece_nation[p] === rc.has_army && game.piece_type[p] === 'army')) continue
+				if (rc.type && rc.type !== kind) continue
+				const lost = attrition_cards(game, attacker, rc.attrition)
+				game.log.push('《' + (c.name || '状态卡') + '》触发：' + attacker + ' 损耗 ' + lost.length + ' 张牌')
+			}
+		}
+	}
+
+	function status_on_econ(game, tag, target, actor) {
+		for (const n in (game.table || {})) {
+			for (const cid of (game.table[n] || [])) {
+				const c = inst_card(cid)
+				if (!c || c.nation !== '德国') continue
+				const cfg = status_config_of(cid)
+				if (!cfg || !cfg.react) continue
+				if (!status_active(game, cid, n)) continue
+				const rc = cfg.react
+				if (rc.when === 'econ_target') {
+					if (rc.tag && rc.tag !== tag) continue
+					if (target !== '德国') continue
+					if (rc.attacker_attrition) {
+						const lost = attrition_cards(game, actor, rc.attacker_attrition)
+						game.log.push('《' + (c.name || '状态卡') + '》触发：' + actor + ' 损耗 ' + lost.length + ' 张')
+					}
+					if (rc.reduce_attrition) {
+						const disc = (game.discard && game.discard['德国']) || []
+						let k = Math.min(rc.reduce_attrition, disc.length)
+						for (let i = 0; i < k; i++) {
+							const card = disc.pop()
+							const dk = game.decks['德国']
+							if (dk && card) dk.unshift(card)
+						}
+						game.log.push('《' + (c.name || '状态卡') + '》触发：损耗数减 ' + k)
+					}
+				}
+				if (rc.when === 'econ_used') {
+					const tags = Array.isArray(rc.tag) ? rc.tag : [rc.tag]
+					if (tags.indexOf(tag) < 0) continue
+					if (rc.add_attrition) { const lost = attrition_passive(game, target, rc.add_attrition); void lost }
+					if (rc.add_score) add_axis_score(game, rc.add_score)
+					if (rc.extra_if_space_army && de_units_in(game, rc.extra_if_space_army.space, ['army'], rc.extra_if_space_army.nation) >= 1) {
+						const lost = attrition_passive(game, target, rc.extra_if_space_army.add_attrition); void lost
+					}
+					game.log.push('《' + (c.name || '状态卡') + '》触发：经济战加成')
+				}
+			}
+		}
+	}
 
 function status_config_of(card_id) {
 	return STATUS_EFFECTS[String(inst_card_id(card_id))] || null
@@ -1104,9 +4196,11 @@ function space_id(name) {
 }
 
 function status_aura(game) {
-	if (!game.status_aura) game.status_aura = { supply_immune: {}, home_override: {} }
+	if (!game.status_aura) game.status_aura = { supply_immune: {}, home_override: {}, virtual_army: {}, space_immune: {} }
 	if (!game.status_aura.supply_immune) game.status_aura.supply_immune = {}
 	if (!game.status_aura.home_override) game.status_aura.home_override = {}
+	if (!game.status_aura.virtual_army) game.status_aura.virtual_army = {}
+	if (!game.status_aura.space_immune) game.status_aura.space_immune = {}
 	return game.status_aura
 }
 
@@ -1117,7 +4211,207 @@ function status_aura(game) {
  * 不写入 state -> 卡离场自动失效，天然满足 A4① 与 B1②
  * （"卡在桌上期间，每个自己回合内都有效"）。
  */
+/*
+ * 【2026-10-08】17749 轴心协定（意大利状态卡）
+ *
+ * 卡面：一回合一次，敌方国家部队因友方效果在其大本营或相邻地区被攻击或消灭时：获得1分。
+ *
+ * 判定（玩家口径 2026-10-08）：
+ *   · 发起方必须是【轴心国】（"友方"= 意大利所属阵营）
+ *   · 被攻击地区必须有【敌方】部队（空打不算）
+ *   · 该地区必须是该敌方部队【所属国的大本营】，或与之相邻
+ *   · 一回合一次（status_used + freq_key 记账）
+ *   · 攻击发生即成立，不要求目标真的被移除
+ *
+ * 仿 17847 消耗战：扫意大利桌面找本卡，status_active 校验后加分。
+ */
+function status_on_axis_pact(game, attacker, space, enemies) {
+	if (!enemies || !enemies.length) return
+	if (faction_of_nation(attacker) !== 'axis') return
+	const tbl = (game.table || {})['意大利'] || []
+	for (const cid of tbl) {
+		const face = String(inst_card_id(cid))
+		if (face !== '17749') continue
+		if (!status_active(game, cid, '意大利')) continue
+		if ((game.status_used || {})[cid] === freq_key(game)) continue
+		/* 被攻击部队所属国的大本营（effective_home_base 含 15344 类改写） */
+		let hit = false
+		for (const p of enemies) {
+			const vn = game.piece_nation[p]
+			if (!vn) continue
+			const hb = effective_home_base(game, vn)
+			if (hb == null) continue
+			if (Number(hb) === Number(space)) { hit = true; break }
+			if (is_adjacent(game, hb, space, faction_of_nation(vn))) { hit = true; break }
+		}
+		if (!hit) continue
+		game.score['axis'] = (game.score['axis'] || 0) + 1
+		game.status_used = game.status_used || {}
+		game.status_used[cid] = freq_key(game)
+		const c = inst_card(cid)
+		game.log.push('《' + (c && c.name || '轴心协定') + '》：敌方部队在其大本营或相邻被攻击，+1 分')
+		break
+	}
+}
+
+/* 德国桌面上的[状态卡]实例 id 列表（17805 红色管弦乐队 候选）。 */
+function german_status_on_table(game) {
+	const t = (game.table || {})['德国'] || []
+	return t.filter(id => {
+		const c = inst_card(String(inst_card_id(id)))
+		return c && c.type === 'STATUS'
+	})
+}
+
+/* ============================================================
+ * 【2026-10-10】17553 抗日义勇军：让权日本弃牌（挂起委托）
+ *
+ * 卡面：中国建设或征召、中国部队被发起战斗后：日本弃置1张手牌，损耗1张牌。
+ *
+ * 玩家口径：日本"弃置1张手牌"由【日本玩家自己选】，故必须【挂起让权】，
+ * 不能由美国替他弃。模式参考 16703 罗马尼亚铁卫团（it_delegate）——
+ * 但 17553 是【跨阵营】（美国 allies -> 日本 axis），除切 current_nation
+ * 外还必须切 game.active，否则日本玩家界面顶栏不会变成"可操作"。
+ *
+ * game.us_japan_delegate = { return_nation, return_active, reason }
+ * 动作 resolve_japan_delegate { card } -> 弃牌 + 损耗 -> 归还操作权。
+ * ============================================================ */
+function offer_us_japan_delegate(game, reason) {
+	/* 仅在美国桌面持有 17553 时触发 */
+	if (!table_has(game, '美国', 17553)) return
+	/* 已有挂起未决 -> 不重复触发 */
+	if (game.us_japan_delegate) return
+	const jpHand = (game.hands['日本'] || []).length
+	const jpDeck = (game.decks['日本'] || []).length
+	/* 无牌可弃则跳过（服务端不替玩家做无意义的挂起） */
+	if (jpHand === 0) return
+	game.us_japan_delegate = {
+		return_nation: game.current_nation,
+		return_active: game.active,
+		reason: reason || '中国行动',
+		deck_len: jpDeck,
+	}
+	game.current_nation = '日本'
+	if (game.econ_return_active == null) game.econ_return_active = game.active
+	game.active = faction_role_of_nation('日本')
+	game.log.push('【抗日义勇军】' + reason + '：让权日本——日本需弃置1张手牌并损耗1张')
+}
+
+function resolve_us_japan_delegate(game, arg) {
+	const dg = game.us_japan_delegate
+	if (!dg) return
+	const card = arg && arg.card
+	if (card) {
+		const hi = (game.hands['日本'] || []).indexOf(card)
+		if (hi < 0) {
+			game.log.push('【日本】手牌中没有该牌')
+			return
+		}
+		game.hands['日本'].splice(hi, 1)
+		game.discard['日本'] = game.discard['日本'] || []
+		game.discard['日本'].push(card)
+		game.log.push('【日本】弃置 1 张手牌（抗日义勇军）')
+	} else {
+		game.log.push('【日本】未弃牌（无牌可弃）')
+	}
+	/* 损耗 1 张（牌堆顶直接进弃牌堆） */
+	const lost = attrition_cards(game, '日本', 1)
+	game.log.push('【日本】损耗 ' + lost.length + ' 张牌（抗日义勇军）')
+	/* 归还操作权 */
+	game.us_japan_delegate = null
+	game.current_nation = dg.return_nation || game.current_nation
+	game.active = dg.return_active || game.active
+	if (game.econ_return_active) { game.active = game.econ_return_active; game.econ_return_active = null }
+	game.log.push('【抗日义勇军】日本结算完毕，操作权归还' + (dg.return_nation || ''))
+}
+
+/* ============================================================
+ * 【2026-10-10】16304 中国远征军：让权美国（挂起委托）
+ *
+ * 卡面：<东南亚>的中国陆军被移除后：中国在相邻地区之一征召陆军。
+ *
+ * 玩家口径：该反应【在自己或其他人回合】都可能触发，且由【美国】执行，
+ * 故必须挂起让权给美国 —— 复用 17900 八月风暴的 set_pending_armed_delegate
+ * （翻转 active 到被让权方，并记录原 active 以便还原），不另造机制。
+ *
+ * game.us_china_delegate = { step:'space', candidates:[...], sea:spaceId }
+ * 动作 resolve_china_delegate { space } -> 中国在该相邻地区征召陆军 -> 归还。
+ * ============================================================ */
+function offer_us_china_delegate(game, seaId, removedNation, removedType) {
+	const sea = (seaId != null) ? seaId : space_id('东南亚')
+	if (!table_has(game, '美国', 16304)) return false
+	if (game.us_china_delegate) return false
+	if (removedNation !== '中国' || removedType !== 'army') return false
+	if (Number(sea) !== Number(space_id('东南亚'))) return false
+	/* 候选：<东南亚>相邻的陆地地区（复用 get_connections 原子，不自写遍历） */
+	const cands = get_connections(game, sea, faction_of_nation('中国'))
+		.map(Number)
+		.filter(nb => {
+			const ss = data.spaces[nb]
+			return ss && ss.terrain !== 'sea'
+		})
+	if (!cands.length) return false
+	/* 记录原 active，翻转到美国（ Allies ） */
+	if (game.armed_delegate_return_active == null)
+		game.armed_delegate_return_active = game.active
+	game.active = faction_role_of_nation('美国')
+	game.us_china_delegate = {
+		step: 'space', sea: Number(sea), candidates: cands,
+		return_nation: game.current_nation,
+	}
+	game.log.push('【中国远征军】<东南亚>的中国陆军被移除：让权美国，选择相邻地区征召中国陆军')
+	return true
+}
+
+function resolve_us_china_delegate(game, arg) {
+	const dg = game.us_china_delegate
+	if (!dg) return
+	const sp = arg && arg.space
+	if (sp == null) {
+		game.log.push('【中国远征军】请选择<东南亚>相邻的陆地地区')
+		return
+	}
+	const tgt = space_id(sp)
+	if (tgt == null || dg.candidates.indexOf(Number(tgt)) < 0) {
+		game.log.push('【中国远征军】所选地区不是<东南亚>的相邻陆地')
+		return
+	}
+	const r = recruit_piece(game, '中国', 'army', Number(tgt))
+	if (!r.ok) {
+		game.log.push('【中国远征军】无法征召：' + r.reason)
+		return
+	}
+	game.log.push('【中国远征军】中国在' + data.name_of(Number(tgt)) + '征召陆军')
+	/* 归还操作权 */
+	game.us_china_delegate = null
+	if (game.armed_delegate_return_active != null) {
+		game.active = game.armed_delegate_return_active
+		game.armed_delegate_return_active = null
+	}
+	refresh(game)
+}
+
+/* 苏联手牌是否持有某卡面 id（17805 触发检查用） */
+function has_card_in_hand(game, nation, card_id) {
+	return ((game.hands || {})[nation] || []).some(c => String(inst_card_id(c)) === String(card_id))
+}
+
+/* 17805 红色管弦乐队：在 苏联/德国/英国 出牌阶段开始时挂起苏联询问是否使用。
+ * 自定义派发（不走通用 armed 扫描，armed.when='su_red' 仅作"不可主动打出"标记）。 */
+function offer_su_red(game, trigger) {
+	/* 仅 苏联/德国/英国 出牌阶段开始可触发 */
+	if (trigger !== '苏联' && trigger !== '德国' && trigger !== '英国') return
+	/* 已挂起德国选择 / 苏联正在选卡 -> 不重复触发 */
+	if (game.pending_red || game.su_red_pick) return
+	if (!has_card_in_hand(game, '苏联', '17805')) { game.su_red_ask = null; return }
+	if (!german_status_on_table(game).length) { game.su_red_ask = null; return }
+	game.su_red_ask = { trigger: trigger, card_name: '红色管弦乐队' }
+}
+
 function status_active(game, card_id, owner_nation) {
+	/* 17805 红色管弦乐队：德国状态卡被指定"本回合内无效"（按轮次 game.turn 生效，过后自动恢复） */
+	const _sid = String(inst_card_id(card_id))
+	if (game.su_red_suppressed && game.su_red_suppressed[_sid] === game.turn) return false
 	const ownerF = faction_of_nation(owner_nation)
 	if (!ownerF) return true
 	for (const n in (game.table || {})) {
@@ -1129,6 +4423,44 @@ function status_active(game, card_id, owner_nation) {
 		}
 	}
 	return true
+}
+
+/* 某国桌面是否有某张状态卡（实例 id 或卡面 id 均可）。
+ * status_active 只查 15343 压制、不查"卡是否在桌面"，故特设本函数判断存在性。 */
+function table_has(game, nation, card_id) {
+	const t = (game.table || {})[nation] || []
+	return t.some(c => String(inst_card_id(c)) === String(card_id))
+}
+
+/* 【2026-10-06】17847 消耗战：苏联[建设陆军]进入弃牌堆后，苏联阵营 +1 分（一回合一次）。
+ * 由 discard_card / attrition_cards 在牌进入弃牌堆时调用。
+ * nation 为被弃牌的持有国（苏联）；card_id 为进入弃牌堆的牌实例。 */
+function su_attrition_score(game, nation, card_id) {
+	if (nation !== '苏联') return
+	const c = inst_card(card_id)
+	if (!c || c.type !== 'BASIC' || c.name !== '建设陆军') return
+	if (!table_has(game, '苏联', 17847)) return
+	if ((game.status_used || {})['17847'] === freq_key(game)) return
+	const f = faction_of_nation('苏联')
+	if (f) game.score[f] = (game.score[f] || 0) + 1
+	game.status_used = game.status_used || {}
+	game.status_used['17847'] = freq_key(game)
+	game.log.push('【苏联】《消耗战》：苏联[建设陆军]进入弃牌堆，获得 1 分')
+}
+
+/* 【2026-10-10】17545 曼哈顿计划：美国【弃牌阶段】弃置任意手牌后，美国阵营 +1 分（一回合一次）。
+ * 由 discard_card 在牌进入弃牌堆时调用（nation 为被弃牌的持有国）。
+ * 仅限弃牌阶段（game.turn_phase==='discard'），不计资源再分配/出牌阶段弃牌。 */
+function us_discard_score(game, nation, card_id) {
+	if (nation !== '美国') return
+	if (game.turn_phase !== 'discard') return
+	if (!table_has(game, '美国', 17545)) return
+	if ((game.status_used || {})['17545'] === freq_key(game)) return
+	const f = faction_of_nation('美国')
+	if (f) game.score[f] = (game.score[f] || 0) + 1
+	game.status_used = game.status_used || {}
+	game.status_used['17545'] = freq_key(game)
+	game.log.push('【美国】《曼哈顿计划》：弃牌阶段弃置手牌，获得 1 分')
 }
 
 /* 某国部队是否处于"总是补给"光环下（15346） */
@@ -1146,13 +4478,23 @@ function nation_supply_immune(game, nation) {
  *   build_army        建设陆军的那一刻（15341/15342，S4）
  *   after_ally_battle 英/美发起战斗后（15346，B3②）
  */
-function status_window_ready(game, nation, card_id, tr) {
+function status_window_ready(game, nation, card_id, tr, opts) {
 	switch (tr.window) {
 		case 'play_start':
 			if (game.turn_phase !== 'play')
 				return { ok: false, reason: '只能在出牌阶段发动' }
 			if ((game.skip_play_done || {})[nation] === game.turn)
 				return { ok: false, reason: '本回合已跳过出牌阶段' }
+			/*
+			 * 【2026-09-28 玩家口径】代价含【跳过出牌阶段】的卡（15345/15347/15338…）
+			 * 必须在【打出牌之前】选择：一旦本回合已经打出过牌
+			 * （play_done[nation]），就不能再"跳过"——出牌行动已经用掉了。
+			 *
+			 * 只对 cost.skip_play 的卡生效：15348（代价=失去 1 分，不是跳过）
+			 * 不受此限，出牌后仍可继续触发。
+			 */
+			if (tr.cost && tr.cost.skip_play && (game.play_done || {})[nation])
+				return { ok: false, reason: '本回合已打出过牌，不能再跳过出牌阶段' }
 			return { ok: true }
 
 		case 'after_naval': {
@@ -1166,24 +4508,113 @@ function status_window_ready(game, nation, card_id, tr) {
 		}
 
 		case 'build_army':
-			/* S4：由 play_card 打建设陆军时通过 arg.from_status 放行；
-			 * 独立点击时要求处于出牌阶段且尚未建设。 */
-			if (game.turn_phase !== 'play')
-				return { ok: false, reason: '只能在出牌阶段发动' }
-			if ((game.skip_play_done || {})[nation] === game.turn)
-				return { ok: false, reason: '本回合已跳过出牌阶段' }
-			return { ok: true }
+			/*
+			 * 【2026-09-28 玩家最终口径】15341 澳大利亚劳管局 / 15342 印度宣布参战
+			 * 的触发时机 = **打出《建设陆军》卡之后、正在选地块时**，用它【替换】
+			 * 本次建设（改为在澳大利亚/印度征召陆军）。
+			 *
+			 * 三条性质（玩家明确）：
+			 *   ① **不受阶段影响** —— 不是"只能在出牌阶段"，
+			 *      哪怕在【别人的回合】触发了英国的建设陆军，英国也能用它替换。
+			 *   ② **不影响出牌** —— 不额外占出牌名额（名额由那张建设卡自己占）。
+			 *   ③ 只在"正在建设"这一刻可用，其余时间【不可点击】。
+			 *
+			 * 为什么这里默认返回 false：
+			 *   本窗口是**事件驱动**（"正在建设陆军"），不是阶段驱动。
+			 *   服务端默认不知道"玩家正在选地块"（那是客户端 UI 状态），
+			 *   所以默认关闭 -> view.table_status.ready=false -> 客户端不会显示可点。
+			 *   （修复前的 bug 正是：只查出牌阶段，于是整个出牌阶段都显示可点。）
+			 *
+			 * 真正的放行走【替换建设】专用通道：客户端在选地块模式下点状态卡时
+			 * 发送 activate_status 带 `from_status:true`，
+			 * 由 activate_status 分支跳过本窗口判定（见该处注释）。
+			 */
+			return {
+				ok: false,
+				reason: '只能在建设陆军时替换（打出《建设陆军》后、选地块时点此卡）',
+			}
 
-		case 'after_ally_battle': {
-			const lb = game.last_battle
-			if (!lb || lb.turn !== game.turn || lb.space == null)
-				return { ok: false, reason: '本回合尚未发起战斗' }
-			const f = faction_of_nation(lb.attacker)
-			const myF = faction_of_nation(nation)
-			if (f !== myF)
-				return { ok: false, reason: '本回合本方尚未发起战斗' }
-			return { ok: true, space: lb.space }
+		case 'after_land':
+			/*
+			 * 【2026-09-30 玩家口径·修订】15253《闪电战》/15245 的窗口
+			 * "发起陆战后" = **发起陆战后【立刻】**，且为【手动发动】。
+			 * do_battle 发起陆战的那一瞬把本国 after_land 状态卡"武装"进
+			 * game.status_instant（仅那一瞬可点）；玩家手动点击才真正发动。
+			 * 下一次玩家做任何其它动作（出牌/弃牌/推进阶段/再发起战斗…）
+			 * exports.action 顶部会把 status_instant 清空，窗口关闭——
+			 * 于是"巴巴罗萨结算后"就再也点不出来了，符合"立刻"。
+			 * 不依赖 game.last_battle（它持久到整回合），避免整回合可点。
+			 */
+			{
+				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_land')
+				if (!e)
+					return { ok: false, reason: '《闪电战》等：仅能在「发起陆战后立刻」手动发动，此刻已不可发动' }
+				return { ok: true, space: e.space }
+			}
+
+		case 'after_build_army':
+			/*
+			 * 【2026-09-30 玩家口径·修订】15247/15248 的窗口 "建设陆军后" =
+			 * **建设陆军后【立刻】**，且为【手动发动】。
+			 * build_actions 检测到 last_built 的瞬间把本国 after_build_army
+			 * 状态卡武装进 game.status_instant；玩家手动点击才发动，
+			 * 下一次其它动作清空窗口。
+			 */
+			{
+				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_build_army')
+				if (!e)
+					return { ok: false, reason: '仅能在「建设陆军后立刻」手动发动，此刻已不可发动' }
+				return { ok: true, space: e.space }
+				}
+
+				case 'after_build_navy':
+				{
+					const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_build_navy')
+					if (!e)
+						return { ok: false, reason: '仅能在「建设海军后立刻」手动发动，此刻已不可发动' }
+					return { ok: true, space: e.space }
+				}
+
+				case 'after_ally_battle': {
+			/*
+			 * 【2026-09-30 玩家口径·修订】15346《自由法国》= **英/美发起战斗后【立刻】、
+			 * 且【手动】发动**（与 15253/15247/15248 同款瞬间窗口）。
+			 * do_battle 末尾按同阵营把所有持有国（含 法国，由同盟玩家代打）的
+			 * after_ally_battle 卡武装进 game.status_instant；玩家手动点击才发动，
+			 * 下一次其它动作清空窗口。
+			 * 不依赖持久的 game.last_battle（会被后续战斗覆盖、且整回合可点）。
+			 */
+			const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_ally_battle')
+			if (!e)
+				return { ok: false, reason: '《自由法国》等：仅能在「盟友发起战斗后立刻」手动发动，此刻已不可发动' }
+			return { ok: true, space: e.space }
 		}
+
+		/* 17546 铆钉女工：弃牌阶段开始时（turn_phase==='discard'）可手动发动 */
+		case 'discard_start':
+			{
+				if (game.turn_phase !== 'discard')
+					return { ok: false, reason: '仅能在「弃牌阶段」发动' }
+				return { ok: true }
+			}
+
+		/* 17541 工业巨头：打出[战略卡]后立刻手动发动（与 after_build_army 同款瞬间窗口） */
+		case 'after_play_basic':
+			{
+				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_play_basic')
+				if (!e)
+					return { ok: false, reason: '仅能在「打出战略卡后立刻」手动发动，此刻已不可发动' }
+				return { ok: true, space: e.space }
+			}
+
+		/* 16304 中国远征军：部队被移除后立刻手动发动（与 after_build_army 同款瞬间窗口） */
+		case 'piece_removed':
+			{
+				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'piece_removed')
+				if (!e)
+					return { ok: false, reason: '仅能在「部队被移除后立刻」手动发动，此刻已不可发动' }
+				return { ok: true, space: e.space }
+			}
 
 		default:
 			return { ok: false, reason: '未实现的触发窗口：' + tr.window }
@@ -1191,11 +4622,120 @@ function status_window_ready(game, nation, card_id, tr) {
 	}
 
 /*
+ * 【2026-09-30 玩家口径·修订】把"X 后立刻"窗口的状态卡在【事件发生的那一瞬】
+ * 武装进 game.status_instant，供玩家【手动】点击发动（不再自动触发）。
+ * 下一次玩家做任何其它动作时（exports.action 顶部），status_instant 会被清空，
+ * 窗口关闭——从而实现"立刻"且不整回合可点。
+ *
+ * 仅武装指定 nation（事件发起方）桌面上的对应窗口卡，且未被本回合用过。
+ */
+/*
+ * 【2026-09-30·修订】把"X 后立刻"窗口的状态卡在【事件发生的那一瞬】武装进
+ * game.status_instant，供玩家【手动】点击发动（不再自动触发）。下一次玩家做任何其它
+ * 动作时（exports.action 顶部），status_instant 会被清空，窗口关闭——实现"立刻"且不整回合可点。
+ *
+ * 通用到【同阵营】所有持有国（不限于事件发起国本尊）：
+ *  - after_land / after_build_army：发起方就是本国（如 德国 15253/15247），本函数会武装本国桌面卡；
+ *  - after_ally_battle：卡由同阵营其它国持有（如 法国 15346 由同盟玩家代打），本函数遍历同阵营
+ *    faction_of_nation(own) === faction_of_nation(nation) 的所有持有国桌面，把匹配窗口的卡武装进来。
+ * 因此 美国/英国/苏联 发起战斗都会武装 法国 15346（6 人版本再收窄为"仅英国可发动"，见 todo-deferred）。
+ *
+ * 频率：once_per_turn 用 freq_key(game) 记账——见下方 freq_key 说明。
+ */
+/*
+ * 频率键：状态卡"一回合一次"的频率记账单位。
+ * 【2026-09-30 玩家口径·修订】"一回合"= 一个【国家的回合(nation-turn)】，不是完整 6 国回合。
+ * 因此德国在自己回合发动过、意大利回合代理德国再发动，是【不同的回合】，都应被允许。
+ * 回合由 (game.turn 完整回合序号, game.current_nation 当前行动国) 唯一确定。
+ * 旧实现误用 game.turn（完整 6 国回合）记账，会把"代理再发动"错误拦截为"本回合已用过"。
+ */
+function freq_key(game) {
+	return game.turn + ':' + (game.current_nation || '')
+}
+function arm_status_instant(game, window, nation, space) {
+	game.status_instant = game.status_instant || []
+	const fac = faction_of_nation(nation)
+	for (const own of Object.keys(game.table || {})) {
+		if (faction_of_nation(own) !== fac) continue
+		for (const cid of (game.table[own] || [])) {
+			const cfg = status_config_of(cid)
+			if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
+			if (!status_active(game, cid, own)) continue
+			if (cfg.trigger.once_per_turn && (game.status_used || {})[cid] === freq_key(game)) continue
+			if (game.status_instant.some(e => e.card_id === cid)) continue
+			game.status_instant.push({ card_id: cid, nation: own, window: window, space: space })
+		}
+	}
+}
+/*
+ * 【2026-09-30 修复】发起陆战/海战"成功"后，武装本国/同阵营的"X 后立刻"状态卡
+ * （闪电战 15253/15245 的 after_land、德国 after_naval、同盟 after_ally_battle）。
+ * 抽成独立函数，供 do_battle 的【主路径】与【代受/抵消分支】共用，
+ * 否则"空军互相抵消"等走提前 return 的分支不会触发闪电战窗口（见 tools/_smoke_seq.js）。
+ */
+function arm_after_battle_status(game, nation, kind, space, opt) {
+	if (opt && opt.silent_status) return
+	if (kind === 'land') {
+		/*
+		 * 【2026-09-30 玩家口径·修订】15253《闪电战》/15245 = **发起陆战后【立刻】、
+		 * 且【手动】发动**。把本国 after_land 状态卡"武装"进 game.status_instant，
+		 * 玩家随后【手动点击】才发动；下一次做任何其它动作即清空窗口。
+		 * 【2026-10-06 通用化】不再限定 nation==='德国'：苏联等任何国家发起陆战
+		 * 都会武装本国 after_land 状态卡（如 17842 喀秋莎 / 17848 正面攻击）。
+		 */
+		try { arm_status_instant(game, 'after_land', nation, space) } catch (e) { game.log.push('arm after_land 错误：' + e.message) }
+	}
+	else if (kind === 'sea' && nation === '德国') { try { auto_fire_status(game, 'after_naval', {}) } catch (e) { game.log.push('auto_fire after_naval 错误：' + e.message) } }
+	/* 同阵营（同盟）状态卡：英/美/苏 发起战斗后，把本阵营 after_ally_battle 卡武装进 status_instant。 */
+	if (faction_of_nation(nation) === 'allies')
+		try { arm_status_instant(game, 'after_ally_battle', nation, space) } catch (e) { game.log.push('arm after_ally_battle 错误：' + e.message) }
+	/*
+	 * 【2026-10-07 苏联增强卡】增强卡(ECHO)的 'after_battle' 窗口。
+	 * 挂在【同一个派发点】（与德国 15253 闪电战 / 法国 15346 自由法国 的
+	 * after_land / after_ally_battle 共用 do_battle 出口），不另造机制：
+	 * 状态卡走 status_instant，增强卡走 offer_armed_effects，仅此区别。
+	 * ctx 带上 space / kind / attacker，供 17814 进击的朱可夫、17900 八月风暴 判定。
+	 */
+	try {
+		offer_armed_effects(game, 'after_battle', {
+			space: space, kind: kind, attacker: nation, nation: nation,
+		})
+	} catch (e) { game.log.push('arm after_battle 错误：' + e.message) }
+	/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联 */
+	try {
+		maybe_arm_su_augstorm(game, space, kind, nation)
+	} catch (e) { game.log.push('arm augstorm 错误：' + e.message) }
+}
+
+/*
+ * 【2026-10-06】状态卡"X 后发起战斗"通用效果（喀秋莎 17842 / 正面攻击 17848 /
+ * 坦克运输 17846）。battleSpace 为触发事件地区；allowed 为允许发起战斗的地区集合
+ * （喀秋莎=仅战斗地区；正面攻击=战斗地区+相邻；坦克运输=建设地区）。
+ * 发起单位（from）与目标（victim）由客户端 arg 提供（同 15338 战斗流程）。
+ */
+function status_launch_battle(game, nation, battleSpace, arg, kind, allowed) {
+	const sp = space_id(arg && arg.space != null ? arg.space : battleSpace)
+	if (sp == null) return { ok: false, reason: '请指定战斗地区' }
+	if (allowed && allowed.length && allowed.indexOf(sp) < 0)
+		return { ok: false, reason: '只能对允许的战斗地区发起' }
+	if (arg.from == null || arg.victim == null)
+		return { ok: false, reason: '请选择发起单位与攻击目标' }
+	const r = do_battle(game, nation, sp, arg.victim, kind, { from: arg.from })
+	if (!r.ok) return { ok: false, reason: r.reason }
+	refresh(game)
+	return { ok: true, desc: nation + ' 发起' + (kind === 'sea' ? '海战' : '陆战') + '：' + (r.desc || data.name_of(sp)) }
+}
+
+/*
  * 执行状态卡的触发效果。
  * 战斗类（15338/15339/15346）走 do_battle，参数从 arg 取；
  * 其余（征召 / 摸牌）直接调用原子层。
+ * ctxSpace（可选）用于 after_land / after_build_army 这类"X 后立刻"卡，
+ * 把事件发生时记录的地区（武装瞬间存下的）传进自定义 run，避免依赖
+ * 持久到整回合的 game.last_battle / game.last_built。
  */
-function run_status_effect(game, nation, card_id, tr, arg) {
+function run_status_effect(game, nation, card_id, tr, arg, ctxSpace) {
+	if (typeof tr.run === 'function') return tr.run(game, { nation: nation, card_id: card_id, ctx: { space: ctxSpace }, arg: arg || {} })
 	const ef = tr.effect || {}
 
 	/* ---------- 征召 ---------- */
@@ -1219,10 +4759,13 @@ function run_status_effect(game, nation, card_id, tr, arg) {
 	/* ---------- 战斗 ---------- */
 	if (ef.kind === 'battle') {
 		const kind = ef.battle || 'land'
-		/* 15346：战斗地区由窗口给定（英国/美国刚打过的地方） */
+		/* 15346：战斗地区由【武装瞬间】记录（after_ally_battle）—— 走 status_instant
+		 * 的 entry.space（经 ctxSpace 传入），而不是持久的 game.last_battle
+		 * （后者会被后续战斗覆盖、且整回合可点）。
+		 * 其余窗口（无武装）回退到 last_battle / arg.space。 */
 		const fixed = (tr.window === 'after_ally_battle')
-			? (game.last_battle ? game.last_battle.space : null)
-			: null
+			? ctxSpace
+			: (game.last_battle ? game.last_battle.space : null)
 		const sp = fixed != null ? fixed : (arg.space != null ? arg.space : null)
 		if (sp == null) {
 			const cand = (ef.spaces || []).map(space_id).filter(x => x != null)
@@ -1324,6 +4867,48 @@ function apply_status_ongoing(game, card_id, nation) {
 		lines.push(og.nation + ' 部队总是处于补给状态')
 	}
 
+	/* ---- 17845 迁都古比雪夫：大本营改判 + 西伯利亚补给/标记 + 莫斯科移除 ---- */
+	if (og.kind === 'home_override') {
+		if (og.home_override)
+			lines.push('苏联 大本营将动态判定为 ' + (og.home_override.to || '？'))
+		if (og.supply_point_and_markers) {
+			const sp = space_id(og.supply_point_and_markers.space)
+			if (sp != null) {
+				/* 【国家维度】(2026-10-08)：同 supply_point_and_markers，传国家名 */
+				const onlyN = og.supply_point_and_markers.only || null
+				const onlyF = og.supply_point_and_markers.only ? faction_of_nation(og.supply_point_and_markers.only) : null
+				add_supply_point(game, sp, onlyN)
+				if (og.supply_point_and_markers.markers)
+						add_marker(game, sp, og.supply_point_and_markers.markers, onlyN, onlyF)
+				lines.push(data.name_of(sp) + ' 成为仅对' + (og.supply_point_and_markers.only || '？') +
+					' 的补给点，并增加 ' + (og.supply_point_and_markers.markers || 0) + ' 个计分标记')
+				refresh(game)
+			}
+		}
+		if (og.remove_supply_and_marker) {
+			for (const r of og.remove_supply_and_marker) {
+				const sp = space_id(r.space)
+				if (sp == null) continue
+				remove_supply_point(game, sp, null)
+				if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
+				lines.push(data.name_of(sp) + ' 移除补给点' + (r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : ''))
+				refresh(game)
+			}
+		}
+	}
+
+	/* ---- 17840 焦土作战：乌克兰去补给 + 减标记（永久）---- */
+	if (og.kind === 'remove_supply_and_marker') {
+		for (const r of (og.spaces || [])) {
+			const sp = space_id(r.space)
+			if (sp == null) continue
+			remove_supply_point(game, sp, null)
+			if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
+			lines.push(data.name_of(sp) + ' 移除补给点' + (r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : ''))
+			refresh(game)
+		}
+	}
+
 	/*
 	 * ---- 地图改动：15345 / 15347 补给点 + 计分标记（永久）----
 	 *
@@ -1334,15 +4919,94 @@ function apply_status_ongoing(game, card_id, nation) {
 	 * 注意：15343 的 suppress_enemy_status 不写入 state（派生式查询），
 	 * 所以这里不需要处理。
 	 */
+	if (og.kind === 'marker_if_controlled') {
+		const sp = space_id(og.space)
+		if (sp != null) {
+			const okAll = (og.require || []).every(s => de_controlled(game, s, '德国'))
+			if (okAll) {
+				add_marker(game, sp, og.markers || 1, '德国', 'axis')
+				lines.push(data.name_of(sp) + ' 增加 ' + (og.markers || 1) + ' 个计分标记（大德意志帝国）')
+			} else {
+				lines.push(data.name_of(sp) + ' 的前置地区未全部被友方控制，未加标记')
+			}
+			refresh(game)
+		}
+	}
+
+	if (og.kind === 'axis_only_seas') {
+		game.status_aura.sea_axis_only = game.status_aura.sea_axis_only || []
+		for (const nm of (og.spaces || [])) {
+			const sid = space_id(nm)
+			if (sid != null && game.status_aura.sea_axis_only.indexOf(sid) < 0)
+				game.status_aura.sea_axis_only.push(sid)
+		}
+		lines.push('北海/波罗的海仅对轴心国相邻（战争海军）')
+	}
+
+	/* ---- 光环：15444 视为有日本陆军（虚拟陆军，非补给源）---- */
+	if (og.kind === 'virtual_army' && og.space && og.nation) {
+		const sp = space_id(og.space)
+		if (sp != null) {
+			aura.virtual_army[sp] = og.nation
+			lines.push(data.name_of(sp) + ' 视为有' + og.nation + '陆军（非补给源，补给经邻海传递）')
+		}
+	}
+
+	/* ---- 光环：8601 指定空间内指定国陆军总是补给（免移除）---- */
+	if (og.kind === 'space_immune' && og.space && og.nation) {
+		const sp = space_id(og.space)
+		if (sp != null) {
+			aura.space_immune[sp] = og.nation
+			lines.push(data.name_of(sp) + ' 的' + og.nation + '陆军总是处于补给状态（免移除）')
+		}
+	}
+
 	if (og.kind === 'supply_point_and_markers') {
 		const sp = space_id(og.space)
 		if (sp != null) {
+			/* 【国家维度】(2026-10-08)：补给点传【国家名】og.only（不是阵营），
+			 * 使"仅对意大利"只对意大利生效；标记的 owner 也用国家名。 */
+			const onlyN = og.only || null
 			const onlyF = og.only ? faction_of_nation(og.only) : null
-			add_supply_point(game, sp, onlyF)
+			add_supply_point(game, sp, onlyN)
 			if (og.markers)
-				add_marker(game, sp, og.markers, og.only || null, onlyF)
+				add_marker(game, sp, og.markers, onlyN, onlyF)
 			lines.push(data.name_of(sp) + ' 成为仅对' + (og.only || '？') +
 				'的补给点，并增加 ' + (og.markers || 0) + ' 个计分标记')
+			refresh(game)
+		}
+	}
+
+	/* ---- 17744/17747 永久成对邻接（只写不撤）----
+	 *
+	 * 玩家口径（2026-10-08）：这两张卡实际不会出现离场情况，选简单实现 ——
+	 * 打出时写入 game.status_connections（永久），【不】实现 revert 分支。
+	 * 与 temp_connections（17823，本回合有效）的区别：没有 turn 校验，常驻生效。
+	 * side 用阵营维度（faction_of_nation），"仅对友方"= 仅轴心国可走该邻接。
+	 */
+	if (og.kind === 'pair_adjacency' && og.pairs) {
+		game.status_connections = game.status_connections || []
+		const onlyF = og.only ? faction_of_nation(og.only) : null
+		let added = 0
+		for (const pr of og.pairs) {
+			const a = space_id(pr[0]), b = space_id(pr[1])
+			if (a == null || b == null) continue
+			if (!game.status_connections.some(x => x.a === a && x.b === b)) {
+				game.status_connections.push({ a: a, b: b, side: onlyF })
+				added++
+			}
+		}
+		if (added) lines.push('新增 ' + added + ' 组仅对' + (og.only || '？') + '的永久相邻')
+	}
+
+	/* ---- 17901 工业心脏：仅增加计分标记（不加补给点，卡面只要求标记）---- */
+	if (og.kind === 'marker_only') {
+		const sp = space_id(og.space)
+		if (sp != null) {
+			const onlyF = og.only ? faction_of_nation(og.only) : null
+			if (og.markers)
+				add_marker(game, sp, og.markers, og.only || null, onlyF)
+			lines.push(data.name_of(sp) + ' 增加 ' + (og.markers || 0) + ' 个计分标记')
 			refresh(game)
 		}
 	}
@@ -1374,6 +5038,20 @@ function revert_status_ongoing(game, card_id, nation) {
 		if (aura.home_override[n] != null) {
 			delete aura.home_override[n]
 			lines.push(n + ' 的大本营恢复为原值')
+		}
+	}
+	if (og.kind === 'virtual_army' && og.space) {
+		const sp = space_id(og.space)
+		if (sp != null && aura.virtual_army[sp] != null) {
+			delete aura.virtual_army[sp]
+			lines.push(data.name_of(sp) + ' 的虚拟陆军光环消失')
+		}
+	}
+	if (og.kind === 'space_immune' && og.space) {
+		const sp = space_id(og.space)
+		if (sp != null && aura.space_immune[sp] != null) {
+			delete aura.space_immune[sp]
+			lines.push(data.name_of(sp) + ' 的免移除光环消失')
 		}
 	}
 	/* 15343 suppress_enemy_status：派生式，无需撤销 */
@@ -1423,7 +5101,7 @@ function hand_view(game, nation, viewer_nation) {
 function inst_pub(instance_id) {
 	const c = inst_card(instance_id)
 	if (!c) return null
-	return {
+	const o = {
 		id: instance_id,
 		card_id: c.id,
 		name: c.name,
@@ -1432,6 +5110,13 @@ function inst_pub(instance_id) {
 		text: c.text || '',
 		img: c.img,
 	}
+	/* 【2026-09-30 A 方案通用化】ECON 经济战卡的目标国列表：
+	 * 单目标 -> 客户端自动带 target 打出；多目标 -> 弹选国框；
+	 * 无 targets（如 15314 用 chain 链式挂起）-> 不附加，客户端直接打。 */
+	if (c.type === 'ECON' && ECON_CARDS[c.id] && ECON_CARDS[c.id].targets) {
+		o.econ_targets = ECON_CARDS[c.id].targets.slice()
+	}
+	return o
 }
 
 /* ============================================================
@@ -1499,25 +5184,29 @@ function home_base_of(nation) {
  * 卡离场自动失效（扫不到 15344）。
  */
 function effective_home_base(game, nation) {
-	/* 扫桌面找 15344 —— 它在【代表团代表国】（英国）的桌面上，
-	 * 影响的是【被代表团】（法国）。所以扫所有同盟阵营的桌面。 */
+	/* 【2026-10-06 通用化】扫同阵营桌面找任何带 ongoing.home_override 的状态卡
+	 * （15344 法国 / 17845 苏联 等），不再硬编码 15344。 */
 	const f = faction_of_nation(nation)
 	for (const n of Object.keys(game.table || {})) {
 		if (faction_of_nation(n) !== f) continue
 		for (const cid of (game.table[n] || [])) {
-			if (String(inst_card_id(cid)) !== '15344') continue
-			if (!status_active(game, cid, n)) continue
 			const cfg = status_config_of(cid)
 			if (!cfg || !cfg.ongoing || !cfg.ongoing.home_override) continue
+			if (!status_active(game, cid, n)) continue
 			const ho = cfg.ongoing.home_override
 			if (ho.nation !== nation) continue
-			/* 条件：西欧被敌方控制 */
-			const condSpace = ho.cond ? space_id(ho.cond.space) : null
-			if (condSpace == null) continue
-			const condOk = ho.cond.enemy
-				? space_enemy_occupied(game, condSpace, nation)
-				: !space_enemy_occupied(game, condSpace, nation)
-			if (condOk) return space_id(ho.to)
+			if (ho.cond) {
+				/* 条件：指定地区被敌/友方控制 */
+				const condSpace = space_id(ho.cond.space)
+				if (condSpace == null) continue
+				const condOk = ho.cond.enemy
+					? space_enemy_occupied(game, condSpace, nation)
+					: !space_enemy_occupied(game, condSpace, nation)
+				if (condOk) return space_id(ho.to)
+			} else {
+				/* 无条件改判（如 17845 苏联→西伯利亚） */
+				return space_id(ho.to)
+			}
 		}
 	}
 	return home_base_of(nation)
@@ -1645,7 +5334,7 @@ function can_build_at(game, nation, space, type) {
 			return { ok: false, reason: data.name_of(space) + ' 有敌方部队' }
 	}
 
-	const nbrs = get_connections(game, space, myFaction)
+	const nbrs = get_connections(game, space, myFaction) || []
 
 	/*
 	 * ---------- 海军（2026-09-22 easy_rule 第五章）----------
@@ -1735,6 +5424,26 @@ function unit_slot_free(game, nation, type, space) {
 
 /* 建设 1 支陆军/海军/空军 */
 function build_piece(game, nation, type, space) {
+	const __r = _build_piece_impl(game, nation, type, space)
+	if (__r && __r.ok) {
+		if (type === 'army' || type === 'navy') { game.last_built = { space: space, nation: nation, type: type } }
+		/*
+		 * 【2026-09-30 德国增强 B 组】建设海军/部署空军后，触发对应装载卡。
+		 * ctx.nation = 建设方；只有 actor 匹配的装载卡才会结算。
+		 */
+		if (type === 'navy') offer_armed_effects(game, 'after_build_navy', { space: space, nation: nation })
+		if (type === 'air') offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nation })
+		/*
+		 * 【2026-10-09 意大利 17711 维希法国殖民地】
+		 * 陆军建设此前【没有】armed 派发点（只有 navy/air），
+		 * 导致"敌方建设时…"的卡永不触发。这里补上 after_build_army。
+		 * 与 after_build_navy / after_deploy_air 同款，ctx 带 space/nation/type。
+		 */
+		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type })
+	}
+	return __r
+}
+function _build_piece_impl(game, nation, type, space) {
 	/*
 	 * 空军走【载体】口径（2026-09-22 玩家明确）：
 	 *   部署空军只要求该地区有【处于补给状态的本国陆军或海军】，
@@ -1771,6 +5480,8 @@ function build_piece(game, nation, type, space) {
 	request_responses(game, 'build', {
 		nation: nation, space: space, type: type, piece_id: id,
 	}, false)
+	/* 17553 抗日义勇军：中国【建设】后，让权日本弃牌+损耗 */
+	if (nation === '中国') offer_us_japan_delegate(game, '中国建设')
 	return { ok: true, id: id, reason: why }
 }
 
@@ -1890,6 +5601,17 @@ function recruit_piece(game, nation, type, space) {
 	game.location[id] = space
 	game.piece_nation[id] = nation
 	game.piece_type[id] = type
+	/* 使"征召"也触发 build 类响应（覆盖意大利 17737/17738 的"建设或征召"），
+	 * 与 build_piece 内已有的 request_responses 对齐；非 build 触发时 fire_trigger 自然无匹配。 */
+	request_responses(game, 'build', { nation, space, type, piece_id: id }, false)
+	/*
+	 * 【2026-10-09 意大利 17711 维希法国殖民地】
+	 * 征召此前【没有】armed 派发点，导致"敌方征召时…"的卡永不触发。
+	 * 这里补上 after_recruit（与 after_build_army 区分，便于卡面精确匹配）。
+	 */
+	offer_armed_effects(game, 'after_recruit', { space: space, nation: nation, type: type })
+	/* 17553 抗日义勇军：中国【征召】后，让权日本弃牌+损耗 */
+	if (nation === '中国') offer_us_japan_delegate(game, '中国征召')
 	refresh(game)
 	return { ok: true, id: id, reason: chk.reason }
 }
@@ -2003,6 +5725,12 @@ function eliminate_piece(game, nation, space, target_piece) {
 		was_supplied: wasSupplied,
 	}, false)
 
+	/* 16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
+	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'eliminate', piece: victim }
+	arm_status_instant(game, 'piece_removed', vNation, space)
+	/* 16304 中国远征军：让权美国选相邻地区征召 */
+	offer_us_china_delegate(game, space, vNation, vType)
+
 	return {
 		ok: true, removed: victim, removed_nation: vNation, removed_type: vType,
 		space: space,
@@ -2030,9 +5758,16 @@ const PLACE_ALIAS = {
 	'奥斯陆': '北欧',         /* id=4  */
 	'不列颠群岛': '不列颠',    /* id=2  */
 	'南非': '非洲南部',       /* id=31 */
+	'北非': '非洲北部',       /* id=15 —— 2026-09-28 补（14923 隆美尔） */
+	'美洲': '拉丁美洲',       /* id=30 —— 2026-09-28 补（15422 太平洋海岸线攻势） */
 	'埃及': '中东',           /* id=16 */
 	'阿尔及利亚': '非洲北部',  /* id=15 */
 	'缅甸': '东南亚',         /* id=37 */
+	/*
+	 * 【注意】本表只是【一对一】别名（仍指单个地区）。
+	 * 泛称（「中国」「太平洋」「非洲」= 该区域全部格位）走 REGION_GROUPS，
+	 * 不要在这里随便挑一个地区顶替（玩家 2026-09-28 口径）。
+	 */
 }
 
 /*
@@ -2050,6 +5785,46 @@ function space_id_of(name) {
 function space_ids_of(names) {
 	const out = []
 	for (const n of names) {
+		const id = space_id_of(n)
+		if (id != null && out.indexOf(id) < 0) out.push(id)
+	}
+	return out
+}
+
+/*
+ * 【2026-09-28】区域组：卡面【泛称】-> 该区域的【全部格位】
+ *
+ * 玩家口径（2026-09-28 确认）：
+ *   卡面写「中国」「太平洋」「非洲」这类泛称时，指【该区域全部格位】，
+ *   既不是某一个具体地区，也不允许随便挑一个顶替。
+ *
+ * 与 PLACE_ALIAS 的区别：
+ *   PLACE_ALIAS 是【一对一】（「南非」->「非洲南部」，仍指单个地区）
+ *   REGION_GROUPS 是【一对多】（「中国」-> 三个中国地区，指全部）
+ *
+ * 注意：这里写【本体名】，再交给 space_id_of 解析。
+ */
+const REGION_GROUPS = {
+	'中国': ['中国西部', '中国东北', '中国东部'],
+	'太平洋': ['中太平洋', '南太平洋', '北太平洋', '东太平洋'],
+	'非洲': ['非洲北部', '非洲南部', '非洲东部'],
+}
+
+/*
+ * 展开一批地区名：泛称展开成该区域全部格位，别名/本体各成一个。
+ * 供需要"按区域统计/按区域生效"的效果使用（取代 space_ids_of）。
+ */
+function space_ids_expand(names) {
+	const out = []
+	for (const n of names || []) {
+		const group = REGION_GROUPS[n]
+		if (group) {
+			for (const sub of group) {
+				const id = space_id_of(sub)
+				if (id != null && out.indexOf(id) < 0) out.push(id)
+			}
+			continue
+		}
 		const id = space_id_of(n)
 		if (id != null && out.indexOf(id) < 0) out.push(id)
 	}
@@ -2154,8 +5929,49 @@ function trigger_ready(game, card_id, nation) {
 
 	if (tr.kind === 'anytime') return { ok: true }
 
+	/*
+	 * 【2026-09-30 新增】出牌阶段开始时（play_start）：
+	 * 指【出牌阶段、且尚未打出过本回合的出牌名额牌（play_done 未置位）】之前。
+	 * 即玩家可在"占用出牌名额的 1 张牌"之前，先打出这些增强卡。
+	 */
+	if (tr.kind === 'play_start') {
+		if (game.turn_phase !== 'play')
+			return {
+				ok: false,
+				reason: '《' + c.name + '》只能在出牌阶段开始时打出（当前是' +
+					phase_zh(game.turn_phase) + '）',
+			}
+		if (game.play_done && game.play_done[nation])
+			return {
+				ok: false,
+				reason: '《' + c.name + '》只能在出牌阶段【开始时】（本回合尚未打出过牌）打出',
+			}
+		const cur = game.current_nation
+		if (cur && faction_of_nation(cur) !== faction_of_nation(nation))
+			return {
+				ok: false,
+				reason: '《' + c.name + '》只能在本方回合打出（当前行动国 ' + cur + '）',
+			}
+		return { ok: true }
+	}
+
 	if (tr.kind === 'any')
 		return { ok: false, reason: '《' + c.name + '》是响应卡，由触发事件驱动，不能主动打出' }
+
+	/*
+	 * 【2026-10-01 玩家最终口径】"打出XX后…"型增强卡（B 组）：
+	 * 【不能主动打出】。它们留在手牌，等事件发生时弹出 ask 框问要不要打。
+	 * 玩家若直接点手牌里的它，给明确原因而不是静默失败。
+	 */
+	if (tr.kind === 'load') {
+		const cfg0 = ECHO_EFFECTS[String(inst_card_id(card_id))]
+		const desc0 = (cfg0 && cfg0.armed && cfg0.armed.desc) || ''
+		return {
+			ok: false,
+			reason: '《' + c.name + '》不能主动打出 —— 它是「' + desc0 +
+				'」的机会卡，对应事件发生时会自动询问是否打出',
+		}
+	}
 
 	if (tr.kind === 'self') {
 		/* 阶段必须匹配 */
@@ -2275,6 +6091,65 @@ function prune_modifiers(game) {
 }
 
 /*
+ * 【2026-09-30 新增】德国增强卡（15213 云雾 / 15216 总体战）的"本回合内"回合修正查询。
+ * 复用 game.modifiers 机制，约定以 key 区分：
+ *   - 'air_no_defend'   ：本回合空军无法代受（云雾）
+ *   - 'army_removed_attrition'：本回合陆军被移除后其所有者损耗1（总体战）
+ * 【2026-09-30 玩家裁定】"本回合"= 仅【德国本国回合】(game.current_nation === 注册国)，
+ * 不是整轮 6 国回合。因此除 untilTurn 过期判断外，还需 current_nation 必须等于 m.nation。
+ * 注册时 nation 已设为打出方（德国），故 below 直接比对 current_nation。
+ */
+function echo_mod_active(game, key) {
+	if (!Array.isArray(game.modifiers)) return false
+	const cur = game.current_nation
+	return game.modifiers.some(m =>
+		m.key === key &&
+		(m.untilTurn == null || (m.untilTurn || 0) >= (game.turn || 1)) &&
+		(!cur || m.nation == null || m.nation === cur))
+}
+
+/*
+ * 【2026-10-01 玩家裁定·已回退】《总体战》(15216) 的损耗口径。
+ *
+ * 卡面原文："陆军被移除后，其所有者损耗 1 张牌"。
+ * 玩家最终裁定：**只有【陆军】被移除才触发**，【空军被移除不触发】
+ * （曾短暂改为陆军+空军都触发，玩家确认理解有误后回退）。
+ *
+ * 口径：
+ *   · 类型限【陆军】（army）；空军 / 海军都不算；
+ *   · 仅【敌方(非轴心)】生效 —— 总体战是德国折磨敌国的手段，不反噬己方/盟友；
+ *   · 损耗对象按 delegate_of_nation 归一（法国属英国、中国属美国）。
+ *
+ * 因此：
+ *   · 夺取制空权(seize_air)移除敌机 -> 不触发；
+ *   · 空军代受且不抵消（只掉空军、原目标保住）-> 不触发。
+ */
+function total_war_attrition(game, removed) {
+	if (!echo_mod_active(game, 'army_removed_attrition')) return
+	if (!Array.isArray(removed)) removed = [removed]
+	const done = {}
+	for (const it of removed) {
+		if (!it) continue
+		const nat = it.nation, typ = it.type
+		if (!nat || typ !== 'army') continue
+		if (faction_of_nation(nat) === 'axis') continue
+		if (done[nat]) continue
+		done[nat] = 1
+		const lostNation = delegate_of_nation(nat)
+		const lost = attrition_cards(game, lostNation, 1)
+		if (lost.length)
+			game.log.push('【总体战】' + nat + ' 有陆军被移除，' + lostNation + ' 损耗 1 张牌')
+	}
+}
+
+/* 把卡 id 转成 {id,name,img,type} 简对象，供客户端弹选框渲染（避免传整张卡） */
+function obj_of(id) {
+	const cc = inst_card(id)
+	if (!cc) return { id: id, name: id, img: '', type: '' }
+	return { id: id, name: cc.name, img: cc.img, type: cc.type }
+}
+
+/*
  * 查询：某支部队是否受到某类修正器保护。
  *
  * 这是 protect 的【唯一判定入口】——
@@ -2303,6 +6178,228 @@ function is_protected(game, piece) {
 }
 
 const EVENT_EFFECTS = {
+	/* ================= 苏联 EVENT 卡（2026-10-06）=================
+	 * 以下 13 张（另 17817 走 play_card 特例）：
+	 * 17816 RDS-1 / 17818 冬季攻势 / 17819 反帝国主义革命 / 17820 方面军 /
+	 * 17821 华西列夫斯基 / 17822 诺门坎战役 / 17823 千岛群岛登陆行动 /
+	 * 17824 苏德友好条约 / 17825 铁托游击队 / 17826 西伯利亚运输 /
+	 * 17827 西伯利亚大铁路 / 17828 百团大战 / 17829 毛泽东。
+	 * 共用能力：op 的 as/around/pick/useNewPiece/spacesFn，区域泛称走 REGION_GROUPS（中国=西部/东北/东部）。
+	 */
+
+	/* ---- 17816 RDS-1：弃置3张手牌（场上有曼哈顿计划改2张）：获得4分 ---- */
+	'17816': {
+		name: 'RDS-1',
+		actor: '苏联',
+		/*
+		 * 代价：默认弃 3 张；若任意桌面有【曼哈顿计划】（175 卡组 STATUS）则减为 2 张。
+		 * cost.discard 已支持函数式（见 resolve_event_card）。
+		 */
+		cost: { discard: (game) => {
+			/* 场上有[曼哈顿计划]（美国 STATUS 17545）则弃 2 张，否则 3 张 */
+			const hasM = Object.keys(game.table || {}).some(n =>
+				(game.table[n] || []).some(c => String(inst_card_id(c)) === '17545'))
+			return hasM ? 2 : 3
+		} },
+		steps: [{
+			op: 'run',
+			run(game, nation) {
+				add_allied_score(game, 4)
+				return { ok: true, desc: '苏联获得 4 分' }
+			},
+		}],
+		desc: '弃置手牌后苏联获得4分',
+	},
+
+	/* ---- 17818 冬季攻势：在<莫斯科>或相邻地区消灭1或2支敌方国家陆军 ---- */
+	'17818': {
+		name: '冬季攻势',
+		actor: '苏联',
+		steps: [{
+			op: 'eliminate',
+			around: '莫斯科',
+			pick: 2, pickMin: 1,
+			type: 'army',
+			enemyOnly: true,
+		}],
+	},
+
+	/* ---- 17819 反帝国主义革命：在<拉丁美洲>消灭1支敌方国家陆军 ---- */
+	'17819': {
+		name: '反帝国主义革命',
+		actor: '苏联',
+		steps: [{
+			op: 'eliminate',
+			spaces: space_ids_of(['拉丁美洲']),
+			pick: 1,
+			type: 'army',
+			enemyOnly: true,
+		}],
+	},
+
+	/* ---- 17820 方面军：莫斯科或相邻建设1支陆军，以此发起1次陆战（对德国）---- */
+	'17820': {
+		name: '方面军',
+		actor: '苏联',
+		steps: [
+			{ op: 'build', type: 'army', around: '莫斯科' },
+			{ op: 'battle', kind: 'land', useNewPiece: true, onlyNation: '德国' },
+		],
+	},
+
+	/* ---- 17821 华西列夫斯基：海参崴/中国东北之一征召陆军，对 中国东北/中国东部 之一发起陆战 ---- */
+	'17821': {
+		name: '华西列夫斯基出兵远东',
+		actor: '苏联',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['海参崴', '中国东北']), pick: 1, grantSupply: true },
+			{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['中国东北', '中国东部']), pick: 1 },
+		],
+	},
+
+	/* ---- 17822 诺门坎战役：蒙古征召陆军，对 中国东北/海参崴 之一发起陆战 ---- */
+	'17822': {
+		name: '诺门坎战役',
+		actor: '苏联',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['蒙古']), pick: 1, grantSupply: true },
+			{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['中国东北', '海参崴']), pick: 1 },
+		],
+	},
+
+	/* ---- 17823 千岛群岛登陆行动：东海无日本海军→本回合海参崴-日本相邻→对日本发起陆战 ---- */
+	'17823': {
+		name: '千岛群岛登陆行动',
+		actor: '苏联',
+		cond(game, nation) {
+			const eastSea = space_id('东海')
+			const hasJpNavy = Object.keys(game.location || {}).some(p =>
+				game.location[p] === eastSea &&
+				game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy')
+			if (hasJpNavy) return { ok: false, reason: '<东海>有日本海军' }
+			return { ok: true }
+		},
+		steps: [
+			{
+				op: 'run',
+				run(game, nation) {
+					/* 本回合中<海参崴><日本>仅对苏联相邻（仿 15254 临时邻接，
+					 * 用 temp_connections + turn 标记，跨回合自动作废）。 */
+					game.temp_connections = game.temp_connections || []
+					game.temp_connections.push({ a: space_id('海参崴'), b: space_id('日本'), side: ALLIES })
+					game.temp_connections_turn = game.turn
+					return { ok: true, desc: '本回合<海参崴>与<日本>相邻（仅苏联）' }
+				},
+			},
+			{ op: 'battle', kind: 'land', spaces: space_ids_of(['日本']), onlyNation: '日本' },
+		],
+	},
+
+	/* ---- 17824 苏德友好条约：在<罗斯><东欧>各征召1支陆军 ---- */
+	'17824': {
+		name: '苏德友好条约',
+		actor: '苏联',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['罗斯', '东欧']), pick: 2, grantSupply: true },
+		],
+	},
+
+	/* ---- 17825 铁托游击队：巴尔干消灭1支敌方陆军 + 巴尔干征召英国或苏联陆军（二选一）---- */
+	'17825': {
+		name: '铁托游击队',
+		actor: '苏联',
+		/*
+		 * 注意：build 必须在 eliminate 把巴尔干(敌)清掉后才能建设，
+		 * 而 event_card_needs 会按"当前局面"预先判定 build 的候选——
+		 * 此时德军尚在，cands 为空 -> 卡死。故 build 改用 op:'run'，
+		 * 在步骤顺序执行时（德军已被上一步消灭）再直接建设。
+		 */
+		choice: [
+			[
+				{ op: 'eliminate', spaces: space_ids_of(['巴尔干']), pick: 1, type: 'army', enemyOnly: true },
+				{ op: 'run', run(game, nation, arg) { return su_tito_build(game, '英国') } },
+			],
+			[
+				{ op: 'eliminate', spaces: space_ids_of(['巴尔干']), pick: 1, type: 'army', enemyOnly: true },
+				{ op: 'run', run(game, nation, arg) { return su_tito_build(game, '苏联') } },
+			],
+		],
+	},
+
+	/* ---- 17826 西伯利亚运输：西伯利亚或相邻征召1支陆军 ---- */
+	'17826': {
+		name: '西伯利亚运输',
+		actor: '苏联',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['西伯利亚']), around: true, pick: 1, grantSupply: true },
+		],
+	},
+
+	/* ---- 17827 西伯利亚大铁路：收回所有苏联陆军，再逐一建设（仿 autobahn 苏联版）---- */
+	'17827': {
+		name: '西伯利亚大铁路',
+		actor: '苏联',
+		/*
+		 * 不能用简单 steps（收回后需逐一选位置重建，多步交互）。
+		 * 用 run 一次性收回所有苏联陆军，再挂 game.pending_autobahn（actor=苏联），
+		 * 由玩家通过 action resolve_autobahn / query autobahn_targets 逐一建设
+		 * （与德国 15228 高速公路共用同一套管线）。
+		 */
+		steps: [{
+			op: 'run',
+			run(game, nation) {
+				/* 复用德国高速公路的通用收回机制（railroad_recall），
+				 * 直接写入 game.pending_autobahn（actor=苏联），
+				 * 后续选位由 resolve_autobahn / autobahn_targets 统一驱动。 */
+				return railroad_recall(game, '苏联')
+			},
+		}],
+	},
+
+	/* ---- 17828 百团大战：中国在<中国>征召1支陆军，中国以此发起1次陆战（对相邻日军）---- */
+	'17828': {
+		name: '百团大战',
+		actor: '中国',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_expand(['中国']), as: '中国', pick: 1, grantSupply: true },
+			{ op: 'battle', kind: 'land', useNewPiece: true, as: '中国',
+				spacesFn: (game, actor) => {
+					/* 目标：与中国地区相邻的、有日军(陆军)的地区 */
+					const out = []
+					for (const cn of space_ids_expand(['中国'])) {
+						for (const nb of (data.spaces[cn].connections || [])) {
+							const hasJp = pieces_on(game, nb).some(p =>
+								game.piece_nation[p] === '日本' && game.piece_type[p] === 'army')
+							if (hasJp && out.indexOf(nb) < 0) out.push(nb)
+						}
+					}
+					return out
+				} },
+		],
+	},
+
+	/* ---- 17829 毛泽东：中国+1陆军后备；在<中国>之一放1计分标记；在<中国>之一消灭1敌方陆军 ---- */
+	'17829': {
+		name: '毛泽东',
+		actor: '中国',
+		/*
+		 * 陆军后备：本作"陆军后备"机制尚未定义消耗方式（待用户确认），
+		 * 此处仅维护 game.army_reserve['中国'] 计数。
+		 */
+		steps: [
+			{
+				op: 'run',
+				run(game, nation) {
+					game.army_reserve = game.army_reserve || {}
+					game.army_reserve['中国'] = (game.army_reserve['中国'] || 0) + 1
+					return { ok: true, desc: '中国增加 1 支陆军后备（机制待定）' }
+				},
+			},
+			{ op: 'marker', count: 1, spaces: space_ids_expand(['中国']), pick: 1 },
+			{ op: 'eliminate', spaces: space_ids_expand(['中国']), pick: 1, type: 'army', enemyOnly: true },
+		],
+	},
+
 	/*
 	 * 【本配置只包含 15 张 EVENT 卡】2026-09-24 调整
 	 *
@@ -2462,6 +6559,612 @@ const EVENT_EFFECTS = {
 		actor: '英国',
 		steps: [{ op: 'eliminate', type: 'army', spaces: space_ids_of(['印度']) }],
 	},
+
+	/* ============================================================
+	 * ===== 德国事件卡（2026-09-30 按【实现方式】重写）=====
+	 *
+	 * 分类（详见 docs/known-issues.md §德国事件卡）：
+	 *   ① 额外打出 —— extraPlay（15227/15236/15238/15240 及将来的 15239）
+	 *   ② 纯自动   —— 目标地区卡面写死、无需玩家选择（15225/15230/15237/14502/15233）
+	 *   ③ 选地区   —— 复用 steps + spaces/around 现成的选择 UI（15232/15235/15238/6600）
+	 *   ④ 多选多步 —— pick / pickMin（15226 巴巴罗萨、15231 进攻美国）
+	 *   ⑤ 前提条件 —— cond（15236/15240/6600）
+	 *   ⑥ 需新 UI   —— 牌堆检视选牌（15229/15239）、让权给对手弃牌（14503）
+	 *
+	 * 原则：能用【声明式】就用声明式（steps/choice），宁可扩展框架也不再写
+	 *       服务端自动替玩家挑目标的 run()。
+	 * ============================================================ */
+
+	/* ② 纯自动 / ⑤ 前提：目标写死，执行即生效 */
+	'15225': {
+		name: '阿登闪击战',
+		actor: '德国',
+		/*
+		 * 卡面：对<西欧>发起陆战。在<西欧>建设陆军。
+		 * 两个目标都由卡面写死 -> 不需要玩家选（cands 各 1 个，框架自动执行）。
+		 */
+		steps: [
+			{ op: 'battle', kind: 'land', spaces: space_ids_of(['西欧']) },
+			{ op: 'build', type: 'army', spaces: space_ids_of(['西欧']) },
+		],
+	},
+	'15226': {
+		name: '巴巴罗萨',
+		actor: '德国',
+		/*
+		 * 卡面：选择在本回合开始时与德国陆军相邻的 3 支苏联陆军，按任意顺序对其发起陆战。
+		 *
+		 * ④ 多选：「最多 3 支」= pick:3；「选择」意味着也可以少于 3 支 = pickMin:1。
+		 * 玩家在地图上点击的【先后顺序】就是执行顺序（arg.picks 保序，见 R44 多步累积）。
+		 *
+		 * spacesFn：候选随局面动态计算（"与德国陆军相邻的苏联陆军"所在地区），
+		 *           不能写成静态 spaces —— 那会把目标写死、失去交互。
+		 */
+		steps: [{
+			op: 'battle', kind: 'land', pick: 3, pickMin: 1, onlyNation: '苏联',
+			spacesFn: (game, actor) => {
+				const out = []
+				for (const pid of de_soviet_armies_near_german(game)) {
+					const sp = game.location[pid]
+					if (sp == null || out.indexOf(sp) >= 0) continue
+					if (data.spaces[sp] && data.spaces[sp].terrain === 'land') out.push(sp)
+				}
+				return out
+			},
+		}],
+	},
+	'15227': {
+		name: '白色方案',
+		actor: '德国',
+		/*
+		 * 卡面：损耗 1 张牌：在<东欧>征召陆军。可打出 1 张手牌。
+		 *
+		 * cost.attrition = 【损耗】（抽牌堆顶 N 张直接进弃牌堆），
+		 * 与"弃置 N 张手牌"（cost.discard）不同，见 15238 同款。
+		 * extraPlay.filter='hand' —— 之后可以随便再打一张手牌。
+		 */
+		cost: { attrition: 1 },
+		steps: [{ op: 'recruit', type: 'army', spaces: space_ids_of(['东欧']) }],
+		extraPlay: { filter: 'hand' },
+	},
+	'15228': {
+		actor: '德国',
+		/*
+		 * 高速公路：先收回所有德国陆军，再根据移除数量让玩家【逐一选择】建设位置，
+		 * 每次走真实 build_piece（写 game.last_built，打开 after_build_army 时点）。
+		 * 不再由服务端自动级联重建——改为交互式：玩家每次点一个合法（处于补给中的
+		 * 德国可建陆军）地区，建一支，重复 N 次（N=移除的陆军数）。
+		 * 具体逻辑见 autobahn_handle / autobahn_resolve（play_card 拦截此卡后驱动）。
+		 * —— ① 挂在 pending_autobahn 下的【逐步选位】模式，不需要额外框架。
+		 */
+	},
+	'15229': {
+		actor: '德国',
+		/*
+		 * 卡面：检视牌堆，选择并打出 1 张[状态卡]。洗混牌堆。
+		 *
+		 * ③+⑥ 选目标 + 牌堆检视：走 pending_script 的 play_status_from_deck。
+		 * 玩家从自己的牌堆里挑 1 张状态卡，其余全部不可见、由服务端洗混。
+		 */
+	},
+	'15230': {
+		name: '海狮计划',
+		actor: '德国',
+		/*
+		 * 卡面：在<北海>建设海军。对<不列颠>发起陆战。
+		 * ② 纯自动（目标写死）；step2 用 useNewPiece —— 卡面意图是让
+		 * 刚建的那支北海海军去打不列颠（否则德军可能没有别的相邻发起单位）。
+		 */
+		steps: [
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['北海']) },
+			{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['不列颠']) },
+		],
+	},
+	'15231': {
+		name: '进攻美国',
+		actor: '德国',
+		/*
+		 * 卡面：在<北大西洋>建设海军。对相邻地区发起【1 或 2 次】陆战。
+		 *
+		 * ④ 多选：pick=2（最多 2 次）、pickMin=1（至少 1 次）——
+		 * 旧实现对【所有】相邻地区各打一次（"打多了"），现已按卡面限制。
+		 * 候选 = 北大西洋的相邻陆地里【真能发起战斗】的那些（动态计算）。
+		 */
+		steps: [
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['北大西洋']) },
+			{
+				op: 'battle', kind: 'land', pick: 2, pickMin: 1, useNewPiece: true,
+				spacesFn: (game, actor) => {
+					const c = space_id('北大西洋')
+					return (data.spaces[c].connections || []).filter(sp =>
+						data.spaces[sp] && data.spaces[sp].terrain === 'land' &&
+						battle_initiators(game, actor, sp).length > 0)
+				},
+			},
+		],
+	},
+	'15232': {
+		name: '巴尔干军政府',
+		actor: '德国',
+		/*
+		 * 卡面：在<巴尔干>征召意大利陆军。在<乌克兰>消灭 1 支敌方国家陆军。
+		 * ③ st.as='意大利' —— 卡是德国打的，但部队归意大利（step.as 机制）。
+		 */
+		steps: [
+			{ op: 'recruit', type: 'army', as: '意大利', spaces: space_ids_of(['巴尔干']) },
+			{ op: 'eliminate', type: 'army', spaces: space_ids_of(['乌克兰']) },
+		],
+	},
+	'15233': {
+		name: '掠夺',
+		actor: '德国',
+		/*
+		 * 卡面：每有 1 个德国控制的友方大本营之外的地区，获得 1 分。上述地区失去 1 个计分标记。
+		 * ② 纯计算、无选择 -> 保留服务端一次性结算。
+		 */
+		run(game, ctx) {
+			const hb = effective_home_base(game, '德国')
+			let n = 0
+			for (let sp = 1; sp < data.spaces.length; sp++) {
+				if (!data.spaces[sp]) continue
+				const ctrl = pieces_on(game, sp).some(p => game.piece_nation[p] === '德国')
+				if (ctrl && sp !== hb) {
+					add_axis_score(game, 1)
+					remove_marker(game, sp, 1)
+					n++
+				}
+			}
+			return { ok: true, desc: '德国控制的 ' + n + ' 个非大本营地区各+1分并失去1个计分标记' }
+		},
+	},
+	'15234': {
+		name: '枪支或黄油',
+		actor: '德国',
+		/*
+		 * 卡面：该卡可视作任意【非[空军力量]】的[战略卡]打出。
+		 * ④ choice —— 复用现成的"二选一/多选一"UI，《空军力量》已排除。
+		 */
+		choice: [
+			[{ op: 'build', type: 'army' }],   // 建设陆军
+			[{ op: 'battle', kind: 'land' }],  // 发起陆战
+			[{ op: 'build', type: 'navy' }],   // 建设海军
+			[{ op: 'battle', kind: 'sea' }],   // 发起海战（不含[空军力量]）
+		],
+	},
+	'15235': {
+		name: '强制征兵',
+		actor: '德国',
+		/*
+		 * 卡面：在<德国>及相邻地区【之一或之二】征召陆军。
+		 * ③ around:'home'（大本营及其相邻）+ pick:2 —— 现成的选择 UI 已支持。
+		 */
+		steps: [
+			{ op: 'recruit', type: 'army', pick: 2, pickMin: 1, around: 'home' },
+		],
+	},
+	'15236': {
+		name: '瑞典支援芬兰',
+		actor: '德国',
+		/*
+		 * 卡面：[北方行动] 若<罗斯>有德国或苏联陆军：在<波罗的海>建设海军，
+		 *       在<北欧>征召陆军。可打出 1 张[北方行动]。
+		 *
+		 * ⑤ cond = 前提条件（不满足则整张卡无效果，且【不】给额外打出）；
+		 * ① extraPlay.filter='north' —— 只能再打一张带 [北方行动] 标签的牌。
+		 */
+		cond(game) {
+			const ross = space_id('罗斯')
+			if (de_is_controlled(game, ross, '德国') || de_is_controlled(game, ross, '苏联'))
+				return { ok: true }
+			return { ok: false, reason: '<罗斯>没有德国或苏联陆军' }
+		},
+		steps: [
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['波罗的海']) },
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['北欧']) },
+		],
+		extraPlay: { filter: 'north' },
+	},
+	'15237': {
+		name: '土耳其加入轴心国',
+		actor: '德国',
+		/* 卡面：在<黑海>建设海军。在<中东>征召陆军。② 纯自动（目标写死） */
+		steps: [
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['黑海']) },
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['中东']) },
+		],
+	},
+	'15238': {
+		name: '伊卡鲁斯行动',
+		actor: '德国',
+		/*
+		 * 卡面：损耗 1 张牌：在<冰岛>或<亚速尔>征召陆军。可打出 1 张手牌。
+		 * ③ 二选一地区（spaces 给 2 个候选，框架自动询问）+ cost.attrition + ① extraPlay。
+		 */
+		cost: { attrition: 1 },
+		steps: [{
+			op: 'recruit', type: 'army',
+			spaces: space_ids_of(['冰岛', '亚速尔']),
+		}],
+		extraPlay: { filter: 'hand' },
+	},
+	'15239': {
+		actor: '德国',
+		/*
+		 * 卡面：检视牌堆并选择 2 张牌抽取，弃置 1 张手牌，洗混牌堆。
+		 *       可打出 1 张【以此法抽到的牌】。
+		 *
+		 * ④ 多步三步 + ⑥ 牌堆检视 UI：走 pending_script 的 draw_pick_discard。
+		 *
+		 *   第 1 步  从牌堆挑 2 张 -> 抽进手牌
+		 *   第 2 步  再挑 1 张手牌弃置
+		 *   第 3 步  自动洗混牌堆 -> 授予 extraPlay(filter='drawn')
+		 *
+		 * 结算完成后【只有那 2 张（若被弃则剩 1 张）还亮着】，
+		 * 其余手牌全部置灰 —— 客户端用 check_phase_for_card 同一套判定，
+		 * 见 play.js 的 extra_play_allows_card。
+		 *
+		 * ⚠ 旧实现是服务端随机抽 2 张 + 自动替玩家打一张（"打多了"的根因），
+		 *    抽哪 2 张【必须】由玩家挑，这次选择权永远在玩家手上。
+		 */
+		},
+	'15240': {
+		name: '轴心行动',
+		actor: '德国',
+		/*
+		 * 卡面：若<意大利>未被控制：在<意大利>建设陆军。可打出 1 张手牌。
+		 * ⑤ cond（已被任意国家占据 -> 无效果）+ ① extraPlay。
+		 */
+		cond(game) {
+			const it = space_id('意大利')
+			const occ = pieces_on(game, it)
+			if (occ.length)
+				return { ok: false, reason: '<意大利>已被占据' }
+			return { ok: true }
+		},
+		steps: [{ op: 'build', type: 'army', spaces: space_ids_of(['意大利']) }],
+		extraPlay: { filter: 'hand' },
+	},
+	'6600': {
+		name: '伊朗加入轴心国',
+		actor: '德国',
+		/*
+		 * 卡面：若<中东>有友方国家陆军：<中东>增加 1 个计分标记，
+		 *       在<乌克兰><中亚>之一消灭 1 支苏联陆军。
+		 *
+		 * ⑤ cond + ③ 二选一地区（spaces 2 个 -> 框架自动询问）+ onlyNation:'苏联'。
+		 * 计分标记用新增的 op 'marker'。
+		 */
+		cond(game) {
+			const friendly = pieces_on(game, space_id('中东')).some(p =>
+				faction_of_nation(game.piece_nation[p]) === AXIS &&
+				game.piece_type[p] === 'army')
+			if (!friendly) return { ok: false, reason: '<中东>没有友方国家陆军' }
+			return { ok: true }
+		},
+		steps: [
+			{ op: 'marker', count: 1, spaces: space_ids_of(['中东']) },
+			{
+				op: 'eliminate', type: 'army', onlyNation: '苏联',
+				spaces: space_ids_of(['乌克兰', '中亚']),
+			},
+		],
+	},
+	'14502': {
+		name: '但泽或战争',
+		actor: '德国',
+		/* 卡面：在<东欧>征召陆军。在<波罗的海>建设海军。② 纯自动（目标写死） */
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['东欧']) },
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['波罗的海']) },
+		],
+	},
+	'14503': {
+		actor: '德国',
+		/*
+		 * 卡面：英国选择并暗牌弃置 1 张暗置的英国响应。
+		 *
+		 * ⑥ 让权：走 pending_script 的 uk_facedown_discard ——
+		 *   德国打出后操作权让给英国，英国在自己的界面上从
+		 *   【桌面上暗置的英国响应卡】里挑 1 张暗弃。
+		 *
+		 * [暗牌] 语义：德国【看不见】被弃的是哪张，
+		 *   所以服务端日志只写"英国暗牌弃置了 1 张响应卡（内容不明）"，
+		 *   绝不把卡名写进公共日志。
+		 *   候选也只发给英国那一方（见 view.pending_script 的阵营过滤）。
+		 */
+		},
+
+	/* ============================================================
+	 * ===== 苏联事件卡（178xx）=====
+	 * ============================================================ */
+	'17817': {
+		name: '进攻是最好的防守',
+		actor: '苏联',
+		/*
+		 * 卡面：选择 1 支相邻苏联陆军的德国陆军：
+		 *   苏联结束中立，对该陆军发起 1 次陆战。
+		 *
+		 * ① 参战触发条件③：苏联打出此卡即结束中立（见 play_card EVENT 分支的
+		 *   end_neutral 钩子）。必须【先】解除中立，后续战斗预算对德发起陆战
+		 *   才不会被中立限制(neutral_attack_check)拦截。
+		 * ② battle：仅限德国陆军（onlyNation:'德国'），候选由 spacesFn 限定为
+		 *   "有德国陆军、且苏联有可发起单位(相邻且补给)相邻" 的地区。
+		 */
+		steps: [
+			{
+				op: 'battle', kind: 'land', onlyNation: '德国', type: 'army',
+				spacesFn: (game, actor) => {
+					const out = []
+					for (let i = 1; i < data.spaces.length; i++) {
+						if (!data.spaces[i]) continue
+						const hasGermanArmy = pieces_on(game, i).some(p =>
+							game.piece_type[p] === 'army' && game.piece_nation[p] === '德国')
+						if (!hasGermanArmy) continue
+						if (battle_initiators(game, actor, i).length === 0) continue
+						out.push(i)
+					}
+					return out
+				},
+			},
+		],
+	},
+
+	/* ============================================================
+	 * 意大利事件卡（EVENT）—— Group 1，7 张（2026-10-08）
+	 * 仿照德国巴巴罗萨/巴尔干军政府：
+	 *   · 跨国征召用 { as:'德国' }（框架已支持，见 15232 注释）
+	 *   · 17728 用 marker op 加计分标记；16702 用 choice 数组二选一
+	 * ============================================================
+	/* 17717 大力神行动：在<地中海>征召德国和意大利海军 */
+	'17717': {
+		name: '大力神行动', actor: '意大利',
+		steps: [
+			{ op: 'recruit', type: 'navy', as: '德国', spaces: space_ids_of(['地中海']) },
+			{ op: 'recruit', type: 'navy', as: '意大利', spaces: space_ids_of(['地中海']) },
+		],
+		notes: '在<地中海>征召德国和意大利海军',
+	},
+	/* 17718 德国非洲军团：在<非洲北部>征召德国陆军；在<地中海>征召德国海军 */
+	'17718': {
+		name: '德国非洲军团', actor: '意大利',
+		steps: [
+			{ op: 'recruit', type: 'army', as: '德国', spaces: space_ids_of(['非洲北部']) },
+			{ op: 'recruit', type: 'navy', as: '德国', spaces: space_ids_of(['地中海']) },
+		],
+		notes: '在<非洲北部>征召德国陆军；在<地中海>征召德国海军',
+	},
+	/* 17719 德国增援反击：在<意大利>消灭1支敌方国家陆军；德国在<意大利>征召陆军 */
+	'17719': {
+		name: '德国增援反击', actor: '意大利',
+		steps: [
+			{ op: 'eliminate', type: 'army', spaces: space_ids_of(['意大利']) },
+			{ op: 'recruit', type: 'army', as: '德国', spaces: space_ids_of(['意大利']) },
+		],
+		notes: '在<意大利>消灭1支敌方国家陆军；德国在<意大利>征召陆军',
+	},
+	/* 17720 德国支援希腊战场：在<巴尔干>消灭1支敌方国家陆军；德国在<巴尔干>征召陆军 */
+	'17720': {
+		name: '德国支援希腊战场', actor: '意大利',
+		steps: [
+			{ op: 'eliminate', type: 'army', spaces: space_ids_of(['巴尔干']) },
+			{ op: 'recruit', type: 'army', as: '德国', spaces: space_ids_of(['巴尔干']) },
+		],
+		notes: '在<巴尔干>消灭1支敌方国家陆军；德国在<巴尔干>征召陆军',
+	},
+	/* 17723 进攻共产国际：在<乌克兰><罗斯>征召陆军 */
+	'17723': {
+		name: '进攻共产国际', actor: '意大利',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['乌克兰']) },
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['罗斯']) },
+		],
+		notes: '在<乌克兰><罗斯>征召陆军',
+	},
+	/* 17728 意属东非：在<非洲东部>建设陆军；<非洲东部>增加1个计分标记 */
+	'17728': {
+		name: '意属东非', actor: '意大利',
+		steps: [
+			{ op: 'build', type: 'army', spaces: space_ids_of(['非洲东部']) },
+			{ op: 'marker', count: 1, spaces: space_ids_of(['非洲东部']) },
+		],
+		notes: '在<非洲东部>建设陆军；<非洲东部>增加1个计分标记',
+	},
+	/* 16702 埃塞俄比亚战争后勤：在<非洲北部>建设陆军；对<非洲东部>发起陆战 或 在<非洲东部>建设陆军 */
+	'16702': {
+		name: '埃塞俄比亚战争后勤', actor: '意大利',
+		choice: [
+			[
+				{ op: 'build', type: 'army', spaces: space_ids_of(['非洲北部']) },
+				{ op: 'battle', battle: 'land', kind: 'land', against: null, spaces: space_ids_of(['非洲东部']) },
+			],
+			[
+				{ op: 'build', type: 'army', spaces: space_ids_of(['非洲北部']) },
+				{ op: 'build', type: 'army', spaces: space_ids_of(['非洲东部']) },
+			],
+		],
+		notes: '在<非洲北部>建设陆军；对<非洲东部>发起陆战 或 在<非洲东部>建设陆军',
+	},
+
+	/* ============================================================
+	 * 意大利事件卡（EVENT）—— Group 2，3 张（2026-10-08）
+	 * 17721 钢铁条约：打出1张[响应卡]；德国打出1张[状态卡]
+	 *   · 意大利与德国同属 AXIS，set_pending_armed_delegate 不切 current_nation，
+	 *     故用自定义 it_delegate 实现「挂起给德国→德国打状态→归还意大利」。
+	 *   · 链式：意大利先获响应 extra_play，打出后由 play_card 钩子为德国建状态 extra_play
+	 *     并切 current_nation='德国'；德国打完状态（或放弃）后归还意大利。
+	 * 17722 华夫脱党：在<非洲北部>消灭1敌陆军；若相邻地区无英国陆军则征召1陆军
+	 *   · 新增 step 级 cond 支持（step 循环开头判断，满足才执行 recruit 原子 op）。
+	 * 17727 西班牙国：在<西欧><非洲北部>之一征召陆军；在<北海><地中海>之一建设海军
+	 *   · 两步各用 recruit/build 原子 op，多候选 spaces 由框架自动询问选一（按轴心相邻）。
+	 * ============================================================ */
+	/* 17721 钢铁条约 */
+	'17721': {
+		name: '钢铁条约', actor: '意大利',
+		run: function (game, ctx) {
+			/* 意大利先获「打出1张[响应卡]」的额外打出权 */
+			grant_extra_play(game, '意大利', '17721', '钢铁条约', { filter: 'response' })
+			return { ok: true, desc: '意大利可额外打出 1 张响应牌；打出后由德国打出 1 张状态卡' }
+		},
+		notes: '打出1张[响应卡]。德国打出1张[状态卡]',
+	},
+	/* 17722 华夫脱党 */
+	'17722': {
+		name: '华夫脱党', actor: '意大利',
+		steps: [
+			{ op: 'eliminate', type: 'army', spaces: space_ids_of(['非洲北部']) },
+			{
+				op: 'recruit', type: 'army', spaces: space_ids_of(['非洲北部']),
+				/* 若相邻地区没有英国陆军：在<非洲北部>征召1支陆军 */
+				cond: function (game) {
+					const tgt = space_id('非洲北部')
+					const adj = (data.spaces[tgt] && data.spaces[tgt].connections) || []
+					for (const sp of adj) {
+						const pieces = pieces_on(game, sp)
+						if (pieces.some(p => game.piece_nation[p] === '英国' && game.piece_type[p] === 'army'))
+							return { ok: false, reason: '相邻地区有英国陆军' }
+					}
+					return { ok: true }
+				},
+			},
+		],
+		notes: '在<非洲北部>消灭1支敌方国家陆军；若相邻地区没有英国陆军，在<非洲北部>征召1支陆军',
+	},
+	/* 17727 西班牙国 */
+	'17727': {
+		name: '西班牙国', actor: '意大利',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['西欧', '非洲北部']) },
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['北海', '地中海']) },
+		],
+		notes: '在<西欧><非洲北部>之一征召陆军；在<北海><地中海>之一建设海军（按轴心相邻）',
+	},
+
+	/* 17724 札萨·汗 */
+	'17724': {
+		name: '札萨·汗', actor: '意大利',
+		steps: [
+			{ op: 'eliminate', type: 'army', spaces: space_ids_of(['中东']) },
+			{
+				op: 'recruit', type: 'army', spaces: space_ids_of(['中东']),
+				/* 若相邻地区没有英国陆军：在<中东>征召1支陆军 */
+				cond: function (game) {
+					const tgt = space_id('中东')
+					const adj = (data.spaces[tgt] && data.spaces[tgt].connections) || []
+					for (const sp of adj) {
+						const pieces = pieces_on(game, sp)
+						if (pieces.some(p => game.piece_nation[p] === '英国' && game.piece_type[p] === 'army'))
+							return { ok: false, reason: '相邻地区有英国陆军' }
+					}
+					return { ok: true }
+				},
+			},
+		],
+		notes: '在<中东>消灭1支敌方国家陆军；若相邻地区没有英国陆军，在<中东>征召1支陆军',
+	},
+
+	/* 17725 掠夺 */
+	'17725': {
+		name: '掠夺', actor: '意大利',
+		run: function (game, ctx) {
+			const hb = effective_home_base(game, '意大利')
+			let n = 0
+			for (let sp = 1; sp < data.spaces.length; sp++) {
+				if (!data.spaces[sp]) continue
+				const ctrl = pieces_on(game, sp).some(p => game.piece_nation[p] === '意大利')
+				if (ctrl && sp !== hb) {
+					add_axis_score(game, 1)
+					remove_marker(game, sp, 1)
+					n++
+				}
+			}
+			return { ok: true, desc: '意大利控制的 ' + n + ' 个非大本营地区各+1分并失去1个计分标记' }
+		},
+		notes: '每有1个意大利控制的友方大本营之外的地区，获得1分；上述地区失去1个计分标记',
+	},
+
+	/* 17726 西班牙蓝色师 */
+	'17726': {
+		name: '西班牙蓝色师', actor: '意大利',
+		run: function (game, ctx) {
+			const all = game.table_responses || []
+			const su = all.filter(r => {
+				const c = inst_card(r.card_id)
+				return r.nation === '苏联' && c && c.type === 'RESPONSE'
+			})
+			if (!su.length)
+				return { ok: true, desc: '苏联没有暗置的响应卡，无效果' }
+			const pick = su[Math.floor(Math.random() * su.length)]
+			const i = all.indexOf(pick)
+			if (i >= 0) all.splice(i, 1)
+			if (!game.discard['苏联']) game.discard['苏联'] = []
+			game.discard['苏联'].push(pick.card_id)
+			game.log.push('【意大利】《西班牙蓝色师》随机弃置了苏联的 1 张暗置响应（内容不明）')
+			return { ok: true, desc: '随机弃置了苏联的 1 张暗置响应' }
+		},
+		notes: '暗牌弃置1张苏联的暗置响应',
+	},
+
+	/* 16703 罗马尼亚铁卫团 */
+	'16703': {
+		name: '罗马尼亚铁卫团', actor: '意大利',
+		steps: [
+			{ op: 'recruit', type: 'army', spaces: space_ids_of(['巴尔干']) },
+			{
+				op: 'run',
+				run: function (game, nation, arg) {
+					/* 委托德国：德国可弃置1张手牌并摸1张 */
+					game.it_delegate = { return_nation: '意大利', mode: 'german_draw' }
+					game.current_nation = '德国'
+					game.log.push('【意大利】《罗马尼亚铁卫团》委托德国：德国可弃置1张手牌并摸1张')
+					return { ok: true, desc: '在<巴尔干>征召陆军；德国可弃置1张手牌并摸1张' }
+				},
+			},
+		],
+		notes: '在<巴尔干>征召陆军。德国可弃置1张手牌：其摸1张牌',
+	},
+
+	/* 17729 卡佩里尼 UIT 24 伊 503 */
+	'17729': {
+		name: '卡佩里尼 UIT 24 伊 503', actor: '意大利',
+		run: function (game, ctx) {
+			game.italy_chain = {
+				order: ['德国', '意大利', '日本'], step: 0,
+				pickedNation: null, pickedCard: null, sub: null, results: [],
+			}
+			advance_italy_chain(game)
+			return { ok: true, desc: '所有友方玩家依次从弃牌堆随机抽1张牌并检视处置' }
+		},
+		notes: '所有友方玩家依次从弃牌堆随机选择1张牌并检视，选择 打出该[战略卡][状态卡][经济战] 或 将其置于牌堆顶 或 将其弃置',
+	},
+
+}
+
+/* 【2026-10-08】17729 卡佩里尼：推进轴心依次链。
+ * 每个国家在己方弃牌堆随机抽 1 张，检视后由 resolve_italy_chain 处置。
+ * 某国弃牌堆为空则跳过；全部处理完则清空 game.italy_chain。 */
+function advance_italy_chain(game) {
+	const ch = game.italy_chain
+	if (!ch) return
+	while (ch.step < ch.order.length) {
+		const nat = ch.order[ch.step]
+		const dis = game.discard[nat] || []
+		if (!dis.length) {
+			ch.results.push({ nation: nat, card: null, choice: 'empty' })
+			ch.step++
+			continue
+		}
+		const cid = dis[Math.floor(Math.random() * dis.length)]
+		ch.pickedNation = nat
+		ch.pickedCard = cid
+		ch.sub = null
+		game.current_nation = nat
+		const c = inst_card(String(inst_card_id(cid)))
+		game.log.push('【' + nat + '】因《卡佩里尼》从弃牌堆随机抽到《' + (c ? c.name : cid) + '》，请处置')
+		return
+	}
+	game.italy_chain = null
+	game.current_nation = '意大利'
+	game.log.push('【卡佩里尼】所有友方玩家处置完毕')
 }
 
 /* ============================================================
@@ -2546,6 +7249,1648 @@ const ECHO_EFFECTS = {
 		cost: { discard: 2 },
 		steps: [{ op: 'recruit', type: 'army', spaces: space_ids_of(['东欧']) }],
 	},
+
+	/* ============================================================
+	 * 德国增强卡（EFFECT）—— 主要在出牌阶段开始时(play_start)
+	 * ============================================================ */
+	/* 14500 黄色方案：损耗2，对<西欧>发起1次陆战（原子战斗预算复用） */
+	'14500': {
+		name: '黄色方案', actor: '德国',
+		cost: { attrition: 2 },
+		steps: [{
+			op: 'battle', battle: 'land', kind: 'land', against: null,
+			spacesFn: (game) => [data.id_of('西欧')],
+		}],
+	},
+	/* 15209 伞兵：损耗1，对"相邻德国空军"的地区发起1次陆战（原子战斗预算复用） */
+	'15209': {
+		name: '伞兵', actor: '德国',
+		cost: { attrition: 1 },
+		steps: [{
+			op: 'battle', battle: 'land', kind: 'land', against: null,
+			spacesFn: fn_adjacent_german_air,
+		}],
+	},
+	/* 15213 云雾：本回合中空军无法防御战斗（回合修正，无代价/步骤，挂 modifiers） */
+	'15213': {
+		name: '云雾', actor: '德国',
+		modifiers: [{ key: 'air_no_defend' }],
+		notes: '本回合中空军无法防御战斗',
+	},
+	/* 15214 战术革新：弃置德国场上1张状态卡，免费打出1张状态卡（自定义 run） */
+	'15214': {
+		name: '战术革新', actor: '德国',
+		run: (game, ctx) => run_effect_tactics(game, ctx),
+		notes: '弃置德国场上1张状态卡，免费打出1张状态卡',
+	},
+	/* 15215 卓越规划：检视牌堆顶5张，任意顺序置于牌堆顶或牌堆底 */
+	'15215': {
+		name: '卓越规划', actor: '德国',
+		steps: [{ op: 'deck_inspect', count: 5, topBottom: true }],
+		notes: '检视牌堆顶5张，任意顺序置于牌堆顶或牌堆底',
+	},
+	/* 15216 总体战：本回合内陆军被移除后，其所有者损耗1（回合修正） */
+	'15216': {
+		name: '总体战', actor: '德国',
+		modifiers: [{ key: 'army_removed_attrition' }],
+		notes: '本回合内陆军被移除后，其所有者损耗1',
+	},
+
+	/* ============================================================
+	 * 德国增强卡（EFFECT）B 组 —— 事件触发型（2026-09-30）
+	 * ============================================================
+	 * 模型：打出即"装载"进 game.armed_effects，当对应事件发生时
+	 * 自动结算（一次性，结算后弃入弃牌堆）。代价在触发时支付。
+	 * 复用 do_battle / build_piece / recruit_piece / attrition_cards 等原子操作。
+	 */
+	/*
+	 * 15205 JU-87 俯冲轰炸机：部署或调度空军后，损耗1：对相邻地区发起1次陆战
+	 *
+	 * 【2026-10-07 修正 · 用户裁定】旧实现是【错的】：
+	 *   run 里用 find_battle_target 自动挑【第一个】目标并立刻 do_battle，
+	 *   玩家既选不了目标、也选不了发起单位，还可能在没得选时白付"损耗1"。
+	 *
+	 * 卡面的正确语义是：它【规定发起位置】（空军所在地区的相邻陆地）
+	 * + 【给 1 次发起陆战的机会】—— 打谁、谁去打，由玩家在机会内决定。
+	 *
+	 * 因此改为复用 15226《巴巴罗萨》同款的【分步原子】：
+	 *   steps[0] = { op:'battle', kind:'land', pick:1, pickMin:0, spacesFn }
+	 * armed.run 只负责【建立战斗预算】（remaining=1，anchor=空军所在地区），
+	 * 之后由 event_battle / event_finish 驱动 —— 与事件卡的战斗预算
+	 * 是【同一套】代码（候选同源走 step_space_candidates，发起单位由玩家选）。
+	 *
+	 * 代价（损耗 1）延后到 event_finish：至少发动了 1 场才付；
+	 * 一场都没发动 = 等同 skip（卡留手牌、不付代价）。
+	 */
+	'15205': {
+		name: 'JU-87 俯冲轰炸机', actor: '德国',
+		steps: [{
+			op: 'battle', kind: 'land', pick: 1, pickMin: 0,
+			/* 候选 = anchor（空军所在地区）的相邻陆地，且可发起（允许空打） */
+			spacesFn: (game, actor, b) => ju87_land_targets(game, b && b.anchor),
+		}],
+		armed: {
+			when: 'after_deploy_air', cost: { attrition: 1 },
+			desc: '部署或调度空军后：对相邻地区发起1次陆战（打谁由你选）',
+			/* 预检：与 run 共用 ju87_land_targets，保证"弹得出框"必然"有得选" */
+			ready(game, ctx) {
+				if (ctx == null || ctx.space == null) return false
+				return ju87_land_targets(game, ctx.space).length > 0
+			},
+			run(game, ctx) {
+				const sp = ctx.space
+				if (sp == null) return { ok: true, skip: true, desc: '未指定空军所在地区' }
+				const cands = ju87_land_targets(game, sp)
+				if (!cands.length)
+					return { ok: true, skip: true, desc: '相邻无可发起的陆战目标，未发动' }
+				game.event_budget = {
+					card_id: ctx.card_id, nation: '德国', as: '德国',
+					kind: 'land', against: null,
+					remaining: 1,                 /* 1 次发起陆战的机会 */
+					anchor: sp,                   /* 发起位置锚点：空军所在地区 */
+					descs: [], battleOk: 0,
+					/* 代价延后：至少发动 1 场才损耗 1 张牌（见 event_finish） */
+					cost: { attrition: 1 },
+					source: 'armed',
+				}
+				refresh(game)
+				return {
+					ok: true, budget: true,
+					desc: '《JU-87》获得 1 次陆战机会（限 ' + data.name_of(sp) +
+						' 的相邻陆地，共 ' + cands.length + ' 个可选目标）',
+				}
+			},
+		},
+	},
+	/* 15206 轰炸伦敦：打出[经济战]且目标为英国，损耗1：不列颠每1支德国空军使损耗数+2 */
+	'15206': {
+		name: '轰炸伦敦', actor: '德国',
+		armed: {
+			when: 'econ_used', actor: '德国', cost: { attrition: 1 },
+			/*
+			 * 【2026-10-01】目标必须是英国 —— 放在 cond 而非 run：
+			 * "立刻窗口"模式下 cond 决定【是否开窗】，目标非英国时压根不弹可点，
+			 * 避免"能点但点了不生效"。run 里的同名检查作为兜底保留。
+			 */
+			cond: (game, ctx) => ((ctx && ctx.targets) || []).indexOf('英国') >= 0,
+			desc: '打出[经济战]且目标为英国时：不列颠每1支德国空军，其损耗数+2',
+			run(game, ctx) {
+				const targets = ctx.targets || []
+				if (targets.indexOf('英国') < 0) return { ok: true, skip: true, desc: '目标非英国，不发动' }
+				const bt = space_id('不列颠')
+				let k = 0
+				if (bt != null) for (const p of pieces_on(game, bt))
+					if (game.piece_nation[p] === '德国' && game.piece_type[p] === 'air') k++
+				if (!k) return { ok: true, skip: true, desc: '不列颠无德国空军，未发动' }
+				const lost = attrition_cards(game, '英国', 2 * k)
+				return { ok: true, desc: '不列颠有 ' + k + ' 支德国空军，英国额外损耗 ' + lost.length + ' 张牌' }
+			},
+		},
+	},
+	/* 15207 JU-52 空投补给：回合开始时（若场上有德国空军），损耗1：本回合内所有德国部队处于补给状态 */
+	'15207': {
+		name: 'JU-52 空投补给', actor: '德国',
+		armed: {
+			when: 'turn_start', actor: '德国', cost: { attrition: 1 },
+			cond: (game) => has_piece(game, '德国', 'air'),
+			desc: '回合开始时若场上有德国空军：本回合内所有德国部队处于补给状态',
+			run(game, ctx) {
+				game.modifiers = game.modifiers || []
+				game.modifiers.push({ key: 'all_german_supplied', untilTurn: game.turn, nation: '德国' })
+				return { ok: true, desc: '本回合内所有德国部队处于补给状态' }
+			},
+		},
+	},
+	/* 15208 齐柏林伯爵号：建设海军后，损耗1：在该海域部署或调度1支空军 */
+	'15208': {
+		name: '齐柏林伯爵号', actor: '德国',
+		armed: {
+			when: 'after_build_navy', actor: '德国', cost: { attrition: 1 },
+			desc: '建设海军后：在该海域部署或调度1支空军',
+			run(game, ctx) {
+				const sp = ctx.space
+				if (sp == null) return { ok: true, desc: '未指定海军所在海域' }
+				const supNow = compute_supply(game)
+				const okCarrier = pieces_on(game, sp).some(p =>
+					game.piece_nation[p] === '德国' &&
+					(game.piece_type[p] === 'army' || game.piece_type[p] === 'navy') &&
+					supNow.in_supply[p])
+				if (!okCarrier) return { ok: true, skip: true, desc: '该海域无处于补给状态的德国海陆部队，无法部署空军' }
+				const r = build_piece(game, '德国', 'air', sp)
+				refresh(game)
+				return r.ok ? { ok: true, desc: '在' + data.name_of(sp) + '部署1支德国空军' }
+					: { ok: true, desc: '无法在该海域部署空军：' + r.reason }
+			},
+		},
+	},
+	/* 15210 施佩伯爵海军上将号：建设海军后，损耗1：在<亚速尔>相邻地区发起1次海战 */
+	'15210': {
+		name: '施佩伯爵海军上将号', actor: '德国',
+		armed: {
+			when: 'after_build_navy', actor: '德国', cost: { attrition: 1 },
+			desc: '建设海军后：在<亚速尔>相邻地区发起1次海战',
+			/* 最小原子预检：<亚速尔>相邻海域能否发起海战 */
+			ready(game, ctx) {
+				const az = space_id('亚速尔')
+				if (az == null) return false
+				return !!find_battle_target(game, '德国', 'sea', { near: az, enemyOnly: true })
+			},
+			run(game, ctx) {
+				const az = space_id('亚速尔')
+				if (az == null) return { ok: true, desc: '亚速尔不存在' }
+				/* 复用最小原子（与 ready 共用） */
+				const tgt = find_battle_target(game, '德国', 'sea', { near: az, enemyOnly: true })
+				if (!tgt) return { ok: true, skip: true, desc: '亚速尔相邻无可发起的海战目标，未发动' }
+				const r = do_battle(game, '德国', tgt.space, 0, 'sea', { from: tgt.initiator })
+				if (!r.ok) return { ok: true, desc: '海战未发动：' + (r.reason || '') }
+				refresh(game)
+				return { ok: true, desc: '对' + data.name_of(tgt.space) + '发起海战' }
+			},
+		},
+	},
+	/* 15211 威瑟堡行动：[北方行动]计分阶段开始时，损耗1：在<北海>征召陆军；可打出1张[北方行动] */
+	'15211': {
+		name: '威瑟堡行动', actor: '德国',
+		armed: {
+			when: 'scoring_north', actor: '德国', cost: { attrition: 1 },
+			desc: '[北方行动]计分阶段开始时：在<北海>征召陆军；可打出1张[北方行动]',
+			run(game, ctx) {
+				const nb = space_id('北海')
+				let d = '未征召'
+				if (nb != null) {
+					const r = recruit_piece(game, '德国', 'army', nb)
+					d = r.ok ? '在北海征召陆军' : ('未征召：' + r.reason)
+				}
+				grant_extra_play(game, '德国', String(inst_card_id(ctx.card_id)), '威瑟堡行动', { filter: 'north' })
+				return { ok: true, desc: d + '；可再打出 1 张[北方行动]' }
+			},
+		},
+	},
+	/* 15212 G7e 鱼雷：打出[潜艇行动]后，损耗1：发起1次海战 */
+	'15212': {
+		name: 'G7e 鱼雷', actor: '德国',
+		armed: {
+			when: 'econ_used', actor: '德国', tag: '潜艇行动', cost: { attrition: 1 },
+			desc: '打出[潜艇行动]后：发起1次海战',
+			/*
+			 * 【2026-10-01】纯函数预检（无副作用）：是否存在"能真正发起海战"的
+			 * 补给中德军海军 + 相邻敌方海域。
+			 *
+			 * 为什么需要：手牌 ask 框模式下，若条件不满足仍弹框，玩家点了
+			 * 会走到 run 的 skip 分支 —— 卡留在手牌、什么都没发生，
+			 * 表现为"弹窗点了没实际打出"。有 ready 后【没把握就不弹框】，
+			 * 与国家技能"没得选就不给按钮"同款口径。
+			 */
+			ready(game, ctx) {
+				if (ctx && ctx.tag && ctx.tag !== '潜艇行动') return false
+				/* 最小原子：能否发起一次海战（有可攻击敌军的海域 + 相邻补给德军海军） */
+				return !!find_battle_target(game, '德国', 'sea', { enemyOnly: true })
+			},
+			run(game, ctx) {
+				if (ctx.tag !== '潜艇行动') return { ok: true, skip: true, desc: '非潜艇行动，不发动' }
+				/* 与 ready 共用同一个原子，保证"弹得出框"=="点了真能打" */
+				const tgt = find_battle_target(game, '德国', 'sea', { enemyOnly: true })
+				if (!tgt) return { ok: true, skip: true, desc: '无可发起的海战目标，未发动' }
+				const r = do_battle(game, '德国', tgt.space, 0, 'sea', { from: tgt.initiator })
+				if (r.ok) { refresh(game); return { ok: true, desc: '对' + data.name_of(tgt.sea) + '发起海战' } }
+				return { ok: true, skip: true, desc: '海战未发动：' + (r.reason || '') }
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 【2026-10-06】日本增强卡（EFFECT）—— 10 张
+	 *
+	 * 与德国增强卡的差异（别套用）：
+	 *   · 德国代价多为「损耗 N 张牌」(attrition)
+	 *   · 日本代价多为「弃置 1 张【响应卡】」(discard + filter:'response')
+	 *     —— 本轮已让 cost.discard 支持 filter（服务端校验 + 客户端过滤候选）
+	 *
+	 * 时点映射（trigger_ready 支持的 kind）：
+	 *   play_start           出牌阶段开始时（15408/7900）
+	 *   self + phase         本方回合某阶段随时可打出
+	 *                        （15407 弃牌 / 15409·15413 计分 / 15412 摸牌）
+	 *   anytime              任意时机（15411）
+	 *   load                 事件触发型：打出即装载，等事件时自动结算
+	 *                        （15405 建设海军后 / 15406 部署空军后 / 15410 被攻击时）
+	 * ============================================================ */
+
+	/* ---- 15405 大日本帝国海军：建设海军后，弃1响应 -> 建设1支海军 ---- */
+	'15405': {
+		name: '大日本帝国海军', actor: '日本',
+		armed: {
+			when: 'after_build_navy', actor: '日本',
+			cost: { discard: 1, filter: 'response' },
+			desc: '建设海军后：弃1张响应卡，建设1支海军',
+			ready(game, ctx) {
+				/* 预检：该地区还能建海军吗（用既有原子 can_build_at） */
+				const sp = ctx && ctx.space
+				if (sp == null) return false
+				/*
+				 * ⚠ 签名是 can_build_at(game, nation, space, type)
+				 *   —— 别写成 (game, nation, type, space)，那是 build_piece 的顺序。
+				 *   两者参数顺序【不同】，极易搞混（2026-10-06 踩过）。
+				 */
+				return !!can_build_at(game, '日本', sp, 'navy').ok
+			},
+			run(game, ctx) {
+				const sp = ctx.space
+				if (sp == null) return { ok: true, skip: true, desc: '无建设地区' }
+				if (!can_build_at(game, '日本', sp, 'navy').ok)
+					return { ok: true, skip: true, desc: '该地区无法再建设海军' }
+				const r = build_piece(game, '日本', 'navy', sp)
+				return r.ok
+					? { ok: true, desc: '在' + data.name_of(sp) + '建设1支海军' }
+					: { ok: true, skip: true, desc: '建设失败：' + (r.reason || '') }
+			},
+		},
+	},
+
+	/* ---- 15406 南云忠一指挥航空队：在海域部署/调度飞机后，弃1响应 -> 对相邻发起1次战斗 ---- */
+	'15406': {
+		name: '南云忠一指挥航空队', actor: '日本',
+		armed: {
+			when: 'after_deploy_air', actor: '日本',
+			cost: { discard: 1, filter: 'response' },
+			desc: '在海域部署或调度飞机后：弃1张响应卡，对相邻地区发起1次战斗',
+			ready(game, ctx) {
+				if (ctx == null || ctx.space == null) return false
+				/* 只对【海域】上的飞机触发 */
+				const spd = data.spaces[Number(ctx.space)]
+				if (!spd || spd.terrain !== 'sea') return false
+				return !!find_battle_target(game, '日本', 'land', { enemyOnly: true })
+			},
+			run(game, ctx) {
+				if (ctx == null || ctx.space == null)
+					return { ok: true, skip: true, desc: '无飞机所在地区' }
+				const spd = data.spaces[Number(ctx.space)]
+				if (!spd || spd.terrain !== 'sea')
+					return { ok: true, skip: true, desc: '飞机不在海域，未发动' }
+				/* 复用最小原子找目标（与 ready 同源） */
+				const tgt = find_battle_target(game, '日本', 'land', { enemyOnly: true })
+				if (!tgt) return { ok: true, skip: true, desc: '无可发起的战斗目标' }
+				const r = do_battle(game, '日本', tgt.space, null, 'land', { from: tgt.initiator })
+				return r.ok
+					? { ok: true, desc: '对' + data.name_of(tgt.space) + '发起1次战斗' }
+					: { ok: true, skip: true, desc: '战斗未发动：' + (r.reason || '') }
+			},
+		},
+	},
+
+	/* ---- 15407 秋水火箭战斗机：弃牌阶段开始时，消灭1支相邻日本空军的敌方空军 ---- */
+	'15407': {
+		name: '秋水火箭战斗机', actor: '日本',
+		desc: '弃牌阶段开始时：消灭1支相邻日本空军的敌方国家空军',
+		run(game, ctx) {
+			/*
+			 * ⚠ 不能用 eliminate_piece —— 它的 enemies 过滤里
+			 *   包含 `game.piece_type[p] !== 'air'`，【排除空军】，
+			 *   消灭敌机会被拒绝（2026-10-06 踩过）。
+			 *   消灭敌方空军要用【夺取制空权】原子 seize_air。
+			 */
+			const myFaction = faction_of_nation('日本')
+			for (const p in game.piece_nation) {
+				if (game.location[p] == null) continue
+				if (game.piece_nation[p] !== '日本' || game.piece_type[p] !== 'air') continue
+				const loc = Number(game.location[p])
+				const nbrs = [loc].concat(
+					get_connections(game, loc, myFaction).map(Number))
+				for (const sp of nbrs) {
+					/* 该地区有敌方空军吗 */
+					const hasEnemyAir = pieces_on(game, sp).some(q => {
+						if (game.piece_type[q] !== 'air') return false
+						const qf = faction_of_nation(game.piece_nation[q])
+						return qf && qf !== myFaction
+					})
+					if (!hasEnemyAir) continue
+					const r = seize_air(game, '日本', sp, p)
+					if (r && r.ok)
+						return {
+							ok: true,
+							desc: '消灭' + data.name_of(sp) + ' 的敌方空军',
+						}
+				}
+			}
+			return { ok: false, reason: '没有相邻的敌方空军可消灭' }
+		},
+	},
+
+	/* ---- 15408 山本五十六指挥大和号：出牌阶段开始时，弃1响应 -> 海域部署或调度1支空军 ---- */
+	'15408': {
+		name: '山本五十六指挥大和号', actor: '日本',
+		kind: 'play_start',
+		cost: { discard: 1, filter: 'response' },
+		/*
+		 * 【2026-10-06 玩家裁定】部署空军必须复用【空军力量】的原子操作：
+		 *   空军力量 部署 = air_host_check（载体校验）+ build_piece(game, nation, 'air', space)。
+		 * 原实现用 steps:[{op:'build',type:'air'}] 走 can_build_at —— 海军是"同格载体"而非"相邻"，
+		 * can_build_at 只查相邻补给陆军，对海域上靠海军搭载的空军一律误判非法，候选永远为空。
+		 * 改用 can_deploy_air（包装 air_host_check + unit_slot_free），候选才会正确出现。
+		 *
+		 * 卡面：在海域【部署或调度】1 支空军 —— 二者都复用同一套载体校验：
+		 *   deploy：build_piece 落子（内部再调 air_host_check + 格位校验）；
+		 *   move  ：把 1 支日本空军移入该海域（同格不能已有本国空军）。
+		 */
+		/* 【2026-10-09】抽出共享实现给 17706 复用，本卡行为不变（nat 固定日本） */
+		run(game, ctx) { return run_sea_air_deploy(game, ctx, '日本') },
+		},
+
+		/* ---- 15409 太平洋帝国：计分阶段开始时，<太平洋>每有1支日本海军 +1分 ---- */
+	'15409': {
+		name: '太平洋帝国', actor: '日本',
+		desc: '计分阶段开始时：<太平洋>每有1支日本海军，获得1分',
+		run(game, ctx) {
+			const ids = space_ids_expand(['太平洋'])
+			let n = 0
+			for (const sp of ids) {
+				for (const p of pieces_on(game, sp)) {
+					if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy') n++
+				}
+			}
+			if (!n) return { ok: false, reason: '<太平洋>没有日本海军' }
+			add_axis_score(game, n)
+			return { ok: true, desc: '<太平洋>有 ' + n + ' 支日本海军，获得 ' + n + ' 分' }
+		},
+	},
+
+	/* ---- 15410 武士道：日本陆军被攻击时，弃1响应 -> 本次战斗中无法被移除 ---- */
+	/* ============================================================
+	 * 【2026-10-07】苏联增强卡（EFFECT）—— 12 张（17805–17815 + 17900）
+	 *
+	 * 苏联代价体系 = 「弃置 1 张[建设陆军]」（cost.discard + filter:'build'），
+	 * 与德国「损耗」、日本「弃 1 张[响应卡]」不同（别套用）。
+	 *
+	 * 时点：after_battle / piece_removed 两个窗口本次新建，
+	 * 但都挂在【与德国·法国状态卡同一个派发点】上（arm_after_battle_status /
+	 * 战斗移除处），不另造机制。
+	 * ============================================================ */
+
+	/* ---- 17814 进击的朱可夫：对4地之一发起战斗后，弃1[建设陆军] -> 战斗地区建设陆军 ---- */
+	'17814': {
+		name: '进击的朱可夫', actor: '苏联',
+		armed: {
+			when: 'after_battle', actor: '苏联',
+			cost: { discard: 1, filter: 'build' },
+			desc: '对<罗斯><乌克兰><东欧><巴尔干>发起战斗后：弃置1张[建设陆军]，在战斗地区建设1支陆军',
+			/* 预检：战斗地区必须是这四地之一，且确实能建（否则不给窗口） */
+			ready(game, ctx) {
+				if (!ctx || ctx.space == null) return false
+				const nm = data.name_of(ctx.space)
+				if (['罗斯', '乌克兰', '东欧', '巴尔干'].indexOf(nm) < 0) return false
+				return can_build_at(game, '苏联', ctx.space, 'army').ok
+			},
+			/* 直接复用德国 15253《闪电战》的同款原子：在战斗地区 build_piece */
+			run(game, ctx) {
+				const sp = (ctx && ctx.space != null) ? ctx.space
+					: (game.last_battle ? game.last_battle.space : null)
+				if (sp == null) return { ok: false, reason: '本回合尚未发起战斗' }
+				const r = build_piece(game, '苏联', 'army', sp)
+				refresh(game)
+				return r.ok
+					? { ok: true, desc: '在' + data.name_of(sp) + '建设1支苏联陆军' }
+					: { ok: true, skip: true, desc: '无法在' + data.name_of(sp) + '建设陆军：' + r.reason }
+			},
+		},
+	},
+
+	/* ---- 17900 八月风暴：<中国东北>被友方攻击后，弃1[建设陆军] -> 该地区征召苏陆军并发起1次陆战 ---- */
+	'17900': {
+		name: '八月风暴', actor: '苏联',
+		armed: {
+			when: 'after_battle', actor: '苏联',
+			cost: { discard: 1, filter: 'build' },
+			desc: '<中国东北>被友方攻击后：弃置1张[建设陆军]，在战斗地区征召1支苏联陆军，并以此发起1次陆战',
+			ready(game, ctx) {
+				if (!ctx || ctx.space == null) return false
+				if (data.name_of(ctx.space) !== '中国东北') return false
+				/* 友方（同盟）发起的攻击 */
+				return faction_of_nation(ctx.attacker || ctx.nation) === faction_of_nation('苏联')
+			},
+			run(game, ctx, gathered) {
+				const sp = (ctx && ctx.space != null) ? ctx.space : null
+				if (sp == null) return { ok: false, reason: '未指定战斗地区' }
+				/* 第二步：玩家已点选进攻目标 -> 用新征召的苏军发起陆战 */
+				if (gathered && gathered.newPiece != null) {
+					const target = (gathered.space != null) ? gathered.space
+						: (ctx && ctx.space != null ? ctx.space : null)
+					if (target == null) return { ok: false, reason: '未选择进攻目标' }
+					const br = do_battle(game, '苏联', target, null, 'land', { from: gathered.newPiece })
+					if (!br.ok)
+						return { ok: true, skip: true, desc: '发起陆战失败：' + (br.reason || '') }
+					return {
+						ok: true,
+						desc: '在' + data.name_of(sp) + '征召1支苏联陆军，并由此向' +
+							data.name_of(target) + '发起1次陆战',
+					}
+				}
+				/* 第一步：在战斗地区（中国东北）征召 1 支苏联陆军（参考 15325 建/征召后立刻用新单位作战） */
+				const rc = recruit_piece(game, '苏联', 'army', sp)
+				if (!rc.ok)
+					return { ok: true, skip: true, desc: '无法在' + data.name_of(sp) + '征召陆军：' + rc.reason }
+				refresh(game)
+				const newP = Object.keys(game.location).find(p =>
+					game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army' &&
+					game.location[p] === sp)
+				if (!newP)
+					return { ok: true, skip: true, desc: '在' + data.name_of(sp) + '征召陆军后未找到该部' }
+				/* 候选：与中国东北相邻的敌占陆地（由玩家点选），用新苏军发起陆战 */
+				const cands = []
+				for (const nb of get_connections(game, sp, faction_of_nation('苏联'))) {
+					const i = Number(nb)
+					const s = data.spaces[i]
+					if (!s || s.terrain !== 'land') continue
+					if (pieces_on(game, i).some(p => faction_of_nation(game.piece_nation[p]) !== faction_of_nation('苏联')))
+						cands.push(i)
+				}
+				if (!cands.length)
+					return { ok: true, skip: true, desc: '已征召苏陆军于' + data.name_of(sp) + '，但周边无敌方占领区可进攻' }
+				/* 暂存新棋子 id 到 off.arg，供第二步读取（need:'space' 多步协议） */
+				if (game.armed_offer) {
+					game.armed_offer.arg = game.armed_offer.arg || {}
+					game.armed_offer.arg.newPiece = newP
+				}
+				return {
+					need: 'space', candidates: cands, pick: 1, pickMin: 1,
+					desc: '已在' + data.name_of(sp) + '征召1支苏联陆军，请选择其进攻的相邻敌占区',
+				}
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 【第二批】需"玩家选目标"的苏联增强卡（17806 / 17808 / 17809 / 17811）
+	 *
+	 * 选目标一律用框架自带的 need:'space' / need:'piece' 协议：
+	 *   - steps[].spaces 给候选地区 -> need:'space'（点地图）
+	 *   - pickUnit 给候选算子    -> need:'piece'（点棋子）
+	 * ECHO 的 pending【不落状态】，客户端把选择放进 play_card 的 arg 重发。
+	 * ============================================================ */
+
+	/* ---- 17805 红色管弦乐队 ----
+	 * 触发：苏联/德国/英国 出牌阶段开始时（offer_su_red 自定义派发，不走通用 armed 扫描）。
+	 * 流程（三挂起）：
+	 *   ① 挂起苏联询问是否使用（su_red_ask）；
+	 *   ② 若使用，苏联选 1 张德国桌面[状态卡]（su_red_pick，发动后 17805 移出手牌）；
+	 *   ③ 挂起德国二选一（pending_red）：本回合内无效 / 损耗 2 张牌。
+	 * 无代价（卡面未写代价）；发动即一次性使用（卡移出苏联手牌）。
+	 * armed.when='su_red' 仅作"不可主动打出"标记，run 由自定义 action 调用。
+	 */
+	'17805': {
+		name: '红色管弦乐队', actor: '苏联',
+		armed: {
+			when: 'su_red', actor: '苏联',
+			desc: '苏联/德国/英国出牌阶段开始时：询问苏联是否使用。若使用，苏联选1张德国[状态卡]，德国选择本回合内无效或损耗2张牌',
+		},
+	},
+
+	/* ---- 17806 空降部队：部署/调度空军后，弃1[建设陆军] -> 该空军相邻地区建设陆军 ----
+	 * 时点 after_deploy_air 已存在（德国 15205 / 日本 15406 在用），直接复用。 */
+	'17806': {
+		name: '空降部队', actor: '苏联',
+		armed: {
+			when: 'after_deploy_air', actor: '苏联',
+			cost: { discard: 1, filter: 'build' },
+			desc: '部署/调度空军后：弃置1张[建设陆军]，在该空军相邻地区建设1支陆军',
+			ready(game, ctx) {
+				const sp = (ctx && ctx.space != null) ? ctx.space : null
+				if (sp == null) return false
+				/* 候选非空才给窗口（否则玩家点了没得选） */
+				return su_air_adjacent_build_spaces(game, sp).length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				const sp = (ctx && ctx.space != null) ? ctx.space : null
+				if (sp == null) return { ok: false, reason: '未指定空军所在地区' }
+				const cands = su_air_adjacent_build_spaces(game, sp)
+				if (!cands.length) return { ok: true, skip: true, desc: '没有可建设陆军的相邻地区' }
+				/* 首次进入：请玩家选地区（框架 need:'space'） */
+				if (arg.space == null) return { need: 'space', candidates: cands, pick: 1, pickMin: 1 }
+				const pick = Number(arg.space)
+				if (cands.indexOf(pick) < 0) return { ok: false, reason: '所选地区不在候选内' }
+				const r = build_piece(game, '苏联', 'army', pick)
+				refresh(game)
+				return r.ok
+					? { ok: true, desc: '在' + data.name_of(pick) + '建设1支苏联陆军（空降）' }
+					: { ok: true, skip: true, desc: '无法在' + data.name_of(pick) + '建设陆军：' + r.reason }
+			},
+		},
+	},
+
+	/* ---- 17808 莫斯科战役：苏陆军被移除后（且场上再无苏陆军），弃1[建设陆军] -> 莫斯科或相邻消灭1敌陆军 ---- */
+	'17808': {
+		name: '莫斯科战役', actor: '苏联',
+		armed: {
+			when: 'piece_removed', actor: '苏联',
+			cost: { discard: 1, filter: 'build' },
+			desc: '苏联陆军被移除后且场上无苏联陆军：弃置1张[建设陆军]，消灭<莫斯科>或相邻地区1支敌方陆军',
+			ready(game, ctx) {
+				/* 必须：被移除的是苏联陆军 + 场上已无苏联陆军 + 有可消灭目标 */
+				if (!ctx || ctx.piece_nation !== '苏联' || ctx.piece_type !== 'army') return false
+				const hasSu = Object.keys(game.location || {}).some(p =>
+					game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army' &&
+					game.location[p] != null)
+				if (hasSu) return false
+				return su_enemy_armies_near(game, '莫斯科').length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				const cands = su_enemy_armies_near(game, '莫斯科')
+				if (!cands.length) return { ok: true, skip: true, desc: '没有可消灭的敌方陆军' }
+				/* 首次进入：请玩家选敌方陆军（框架 need:'piece'） */
+				if (arg.piece == null) return { need: 'piece', candidates: cands, pick: 1, pickMin: 1 }
+				const pick = String(arg.piece)
+				if (cands.indexOf(pick) < 0) return { ok: false, reason: '所选部队不在候选内' }
+				const sp = game.location[pick]
+				const vn = game.piece_nation[pick]
+				const r = eliminate_piece(game, '苏联', sp, pick)
+				refresh(game)
+				return r.ok
+					? { ok: true, desc: '消灭' + data.name_of(sp) + '的' + vn + '陆军' }
+					: { ok: true, skip: true, desc: '无法消灭该部队' }
+			},
+		},
+	},
+
+	/* ---- 17809 骑兵师：出牌阶段开始时，弃1[建设陆军] -> 移除场上1支苏陆军，再建设1支陆军（两步） ---- */
+	'17809': {
+		name: '骑兵师', actor: '苏联',
+		armed: {
+			when: 'play_start', actor: '苏联',
+			cost: { discard: 1, filter: 'build' },
+			desc: '出牌阶段开始时：弃置1张[建设陆军]，移除场上1支苏联陆军，然后建设1支陆军',
+			ready(game, ctx) {
+				/* 场上至少有 1 支苏联陆军才给窗口 */
+				return su_army_pieces(game).length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				/* 第一步：选要移除的己方苏联陆军 */
+				if (arg.piece == null) {
+					const cands = su_army_pieces(game)
+					if (!cands.length) return { ok: true, skip: true, desc: '场上没有苏联陆军' }
+					return { need: 'piece', candidates: cands, pick: 1, pickMin: 1 }
+				}
+				const pick = String(arg.piece)
+				/*
+				 * 【幂等性】ECHO 的 pending 不落状态，客户端每次都把【累积后的整个 arg】
+				 * 随 play_card 重发 —— 所以本 run 会被多次调用，第一次已把部队移除，
+				 * 第二次进来时该部队已不在场，若再校验"必须在场"就会误报失败。
+				 * 故在 game 上记一个临时槽记录"第一步已完成"，保证只移除一次。
+				 */
+				const slot = (game.su_cavalry_step = game.su_cavalry_step || {})
+				if (slot.piece !== pick) {
+					if (su_army_pieces(game).indexOf(pick) < 0)
+						return { ok: false, reason: '所选部队不是场上的苏联陆军' }
+					slot.fromSpace = game.location[pick]
+					remove_piece(game, '苏联', pick)
+					refresh(game)
+					slot.piece = pick
+				}
+				const fromSpace = slot.fromSpace
+				/* 第二步：选建设地区（候选 = 统一 helper 算出的可建设陆军地区） */
+				if (arg.space == null) {
+					const cands = build_candidate_spaces(game, '苏联', 'army', {})
+					if (!cands.length)
+						return { ok: true, desc: '移除了' + data.name_of(fromSpace) + '的苏联陆军（无可建设地区）' }
+					return { need: 'space', candidates: cands, pick: 1, pickMin: 1 }
+				}
+				const sp = Number(arg.space)
+				const r = build_piece(game, '苏联', 'army', sp)
+				refresh(game)
+				game.su_cavalry_step = null   /* 收尾，清掉第一步的临时槽 */
+				return {
+					ok: true,
+					desc: '移除' + data.name_of(fromSpace) + '的苏联陆军' +
+						(r.ok ? '，并在' + data.name_of(sp) + '建设1支陆军'
+							: '（但无法在' + data.name_of(sp) + '建设：' + r.reason + '）'),
+				}
+			},
+		},
+	},
+
+	/* ---- 17811 雅科夫列夫设计局：苏空军被移除后，在该地区或相邻部署/调度1支苏空军 ---- */
+	'17811': {
+		name: '雅科夫列夫设计局', actor: '苏联',
+		armed: {
+			when: 'piece_removed', actor: '苏联',
+			desc: '苏联空军被移除后：在该地区或其相邻地区部署/调度1支苏联空军',
+			ready(game, ctx) {
+				if (!ctx || ctx.piece_nation !== '苏联' || ctx.piece_type !== 'air') return false
+				if (ctx.space == null) return false
+				return su_air_deploy_spaces(game, ctx.space).length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				const base = (ctx && ctx.space != null) ? ctx.space : null
+				if (base == null) return { ok: false, reason: '未指定空军被移除的地区' }
+				const cands = su_air_deploy_spaces(game, base)
+				if (!cands.length) return { ok: true, skip: true, desc: '没有可部署空军的地区' }
+				if (arg.space == null) return { need: 'space', candidates: cands, pick: 1, pickMin: 1 }
+				const pick = Number(arg.space)
+				if (cands.indexOf(pick) < 0) return { ok: false, reason: '所选地区不在候选内' }
+				const r = build_piece(game, '苏联', 'air', pick)
+				refresh(game)
+				return r.ok
+					? { ok: true, desc: '在' + data.name_of(pick) + '部署1支苏联空军' }
+					: { ok: true, skip: true, desc: '无法在' + data.name_of(pick) + '部署空军：' + r.reason }
+			},
+		},
+	},
+
+	/* ---- 17815 Z计划：空军阶段开始时，【中国】部署1支空军 或 发起1次夺取制空权 ----
+	 *
+	 * actor = '中国'（卡虽属苏联卡组，但效果作用于中国；与 15307《自由法国海军》
+	 * actor='法国' 的先例一致）。
+	 * 二选一用框架现成的顶层 choice 字段：event_card_needs 会先要 need:'choice'，
+	 * 之后 arg.choice 带回所选分支（0=部署空军，1=夺取制空权）。
+	 */
+	'17815': {
+		name: 'Z 计划', actor: '中国',
+		choice: [[], []],   /* 两个分支，仅用于触发"先问分支"；实际效果走 run */
+		run(game, ctx) {
+			const arg = (ctx && ctx.arg) || {}
+			if (arg.choice == null) return { ok: false, reason: '请先选择：部署空军 或 夺取制空权' }
+			if (arg.choice === 0) {
+				/* 分支①：部署 1 支中国空军 */
+				const cands = []
+				for (const sid in data.spaces) {
+					const n = Number(sid)
+					if (data.spaces[n].terrain === 'sea') continue
+					if (!air_host_check(game, '中国', n).ok) continue
+					if (can_build_at(game, '中国', n, 'air').ok) cands.push(n)
+				}
+				if (!cands.length) return { ok: true, skip: true, desc: '没有可部署中国空军的地区' }
+				if (arg.space == null) return { need: 'space', candidates: cands, pick: 1, pickMin: 1 }
+				const r = build_piece(game, '中国', 'air', Number(arg.space))
+				refresh(game)
+				return r.ok
+					? { ok: true, desc: '中国在' + data.name_of(Number(arg.space)) + '部署1支空军' }
+					: { ok: true, skip: true, desc: '无法部署空军：' + r.reason }
+			}
+			/* 分支②：夺取制空权（复用 seize_air 原子） */
+			const cands = air_seize_spaces(game, '中国')
+			if (!cands.length) return { ok: true, skip: true, desc: '没有可夺取制空权的地区' }
+			if (arg.space == null) return { need: 'space', candidates: cands, pick: 1, pickMin: 1 }
+			const r = seize_air(game, '中国', Number(arg.space), null)
+			refresh(game)
+			return r.ok
+				? { ok: true, desc: '中国在' + data.name_of(Number(arg.space)) + '发起夺取制空权' }
+				: { ok: true, skip: true, desc: '无法夺取制空权：' + (r.reason || '') }
+		},
+	},
+
+	/* ---- 17807 里海舰队：计分阶段开始时，在<里海>相邻地区征召 1 支陆军 ----
+	 *
+	 * 与日本 15413《诸岛要塞》同款：self + phase:'scoring' + steps:[{op:'recruit'}]。
+	 * 候选地区写死"里海的陆地相邻"（已核实：中亚、中东），
+	 * 框架会再按 can_recruit_at 过滤（该地区有部队则不可征召）。
+	 * 无代价（卡面未写代价，与苏联其它 EFFECT 的"弃1[建设陆军]"不同）。
+	 */
+	/* ============================================================
+	 * 意大利增强卡 EFFECT 组 1（2026-10-09）
+	 *
+	 * 三张都是【计分阶段开始时】发动的自身时机型（载体 A）：
+	 *   CARD_TRIGGERS 注册 kind:'self', phase:'scoring'，steps 声明式。
+	 * 仿苏联 17807《里海舰队》（就在本表下方）。
+	 *
+	 * ⚠ 必须写在 ECHO_EFFECTS（不是 EVENT_EFFECTS）：
+	 *   card_effect_of() 按【卡类型】分派 —— EFFECT 查 ECHO_EFFECTS，
+	 *   EVENT 才查 EVENT_EFFECTS。写错表会静默报"效果尚未实现"。
+	 *
+	 * 征召候选走 step_space_candidates（内部即 can_recruit_at），
+	 * 与建设阶段高亮同一口径，不手搓循环。
+	 * ============================================================ */
+
+	/* 17707 意大利皇家海军司令部：计分阶段开始时，场上每有1支意大利海军，获得1分 */
+	'17707': {
+		name: '意大利皇家海军司令部', actor: '意大利',
+		steps: [{
+			op: 'run',
+			run(game, nation) {
+				const k = count_units_all(game, '意大利', ['navy'])
+				if (!k) return { ok: true, desc: '场上无意大利海军，无效果' }
+				add_axis_score(game, k)
+				return { ok: true, desc: '场上每有 1 支意大利海军（' + k + ' 支），意大利获得 ' + k + ' 分' }
+			},
+		}],
+		desc: '计分阶段开始时：场上每有1支意大利海军，获得1分',
+	},
+
+	/* 17709 黄金广场改变：计分阶段开始时，在<中东>征召陆军 */
+	'17709': {
+		name: '黄金广场改变', actor: '意大利',
+		steps: [{
+			op: 'recruit', type: 'army', spaces: space_ids_of(['中东']),
+		}],
+		desc: '计分阶段开始时：在<中东>征召陆军',
+	},
+
+	/* 17710 索马里兰：计分阶段开始时，在<非洲东部>征召陆军 */
+	'17710': {
+		name: '索马里兰', actor: '意大利',
+		steps: [{
+			op: 'recruit', type: 'army', spaces: space_ids_of(['非洲东部']),
+		}],
+		desc: '计分阶段开始时：在<非洲东部>征召陆军',
+	},
+
+	/* ============================================================
+	 * 组 4b · 16701 意大利万岁（2026-10-09）
+	 *
+	 * 卡面：出牌阶段开始时：本回合出牌阶段【行动 2 次】，但只能打出[战略卡]。
+	 * 玩家口径（2026-10-09）：[战略卡] = 【基本卡】(BASIC)。
+	 *
+	 * 载体：kind:'play_start'（与日本 15408 同款时点）。
+	 * 效果落成两个 game 字段：
+	 *   game.it_viva      = true   本回合限制生效（只能打基本卡）
+	 *   game.it_viva_used = 0      已用掉的额外机会数（上限 1）
+	 * 由 mark_play_done / it_italy_viva_left 配合实现"行动 2 次"。
+	 *
+	 * ⚠ 新增权利类状态必须在 phase_play 与 next_phase 两处清（pitfalls 已载），
+	 *   否则会跨阶段/跨回合残留。
+	 * ============================================================ */
+	'16701': {
+		name: '意大利万岁', actor: '意大利',
+		kind: 'play_start',
+		desc: '出牌阶段开始时：本回合出牌阶段行动2次，但只能打出基本卡',
+		run(game, ctx) {
+			game.it_viva = true
+			game.it_viva_used = 0
+			return { ok: true, desc: '本回合出牌阶段可行动 2 次，但只能打出基本卡' }
+		},
+	},
+
+	/* ============================================================
+	 * 组 4 · 16700 一日之狮（2026-10-09，新增 enemy_echo_played 窗口）
+	 *
+	 * 卡面：敌方国家打出[增强卡]时，损耗 1 张牌：使其无效。
+	 *
+	 * 玩家口径（2026-10-09）：等同 15329《反潜战术》的拦截 ——
+	 *   照常打出、占名额、但【效果不发生】。
+	 *
+	 * 实现：新增 armed 窗口 'enemy_echo_played'，派发点在 play_card 的
+	 * ECHO 分支【resolve_event_card 之前】（效果执行前才拦得住）。
+	 * 检测到应答就挂起该次打出；16700 的 run 负责：
+	 *   ① 意大利损耗 1 张（代价）
+	 *   ② 把被拦截的卡从对方手牌移进弃牌堆（"照常打出"）
+	 *   ③ 不执行其效果（因为 play_card 已 return）
+	 *
+	 * ⚠ 必须 watch:true —— ctx.nation 是打牌的敌方，卡持有国是意大利。
+	 * ============================================================ */
+	'16700': {
+		name: '一日之狮', actor: '意大利',
+		armed: {
+			when: 'enemy_echo_played', actor: '意大利', watch: true,
+			desc: '敌方打出[增强卡]时：损耗1张牌，使其无效',
+			/* 预检：确实是敌方打出 + 意大利付得起损耗 */
+			ready(game, ctx) {
+				const who = ctx && ctx.nation
+				if (!who) return false
+				/* 敌方 = 不同阵营（意大利属轴心） */
+				if (faction_of_nation(who) === 'axis') return false
+				/* 付不起损耗就不给窗口（避免"点了被拒"） */
+				return can_attrite(game, '意大利', 1)
+			},
+			run(game, ctx) {
+				const who = ctx && ctx.nation
+				const cid = ctx && ctx.card
+				if (!who || !cid)
+					return { ok: true, skip: true, desc: '未记录被打出的增强卡' }
+				/* ① 代价：意大利损耗 1 张 */
+				if (!can_attrite(game, '意大利', 1))
+					return { ok: true, skip: true, desc: '意大利牌库不足，无法损耗' }
+				attrition_cards(game, '意大利', 1)
+				/* ② 被拦截的卡照常打出（进弃牌堆），但效果不执行 */
+				const nm = (inst_card(String(inst_card_id(cid))) || {}).name || cid
+				discard_card(game, who, cid)
+				/* ③ 标记本次不再重复询问（防止重复拦截） */
+				game.__skip_echo_intercept = true
+				return {
+					ok: true,
+					desc: '意大利损耗 1 张牌：敌方增强卡《' + nm + '》效果无效',
+				}
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 组 3c · 17708 意大利皇家空军（2026-10-09，方案 A：watch）
+	 *
+	 * 卡面：成为[经济战]目标时，移除 1 支空军：不执行损耗。
+	 *
+	 * 载体：econ_used（已存在的窗口）+ watch（意大利是被打击方，
+	 *       事件发起方 ctx.nation 是打击方）。
+	 * 「不执行损耗」用【事后回滚】实现，与德国状态卡 15246 的
+	 * reduce_attrition 同款 —— 不需要在 play_card 里新增挂起。
+	 *
+	 * 交互：armed 原生的 need:'piece' 协议（玩家选移除哪支空军）。
+	 * ============================================================ */
+	'17708': {
+		name: '意大利皇家空军', actor: '意大利',
+		armed: {
+			when: 'econ_used', actor: '意大利', watch: true,
+			desc: '成为经济战目标时：移除1支空军，本次损耗不执行',
+			/* 只在本国是目标、且确实被损耗、且场上有空军时才给窗口 */
+			ready(game, ctx) {
+				const tgs = (ctx && ctx.targets) || []
+				if (tgs.indexOf('意大利') < 0) return false
+				const lost = (ctx && ctx.attrited && ctx.attrited['意大利']) || 0
+				if (lost <= 0) return false
+				/* 无空军时不能打出（玩家口径） */
+				return it_air_pieces(game).length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				const airs = it_air_pieces(game)
+				if (!airs.length) return { ok: true, skip: true, desc: '场上无意大利空军，无法发动' }
+				/* ① 还没选 -> 让意大利选移除哪支空军（armed need 协议） */
+				if (arg.piece == null)
+					return { need: 'piece', candidates: airs, pick: 1, pickMin: 1 }
+				const p = arg.piece
+				if (airs.indexOf(p) < 0)
+					return { ok: true, skip: true, desc: '选择无效：不是意大利空军' }
+				/* ② 移除该空军 */
+				const sp = game.location[p]
+				delete game.location[p]
+				refresh(game)
+				/* ③ 回滚本次对意大利的损耗 */
+				const lost = (ctx && ctx.attrited && ctx.attrited['意大利']) || 0
+				const back = rollback_attrition(game, '意大利', lost)
+				return {
+					ok: true,
+					desc: '移除' + data.name_of(sp) + '的意大利空军，本次损耗 ' +
+						lost + ' 张已回滚 ' + back + ' 张',
+				}
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 组 3b · 17711 维希法国殖民地（2026-10-09，方案 A：watch）
+	 *
+	 * 卡面：敌方国家在<非洲北部><非洲南部><中东><马达加斯加><东南亚>
+	 *       建设、征召或消灭，或【对上述地区发起陆战】后：其损耗 2 张牌。
+	 *
+	 * 四个时机分别对应四个 armed 窗口：
+	 *   建设 -> after_build_army（2026-10-09 新增派发点）
+	 *   征召 -> after_recruit   （2026-10-09 新增派发点）
+	 *   消灭 -> piece_removed   （已有派发点 ~11724）
+	 *   陆战 -> after_battle    （已有派发点 ~4149）
+	 *
+	 * ⚠ 用数组 when 需要改框架；这里用【一个共享 run + 四个条目】的方式：
+	 *   同一张卡面在 ECHO_EFFECTS 里只能有一个 armed，
+	 *   故把四个窗口合并为 when: 数组 —— 见下方 armed 判定处的数组支持。
+	 *
+	 * 地区范围用 VICHY_SPACES（space_ids_of，卡面写死五地）。
+	 * "敌方"= 非轴心阵营（意大利属轴心）。
+	 * ============================================================ */
+	'17711': {
+		name: '维希法国殖民地', actor: '意大利',
+		armed: {
+			when: ['after_build_army', 'after_recruit', 'piece_removed', 'after_battle'],
+			actor: '意大利', watch: true,
+			desc: '敌方在上述地区建设/征召/消灭/发起陆战后：其损耗2张牌',
+			ready(game, ctx) { return vichy_hit(game, ctx) },
+			run(game, ctx) {
+				const n = (ctx && ctx.nation) || (ctx && ctx.attacker)
+				if (!n) return { ok: true, skip: true, desc: '未记录行动方，未发动' }
+				const lost = attrition_passive(game, n, 2)
+				return { ok: true, desc: n + ' 在维希殖民地地区行动，损耗 ' + lost.length + ' 张牌' }
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 组 3 · 17705 波尔多潜艇基地（2026-10-09，方案 A：watch）
+	 *
+	 * 卡面：德国打出[潜艇行动]时：使其损耗数加 3。
+	 *
+	 * 玩家口径（2026-10-09）：
+	 *   · 「德国」= 仅德国（不是任意国打出潜艇行动都算）
+	 *   · econ_used 是【结算后】窗口 -> +3 理解为【追加损耗 3 张】，
+	 *     与德国状态卡 15249 的 add_attrition 同款（不是修改本次损耗数）
+	 *
+	 * ⚠ 必须 watch:true —— 事件发起国(ctx.nation)是德国，卡持有国是意大利，
+	 *   不声明会被 offer_armed_effects 的"发起国==持有国"过滤掉（永不触发）。
+	 * ============================================================ */
+	'17705': {
+		name: '波尔多潜艇基地', actor: '意大利',
+		armed: {
+			when: 'econ_used', actor: '意大利', watch: true,
+			desc: '德国打出[潜艇行动]时：使其损耗数加3',
+			/* 仅德国打出的[潜艇行动]才给窗口 */
+			ready(game, ctx) {
+				if (!ctx || ctx.nation !== '德国') return false
+				if (ctx.tag !== '潜艇行动') return false
+				/* 必须真有受击国，否则弹了也没意义 */
+				return (ctx.targets || []).length > 0
+			},
+			run(game, ctx) {
+				const targets = (ctx && ctx.targets) || []
+				if (!targets.length) return { ok: true, skip: true, desc: '无受击国，未发动' }
+				let total = 0
+				const names = []
+				for (const t of targets) {
+					const lost = attrition_passive(game, t, 3)
+					total += lost.length
+					names.push(t + '+' + lost.length)
+				}
+				return {
+					ok: true,
+					desc: '德国的[潜艇行动]追加损耗：' + names.join('、') + '（共 ' + total + ' 张）',
+				}
+			},
+		},
+	},
+
+	/* ============================================================
+	 * 组 2 · 17706 意大利完成航母（2026-10-09）
+	 *
+	 * 卡面：出牌阶段开始时，损耗1张牌：在海域【部署或调度】1 支空军。
+	 *
+	 * 与日本 15408《山本五十六》同款，唯一差别是代价：
+	 *   15408 = 弃置 1 张[响应卡]（需弃牌 UI）
+	 *   17706 = 损耗 1 张牌（attrition，磨牌库顶，无需 UI）
+	 * 因此完全复用 run_sea_air_deploy / sea_air_deploy_candidates，
+	 * 只换 nation 与 cost —— 不改 15408 的行为。
+	 *
+	 * ⚠ 空军候选必须用 air_host_check + unit_slot_free，
+	 *   不能用 can_build_at（载体是"同格"陆/海军，不是"相邻"）。
+	 * ============================================================ */
+	'17706': {
+		name: '意大利完成航母', actor: '意大利',
+		kind: 'play_start',
+		cost: { attrition: 1 },
+		desc: '出牌阶段开始时：损耗1张牌，在海域部署或调度1支空军',
+		run(game, ctx) { return run_sea_air_deploy(game, ctx, '意大利') },
+	},
+
+	'17807': {
+		name: '里海舰队', actor: '苏联',
+		steps: [{
+			op: 'recruit', type: 'army',
+			spaces: space_ids_of(['中亚', '中东']),
+		}],
+	},
+
+	/* ---- 17810 维捷布斯克之门：计分阶段，弃1[建设陆军]+2手牌，消灭1支敌方陆军 ----
+	 *
+	 * 代价：弃置 3 张手牌，其中至少 1 张是[建设陆军]（cost.needBuild=1，
+	 * 与 cost.filter='build' 不同——后者要求全部是建设陆军）。
+	 * 效果：在<莫斯科>/<罗斯>之一消灭1支敌方国家陆军（steps.op:'eliminate'）。
+	 * 两地区都无敌方陆军则 failStep（无效果、不浪费）。
+	 */
+	'17810': {
+		name: '维捷布斯克之门', actor: '苏联',
+		cost: { discard: 3, needBuild: 1 },
+		steps: [{
+			op: 'eliminate', type: 'army',
+			spaces: space_ids_of(['莫斯科', '罗斯']),
+			pick: 1,
+		}],
+	},
+
+	/* ---- 17812 亚洲人力储备：弃牌阶段，从弃牌堆取1[建设陆军]置手牌、1[建设陆军]洗入牌堆 ----
+	 *
+	 * 无代价。走 run 多步（pending_echo）：
+	 *   ① 候选=本国弃牌堆的[建设陆军]，选1张进手牌；
+	 *   ② 候选=剩余[建设陆军]，选1张洗入牌堆（置底，规则未要求置顶）。
+	 * 弃牌堆无[建设陆军]则直接跳过（不浪费弃牌阶段）。
+	 */
+	'17812': {
+		name: '亚洲人力储备', actor: '苏联',
+		run: function (game, ctx) {
+			const arg = (ctx && ctx.arg) || {}
+			const me = '苏联'
+			const pe = game.pending_echo
+			const isBuild = id => {
+				const c = inst_card(String(inst_card_id(id)))
+				return c && c.type === 'BASIC' && c.name === '建设陆军'
+			}
+			const buildList = () => (game.discard[me] || []).filter(isBuild)
+			if (!pe || pe.card !== '17812') {
+				/* 初始化第一步 */
+				const builds = buildList()
+				if (!builds.length)
+					return { ok: true, skip: true, desc: '弃牌堆没有[建设陆军]' }
+				game.pending_echo = {
+					card: '17812', kind: 'su', step: 'hand',
+					title: '亚洲人力储备：选 1 张[建设陆军]置入手牌',
+					candidates: builds.map(id => obj_of(id)),
+				}
+				return { pending: true, need: 'su_pick' }
+			}
+			if (pe.step === 'hand') {
+				const pick = arg.pick
+				if (!buildList().includes(pick))
+					return { ok: false, reason: '所选卡不在候选[建设陆军]内' }
+				const i = game.discard[me].indexOf(pick)
+				game.discard[me].splice(i, 1)
+				game.hands[me].push(pick)
+				refresh(game)
+				const remain = buildList()
+				if (!remain.length) {
+					game.pending_echo = null
+					discard_card(game, me, ctx.card_id)
+					return { ok: true, desc: '已将 1 张[建设陆军]置入手牌（弃牌堆无更多[建设陆军]）' }
+				}
+				game.pending_echo = {
+					card: '17812', kind: 'su', step: 'deck',
+					title: '亚洲人力储备：选 1 张[建设陆军]洗入牌堆',
+					candidates: remain.map(id => obj_of(id)),
+				}
+				return { pending: true, need: 'su_pick' }
+			}
+			if (pe.step === 'deck') {
+				const pick = arg.pick
+				if (!buildList().includes(pick))
+					return { ok: false, reason: '所选卡不在候选[建设陆军]内' }
+				const i = game.discard[me].indexOf(pick)
+				game.discard[me].splice(i, 1)
+				game.deck[me].push(pick)
+				refresh(game)
+				game.pending_echo = null
+				discard_card(game, me, ctx.card_id)
+				return { ok: true, desc: '已将 1 张[建设陆军]置入手牌、1 张洗入牌堆' }
+			}
+			game.pending_echo = null
+			return { ok: true, skip: true }
+		},
+	},
+
+	/* ---- 17813 重建要塞：弃牌阶段，弃1[建设陆军]，检视弃牌堆选1[响应卡]打出 ----
+	 *
+	 * 代价：弃置 1 张[建设陆军]（cost.filter='build'，resolve_event_card 先付）。
+	 * 效果：候选=本国弃牌堆的[响应卡]，选1张打出（facedown_response 直接以'discard'为来源）。
+	 * 弃牌堆无[响应卡]则跳过。
+	 */
+	'17813': {
+		name: '重建要塞', actor: '苏联',
+		cost: { discard: 1, filter: 'build' },
+		run: function (game, ctx) {
+			const arg = (ctx && ctx.arg) || {}
+			const me = '苏联'
+			const pe = game.pending_echo
+			const isResp = id => {
+				const c = inst_card(String(inst_card_id(id)))
+				return c && c.type === 'RESPONSE'
+			}
+			const respList = () => (game.discard[me] || []).filter(isResp)
+			if (!pe || pe.card !== '17813') {
+				const resps = respList()
+				if (!resps.length)
+					return { ok: true, skip: true, desc: '弃牌堆没有[响应卡]' }
+				game.pending_echo = {
+					card: '17813', kind: 'su', step: 'play',
+					title: '重建要塞：选 1 张[响应卡]打出',
+					candidates: resps.map(id => obj_of(id)),
+				}
+				return { pending: true, need: 'su_pick' }
+			}
+			if (pe.step === 'play') {
+				const pick = arg.pick
+				if (!respList().includes(pick))
+					return { ok: false, reason: '所选卡不在候选[响应卡]内' }
+				const r = facedown_response(game, me, pick, 'discard')
+				refresh(game)
+				game.pending_echo = null
+				discard_card(game, me, ctx.card_id)
+				return r.ok
+					? { ok: true, desc: '打出响应《' + (inst_card(String(inst_card_id(pick))) || {}).name + '》' }
+					: { ok: true, skip: true, desc: '无法打出响应卡：' + (r.reason || '') }
+			}
+			game.pending_echo = null
+			return { ok: true, skip: true }
+		},
+	},
+
+	'15410': {
+		name: '武士道', actor: '日本',
+		armed: {
+			when: 'piece_attacked', actor: '日本',
+			/*
+			 * 【2026-10-06 玩家口径】suspend:true = 这张卡要【挂起战斗】再问，
+			 * 而不是弹"可选窗口"（armed_offer）后继续同步结算 ——
+			 * 同步结算时受击单位在玩家表态前就已被移除，保护来不及生效。
+			 * 挂起走 pending_battle(stage='guard')，与响应卡/空军代受同款，
+			 * 由 guard_card_candidates() 负责筛选。
+			 */
+			suspend: true,
+			cost: { discard: 1, filter: 'response' },
+			desc: '日本陆军被攻击时：弃1张响应卡，使其在本次战斗中无法被移除',
+			ready(game, ctx) {
+				return !!(ctx && ctx.piece &&
+					game.piece_nation[ctx.piece] === '日本' &&
+					game.piece_type[ctx.piece] === 'army')
+			},
+			run(game, ctx) {
+				const pid = ctx && ctx.piece
+				if (!pid || game.location[pid] == null)
+					return { ok: true, skip: true, desc: '目标部队不存在' }
+				/* 用既有 protect 修饰器：本回合（本次战斗）内无法被移除 */
+				register_modifier(game, {
+					key: 'protect', nation: game.piece_nation[pid],
+					type: game.piece_type[pid],
+					spaces: [game.location[pid]], untilTurn: game.turn,
+				})
+				return { ok: true, desc: '该日本陆军在本回合内不会被移除' }
+			},
+		},
+	},
+
+	/* ---- 15411 夜间运输：补给阶段开始时，弃1响应 -> 选1支【无补给】的日本陆/海军 ---- */
+	'15411': {
+		name: '夜间运输', actor: '日本',
+		cost: { discard: 1, filter: 'response' },
+		/*
+		 * 【2026-10-06 玩家口径】两处都要改：
+		 *   ① 时点：任意时机 -> 【补给阶段开始时】（CARD_TRIGGERS 改 kind:'self',phase:'supply'）
+		 *   ② 目标：任意日本陆/海军 -> 必须由玩家【选择 1 支无补给的】
+		 *      （旧实现是"服务端自动挑第一支"，违反"服务端不替玩家做选择"）。
+		 * pickUnit 声明"需要玩家选一支部队"，候选由 pick_unit_candidates
+		 * 按 supplied:false 过滤（与 compute_supply 同源）。
+		 */
+		pickUnit: { nation: '日本', types: ['army', 'navy'], supplied: false },
+		desc: '补给阶段开始时：弃1张响应卡，选择1支无补给的日本陆军或海军，其在本回合内总是处于补给状态',
+		run(game, ctx) {
+			/* 代价由 resolve_event_card 的通用代价段先付掉，这里只管效果 */
+			const arg = (ctx && ctx.arg) || {}
+			const spec = { nation: '日本', types: ['army', 'navy'], supplied: false }
+			const cands = pick_unit_candidates(game, spec)
+			const pick = (arg.piece != null) ? String(arg.piece) : null
+			if (!pick || cands.indexOf(pick) < 0)
+				return {
+					ok: false,
+					reason: cands.length
+						? '只能选择 1 支【无补给】的日本陆军或海军（当前可选 ' + cands.length + ' 支）'
+						: '场上没有无补给的日本陆军或海军',
+				}
+			/* 复用既有补给覆盖机制 */
+			if (typeof ensure_supply_override === 'function')
+				ensure_supply_override(game)
+			grant_supply(game, pick, game.turn)
+			return {
+				ok: true,
+				desc: data.name_of(game.location[pick]) + ' 的' +
+					piece_type_zh(game.piece_type[pick]) + '在本回合内总是处于补给状态',
+			}
+		},
+	},
+
+	/* ---- 15412 御前会议：摸牌阶段结束时，弃1响应 -> 打出1张响应卡 ---- */
+	'15412': {
+		name: '御前会议', actor: '日本',
+		cost: { discard: 1, filter: 'response' },
+		/*
+		 * 【2026-10-06 玩家口径】复用【日本国家技能】的一步式机制：
+		 *   同一个弹窗里同时选「要弃的响应牌」+「要暗置打出的响应牌」，
+		 *   一次提交完成 —— 与国家技能 use_national_skill(one_step) 同款，
+		 *   服务端执行共用 jp_facedown_play()，客户端共用同一个一步式弹窗。
+		 *
+		 * one_step.filter = 要打出那张牌的类型限定（这里是 [响应卡]）。
+		 * 没指定 arg.play 时 event_card_needs 返回 need:'one_step_pick'，
+		 * 服务端【绝不】替玩家挑哪张要打出。
+		 */
+		one_step: { filter: 'response' },
+		desc: '摸牌阶段结束时：弃1张响应卡，打出1张[响应卡]（暗置于桌面）',
+		run(game, ctx) {
+			const arg = (ctx && ctx.arg) || {}
+			/* 代价已由通用代价段付掉；这里只做"暗置打出"，与国家技能同原子 */
+			return jp_facedown_play(game, '日本', arg.play, 'response')
+		},
+	},
+
+	/* ---- 15413 诸岛要塞：计分阶段开始时，弃1响应 -> 在四岛之一征召1支陆军 ---- */
+	'15413': {
+		name: '诸岛要塞', actor: '日本',
+		cost: { discard: 1, filter: 'response' },
+		/* 候选地区写死四个岛（卡面指定），框架按 can_recruit_at 过滤 */
+		steps: [{
+			op: 'recruit', type: 'army',
+			spaces: space_ids_of(['硫磺岛', '菲律宾', '印度尼西亚', '新几内亚']),
+		}],
+	},
+
+	/*
+	 * ---- 7900 竭泽而渔：出牌阶段开始时，弃4张手牌 -> 弃牌堆选1张置入手牌 ----
+	 *
+	 * 【2026-10-06 玩家口径】复用德国【牌库搜索】的多步脚本框架
+	 * （SCRIPT_CARD_KIND + pending_script + resolve_script），
+	 * 只是把候选来源从【牌堆】换成【弃牌堆】（见 kind 'discard_pay_pick'）。
+	 *
+	 * 两步：
+	 *   第 1 步 从手牌选 4 张弃置（need_discard）
+	 *   第 2 步 检视弃牌堆，选 1 张置入手牌（need_pick）
+	 * 顺序与卡面一致：先弃后进 —— 弃掉的那 4 张立刻成为第 2 步的候选。
+	 *
+	 * 这里【不写 run】：整张卡由 script_start / script_resolve 驱动，
+	 * 客户端复用德国脚本卡的选牌弹窗（query 'script_state'）。
+	 */
+	'7900': {
+		name: '竭泽而渔', actor: '日本',
+		cost: { discard: 4 },
+		desc: '出牌阶段开始时：弃置4张手牌，检视弃牌堆，选择并将1张牌置入手牌',
+	},
+}
+
+/* ============================================================
+ * 【2026-10-01 重构 · 最小原子】发起战斗的判定
+ *
+ * 背景（玩家指出"现在的判断逻辑不对"）：
+ *   此前增强卡各自手写 `get_connections + compute_supply + do_battle` 的遍历，
+ *   出现三处重复且【有 bug】：
+ *     · de_adj_navy_in_supply 把阵营【硬编码成 'axis'】（对别国用会错）；
+ *     · de_sea_battle_target 从【海军所在格】出发找邻居，而 do_battle 是
+ *       从【目标格】出发校验发起单位 —— 方向相反。connections 不对称时
+ *       就会出现"找到了目标但 do_battle 说发起单位不相邻"（此前海战失败的真正根源）；
+ *     · 漏了 basic_targets 的"目标格不能有我方单位""空军不算目标"两条口径。
+ *
+ * 修法：**不自己重写遍历**，直接复用已有的最小原子 `battle_initiators()`
+ * （= 目标格邻居 + 补给中 + 陆军/海军）。它与 basic_targets 战斗分支、
+ * do_battle 的发起校验【同源】，因此"这里说能打"必然"do_battle 也接受"。
+ * ============================================================ */
+
+/*
+ * 能否由 nation 对 space 发起 kind('land'|'sea') 战斗。
+ * 返回 { ok, space, initiator } 或 { ok:false, reason }。
+ */
+function can_initiate_battle_at(game, nation, space, kind) {
+	const wantTerrain = (kind === 'sea') ? 'sea' : 'land'
+	if (!data.spaces[space]) return { ok: false, reason: '地区不存在' }
+	if (data.spaces[space].terrain !== wantTerrain)
+		return { ok: false, reason: '地形不符' }
+	const myFaction = faction_of_nation(nation)
+	/* 目标地区不能有我方阵营单位（与 basic_targets 一致） */
+	if (pieces_on(game, space).some(p =>
+		faction_of_nation(game.piece_nation[p]) === myFaction))
+		return { ok: false, reason: '该地区有我方单位' }
+	/* 发起单位：最小原子 battle_initiators（相邻 + 补给 + 陆/海军） */
+	const inits = battle_initiators(game, nation, space)
+	if (!inits.length)
+		return { ok: false, reason: '无相邻的补给中本国陆/海军' }
+	return { ok: true, space: space, initiator: inits[0].id }
+}
+
+/*
+ * 找一个"能真正发起 kind 战斗"的目标（纯函数，无副作用）。
+ *   opts.near      : 限定目标必须在 near 格位的相邻（15210「<亚速尔>相邻」）
+ *   opts.enemyOnly : 只考虑有【可攻击敌军】的格位（空军不算，与 basic_targets 同口径）
+ * 返回 { ok, space, initiator } 或 null。
+ *
+ * ready(决定要不要弹 ask 框) 与 run(真正执行) **共用此函数**，
+ * 保证"弹得出框"必然"点了真能打"。
+ */
+function find_battle_target(game, nation, kind, opts) {
+	opts = opts || {}
+	const myFaction = faction_of_nation(nation)
+	const wantTerrain = (kind === 'sea') ? 'sea' : 'land'
+	let pool = null
+	if (opts.near != null) {
+		pool = get_connections(game, Number(opts.near), myFaction).map(Number)
+			.filter(i => data.spaces[i] && data.spaces[i].terrain === wantTerrain)
+	} else {
+		pool = []
+		for (let i = 1; i < data.spaces.length; i++) {
+			if (data.spaces[i] && data.spaces[i].terrain === wantTerrain) pool.push(i)
+		}
+	}
+	for (const sp of pool) {
+		if (opts.enemyOnly) {
+			const enemies = pieces_on(game, sp).filter(p => {
+				const f = faction_of_nation(game.piece_nation[p])
+				return f && f !== myFaction && game.piece_type[p] !== 'air'
+			})
+			if (!enemies.length) continue
+		}
+		const r = can_initiate_battle_at(game, nation, sp, kind)
+		if (r.ok) return r
+	}
+	return null
+}
+
+/* 场上是否存在某国某类棋子 */
+function has_piece(game, nation, type) {
+	for (const p of Object.keys(game.location)) {
+		if (game.location[p] == null) continue
+		if (game.piece_nation[p] === nation && game.piece_type[p] === type) return true
+	}
+	return false
+}
+
+/*
+ * 【2026-10-01】已删除 de_adj_navy_in_supply：
+ * 原实现把阵营硬编码成 'axis'、且自己遍历 get_connections + compute_supply，
+ * 与 do_battle 的校验方向相反。现统一走最小原子 find_battle_target /
+ * can_initiate_battle_at / battle_initiators，不再保留这一层薄封装。
+ */
+
+/*
+ * 【2026-10-07】15205《JU-87 俯冲轰炸机》的候选地区（纯函数，无副作用）。
+ *
+ * 卡面只【规定发起位置】：空军所在地区(anchor) 的【相邻陆地】。
+ * 候选口径与 step_space_candidates 的 battle 全图推举一致：
+ *   · 地形必须是陆地
+ *   · 该地区不能有【本方阵营】部队（不能打自己人）
+ *   · 必须有相邻的、处于补给状态的德国陆/海军可发起（battle_initiators）
+ *   · 允许"空打"（无敌军也可），与 15231《进攻美国》同口径
+ *
+ * ready（要不要弹窗口）与 run（建预算）与 spacesFn（预算候选）
+ * **三处共用此函数**，保证 UI 与判定不会漂移。
+ */
+function ju87_land_targets(game, anchor) {
+	const sp0 = Number(anchor)
+	if (!sp0 || !data.spaces[sp0]) return []
+	const myFaction = faction_of_nation('德国')
+	const out = []
+	for (const nb of get_connections(game, sp0, myFaction)) {
+		const i = Number(nb)
+		if (!data.spaces[i] || data.spaces[i].terrain !== 'land') continue
+		/* 目标地区不能有我方阵营单位 */
+		if (pieces_on(game, i).some(p =>
+			faction_of_nation(game.piece_nation[p]) === myFaction)) continue
+		/* 必须有可发起单位（相邻 + 补给 + 陆/海军） */
+		if (!battle_initiators(game, '德国', i).length) continue
+		out.push(i)
+	}
+	return out
+}
+
+/* ============================================================
+ * 【2026-10-01 玩家最终口径】德国增强 B 组"打出XX后…"卡
+ * = **留在手牌** + 事件后弹【可选 ask 框】问要不要打出。
+ *
+ * 玩家原话：
+ *   "应该是打出潜艇行动经济战后，g7 在手牌，弹出可打出的 ask 框。
+ *    如果英国响应拦截了经济战，那此时 g7 应该在英国拦截后弹出 ask，
+ *    照常此时可以选择打出。"
+ *
+ * 模型（取代"装载"与"自动结算"两版）：
+ *   ① 卡【始终留在手牌】，不预先打出、不装载；
+ *   ② 事件发生的那一刻（含"英国拦截结算之后"），本函数扫【手牌】
+ *      找出所有匹配的卡 -> 写 game.armed_offer（一个可选窗口）；
+ *   ③ 客户端据此弹 ask 框：每张卡一个"打出"按钮 + "不打出"；
+ *   ④ 玩家点"打出" -> 走 use_armed_offer：付代价 -> run -> 手牌移除 + 进弃牌堆；
+ *   ⑤ 玩家点"不打出"或去做任何其它动作 -> offer 清掉（错过即失效，不强制）。
+ *
+ * 与国家技能(national_skill_offer)同款"可选窗口"：
+ *   · 不挂起、不替玩家决定；
+ *   · 手牌里没有匹配卡就【不弹框】（没得选不给按钮）；
+ *   · 付不起代价的卡不进候选。
+ * ============================================================ */
+function offer_armed_effects(game, when, ctx) {
+	ctx = ctx || {}
+	/* 只考虑"卡面声明的 actor"那一方（德国）的手牌 */
+	const actorNation = ctx.nation
+	const cards = []
+	for (const nation of Object.keys(game.hands || {})) {
+		/*
+		 * 【2026-10-09 方案 A】watch（他人触发）支持。
+		 *
+		 * 原实现在【外层】按 nation 过滤（事件发起国 == 卡持有国才考虑），
+		 * 于是"敌方/他国做某事时"的卡（意大利 17705「德国打出[潜艇行动]时」、
+		 * 17708「成为[经济战]目标时」、17711「敌方建设/征召/消灭时」）
+		 * 永远进不了候选 —— 因为 ctx.nation 是对方。
+		 *
+		 * 改法：过滤【下移】到内层（读到 eff.armed 之后），
+		 * 声明 watch:true 的卡跳过该过滤。默认行为完全不变。
+		 */
+		for (const cid of (game.hands[nation] || [])) {
+			const eff = ECHO_EFFECTS[String(inst_card_id(cid))]
+			const ar = eff && eff.armed
+			/*
+			 * 【2026-10-09】armed.when 支持【数组】（一张卡监听多个窗口）。
+			 * 意大利 17711《维希法国殖民地》要同时听
+			 * 建设 / 征召 / 消灭 / 陆战 四个窗口。
+			 * 单值字符串的行为完全不变。
+			 */
+			if (!ar) continue
+			const whens = Array.isArray(ar.when) ? ar.when : [ar.when]
+			if (whens.indexOf(when) < 0) continue
+			if (!ar.watch && actorNation && nation !== actorNation) continue
+			if (ar.tag && ar.tag !== ctx.tag) continue
+			if (typeof ar.cond === 'function' && !ar.cond(game, ctx)) continue
+			/*
+			 * 【2026-10-01】ready 纯函数预检：这张卡【此刻真的能发动】才进候选。
+			 * 否则会出现"弹了框、点了却什么都没发生"（run 走 skip 分支、
+			 * 卡留在手牌）。没把握就不弹 —— 与国家技能"没得选就不给按钮"同款。
+			 */
+			if (typeof ar.ready === 'function' && !ar.ready(game, ctx)) continue
+			const need = (ar.cost && ar.cost.attrition) || 0
+			/* 付不起代价的卡不进候选（避免"按钮能点但点了被拒"） */
+			if (need && !can_attrite(game, nation, need)) continue
+			cards.push({
+				card_id: cid,
+				nation: nation,
+				name: (inst_card(cid) || { name: '?' }).name,
+				desc: ar.desc || '',
+				cost: need,
+			})
+		}
+	}
+	if (!cards.length) { game.armed_offer = null; return }
+	game.armed_offer = {
+		nation: cards[0].nation,
+		when: when,
+		cards: cards,
+		/* 事件上下文，发动时原样回传给 run() */
+		ctx: { tag: ctx.tag, targets: ctx.targets, nation: ctx.nation, space: ctx.space,
+			/*
+			 * 【2026-10-09】透传被操作的【卡实例 id】。
+			 * 16700《一日之狮》要把被判定无效的敌方增强卡
+			 * 从对方手牌移进弃牌堆（"照常打出"但效果不发生）。
+			 */
+			card: ctx.card },
+	}
+	game.log.push('【' + game.armed_offer.nation + '】可打出：' +
+		cards.map(x => '《' + x.name + '》').join('、') +
+		'（' + (cards[0].desc || '') + '）—— 现在打出，做其它动作即错过')
+}
+
+function clear_armed_offer(game) {
+	if (!game) return
+	game.armed_offer = null
+	if (game.pending_armed_delegate) {
+		game.pending_armed_delegate = null
+		if (game.armed_delegate_return_active) {
+			game.active = game.armed_delegate_return_active
+			game.armed_delegate_return_active = null
+		}
+	}
+}
+
+/* 【2026-10-07】17900 八月风暴的"友方攻击 -> 让权苏联"挂起。
+ * 把 active 翻到被让权方（苏联）的一方，并记录原 active 以便还原。 */
+function set_pending_armed_delegate(game, pd) {
+	game.pending_armed_delegate = pd
+	if (pd) {
+		const f = faction_of_nation(pd.nation)
+		const role = f === ALLIES ? ALLIES_ROLE : (f === AXIS ? AXIS_ROLE : null)
+		if (role && game.active !== role) {
+			if (!game.armed_delegate_return_active) game.armed_delegate_return_active = game.active
+			game.active = role
+		}
+	} else if (game.armed_delegate_return_active) {
+		game.active = game.armed_delegate_return_active
+		game.armed_delegate_return_active = null
+	}
+	return pd
+}
+
+/* 友方（同盟、非苏联）攻击中国东北结算后，若苏联手牌同时持有 17900 与
+ * 至少 1 张[建设陆军]，则挂起让权给苏联：弹可打出窗口并翻转 active。 */
+function maybe_arm_su_augstorm(game, space, kind, attackerNation) {
+	if (kind !== 'land') return
+	if (data.name_of(space) !== '中国东北') return
+	if (attackerNation === '苏联') return
+	if (faction_of_nation(attackerNation) !== faction_of_nation('苏联')) return
+	const suHand = game.hands['苏联'] || []
+	const cid17900 = suHand.find(id => String(inst_card_id(id)) === '17900')
+	if (!cid17900) return
+	const hasBuild = suHand.some(id => {
+		const c = inst_card(String(inst_card_id(id)))
+		return !!c && c.type === 'BASIC' && c.name === '建设陆军'
+	})
+	if (!hasBuild) return
+	const eff = ECHO_EFFECTS['17900']
+	if (!eff || !eff.armed) return
+	if (typeof eff.armed.ready === 'function' &&
+		!eff.armed.ready(game, { space: space, attacker: attackerNation, nation: attackerNation, kind: kind }))
+		return
+	game.armed_offer = {
+		nation: '苏联',
+		when: 'after_battle',
+		cards: [{
+			card_id: cid17900,
+			nation: '苏联',
+			name: (inst_card(cid17900) || { name: '?' }).name,
+			desc: eff.armed.desc || '',
+			cost: (eff.armed.cost && eff.armed.cost.discard) || 0,
+		}],
+		ctx: { space: space, attacker: attackerNation, kind: kind },
+	}
+	set_pending_armed_delegate(game, {
+		card_id: cid17900, space: space, attacker: attackerNation, nation: '苏联',
+	})
+	game.log.push('【苏联】可打出：《八月风暴》—— 中国东北遭友方攻击，让权苏联决定是否发动')
+}
+
+/* 手牌中是否存在"XX后…"型增强卡（供提示"该卡不能主动打出"） */
+function is_armed_hand_card(card_id) {
+	const eff = ECHO_EFFECTS[String(inst_card_id(card_id))]
+	return !!(eff && eff.armed)
+}
+
+/*
+ * 【2026-10-06】找出手牌里【能保护这支部队】的【挂起型】增强卡
+ * （目前只有日本 15410《武士道》）。
+ *
+ * 与 offer_armed_effects 的差别：
+ *   · 那边弹"可选窗口"（不挂起，玩家不表态就继续同步结算）；
+ *   · 这里要求 armed.suspend === true，由 do_battle【挂起战斗】再问，
+ *     因为保护必须在"移除受击单位"【之前】生效，同步结算来不及。
+ *
+ * 口径与 offer_armed_effects 完全一致（避免两套判定漂移）：
+ *   ① armed.when === 'piece_attacked' 且 suspend 为真
+ *   ② armed.ready() 预检通过（此刻真的能发动才问）
+ *   ③ 付得起代价（损耗看牌库；弃置看符合类型的手牌够不够）
+ * —— "没把握就不问"，否则会出现"弹了框、点了却什么都没发生"。
+ */
+function guard_card_candidates(game, victim, attacker, space, kind) {
+	const owner = game.piece_nation[victim]
+	if (!owner) return []
+	const ctx = {
+		nation: owner, space: space, kind: kind,
+		piece: victim, attacker: attacker,
+	}
+	const out = []
+	for (const cid of (game.hands[owner] || [])) {
+		const eff = ECHO_EFFECTS[String(inst_card_id(cid))]
+		const ar = eff && eff.armed
+		if (!ar || ar.when !== 'piece_attacked' || !ar.suspend) continue
+		if (typeof ar.ready === 'function' && !ar.ready(game, ctx)) continue
+		const needAttr = (ar.cost && ar.cost.attrition) || 0
+		if (needAttr && !can_attrite(game, owner, needAttr)) continue
+		const need = (ar.cost && ar.cost.discard) || 0
+		if (need) {
+			const filter = (ar.cost && ar.cost.filter) || null
+			const pool = (game.hands[owner] || []).filter(id =>
+				id !== cid && (!filter || filter_matches_card(id, filter)))
+			if (pool.length < need) continue
+		}
+		out.push({
+			card_id: cid,
+			nation: owner,
+			name: (inst_card(cid) || { name: '?' }).name,
+			desc: ar.desc || '',
+			cost: need,
+			cost_filter: (ar.cost && ar.cost.filter) || null,
+		})
+	}
+	return out
+}
+
+/*
+ * 【2026-10-07】苏联响应卡 17837《KV-2 重型坦克》的触发判定。
+ *
+ * 卡面："苏联陆军被攻击时：攻击国家选择 弃置 4 张手牌 或
+ *       使该陆军在本次战斗中不会被移除。"
+ *
+ * 触发条件：本次是【陆战】、受击单位是【苏联陆军】、
+ * 且【苏联】暗置着一张 17837（响应卡在 game.table_responses）。
+ * 返回该暗置条目（供结算时消耗），不满足则返回 null。
+ */
+function kv2_response_for(game, victim, attacker, space, kind) {
+	if (kind !== 'land') return null
+	const vNation = game.piece_nation[victim]
+	if (vNation !== '苏联') return null
+	if (game.piece_type[victim] !== 'army') return null
+	const list = game.table_responses || []
+	for (const tr of list) {
+		if (String(inst_card_id(tr.card_id)) !== '17837') continue
+		if (tr.owner_side && tr.owner_side !== faction_of_nation('苏联')) continue
+		return tr
+	}
+	return null
 }
 
 /* ============================================================
@@ -2562,6 +8907,53 @@ CARD_TRIGGERS['15309'] = { kind: 'self', phase: 'scoring' }
 CARD_TRIGGERS['15310'] = { kind: 'self', phase: 'scoring' }
 CARD_TRIGGERS['15311'] = { kind: 'anytime' }
 CARD_TRIGGERS['15312'] = { kind: 'self', phase: 'scoring' }
+
+/* ============================================================
+ * 德国增强卡（EFFECT）触发时机 —— 主要在「出牌阶段开始时」(play_start)
+ * ============================================================ */
+CARD_TRIGGERS['14500'] = { kind: 'play_start', nation: '德国' }
+CARD_TRIGGERS['15209'] = { kind: 'play_start', nation: '德国' }
+CARD_TRIGGERS['15213'] = { kind: 'play_start', nation: '德国' }
+CARD_TRIGGERS['15214'] = { kind: 'play_start', nation: '德国' }
+CARD_TRIGGERS['15215'] = { kind: 'play_start', nation: '德国' }
+CARD_TRIGGERS['15216'] = { kind: 'play_start', nation: '德国' }
+
+/* ============================================================
+ * 【2026-10-06】日本增强卡（EFFECT）触发时机
+ *
+ * 时点对照（与卡面一致）：
+ *   15405 建设海军后          -> load / after_build_navy
+ *   15406 海域部署飞机后      -> load / after_deploy_air
+ *   15407 弃牌阶段开始时      -> self  + phase:'discard'
+ *   15408 出牌阶段开始时      -> play_start
+ *   15409 计分阶段开始时      -> self  + phase:'scoring'
+ *   15410 日本陆军被攻击时    -> load / piece_attacked（suspend：挂起战斗再问）
+ *   15411 补给阶段开始时      -> self  + phase:'supply'（2026-10-06 玩家口径，原为 anytime）
+ *   15412 摸牌阶段结束时      -> self  + phase:'draw'
+ *   15413 计分阶段开始时      -> self  + phase:'scoring'
+ *   7900  出牌阶段开始时      -> play_start
+ * ============================================================ */
+CARD_TRIGGERS['15405'] = { kind: 'load', nation: '日本' }
+CARD_TRIGGERS['15406'] = { kind: 'load', nation: '日本' }
+CARD_TRIGGERS['15407'] = { kind: 'self', phase: 'discard', nation: '日本' }
+CARD_TRIGGERS['15408'] = { kind: 'play_start', nation: '日本' }
+CARD_TRIGGERS['15409'] = { kind: 'self', phase: 'scoring', nation: '日本' }
+CARD_TRIGGERS['15410'] = { kind: 'load', nation: '日本' }
+CARD_TRIGGERS['15411'] = { kind: 'self', phase: 'supply', nation: '日本' }
+CARD_TRIGGERS['15412'] = { kind: 'self', phase: 'draw', nation: '日本' }
+CARD_TRIGGERS['15413'] = { kind: 'self', phase: 'scoring', nation: '日本' }
+CARD_TRIGGERS['7900'] = { kind: 'play_start', nation: '日本' }
+
+/* ============================================================
+ * 德国增强卡（EFFECT）B 组 —— 事件触发型（load：打出即装载，等待事件自动结算）
+ * ============================================================ */
+CARD_TRIGGERS['15205'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15206'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15207'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15208'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15210'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15211'] = { kind: 'load', nation: '德国' }
+CARD_TRIGGERS['15212'] = { kind: 'load', nation: '德国' }
 
 /* ============================================================
  * 12 张响应卡（RESPONSE / ? 问号）的【触发声明 + 效果配置】
@@ -2589,6 +8981,339 @@ CARD_TRIGGERS['15312'] = { kind: 'self', phase: 'scoring' }
  *
  * 本步只声明 + 接 fire_trigger 钩子，不实现触发询问 UI（第 3 步）。
  * ============================================================ */
+
+/* ============================================================
+ * 【2026-10-04】日本响应牌用的地区判定小工具
+ *
+ * 全部【复用已有原子】get_connections / pieces_on / space_ids_expand，
+ * 不自己重写遍历（见 rtt-atomic-operations 第一节的铁律）。
+ *
+ * ⚠ 必须定义在 RESPONSE_EFFECTS 对象【外面】—— 函数声明不能出现在
+ *   对象字面量里（曾误插进去导致 SyntaxError）。
+ * ============================================================ */
+
+/* 该地区是否叫 name，或与之相邻（name 走 space_id_of，支持别名） */
+function space_is_or_adjacent_to(game, space, name, side) {
+	if (space == null) return false
+	const target = space_id_of(name)
+	if (target == null) return false
+	if (Number(space) === Number(target)) return true
+	/* ⚠ is_adjacent 的第一个参数是 game —— 别写成 is_adjacent(space, target) */
+	return is_adjacent(game, Number(space), Number(target), side)
+}
+
+/*
+ * 该地区是否属于卡面写的区域/地区名。
+ * 复用 space_ids_expand：区域泛称（中国/太平洋/非洲）展开成全部格位，
+ * 单个地区名直接解析 —— 不要用字符串包含匹配（会误命中，如"东"匹配到"东海"）。
+ */
+function is_in_region(space, region) {
+	if (space == null) return false
+	const ids = space_ids_expand([region])
+	return ids.indexOf(Number(space)) >= 0
+}
+
+/*
+ * 某地区【及其相邻地区】里 nation 的【海军】数量（15427/15428 的触发条件）。
+ * 复用 get_connections + pieces_on，不自己重写遍历。
+ */
+function navy_count_near(game, nation, space) {
+	if (space == null) return 0
+	const myFaction = faction_of_nation(nation)
+	const pool = [Number(space)].concat(
+		get_connections(game, Number(space), myFaction).map(Number))
+	let n = 0
+	for (const sp of pool) {
+		for (const p of pieces_on(game, sp)) {
+			if (game.piece_nation[p] === nation && game.piece_type[p] === 'navy') n++
+		}
+	}
+	return n
+}
+
+/*
+ * 【2026-10-04】响应卡"选地区 -> 执行"的通用骨架。
+ *
+ * 为什么抽出来：第二批有 8 张卡都是
+ *   "在【基准地区或其相邻】做某件事"，逻辑完全同构。
+ * 各自再写一遍就会漂移（见 rtt-atomic-operations 的铁律）。
+ *
+ * @param {object} opt
+ *   kind        : 'land' | 'sea' —— 候选地区的地形
+ *   base        : 基准地区 id（战斗地区 / 建设地区 / 卡面写死的地区）
+ *   includeBase : 是否把基准地区本身也作为候选
+ *   prompt      : 给玩家的提示
+ *   run         : (game, spaceId) => { ok, desc }
+ */
+function pick_space_then(game, ctx, choice, opt) {
+	const base = opt.base
+	if (base == null) return { ok: false, desc: '（无基准地区）' }
+	const myFaction = faction_of_nation(opt.nation || '日本')
+	let pool = get_connections(game, Number(base), myFaction).map(Number)
+	if (opt.includeBase) pool = [Number(base)].concat(pool)
+	/* 按地形过滤 */
+	const cands = []
+	for (const sp of pool) {
+		const spData = data.spaces[sp]
+		if (!spData) continue
+		if (spData.terrain !== opt.kind) continue
+		if (cands.indexOf(sp) >= 0) continue
+		cands.push(sp)
+	}
+	if (choice === undefined) {
+		if (!cands.length) return { ok: false, desc: '（没有合法的相邻地区）' }
+		return {
+			pending: true, kind: 'space',
+			candidates: cands.map(sp => ({ id: sp, name: data.name_of(sp) })),
+			prompt: opt.prompt || '请选择地区',
+		}
+	}
+	/* 校验选择确实在候选内（防伪造） */
+	if (cands.indexOf(Number(choice)) < 0)
+		return { ok: false, desc: '（所选地区不在候选内）' }
+	return opt.run(game, Number(choice))
+}
+
+/* 选地区 -> 在该地区发起战斗（15419/15422/15423/15430/15438） */
+function pick_space_then_battle(game, ctx, choice, opt) {
+	const nat = opt.nation || '日本'
+	return pick_space_then(game, ctx, choice, Object.assign({}, opt, {
+		run: (g, sp) => (opt.kind === 'sea'
+			? do_sea_battle_at(g, sp, nat)
+			: do_land_battle_at(g, sp, nat)),
+	}))
+}
+
+/* 在指定地区发起陆战（复用 battle_initiators） */
+function do_land_battle_at(game, space, nat) {
+	nat = nat || '日本'
+	const inits = battle_initiators(game, nat, space)
+	if (!inits.length) return { ok: false, desc: '（无相邻的补给中' + nat + '陆/海军）' }
+	const r = do_battle(game, nat, space, null, 'land', { from: inits[0].id })
+	return {
+		ok: r.ok,
+		desc: r.ok ? '对' + data.name_of(space) + '发起陆战'
+			: '（陆战未发动：' + (r.reason || '') + '）',
+	}
+}
+
+/*
+ * 选【敌方陆军】-> 消灭（15433/15434/7905）。
+ * opt.near 非空时，只考虑与该地区相邻的敌方陆军。
+ */
+function pick_enemy_army_then_eliminate(game, ctx, choice, opt) {
+	const nat = opt.nation || '日本'
+	const myFaction = faction_of_nation(nat)
+	const near = opt.near
+	let pool = {}
+	if (near != null) {
+		pool[Number(near)] = true
+		for (const nb of get_connections(game, Number(near), myFaction).map(Number))
+			pool[nb] = true
+	}
+	const cands = []
+	for (const p in game.piece_nation) {
+		if (game.location[p] == null) continue
+		if (game.piece_type[p] !== 'army') continue
+		const pn = game.piece_nation[p]
+		if (faction_of_nation(pn) === myFaction) continue   /* 敌方 */
+		if (near != null && !pool[Number(game.location[p])]) continue
+		cands.push({ id: p, name: data.name_of(game.location[p]) + ' 的' + pn + '陆军' })
+	}
+	if (choice === undefined) {
+		if (!cands.length) return { ok: false, desc: '（没有可消灭的敌方陆军）' }
+		return {
+			pending: true, kind: 'piece', candidates: cands,
+			prompt: opt.prompt || '选择要消灭的敌方陆军',
+		}
+	}
+	const target = cands.find(x => x.id === choice)
+	if (!target) return { ok: false, desc: '（所选部队不在候选内）' }
+	const space = game.location[choice]
+	const r = eliminate_piece(game, nat, space, choice)
+	return { ok: r.ok, desc: r.ok ? '消灭' + target.name : '（无法消灭）' }
+}
+
+/*
+ * 在【指定海域】发起 1 次海战（目标写死的卡用，如<南海>）。
+ * 发起单位复用 battle_initiators；返回 { ok, desc }。
+ */
+function do_sea_battle_at(game, sea, nat) {
+	nat = nat || '日本'
+	const inits = battle_initiators(game, nat, sea)
+	if (!inits.length)
+		return { ok: false, desc: '（无相邻补给日本海军，海战未发动）' }
+	const r = do_battle(game, '日本', sea, null, 'sea', { from: inits[0].id })
+	return {
+		ok: r.ok,
+		desc: r.ok ? '对' + data.name_of(sea) + '发起海战'
+			: '（海战未发动：' + (r.reason || '') + '）',
+	}
+}
+
+/*
+ * 【2026-10-06】全部【海域】的地区 id 列表（15408 山本五十六：在海域部署空军）。
+ * 用 data.spaces 遍历并按 terrain 过滤，不写死地区名/数量。
+ */
+function all_sea_space_ids() {
+	const out = []
+	for (let i = 1; i < data.spaces.length; i++) {
+		const sp = data.spaces[i]
+		if (!sp) continue
+		if (sp.terrain !== 'sea') continue
+		out.push(i)
+	}
+	return out
+}
+
+/*
+ * 【2026-10-09 意大利 17711 维希法国殖民地】
+ *
+ * 卡面五地（写死，与卡面一致）：
+ *   <非洲北部> <非洲南部> <中东> <马达加斯加> <东南亚>
+ *
+ * 惰性求值（每次调用时才 space_ids_of）——
+ * 配置对象 ECHO_EFFECTS 的求值早于本文件的辅助函数区，
+ * 顶层 const 会踩 TDZ；写成函数就没有初始化顺序问题。
+ */
+function vichy_spaces() {
+	return space_ids_of(['非洲北部', '非洲南部', '中东', '马达加斯加', '东南亚'])
+}
+
+/*
+ * 17711 的触发判定（ready 与 run 共用，保证"弹得出窗口"必然"有得选"）：
+ *   ① 行动方是【敌方】（非轴心阵营；意大利属轴心）
+ *   ② 事发地区在五地之内
+ * 陆战取 ctx.space（战斗地区 = 被攻击地区，对应"对上述地区发起陆战"）。
+ */
+function vichy_hit(game, ctx) {
+	if (!ctx || ctx.space == null) return false
+	const sp = Number(ctx.space)
+	if (vichy_spaces().indexOf(sp) < 0) return false
+	const actorNat = ctx.nation || ctx.attacker
+	if (!actorNat) return false
+	/* 敌方 = 非轴心 */
+	return faction_of_nation(actorNat) !== 'axis'
+}
+
+/*
+ * 【2026-10-09 意大利 17708 皇家空军】
+ *
+ * 卡面：成为[经济战]目标时，移除 1 支空军：不执行损耗。
+ * 玩家口径（2026-10-09）：**可选**；场上无空军时不能打出；由意大利选择移除哪支。
+ *
+ * 实现要点：不在 ECON 结算【之前】拦截（那要在 play_card 里新增挂起，
+ * 改动面大），而是走【已有的 econ_used 窗口 + 事后回滚】——
+ * 与德国状态卡 15246 的 reduce_attrition 完全同款：
+ * 损耗已发生也没关系，把牌从弃牌堆顶拿回牌库顶即等价于"没损耗"。
+ */
+
+/* 各国弃牌堆当前长度的快照 */
+function econ_discard_snapshot(game) {
+	const out = {}
+	for (const n of Object.keys(game.discard || {}))
+		out[n] = ((game.discard || {})[n] || []).length
+	return out
+}
+
+/* 结算后各国【真实新增】的弃牌张数（= 本次损耗数） */
+function econ_attrited_count(game, targets, before) {
+	targets = Array.isArray(targets) ? targets : [targets]
+	const out = {}
+	for (const n of targets) {
+		if (!n) continue
+		const now = ((game.discard || {})[n] || []).length
+		const pre = (before && before[n]) || 0
+		const d = now - pre
+		if (d > 0) out[n] = d
+	}
+	return out
+}
+
+/* 把某国弃牌堆顶 N 张【放回牌库顶】（回滚损耗） */
+function rollback_attrition(game, nation, n) {
+	const disc = (game.discard || {})[nation] || []
+	const dk = (game.decks || {})[nation]
+	if (!dk) return 0
+	let k = Math.min(n, disc.length)
+	for (let i = 0; i < k; i++) {
+		const card = disc.pop()
+		if (card) dk.unshift(card)
+	}
+	return k
+}
+
+/* 意大利所有在版图上的空军（供 17708 选择） */
+function it_air_pieces(game) {
+	return my_air_pieces(game, '意大利')
+}
+
+/*
+ * 【2026-10-09】可【部署或调度】空军的海域候选。
+ *
+ * 复用既有原子，禁止自己重写遍历：
+ *   all_sea_space_ids()（地形过滤） + air_host_check（载体校验）
+ *   + unit_slot_free（每国每格限 1 支）。
+ * 15408《山本五十六》（日本）与 17706《意大利完成航母》（意大利）共用，
+ * 只差 nation，避免两处口径漂移。
+ */
+function sea_air_deploy_candidates(game, nat) {
+	const out = []
+	for (const i of all_sea_space_ids()) {
+		if (!air_host_check(game, nat, i).ok) continue
+		if (!unit_slot_free(game, nat, 'air', i).ok) continue
+		out.push(i)
+	}
+	return out
+}
+
+/*
+ * 【2026-10-09】执行「在海域部署或调度 1 支空军」。
+ * 15408 与 17706 共用同一实现（原 15408 的 run 内联版抽出，行为不变）。
+ *   arg.choice === 1 -> 调度（把 1 支本国空军移入）
+ *   否则              -> 部署（build_piece，内部再校验载体与格位）
+ */
+function run_sea_air_deploy(game, ctx, nat) {
+	const arg = (ctx && ctx.arg) || {}
+	const space = arg.space
+	if (!space) return { ok: false, reason: '未指定目标海域' }
+	const sp = data.spaces[space]
+	if (!sp || sp.terrain !== 'sea')
+		return { ok: false, reason: '只能在海域部署/调度空军' }
+	const host = air_host_check(game, nat, space)
+	if (!host.ok) return host
+	if (!unit_slot_free(game, nat, 'air', space).ok)
+		return { ok: false, reason: data.name_of(space) + ' 本国空军已满（每格 1 支）' }
+
+	if (arg.choice === 1) {
+		/* 调度：把 1 支本国空军移入该海域 */
+		const airs = my_air_pieces(game, nat)
+		const air = airs.find(a => Number(game.location[a]) !== space) || airs[0]
+		if (!air) return { ok: false, reason: '没有可调度的' + nat + '空军' }
+		const from = game.location[air]
+		game.location[air] = space
+		refresh(game)
+		return { ok: true, desc: '调度空军 ' + data.name_of(from) + ' → ' + data.name_of(space) }
+	}
+
+	/* 部署：复用空军力量的部署原子 build_piece */
+	const r = build_piece(game, nat, 'air', space)
+	if (!r.ok) return r
+	return { ok: true, desc: '在 ' + data.name_of(space) + ' 部署 1 支空军（' + (r.reason || '') + '）' }
+}
+
+/* space 的相邻地区里是否有 nation 的 type 部队 */
+function adjacent_has_piece(game, space, nation, type) {
+	if (space == null) return false
+	const myFaction = faction_of_nation(nation)
+	const nbrs = get_connections(game, Number(space), myFaction).map(Number)
+	for (const nb of nbrs) {
+		for (const p of pieces_on(game, nb)) {
+			if (game.piece_nation[p] === nation && game.piece_type[p] === type) return true
+		}
+	}
+	return false
+}
 
 const RESPONSE_EFFECTS = {
 	/*
@@ -2801,6 +9526,362 @@ const RESPONSE_EFFECTS = {
 		},
 		/* effect 实现见本文件 RESPONSE_EFFECT_IMPL[cardId]（dispatch 走那里，本字段已废弃） */
 	},
+
+	/* ============================================================
+	 * 【2026-10-04】日本响应牌（25 张）
+	 *
+	 * 触发时点约定：
+	 *   · play_start   —— 出牌阶段开始时（本轮新增，见 phase_play）
+	 *   · battle       —— 发起战斗后（ctx: {nation, space, kind, result}）
+	 *   · build        —— 建设后（ctx: {nation, space, type, piece_id}）
+	 *   · piece_removed—— 部队被移除后（ctx: {piece_nation, piece_type, space, ...}）
+	 *
+	 * 需要【玩家选择目标/单位】的卡，effect 返回 pending:
+	 * true 由 UI 走选择流程；能直接结算的直接调用原子。
+	 * ⚠ 未实现完的卡先登记 trigger，effect 标注 TODO，
+	 *   避免"配置了却触发不了"的静默失效。
+	 * ============================================================ */
+
+	'15419': {
+		name: '万岁冲锋', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (game, ctx, owner_side) => ctx.kind === 'land' && ctx.nation === '日本',
+		},
+	},
+	'15420': {
+		name: '本土决战', actor: '日本',
+		/*
+		 * 卡面"任意时机：<日本><东海>的日本部队在本回合内不会被移除"。
+		 * 【实现口径】响应卡是暗置后等事件触发，"任意时机"无法直接表达，
+		 * 故按其实际用途实现为：这些地区的日本部队【被移除时】使其不被移除
+		 * （与英国 15330 防御姿态同款）。若将来要做成主动打出，再改。
+		 */
+		trigger: {
+			on: 'piece_removed',
+			filter: (game, ctx) => {
+				if (ctx.piece_nation !== '日本') return false
+				const nm = data.name_of(ctx.space)
+				return nm === '日本' || nm === '东海'
+			},
+		},
+	},
+	'15421': {
+		name: '关东军', actor: '日本',
+		trigger: {
+			on: 'piece_removed',
+			filter: (game, ctx, owner_side) => {
+				if (ctx.piece_nation !== '日本' || ctx.piece_type !== 'army') return false
+				/* <中国东北> 或相邻地区 */
+				return space_is_or_adjacent_to(game, ctx.space, '中国东北', owner_side)
+			},
+		},
+	},
+	'15422': {
+		name: '太平洋海岸线攻势', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (game, ctx, owner_side) =>
+				ctx.kind === 'land' && is_in_region(ctx.space, '美洲'),
+		},
+	},
+	'15423': {
+		name: '潜艇支援', actor: '日本',
+		trigger: { on: 'build', filter: (g, ctx) => ctx.type === 'navy' && ctx.nation === '日本' },
+	},
+	'15424': {
+		name: '海军特别陆战队', actor: '日本',
+		trigger: { on: 'build', filter: (g, ctx) => ctx.type === 'navy' && ctx.nation === '日本' },
+	},
+	'15425': {
+		name: '海军空降部队', actor: '日本',
+		trigger: { on: 'build', filter: (g, ctx) => ctx.type === 'navy' && ctx.nation === '日本' },
+	},
+	'15426': {
+		name: '驱逐舰运输', actor: '日本',
+		trigger: { on: 'battle', filter: (g, ctx) => ctx.kind === 'sea' && ctx.nation === '日本' },
+	},
+	'15427': {
+		name: '机动舰队', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'15428': {
+		name: '舰队决战', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'15429': {
+		name: '卢沟桥事变', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'15430': {
+		name: '奇袭', actor: '日本',
+		trigger: { on: 'battle', filter: (g, ctx) => ctx.kind === 'sea' && ctx.nation === '日本' },
+	},
+	'15431': {
+		name: '全面侵华', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (g, ctx) => ctx.kind === 'land' && is_in_region(ctx.space, '中国'),
+		},
+	},
+	'15432': {
+		name: '神风敢死队', actor: '日本',
+		trigger: {
+			on: 'build',
+			filter: (game, ctx, owner_side) => {
+				if (ctx.type !== 'navy') return false
+				const builderFaction = faction_of_nation(ctx.nation)
+				/* 敌方国家建设海军，且该地区相邻日本海军 */
+				return builderFaction && builderFaction !== owner_side &&
+					adjacent_has_piece(game, ctx.space, '日本', 'navy')
+			},
+		},
+	},
+	'15433': {
+		name: '皖南事变', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'15434': {
+		name: '伪满洲国', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'15435': {
+		name: '攻陷新加坡', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (g, ctx) => ctx.kind === 'land' && is_in_region(ctx.space, '东南亚'),
+		},
+	},
+	'15436': {
+		name: '战舰修理', actor: '日本',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ctx) => ctx.piece_nation === '日本' && ctx.piece_type === 'navy',
+		},
+	},
+	'15437': {
+		name: '支援印度民族主义者', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (g, ctx) => ctx.kind === 'land' && is_in_region(ctx.space, '印度'),
+		},
+	},
+	'15438': {
+		name: '偷袭珍珠港', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'7902': {
+		name: '澳洲海岸线攻势', actor: '日本',
+		trigger: {
+			on: 'battle',
+			filter: (g, ctx) => ctx.kind === 'land' &&
+				(is_in_region(ctx.space, '澳大利亚') || is_in_region(ctx.space, '新西兰')),
+		},
+	},
+	'7903': {
+		name: '菊水特攻', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'7904': {
+		name: '亡命之计', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'7905': {
+		name: '豫湘桂战役', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	'8600': {
+		name: '南方作战计划', actor: '日本',
+		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+	},
+	/* ===================== 苏联 RESPONSE（2026-10-06） ===================== */
+	'17830': {
+		actor: '苏联',
+		trigger: { on: 'play_start', filter: (g, ct) => ct.nation === '苏联' },
+		optional: true,
+	},
+	'17831': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) => ct.piece_nation === '苏联' && ct.piece_type === 'army' &&
+				['乌克兰', '莫斯科'].indexOf(data.name_of(ct.space)) >= 0,
+		},
+		optional: true,
+	},
+	'17832': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) => ct.piece_nation === '苏联' && ct.piece_type === 'army' &&
+				data.name_of(ct.space) === '罗斯',
+		},
+		optional: true,
+	},
+	'17833': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) => ct.piece_nation === '苏联' && ct.piece_type === 'army' &&
+				data.name_of(ct.space) === '莫斯科',
+		},
+		optional: true,
+	},
+	'17834': {
+		actor: '苏联',
+		trigger: {
+			on: 'build',
+			filter: (g, ct) => ct.type === 'army' &&
+				faction_of_nation(ct.nation) !== faction_of_nation('苏联') &&
+				space_is_or_adjacent_to(g, ct.space, '莫斯科', faction_of_nation('苏联')),
+		},
+		optional: true,
+	},
+	'17835': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) => ct.piece_nation === '苏联' && ct.piece_type === 'army' &&
+				data.name_of(ct.space) === '乌克兰',
+		},
+		optional: true,
+	},
+	'17836': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) => ct.piece_nation === '苏联' && ct.piece_type === 'army' &&
+				['西伯利亚', '中亚'].indexOf(data.name_of(ct.space)) >= 0,
+		},
+		optional: true,
+	},
+	'17837': {
+		actor: '苏联',
+		trigger: {
+			on: 'piece_attacked',
+			filter: (g, ct) => ct.defender_nation === '苏联' && ct.kind === 'land',
+		},
+		optional: true,
+	},
+	'17902': {
+		actor: '苏联',
+		trigger: {
+			on: 'battle',
+			filter: (g, ct) => ct.kind === 'land' &&
+				(ct.nation === '中国' || ct.victimNation === '中国'),
+		},
+		optional: true,
+	},
+
+	/* ---- 意大利响应牌（RESPONSE，Group A，2026-10-08）----
+	 * 复用英/日/苏原子：还原保护类用 restore_piece + register_modifier(protect)，
+	 * 消灭类用 eliminate_piece，征召类用 recruit_piece。
+	 * 触发点：piece_removed / build（玩家"建设陆军"走 build_piece 已触发 build；
+	 *   recruit_piece 内部已补 request_responses 使"征召"也触发 build，覆盖 17737/17738）。
+	 */
+	'17730': {
+		actor: '意大利',
+		name: '贝尔萨列里神射手团',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct, owner_side) =>
+				ct.piece_nation === '意大利' && ct.piece_type === 'army' &&
+				space_is_or_adjacent_to(g, ct.space, '巴尔干', owner_side),
+		},
+		optional: true,
+	},
+	'17731': {
+		actor: '意大利',
+		name: '不可思议行动',
+		trigger: {
+			on: 'build',
+			filter: (g, ct) =>
+				ct.type === 'army' && ct.nation === '苏联' &&
+				(adjacent_has_piece(g, ct.space, '英国', 'army') ||
+					adjacent_has_piece(g, ct.space, '美国', 'army')),
+		},
+		optional: true,
+	},
+	'17733': {
+		actor: '意大利',
+		name: '卡西诺山',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct, owner_side) =>
+				ct.piece_type === 'army' &&
+				faction_of_nation(ct.piece_nation) === 'axis' &&
+				data.name_of(ct.space) === '意大利',
+		},
+		optional: true,
+	},
+	'17734': {
+		actor: '意大利',
+		name: '罗马尼亚增援',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct) =>
+				ct.piece_nation === '德国' && ct.piece_type === 'army' &&
+				ct.was_supplied === true,
+		},
+		optional: true,
+	},
+	'17735': {
+		actor: '意大利',
+		name: '山地特种兵',
+		trigger: {
+			on: 'piece_removed',
+			filter: (g, ct, owner_side) =>
+				ct.piece_nation === '意大利' && ct.piece_type === 'army' &&
+				space_is_or_adjacent_to(g, ct.space, '意大利', owner_side),
+		},
+		optional: true,
+	},
+	'17737': {
+		actor: '意大利',
+		name: '以逸待劳',
+		trigger: {
+			on: 'build',
+			filter: (g, ct, owner_side) =>
+				ct.type === 'army' &&
+				faction_of_nation(ct.nation) !== owner_side &&
+				space_is_or_adjacent_to(g, ct.space, '意大利', owner_side),
+		},
+		optional: true,
+	},
+	'17738': {
+		actor: '意大利',
+		name: '殖民地游击队',
+		trigger: {
+			on: 'build',
+			filter: (g, ct, owner_side) =>
+				ct.type === 'army' &&
+				faction_of_nation(ct.nation) !== owner_side &&
+				(['拉丁美洲', '马达加斯加'].indexOf(data.name_of(ct.space)) >= 0),
+		},
+		optional: true,
+	},
+
+	/* ---- 意大利响应牌（RESPONSE，Group B，2026-10-08）---- */
+	/* 17736 王牌飞行员：成为[轰炸行动]目标时本回合无效（拦截类，镜像 15329） */
+	'17736': {
+		actor: '意大利',
+		name: '王牌飞行员',
+		trigger: {
+			on: 'econ_bombing',
+			filter: (g, ct, owner_side) => ct.target === '意大利',
+		},
+		optional: true,
+	},
+	/* 17732 德国军事顾问：出牌阶段开始时选择 1 张德国状态卡，本回合可免费使用 */
+	'17732': {
+		actor: '意大利',
+		name: '德国军事顾问',
+		trigger: {
+			on: 'play_start',
+			filter: (g, ct, owner_side) => ct.nation === '意大利',
+		},
+		optional: true,
+	},
 }
 
 /* ============================================================
@@ -2825,7 +9906,8 @@ const RESPONSE_EFFECTS = {
  * （算子先移除，触发后由持有方决定是否还原 + 本回合保护），
  * 因此不再属于 PRE_CANCEL，统一走 pre=false 的"事后类"分支。
  */
-const RESPONSE_PRE_CANCEL = new Set(['15329'])
+/* 拦截类响应：发动后原卡进弃牌堆、效果不生效（在 play_card 生效前挂起） */
+const RESPONSE_PRE_CANCEL = new Set(['15329', '17736'])
 
 const RESPONSE_EFFECT_IMPL = {
 	'15328': (game, side, ctx) => {
@@ -2904,6 +9986,609 @@ const RESPONSE_EFFECT_IMPL = {
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
 		return { ok: r.ok, desc: r.ok ? '消灭该陆军' : '（无敌军可消灭）' }
 	},
+
+	/* ============================================================
+	 * 【2026-10-04】日本响应牌 effect（第一批：无需玩家选择）
+	 *
+	 * 筛选标准：目标/对象能由【ctx】或【卡面写死的地区】直接确定，
+	 *   不需要玩家在地图上选地区 / 选部队 / 选牌。
+	 *   其余需要选择的卡（15419/15422~15428/15430/15431/15433/15434/
+	 *   15438/7903/7904/7905/8600）待第 2 批，届时【复用】事件卡的
+	 *   event_budget 选地区机制与发起单位选择机制。
+	 *
+	 * 全部复用既有原子：restore_piece / register_modifier /
+	 *   eliminate_piece / recruit_piece / build_piece /
+	 *   battle_initiators / do_battle（不自己重写遍历）。
+	 * ============================================================ */
+
+	'15420': (game, side, ctx) => {
+		/* <日本>/<东海> 的日本部队被移除时：还原并保护（本回合不会被移除） */
+		restore_piece(game, ctx)
+		register_modifier(game, {
+			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
+			spaces: [ctx.space], untilTurn: game.turn,
+		})
+		return { ok: true, desc: '该日本部队本回合不会被移除' }
+	},
+	'15421': (game, side, ctx) => {
+		/* <中国东北>或相邻的【补给状态】日本陆军被移除时：还原并保护 */
+		restore_piece(game, ctx)
+		register_modifier(game, {
+			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
+			spaces: [ctx.space], untilTurn: game.turn,
+		})
+		return { ok: true, desc: '该日本陆军本回合不会被移除' }
+	},
+	'15429': (game, side, ctx) => {
+		/*
+		 * 出牌阶段开始时：对【<中国东部>】发起 1 次陆战（目标固定）。
+		 * 发起单位用既有原子 battle_initiators 自动取一支；
+		 * 若有多支，本批先取第一支（第 2 批复发起单位选择 UI 后再改成玩家选）。
+		 */
+		const sid = space_id_of('中国东部')
+		if (sid == null) return { ok: false, desc: '（<中国东部> 不存在）' }
+		const inits = battle_initiators(game, '日本', sid)
+		if (!inits.length) return { ok: false, desc: '（无相邻的补给中日本陆/海军可发起）' }
+		const r = do_battle(game, '日本', sid, null, 'land', { from: inits[0].id })
+		return { ok: r.ok, desc: r.ok ? '对<中国东部>发起陆战' : ('（陆战未发动：' + (r.reason || '') + '）') }
+	},
+	'15432': (game, side, ctx) => {
+		/* 敌方国家相邻日本海军建设海军后：消灭【建设的海军】 */
+		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
+		return { ok: r.ok, desc: r.ok ? '消灭建设的海军' : '（无敌军可消灭）' }
+	},
+	'15435': (game, side, ctx) => {
+		/* 对<东南亚>发起陆战后：①在战斗地区征召陆军 ②对<南海>发起1次海战 */
+		const msgs = []
+		const rr = recruit_piece(game, '日本', 'army', ctx.space)
+		msgs.push(rr.ok ? '在' + data.name_of(ctx.space) + '征召陆军' : '（无法征召：' + (rr.reason || '') + '）')
+		const sea = space_id_of('南海')
+		if (sea != null) {
+			const inits = battle_initiators(game, '日本', sea)
+			if (inits.length) {
+				const rb = do_battle(game, '日本', sea, null, 'sea', { from: inits[0].id })
+				msgs.push(rb.ok ? '对<南海>发起海战' : '（海战未发动：' + (rb.reason || '') + '）')
+			} else {
+				msgs.push('（无相邻补给日本海军，<南海>海战未发动）')
+			}
+		}
+		return { ok: true, desc: msgs.join('；') }
+	},
+	'15436': (game, side, ctx) => {
+		/* 【补给状态】的日本海军被移除时：还原并保护 */
+		restore_piece(game, ctx)
+		register_modifier(game, {
+			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
+			spaces: [ctx.space], untilTurn: game.turn,
+		})
+		return { ok: true, desc: '该日本海军本回合不会被移除' }
+	},
+	'15437': (game, side, ctx) => {
+		/* 对<印度>发起陆战后：在【战斗地区】建设陆军 */
+		const r = build_piece(game, '日本', 'army', ctx.space)
+		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '建设陆军' : '（无法建设：' + (r.reason || '') + '）' }
+	},
+	'7902': (game, side, ctx) => {
+		/* 对<澳大利亚>/<新西兰>发起陆战后：在【战斗地区】建设陆军 */
+		const r = build_piece(game, '日本', 'army', ctx.space)
+		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '建设陆军' : '（无法建设：' + (r.reason || '') + '）' }
+	},
+
+	/* ---- 第二批 A：目标由卡面写死 / ctx 直接给定，无需玩家选择 ---- */
+
+	'15427': (game, side, ctx) => {
+		/*
+		 * 出牌阶段开始时：若日本在<北太平洋>或其相邻地区有 >=2 支海军 -> 获得 2 分。
+		 * 条件不满足则不触发（响应卡留在桌面）。
+		 */
+		const sid = space_id_of('北太平洋')
+		if (sid == null) return { ok: false, desc: '（<北太平洋> 不存在）' }
+		if (navy_count_near(game, '日本', sid) < 2)
+			return { ok: false, desc: '（<北太平洋>或相邻不足 2 支日本海军）' }
+		add_axis_score(game, 2)
+		return { ok: true, desc: '获得 2 分' }
+	},
+	'15428': (game, side, ctx) => {
+		/*
+		 * 出牌阶段开始时：若日本在<中国东部>或其相邻有 >=2 支海军
+		 * -> 在【<南海>】发起 1 次海战（目标固定）。
+		 */
+		const cn = space_id_of('中国东部')
+		const sea = space_id_of('南海')
+		if (cn == null || sea == null) return { ok: false, desc: '（地区不存在）' }
+		if (navy_count_near(game, '日本', cn) < 2)
+			return { ok: false, desc: '（<中国东部>或相邻不足 2 支日本海军）' }
+		return do_sea_battle_at(game, sea)
+	},
+	'15431': (game, side, ctx) => {
+		/*
+		 * 对<中国>发起陆战后：对【战斗地区】(ctx.space) 发起 1 次陆战（目标固定）。
+		 */
+		if (ctx.space == null) return { ok: false, desc: '（无战斗地区）' }
+		const inits = battle_initiators(game, '日本', ctx.space)
+		if (!inits.length) return { ok: false, desc: '（无相邻的补给中日本陆/海军）' }
+		const r = do_battle(game, '日本', ctx.space, null, 'land', { from: inits[0].id })
+		return {
+			ok: r.ok,
+			desc: r.ok ? '对' + data.name_of(ctx.space) + '发起陆战'
+				: '（陆战未发动：' + (r.reason || '') + '）',
+		}
+	},
+	'7903': (game, side, ctx, choice, extra) => {
+		/*
+		 * 【2026-10-05 玩家核对卡面确认】
+		 *   出牌阶段开始时：在<东海>征召【海军】。以【此海军】发起 1 次海战。
+		 *
+		 * ⚠ 我之前误实现为"征召【陆军】+ 对<南海>海战"（照 CSV 旧文本）。
+		 *   玩家核对卡面后确认是【海军】，且海战必须由【刚征召的这支】海军发起。
+		 *   <东海>本就是海域，征召海军正合适 —— 我之前"无法征召"是【类型搞错】，
+		 *   不是地区名错（地区名无需改）。
+		 */
+		const east = space_id_of('东海')
+		if (east == null) return { ok: false, desc: '（<东海> 不存在）' }
+
+		if (choice === undefined) {
+			/* ① 在<东海>征召 1 支海军 */
+			const rr = recruit_piece(game, '日本', 'navy', east)
+			if (!rr.ok)
+				return { ok: false, desc: '（<东海>无法征召海军：' + (rr.reason || '') + '）' }
+			/* ② 候选海域 = 与<东海>【双向】相邻的海域 */
+			const myFaction = faction_of_nation('日本')
+			const nbrs = get_connections(game, Number(east), myFaction).map(Number)
+			const cands = []
+			for (const sp of nbrs) {
+				const spd = data.spaces[sp]
+				if (!spd || spd.terrain !== 'sea') continue
+				if (cands.indexOf(sp) >= 0) continue
+				/*
+				 * ⚠ connections 可能不对称：do_battle 是【从目标格】校验发起单位，
+				 *   所以候选必须【双向】相邻，否则会"能选但 do_battle 拒绝"
+				 *   （见 rtt-atomic-operations 第三节陷阱 2）。
+				 */
+				if (get_connections(game, sp, myFaction).map(Number).indexOf(Number(east)) < 0)
+					continue
+				cands.push(sp)
+			}
+			if (!cands.length)
+				return { ok: true, desc: '在<东海>征召海军；（无相邻海域可发起海战）' }
+			return {
+				pending: true, kind: 'space',
+				candidates: cands.map(sp => ({ id: sp, name: data.name_of(sp) })),
+				prompt: '选择要发起海战的海域（以刚征召的海军）',
+				/* 记住发起单位：必须是【刚征召的那支】海军 */
+				extra: { navy: rr.id },
+			}
+		}
+
+		/* 带 choice 结算：用【刚征召的】海军发起海战 */
+		const navy = (extra && extra.navy) || null
+		if (!navy || game.location[navy] == null)
+			return { ok: false, desc: '（找不到刚征召的海军）' }
+		const r = do_battle(game, '日本', Number(choice), null, 'sea', { from: navy })
+		return {
+			ok: r.ok,
+			desc: r.ok
+				? '以新征召海军对' + data.name_of(Number(choice)) + '发起海战'
+				: '（海战未发动：' + (r.reason || '') + '）',
+		}
+	},
+
+	/* ---- 第二批 B：需要玩家选择（effect 第一次调用返回 pending）----
+	 *
+	 * 统一约定：effect(game, side, ctx, choice)
+	 *   · choice === undefined -> 返回 { pending:true, kind, candidates, prompt }
+	 *   · choice 有值          -> 用 choice 执行并返回 { ok, desc }
+	 * 服务端 trigger_response 挂起，玩家选完走 resolve_response_choice 再调一次。
+	 * 客户端复用事件卡的 highlight_event_targets（不另造 UI）。
+	 */
+
+	'15419': (game, side, ctx, choice) => {
+		/* 日本发起陆战后：对【战斗地区或其相邻地区】发起 1 次陆战 */
+		return pick_space_then_battle(game, ctx, choice, {
+			kind: 'land', base: ctx.space, includeBase: true,
+			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
+		})
+	},
+	'15422': (game, side, ctx, choice) => {
+		/* 对<美洲>发起陆战后：对战斗地区或其相邻发起 1 次陆战 */
+		return pick_space_then_battle(game, ctx, choice, {
+			kind: 'land', base: ctx.space, includeBase: true,
+			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
+		})
+	},
+	'15423': (game, side, ctx, choice) => {
+		/* 日本建设海军后：在建设地区或其相邻发起 1 次海战 */
+		return pick_space_then_battle(game, ctx, choice, {
+			kind: 'sea', base: ctx.space, includeBase: true,
+			prompt: '选择要发起海战的海域（建设地区或其相邻）',
+		})
+	},
+	'15424': (game, side, ctx, choice) => {
+		/* 日本建设海军后：在建设地区或其相邻【征召陆军】 */
+		return pick_space_then(game, ctx, choice, {
+			kind: 'land', base: ctx.space, includeBase: true,
+			prompt: '选择要征召陆军的地区（建设地区或其相邻）',
+			run: (g, sp) => {
+				const r = recruit_piece(g, '日本', 'army', sp)
+				return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '征召陆军'
+					: '（无法征召：' + (r.reason || '') + '）' }
+			},
+		})
+	},
+	'15425': (game, side, ctx, choice) => {
+		/* 日本建设海军后：在建设地区或其相邻【部署空军】 */
+		return pick_space_then(game, ctx, choice, {
+			kind: 'land', base: ctx.space, includeBase: true,
+			prompt: '选择要部署空军的地区（建设地区或其相邻）',
+			run: (g, sp) => {
+				const r = build_piece(g, '日本', 'air', sp)
+				return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '部署空军'
+					: '（无法部署：' + (r.reason || '') + '）' }
+			},
+		})
+	},
+	'15426': (game, side, ctx, choice) => {
+		/* 日本发起海战后：在<东海>或其相邻【建设海军】 */
+		const east = space_id_of('东海')
+		return pick_space_then(game, ctx, choice, {
+			kind: 'sea', base: east, includeBase: true,
+			prompt: '选择要建设海军的海域（<东海>或其相邻）',
+			run: (g, sp) => {
+				const r = build_piece(g, '日本', 'navy', sp)
+				return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '建设海军'
+					: '（无法建设：' + (r.reason || '') + '）' }
+			},
+		})
+	},
+	'15430': (game, side, ctx, choice) => {
+		/* 日本发起海战后：对战斗地区或其相邻发起 1 次陆战 */
+		return pick_space_then_battle(game, ctx, choice, {
+			kind: 'land', base: ctx.space, includeBase: true,
+			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
+		})
+	},
+	'15438': (game, side, ctx, choice) => {
+		/* 出牌阶段开始时：对<夏威夷>或其相邻发起 1 次海战 */
+		const hi = space_id_of('夏威夷')
+		return pick_space_then_battle(game, ctx, choice, {
+			kind: 'sea', base: hi, includeBase: true,
+			prompt: '选择要发起海战的海域（<夏威夷>或其相邻）',
+		})
+	},
+
+	/* ---- 需要选【敌方陆军】消灭：15433 / 15434 / 7905 ---- */
+	'15433': (game, side, ctx, choice) => {
+		/* 出牌阶段开始时：消灭 1 支敌方陆军 */
+		return pick_enemy_army_then_eliminate(game, ctx, choice, {
+			prompt: '选择要消灭的 1 支敌方陆军',
+		})
+	},
+	'15434': (game, side, ctx, choice) => {
+		/* 出牌阶段开始时：消灭与<中国东北>相邻的 1 支敌方陆军 */
+		return pick_enemy_army_then_eliminate(game, ctx, choice, {
+			near: space_id_of('中国东北'),
+			prompt: '选择要消灭的 1 支敌方陆军（与<中国东北>相邻）',
+		})
+	},
+	'7905': (game, side, ctx, choice) => {
+		/* 出牌阶段开始时：消灭与<中国东北>相邻的 1 支敌方陆军（同 15434） */
+		return pick_enemy_army_then_eliminate(game, ctx, choice, {
+			near: space_id_of('中国东北'),
+			prompt: '选择要消灭的 1 支敌方陆军（与<中国东北>相邻）',
+		})
+	},
+
+	/* ---- 8600 南方作战计划：四选一 ---- */
+	'8600': (game, side, ctx, choice) => {
+		const options = [
+			{ key: 'score', name: '获得 1 分' },
+			{ key: 'kill_cn', name: '消灭 1 支中国陆军' },
+			{ key: 'recruit_sea', name: '在<东南亚>征召 1 支陆军' },
+			{ key: 'battle_india', name: '对英属印度发起 1 次陆战' },
+		]
+		if (choice === undefined) {
+			return {
+				pending: true, kind: 'option',
+				candidates: options.map((o, i) => ({ id: i, name: o.name })),
+				prompt: '南方作战计划：选择执行哪项',
+			}
+		}
+		const opt = options[Number(choice)]
+		if (!opt) return { ok: false, desc: '（无效选项）' }
+		switch (opt.key) {
+			case 'score':
+				add_axis_score(game, 1)
+				return { ok: true, desc: '获得 1 分' }
+			case 'kill_cn': {
+				/* 消灭 1 支中国陆军：这里选第一支（多个时待后续细化） */
+				for (const p in game.piece_nation) {
+					if (game.piece_nation[p] !== '中国' || game.piece_type[p] !== 'army') continue
+					if (game.location[p] == null) continue
+					const r = eliminate_piece(game, '日本', game.location[p], p)
+					if (r.ok) return { ok: true, desc: '消灭 1 支中国陆军' }
+				}
+				return { ok: false, desc: '（场上无中国陆军）' }
+			}
+			case 'recruit_sea': {
+				const sea = space_id_of('东南亚')
+				if (sea == null) return { ok: false, desc: '（<东南亚> 不存在）' }
+				const r = recruit_piece(game, '日本', 'army', sea)
+				return { ok: r.ok, desc: r.ok ? '在<东南亚>征召陆军'
+					: '（无法征召：' + (r.reason || '') + '）' }
+			}
+			case 'battle_india': {
+				const ind = space_id_of('印度')
+				if (ind == null) return { ok: false, desc: '（<印度> 不存在）' }
+				return do_land_battle_at(game, ind)
+			}
+		}
+		return { ok: false, desc: '（无效选项）' }
+	},
+
+	/* ---- 7904 亡命之计：从弃牌堆选 1 张响应牌暗置于桌面 ---- */
+	'7904': (game, side, ctx, choice) => {
+		const dn = '日本'
+		/*
+		 * ⚠ is_card_type 用 CARD_BY_ID[card_id] 直接查，【不接受实例 id】
+		 *   （如 '15419#1' 查不到）。必须先 inst_card_id 归一成卡面 id。
+		 *   否则弃牌堆里明明有响应牌却判成"没有"，这张卡永远选不出牌。
+		 */
+		const pool = (game.discard[dn] || []).filter(id =>
+			is_card_type(String(inst_card_id(id)), 'RESPONSE'))
+		if (choice === undefined) {
+			if (!pool.length) return { ok: false, desc: '（弃牌堆中没有响应牌）' }
+			return {
+				pending: true, kind: 'card',
+				candidates: pool.map(id => ({
+					id: id, name: (inst_card(id) || {}).name || id,
+				})),
+				prompt: '从弃牌堆选择 1 张响应牌（暗置于桌面）',
+			}
+		}
+		/* 复用暗置原子（从弃牌堆取出） */
+		const fr = facedown_response(game, dn, choice, 'discard')
+		if (!fr.ok) return { ok: false, desc: '（' + fr.reason + '）' }
+		return { ok: true, desc: '暗置《' + ((inst_card(choice) || {}).name || '响应牌') + '》' }
+	},
+
+	/* ============================================================
+	 * 苏联 RESPONSE 实现（2026-10-06）复用英/日原子操作
+	 * ============================================================ */
+
+	/* 17830 保卫祖国：回合开始时在莫斯科或相邻征召1陆军 + 消灭莫斯科1支敌方陆军 */
+	'17830': (game, side, ctx, choice) => {
+		const msc = space_id_of('莫斯科')
+		if (msc == null) return { ok: false, desc: '（莫斯科 不存在）' }
+		if (choice === undefined) {
+			const f = faction_of_nation('苏联')
+			const cands = new Set([msc])
+			for (const nb of get_connections(game, msc, f).map(Number))
+				if (data.spaces[nb] && data.spaces[nb].terrain === 'land') cands.add(nb)
+			return {
+				pending: true, kind: 'space',
+				candidates: [...cands].map(sp => ({ id: sp, name: data.name_of(sp) })),
+				prompt: '选择征召苏联陆军的地区（莫斯科或其相邻）',
+			}
+		}
+		const sp = Number(choice)
+		const r = recruit_piece(game, '苏联', 'army', sp)
+		let msg = r.ok ? '在' + data.name_of(sp) + '征召苏联陆军'
+			: '（无法征召：' + (r.reason || '') + '）'
+		/* 自动消灭莫斯科 1 支敌方陆军（多支时取第一支） */
+		for (const p in game.piece_nation) {
+			if (game.location[p] == null || game.location[p] !== msc) continue
+			if (game.piece_type[p] !== 'army') continue
+			if (faction_of_nation(game.piece_nation[p]) === faction_of_nation('苏联')) continue
+			const er = eliminate_piece(game, '苏联', msc, p)
+			if (er.ok) { msg += '；消灭莫斯科的' + game.piece_nation[p] + '陆军'; break }
+		}
+		return { ok: true, desc: msg }
+	},
+
+	/* 17831 撤退与整编：乌/莫斯科苏陆军被移除后，在西伯利亚/中亚征召陆军 */
+	'17831': (game, side, ctx, choice) => {
+		const cands = []
+		for (const nm of ['西伯利亚', '中亚']) {
+			const id = space_id_of(nm)
+			if (id != null) cands.push({ id: id, name: nm })
+		}
+		if (choice === undefined) {
+			if (!cands.length) return { ok: false, desc: '（无可用征召地区）' }
+			return {
+				pending: true, kind: 'space', candidates: cands,
+				prompt: '《撤退与整编》选择征召地区（西伯利亚 / 中亚）',
+			}
+		}
+		const sp = Number(choice)
+		const r = recruit_piece(game, '苏联', 'army', sp)
+		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '征召苏联陆军'
+			: '（无法征召：' + (r.reason || '') + '）' }
+	},
+
+	/* 17832 列宁格勒保卫战 / 17833 莫斯科保卫战 / 17835 斯大林格勒保卫战 */
+	'17832': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('罗斯')].filter(x => x != null)),
+	'17833': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('莫斯科')].filter(x => x != null)),
+	'17835': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('乌克兰')].filter(x => x != null)),
+
+	/* 17836 无休止的扩张（A）：西伯利亚/中亚苏陆军被移除后还原 + 本回合保护两区 */
+	'17836': (game, side, ctx) => su_defense_protect(game, ctx,
+		['西伯利亚', '中亚'].map(space_id_of).filter(x => x != null)),
+
+	/* 17834 湿季泥沼：敌方在莫斯科或相邻建陆军后，消灭该陆军 */
+	'17834': (game, side, ctx, choice) => {
+		const r = eliminate_piece(game, '苏联', ctx.space, ctx.piece_id)
+		return { ok: r.ok, desc: r.ok ? '消灭了在' + data.name_of(ctx.space) + '建设的敌方陆军'
+			: '（无法消灭）' }
+	},
+
+	/* 17902 敌后游击队：中国发起或被发起陆战后，中国在战斗地区征召陆军 */
+	'17902': (game, side, ctx, choice) => {
+		const sp = ctx.space
+		if (sp == null) return { ok: false, desc: '（无战斗地区）' }
+		const r = recruit_piece(game, '中国', 'army', sp)
+		return { ok: r.ok, desc: r.ok ? '中国在' + data.name_of(sp) + '征召陆军'
+			: '（无法征召：' + (r.reason || '') + '）' }
+	},
+
+	/* ---- 意大利响应牌 RESPONSE 实现（Group A，2026-10-08）----
+	 * 全部复用原子：还原保护类 = restore_piece + register_modifier(protect)；
+	 * 消灭类 = eliminate_piece；征召类 = recruit_piece。
+	 */
+	'17730': (game, side, ctx) => {
+		restore_piece(game, ctx)
+		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		return { ok: true, desc: '还原<巴尔干/相邻>的意大利陆军并本回合保护' }
+	},
+	'17731': (game, side, ctx) => {
+		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
+		return { ok: r.ok, desc: r.ok ? '消灭苏联在' + data.name_of(ctx.space) + '建设的陆军'
+			: '（无法消灭）' }
+	},
+	'17733': (game, side, ctx) => {
+		restore_piece(game, ctx)
+		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		return { ok: true, desc: '还原<意大利>的轴心陆军并本回合保护' }
+	},
+	'17734': (game, side, ctx) => {
+		const r = recruit_piece(game, '意大利', 'army', ctx.space)
+		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '征召意大利陆军'
+			: '（无法征召：' + (r.reason || '') + '）' }
+	},
+	'17735': (game, side, ctx) => {
+		restore_piece(game, ctx)
+		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		return { ok: true, desc: '还原<意大利/相邻>的意大利陆军并本回合保护' }
+	},
+	'17737': (game, side, ctx) => {
+		const it = space_id_of('意大利')
+		if (it == null) return { ok: false, desc: '（<意大利> 不存在）' }
+		const r1 = recruit_piece(game, '德国', 'army', it)
+		const r2 = recruit_piece(game, '意大利', 'army', it)
+		let msg = '在<意大利>征召德国和意大利陆军'
+		if (!r1.ok) msg += '（德国征召失败：' + (r1.reason || '') + '）'
+		if (!r2.ok) msg += '（意大利征召失败：' + (r2.reason || '') + '）'
+		return { ok: r1.ok || r2.ok, desc: msg }
+	},
+	'17738': (game, side, ctx) => {
+		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
+		return { ok: r.ok, desc: r.ok ? '消灭在' + data.name_of(ctx.space) + '建设的敌方陆军'
+			: '（无法消灭）' }
+	},
+
+	/* ---- 意大利响应牌 RESPONSE 实现（Group B，2026-10-08）---- */
+	/* 17736 王牌飞行员：拦截类，返回 cancel 使 15313 轰炸对意大利无效（与 15329 同） */
+	'17736': (game, side, ctx) => {
+		return { ok: true, cancel: true, desc: '本回合[轰炸行动]对意大利无效' }
+	},
+	/* 17732 德国军事顾问：收集桌上德国状态卡，置 pending 待意大利选 1 张借用 */
+	'17732': (game, side, ctx) => {
+		const germanyTable = (game.table && game.table['德国']) || []
+		const opts = germanyTable.filter(cid => {
+			const cfg = status_config_of(cid)
+			return cfg && cfg.trigger
+		})
+		if (!opts.length) return { ok: false, desc: '（桌上没有德国状态卡可借用）' }
+		game.italy_borrow = { pending: true, nation: '意大利', options: opts, turn: game.turn }
+		return { ok: true, desc: '选择 1 张德国状态卡借用（本回合免费使用）', choice: true }
+	},
+}
+
+/* ============================================================
+ * 苏联增强卡的候选辅助（2026-10-07 第二批）
+ * 全部走"通用原子"，不自己重写遍历（见 rtt-atomic-operations 铁律）。
+ * ============================================================ */
+
+/* 场上全部苏联陆军（算子 id） */
+function su_army_pieces(game) {
+	return Object.keys(game.location || {}).filter(p =>
+		game.location[p] != null && game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army')
+}
+
+/* 17806：某地区（空军所在）的相邻、且可建设苏联陆军的地区
+ * 必须额外检查【单位槽空闲】—— can_build_at 不排除"已有本国部队"的格子，
+ * 若漏掉这层，候选会含已驻军地区，build_piece 虽返回 ok 却不真正新增棋子。 */
+function su_air_adjacent_build_spaces(game, base) {
+	const f = faction_of_nation('苏联')
+	const out = []
+	for (const nb of get_connections(game, Number(base), f).map(Number)) {
+		if (!data.spaces[nb] || data.spaces[nb].terrain === 'sea') continue
+		if (!can_build_at(game, '苏联', nb, 'army').ok) continue
+		if (!unit_slot_free(game, '苏联', 'army', nb).ok) continue
+		out.push(nb)
+	}
+	return out
+}
+
+/* 17808：<莫斯科>或相邻地区的敌方陆军（算子 id） */
+function su_enemy_armies_near(game, centerName) {
+	const c = space_id_of(centerName)
+	if (c == null) return []
+	const f = faction_of_nation('苏联')
+	const pool = new Set([c])
+	for (const nb of get_connections(game, c, f).map(Number)) pool.add(nb)
+	const out = []
+	for (const p of Object.keys(game.location || {})) {
+		if (game.location[p] == null) continue
+		if (game.piece_type[p] !== 'army') continue
+		if (faction_of_nation(game.piece_nation[p]) === f) continue   /* 只敌方 */
+		if (!pool.has(Number(game.location[p]))) continue
+		out.push(p)
+	}
+	return out
+}
+
+/* 17811 / 17815：某地区或其相邻、且可部署该国空军的地区
+ * （空军需有本国陆/海军载体且补给中）。nation 默认苏联，可传 '中国'。 */
+function su_air_deploy_spaces(game, base, nation) {
+	nation = nation || '苏联'
+	const f = faction_of_nation(nation)
+	const pool = [Number(base)]
+	for (const nb of get_connections(game, Number(base), f).map(Number)) pool.push(nb)
+	const out = []
+	for (const sp of pool) {
+		if (!data.spaces[sp]) continue
+		/* 空军不能独立存在：必须有补给中的本国陆/海军作载体 */
+		if (!air_host_check(game, nation, sp).ok) continue
+		if (can_build_at(game, nation, sp, 'air').ok) out.push(sp)
+	}
+	return out
+}
+
+/* 17815 Z计划：可【夺取制空权】的地区 —— 有敌方空军、且该国相邻有补给中的本国空军 */
+function air_seize_spaces(game, nation) {
+	const f = faction_of_nation(nation)
+	const sup = compute_supply(game)
+	const myAir = Object.keys(game.location || {}).filter(p =>
+		game.location[p] != null && game.piece_nation[p] === nation &&
+		game.piece_type[p] === 'air' && sup.in_supply[p])
+	const out = []
+	for (const p of Object.keys(game.location || {})) {
+		if (game.location[p] == null) continue
+		if (game.piece_type[p] !== 'air') continue
+		if (faction_of_nation(game.piece_nation[p]) === f) continue   /* 只敌方空军 */
+		const sp = Number(game.location[p])
+		/* 该国是否有与 sp 相邻、且补给中的空军 */
+		const ok = myAir.some(a => {
+			const nbs = get_connections(game, Number(game.location[a]), f).map(Number)
+			return nbs.indexOf(sp) >= 0
+		})
+		if (ok && out.indexOf(sp) < 0) out.push(sp)
+	}
+	return out
+}
+
+/* 共用：被移除后还原该部队 + 本回合保护指定地区内全部苏联陆军
+ * 苏联响应卡 17832/17833/17835/17836 复用 */
+function su_defense_protect(game, ctx, spaces) {
+	if (ctx && ctx.piece != null) restore_piece(game, ctx)
+	const mods = game.modifiers || (game.modifiers = [])
+	mods.push({
+		key: 'protect', nation: '苏联', type: 'army', spaces: spaces,
+		untilTurn: game.turn, card: 'su_defense',
+	})
+	const names = spaces.map(data.name_of).join('、')
+	return { ok: true, desc: (ctx && ctx.piece != null ? '苏联陆军已还原，' : '') +
+		names + '的苏联陆军本回合内不会被移除' }
 }
 
 /* 取某阵营下一个代表国（用于弃牌堆归属） */
@@ -2911,6 +10596,39 @@ function first_nation_of_side(side) {
 	for (const n of ORDER_OF_NATIONS)
 		if (faction_of_nation(n) === side) return n
 	return null
+}
+
+/*
+ * 【2026-10-05】响应卡【暗置】的统一原子。
+ *
+ * 语义：从手牌（或指定来源）移除 -> 背面朝上放到桌面响应区，
+ *   **不进弃牌堆**，也不占出牌名额（由调用方决定是否 mark_play_done）。
+ *
+ * 为什么抽出来：此前 play_card 的 RESPONSE 分支、7904 亡命之计、
+ *   以及日本国家技能各写了一遍 push table_responses，三处同构会漂移。
+ *   按 rtt-atomic-operations 的铁律，统一到一个原子。
+ *
+ * @param from 'hand'（默认，从手牌移除）| 'discard'（从弃牌堆取出）
+ */
+function facedown_response(game, nation, card_id, from) {
+	/*
+	 * ⚠ 注意字段名：手牌是【hands】（复数），弃牌堆是【discard】（单数）。
+	 *   写成 game['hand'] 会是 undefined 并抛 TypeError（2026-10-05 踩过）。
+	 */
+	const src = from === 'discard' ? 'discard' : 'hands'
+	game[src] = game[src] || {}
+	const list = game[src][nation] || (game[src][nation] = [])
+	const idx = list.indexOf(card_id)
+	if (idx < 0) return { ok: false, reason: '该牌不在' + (src === 'hand' ? '手牌' : '弃牌堆') }
+	list.splice(idx, 1)
+	game.table_responses = game.table_responses || []
+	game.table_responses.push({
+		card_id: card_id,
+		owner_side: faction_of_nation(nation),
+		nation: nation,
+		id: card_id,
+	})
+	return { ok: true }
 }
 
 /* 把已触发的响应卡从桌面移入弃牌堆 */
@@ -2964,7 +10682,7 @@ function request_responses(game, on, ctx, pre) {
 	 *   1) 锁住当前操作者（全局拦截阻止其继续其它操作）；
 	 *   2) 把操作权临时让给持有方——记住原先的操作权（response_return_active），
 	 *      待响应结算后交还；并把 game.active 翻到持有方阵营的角色，
-	 *      客户端据此把界面切到“对方行动”、向持有方弹出响应框。
+	 *      客户端据此把界面切到"对方行动"、向持有方弹出响应框。
 	 * 若持有方正是当前操作者（同阵营或自己触发，如 15336 友方陆战触发），
 	 * 则无需让权，当前操作者就地决定即可。
 	 */
@@ -3032,6 +10750,58 @@ CARD_TRIGGERS['15337'] = { kind: 'any', on: 'piece_removed' }
 CARD_TRIGGERS['12503'] = { kind: 'any', on: 'build' }
 CARD_TRIGGERS['12504'] = { kind: 'any', on: 'build' }
 
+/* 苏联响应卡（2026-10-06）。on 仅作阅读对齐，逻辑以 RESPONSE_EFFECTS 为准 */
+CARD_TRIGGERS['17830'] = { kind: 'any', on: 'play_start' }
+CARD_TRIGGERS['17831'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17832'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17833'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17834'] = { kind: 'any', on: 'build' }
+CARD_TRIGGERS['17835'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17836'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17837'] = { kind: 'any', on: 'piece_attacked' }
+CARD_TRIGGERS['17902'] = { kind: 'any', on: 'battle' }
+
+/* 苏联增强卡（EFFECT，2026-10-07）。
+ * armed 事件型走 kind:'load'（打出即装载）；自身时机型走 kind:'self'+phase */
+CARD_TRIGGERS['17807'] = { kind: 'self', phase: 'scoring', nation: '苏联' }
+/* armed 事件型：打出即装载（loading），等时点到了再询问玩家 */
+CARD_TRIGGERS['17806'] = { kind: 'load', nation: '苏联' }
+CARD_TRIGGERS['17808'] = { kind: 'load', nation: '苏联' }
+CARD_TRIGGERS['17809'] = { kind: 'load', nation: '苏联' }
+CARD_TRIGGERS['17811'] = { kind: 'load', nation: '苏联' }
+/* 17815 Z计划：自身时机型，空军阶段可打出（actor 是中国，但卡归苏联持有） */
+CARD_TRIGGERS['17815'] = { kind: 'self', phase: 'airforce', nation: '中国' }
+/* 17810 维捷布斯克之门：计分阶段，弃 1[建设陆军]+2 手牌，消灭 1 支敌方陆军 */
+CARD_TRIGGERS['17810'] = { kind: 'self', phase: 'scoring', nation: '苏联' }
+/* 17812 亚洲人力储备 / 17813 重建要塞：弃牌阶段 */
+CARD_TRIGGERS['17812'] = { kind: 'self', phase: 'discard', nation: '苏联' }
+CARD_TRIGGERS['17813'] = { kind: 'self', phase: 'discard', nation: '苏联' }
+CARD_TRIGGERS['17814'] = { kind: 'load', nation: '苏联' }
+CARD_TRIGGERS['17900'] = { kind: 'load', nation: '苏联' }
+
+/* 意大利响应牌（Group A，2026-10-08）。on 仅作阅读对齐，逻辑以 RESPONSE_EFFECTS 为准 */
+/* 意大利增强卡 EFFECT 组 1（2026-10-09）：计分阶段开始时自动发动的自身时机型 */
+CARD_TRIGGERS['17707'] = { kind: 'self', phase: 'scoring', nation: '意大利' }
+CARD_TRIGGERS['17709'] = { kind: 'self', phase: 'scoring', nation: '意大利' }
+CARD_TRIGGERS['17710'] = { kind: 'self', phase: 'scoring', nation: '意大利' }
+/* 组 2：17706 出牌阶段开始时（与日本 15408 同款 kind:'play_start'） */
+CARD_TRIGGERS['17706'] = { kind: 'play_start', nation: '意大利' }
+/* 组 3：17705 / 17711 是 armed 事件触发型（watch），打出即装载，等事件窗口询问 */
+CARD_TRIGGERS['17705'] = { kind: 'load', nation: '意大利' }
+CARD_TRIGGERS['17711'] = { kind: 'load', nation: '意大利' }
+CARD_TRIGGERS['17708'] = { kind: 'load', nation: '意大利' }
+/* 组 4：16700 一日之狮（armed 事件触发型，watch） */
+CARD_TRIGGERS['16700'] = { kind: 'load', nation: '意大利' }
+/* 组 4b：16701 意大利万岁（出牌阶段开始时发动的自身时机型） */
+CARD_TRIGGERS['16701'] = { kind: 'play_start', nation: '意大利' }
+CARD_TRIGGERS['17730'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17731'] = { kind: 'any', on: 'build' }
+CARD_TRIGGERS['17733'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17734'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17735'] = { kind: 'any', on: 'piece_removed' }
+CARD_TRIGGERS['17737'] = { kind: 'any', on: 'build' }
+CARD_TRIGGERS['17738'] = { kind: 'any', on: 'build' }
+
 /* 把一个 step 翻译成人话（供 choice 选项的按钮文案用） */
 function event_step_label(st) {
 	const t = piece_type_zh(st.type || 'army')
@@ -3095,6 +10865,97 @@ function event_card_needs(game, nation, card_id, arg) {
 	if (!eff) return null
 	arg = arg || {}
 
+	/*
+	 * 【2026-10-06】15408 山本五十六指挥大和号：出牌阶段开始时，弃1张[响应卡]，
+	 * 在海域【部署或调度】1 支空军。二者都复用空军力量的原子（air_host_check + unit_slot_free）。
+	 * 候选 = 海域、有本国补给中陆/海军载体、且该海域尚无本国空军（每格 1 支）。
+	 * 注：card_id 在真实流程里是实例形式（如 '15408#1'），需剥掉实例后缀比对面 id。
+	 */
+	const faceId = String(card_id || '').split('#')[0]
+	/*
+	 * 【2026-10-09】泛化：17706《意大利完成航母》与 15408 同款
+	 * （海域部署或调度 1 支空军），国家取 eff.actor，代价取 eff.cost。
+	 * 原 15408 分支硬编码 nat='日本'，这里改为按卡取，行为对 15408 不变。
+	 */
+	if (faceId === '15408' || faceId === '17706') {
+		const nat = eff.actor || '日本'
+		/* 候选复用共享 helper（与 run 同一口径，避免漂移） */
+		const seaAirCands = () => sea_air_deploy_candidates(game, nat)
+		const myAir = my_air_pieces(game, nat)
+		/*
+		 * 【选项 A · 2026-10-06】代价（弃 1 张[响应卡]）先收，再让玩家选部署/调度。
+		 * 两个选项【始终都给】，不合法的用 disabled+reason 在客户端【暗置】（而非隐藏），
+		 * 满足玩家"不合法选项暗置"的口径。
+		 */
+		const canDeploy = seaAirCands().length > 0
+		const canMove = myAir.length > 0
+		if (arg.choice == null) {
+			const opts = [
+				{
+					index: 0, label: '部署 1 支空军',
+					disabled: !canDeploy,
+					reason: canDeploy ? '' : '没有可部署空军的海域（需有补给中陆/海军载体的海域）',
+				},
+				{
+					index: 1, label: '调度 1 支空军',
+					disabled: !canMove,
+					/* 【2026-10-09】原硬编码「日本空军」，改为按 nat */
+					reason: canMove ? '' : '没有可调度的' + nat + '空军',
+				},
+			]
+			if (opts.every(o => o.disabled)) return null   // 全不可行：本卡不适用
+			return {
+				need: 'choice', count: opts.length, options: opts,
+				/* 【2026-10-09】代价按卡面取：15408 弃1响应卡 / 17706 损耗1张 */
+				cost: eff.cost || null,
+			}
+		}
+		/* choice 已定：选目标海域（候选已排除已有本国空军的海域） */
+		if (arg.space != null) return null
+		/*
+		 * 代价已在 choice 阶段由客户端随最终 play_card 提交（pending_echo_cards），
+		 * 这里【显式】带 cost:null，避免 query 出口又从 eff.cost 兜底二次弹弃牌框。
+		 */
+		return {
+			need: 'space', candidates: seaAirCands(), pick: 1, pickMin: 1, total: 1,
+			cost: null,
+		}
+	}
+
+	/*
+	 * 【2026-10-06】一步式：弃 N 张代价 + 【同时】指定要打出的那张牌
+	 * （15412 御前会议，复用日本国家技能的一步式窗口）。
+	 *
+	 * 顺序刻意排在 choice / steps 之前：这两类"要玩家在弹窗里一次填完"的
+	 * 参数必须先齐，否则会出现"代价付了却不知道打哪张"。
+	 * 服务端【绝不】替玩家挑 arg.play。
+	 */
+	if (eff.one_step && arg.play == null) {
+		return {
+			need: 'one_step_pick',
+			cost: eff.cost || null,
+			play: eff.one_step,
+			desc: eff.desc || '',
+		}
+	}
+
+	/*
+	 * 【2026-10-06】选 1 支部队（15411 夜间运输：选 1 支【无补给】的部队）。
+	 *
+	 * 与 need:'space' 的区别：候选是【算子 id】不是地区 id，
+	 * 客户端改用 highlight_pieces 高亮、on_click_piece 提交。
+	 * 候选为空时仍返回 need:'piece'（空候选）—— 让客户端统一走
+	 * "当前没有合法目标 -> 取消"分支，而不是被当成"不用选"直接打出。
+	 */
+	if (eff.pickUnit && arg.piece == null) {
+		return {
+			need: 'piece',
+			candidates: pick_unit_candidates(game, eff.pickUnit),
+			pick: 1,
+			pickMin: 1,
+		}
+	}
+
 	/* 二选一尚未决定 */
 	if (eff.choice) {
 		if (arg.choice == null) return { need: 'choice', count: eff.choice.length }
@@ -3102,6 +10963,12 @@ function event_card_needs(game, nation, card_id, arg) {
 
 	/* 检查每个 step 是否需要指定地区 */
 	const steps = eff.choice ? (eff.choice[arg.choice] || []) : (eff.steps || [])
+	/*
+	 * 【2026-09-29】prevSpaces：记录上一个【会产出单位】的 step（build/recruit）
+	 * 的地区，供后续 step 的 useNewPiece 使用（15325：建完陆军立刻用它发起陆战）。
+	 * 优先用玩家【已选】的地区；没选就用该 step 的候选（若唯一则确定）。
+	 */
+	let prevSpaces = null
 	for (let i = 0; i < steps.length; i++) {
 		const st = steps[i]
 		/*
@@ -3144,18 +11011,55 @@ function event_card_needs(game, nation, card_id, arg) {
 			}
 			return { need: 'peek_reorder', step: i, cards: picked, target: target }
 		}
-		/* 候选地区：配置给出，或按 op/type 全图推举 */
-		const cands = step_space_candidates(game, eff.actor, st, arg)
+		/*
+		 * 【2026-09-30 重构】battle 步骤不再要求"出牌时预选 N 个目标"。
+		 * 改为建立「战斗预算」(event_budget)，由玩家在预算存续期间逐次
+		 * 点击目标发起战斗（每战都是一次完全原子的 do_battle，代受/抵消/
+		 * 响应/闪电战窗口/15245 全部照常），期间可插入状态/免死/飞机代受等。
+		 * 因此这里直接跳过，不返回 need:'space'。
+		 */
+		if (st.op === 'battle') continue
+		/*
+		 * 候选地区：配置给出，或按 op/type 全图推举。
+		 *
+		 * prevSpaces = 前一个 build/recruit step 的候选（或玩家已选）地区，
+		 * 供本 step 的 useNewPiece 判断"新单位能从哪里发起"（见 15325）。
+		 */
+		const cands = step_space_candidates(game, eff.actor, st, arg, prevSpaces)
 		const need = step_pick_count(st)
+		const minNeed = step_pick_min(st)
 
 		/*
-		 * 候选数 == 需要选的数量 -> 全选，不必问玩家；
-		 * 候选数 >  需要选的数量 -> 必须由玩家决定选哪几个。
+		 * 候选数 <= 至少数量 -> 全选，不必问玩家；
+		 * 候选数 >  至少数量 -> 必须由玩家决定选哪几个。
+		 *
+		 * 【2026-09-30】上限改为 min(候选数, pick)：
+		 * 《巴巴罗萨》pick=3 但全场只有 2 个合法目标时，
+		 * 不能要求玩家再选第 3 个（原本会卡在"还没选够"）。
 		 */
-		if (cands.length > need) {
-			const picked = pick_spaces_for(arg, i, steps.length, need)
-			if (picked.length < need)
-				return { need: 'space', step: i, candidates: cands, pick: need }
+		if (cands.length > minNeed) {
+			const upto = Math.min(cands.length, need)
+			const picked = pick_spaces_for(arg, i, steps.length, upto)
+			if (picked.length < minNeed)
+				/*
+				 * 【2026-09-29】带上 total（总步数）。
+				 * 客户端据此判断是不是【多步卡】：
+				 *   多步卡必须逐步累积选择、选完再提交，
+				 *   不能选完第 1 步就 send_action —— 否则服务端发现后续 step
+				 *   还没选就返回 pending、整张卡不执行（表现为"点了没反应"）。
+				 */
+				return {
+					need: 'space', step: i, total: steps.length,
+					candidates: cands, pick: upto, pickMin: minNeed,
+				}
+		}
+		/* 更新 prevSpaces：本 step 若产出单位，记下它的地区供后续 useNewPiece */
+		if (st.op === 'build' || st.op === 'recruit') {
+			const one = pick_space_for(arg, i, steps.length)
+			if (one != null) prevSpaces = [one]
+			else if (cands.length === 1) prevSpaces = [cands[0]]   /* 候选唯一 -> 可确定 */
+			else if (cands.length > 1) prevSpaces = cands.slice()   /* 多选：任一都可能 */
+			else prevSpaces = null
 		}
 	}
 	return null
@@ -3203,12 +11107,34 @@ function pick_spaces_for(arg, i, total, pick) {
 	if (!arg) return []
 	if (total === 1) return Array.isArray(arg.picks) ? arg.picks.slice() : []
 	if (Array.isArray(arg.picks) && Array.isArray(arg.picks[i])) return arg.picks[i].slice()
+	/*
+	 * 【2026-09-30】多步卡里【带多选】的那一步（如 15231《进攻美国》：
+	 * step0 北大西洋建海军 + step1 相邻地区发起 1~2 次陆战）：
+	 * 客户端的 Done 按钮传的是 arg.spaces[step] = [多选的地区]，
+	 * 不是二维的 arg.picks[step]。这里补上这条读取路径，
+	 * 否则多选直接退化成"服务端自动取前 N 个"—— 玩家白选一场。
+	 */
+	if (Array.isArray(arg.spaces) && Array.isArray(arg.spaces[i])) return arg.spaces[i].slice()
 	return []
 }
 
-/* 某个 step 需要选几个地区（缺省 1） */
+/* 某个 step 需要选几个地区（缺省 1）= 【最多】选几个 */
 function step_pick_count(st) {
 	return (st && st.pick) ? st.pick : 1
+}
+
+/*
+ * 某个 step 【至少】选几个地区（缺省 = pick）。
+ *
+ * 【2026-09-30 新增】卡面有"发起 1【或】2 次陆战"《进攻美国》、
+ * "选择…的 3 支苏联陆军"《巴巴罗萨》（可选 1~3 支）这类【可选区间】表述：
+ *   pick    = 最多（3 / 2）
+ *   pickMin = 至少（1）
+ * 只有 pick 时维持原语义（必须选满 pick 个）。
+ */
+function step_pick_min(st) {
+	if (st && st.pickMin) return st.pickMin
+	return step_pick_count(st)
 }
 
 /*
@@ -3216,14 +11142,163 @@ function step_pick_count(st) {
  *   · 配置给了 spaces -> 用它（但 battle 的"空打"允许额外地区）
  *   · 没给 -> 按 op/type 在全图内推举合法地区
  */
-function step_space_candidates(game, actor, st, arg) {
+/*
+ * 【2026-09-30 德国卡】候选的后处理：
+ *   · recruit / build：逐个用 can_*_at 校验（局面会随前一步变化）
+ *   · onlyNation：只保留"有该国该兵种"的地区（《巴巴罗萨》只打苏联陆军所在地区）
+ */
+function event_cands_filter(game, actor, st, list) {
+	let out = list.slice()
+	if (st.op === 'recruit' || st.op === 'build')
+		out = out.filter(sp => (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, sp, st.type).ok)
+	if (st.onlyNation) {
+		const wantType = st.type || 'army'
+		out = out.filter(sp => pieces_on(game, sp).some(p =>
+			game.piece_nation[p] === st.onlyNation &&
+			game.piece_type[p] === wantType &&
+			faction_of_nation(game.piece_nation[p]) !== faction_of_nation(actor)))
+	}
+	/*
+	 * 【2026-10-06】eliminate：候选只保留"确有敌方部队(非空军)"的地区，
+	 * 否则玩家会被引导到空地、而空地无目标会导致整步 failStep。
+	 * 兵种限定：st.type 存在时只算该兵种的敌对方。
+	 */
+	if (st.op === 'eliminate') {
+		const myF = faction_of_nation(actor)
+		out = out.filter(sp => pieces_on(game, sp).some(p =>
+			faction_of_nation(game.piece_nation[p]) !== myF &&
+			game.piece_type[p] !== 'air' &&
+			(st.type ? game.piece_type[p] === st.type : true)))
+	}
+	return out
+}
+
+/*
+ * 【2026-09-30 重构·战斗预算(event_budget)】
+ * 计算某张预算卡当前可攻击的目标地区（每帧动态重算，敌军被移除后自动收窄）：
+ *   · 必须有 against 国(苏联)的陆军/海军（不含空军）
+ *   · 必须有 attack 方阵营、处于补给、相邻的单位可发起（battle_initiators）
+ *   · 若卡面有 spacesFn（如"与德国陆军相邻"），进一步用它限定
+ * 返回地区 id 数组。模块级定义，供 build_view 与 exports.action 共用。
+ */
+/*
+ * 【2026-10-01 修复 · 一类问题】原先这里自己实现了一套"目标合法性"判定，
+ * 与 step_space_candidates 重复且【口径不一致】：
+ *   ① 它只处理 st.spacesFn，【完全没有 st.spaces 静态限定分支】——
+ *      于是 15321《低地国家自由军》卡面写的 spaces:[西欧] 被完全忽略，
+ *      高亮退化成"全图所有有敌军的陆地"（所以你看到北海高亮，却点不动）；
+ *   ② 它强制要求目标格【必须有可攻击敌军】，把"空地空打"也一并排除了。
+ *
+ * 现在直接复用 step_space_candidates —— 它与 event_card_needs
+ * 完全同源，两边不会再漂移。
+ *
+ * 同时下发每个候选目标对应的【可发起单位】(initiators)，
+ * 供客户端高亮 + 让玩家选择由谁发起。
+ */
+function event_battle_targets(game, b) {
+	const eff = card_effect_of(b.card_id)
+	if (!eff) return []
+	/* 与 event_card_needs 一致：choice 型卡按 b.choice 取对应分支 */
+	const steps = (eff.choice && (eff.choice[b.choice] || [])) ||
+		(!eff.choice && (eff.steps || [])) || []
+	const st = steps.find(s => s.op === 'battle')
+	if (!st) return []
+	return step_space_candidates(game, b.as || eff.actor, st, { space: b.space }, null, b)
+}
+
+/*
+ * 【2026-10-01】某个目标格位上，可发起该场战斗的本国单位（陆/海军，已补给）。
+ * 与 basic_targets / do_battle 的发起校验同源（都走 battle_initiators）。
+ */
+function battle_initiators_at(game, nation, space) {
+	return battle_initiators(game, nation, space)
+}
+
+/*
+ * 【2026-09-30 德国增强·伞兵】返回"与德国空军相邻"的所有地区 id 集合
+ * （德国空军所在地区本身 + 其相邻地区），供《伞兵》的战斗候选限定。
+ */
+function fn_adjacent_german_air(game) {
+	const out = new Set()
+	for (const p of Object.keys(game.piece_nation || {})) {
+		if (game.piece_type[p] === 'air' && game.piece_nation[p] === '德国') {
+			const sp = game.location[p]
+			if (sp != null) {
+				out.add(sp)
+				for (const nb of (data.spaces[sp].connections || [])) out.add(nb)
+			}
+		}
+	}
+	return [...out]
+}
+
+/*
+ * 【2026-10-07】第 6 参 budget：战斗预算对象(game.event_budget)。
+ * 传给 spacesFn 作第 3 参，供"发起位置由【事件上下文】决定"的卡取锚点
+ * （15205《JU-87》：候选 = 空军所在地区的相邻陆地，锚点是部署/调度的那一格）。
+ * 旧的 spacesFn(game, actor) 只用前两参，不受影响。
+ */
+/*
+ * 【2026-10-07】统一候选 helper：建设/征召的合法地区。
+ * 替代手搓的 su_buildable_land_spaces 等循环（避免与 can_build_at / unit_slot_free 漂移）。
+ * opt.near 限定中心地区及其相邻；opt.slotFree=false 可关闭"同格已有同国同兵种排除"。
+ * 苏联增强卡 17806/17809/17814 等统一走它（skill 五之四 载体 B 的原子候选口径）。
+ */
+function build_candidate_spaces(game, nation, type, opt) {
+	opt = opt || {}
+	const pool = []
+	for (let i = 1; i < data.spaces.length; i++) {
+		if (!data.spaces[i]) continue
+		if (data.spaces[i].terrain === 'sea') continue
+		if (!can_build_at(game, nation, i, type).ok) continue
+		pool.push(i)
+	}
+	let out = pool
+	if (opt.near != null) {
+		const center = (typeof opt.near === 'number') ? opt.near : data.id_of(opt.near)
+		out = pool.filter(i => i === center || (data.spaces[center].connections || []).indexOf(i) >= 0)
+	}
+	if (opt.slotFree !== false) {
+		out = out.filter(i => !pieces_on(game, i).some(p => game.piece_nation[p] === nation && game.piece_type[p] === type))
+	}
+	return out
+}
+
+function step_space_candidates(game, actor, st, arg, prevSpaces, budget) {
+	/* spacesFn：动态候选（2026-09-30 新增，用于《巴巴罗萨》这类"按当前局面算目标"的卡） */
+	if (typeof st.spacesFn === 'function')
+		return event_cands_filter(game, actor, st, st.spacesFn(game, actor, budget) || [])
 	if (st.spaces && st.spaces.length) {
 		/* 已配置：逐个验证当前是否合法（recruit/build 会随局面变化） */
-		if (st.op === 'recruit' || st.op === 'build') {
-			return st.spaces.filter(sp =>
-				(st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, sp, st.type).ok)
+		return event_cands_filter(game, actor, st, st.spaces)
+	}
+	/* around：以某中心地区（含其相邻）为候选集（2026-09-27 新增，用于「德国及相邻地区」类卡） */
+	if (st.around != null) {
+		let center
+		if (st.around === 'home') center = effective_home_base(game, actor)
+		else center = (typeof st.around === 'number') ? st.around : data.id_of(st.around)
+		if (center != null) {
+			const set = new Set([center])
+			for (const nb of (data.spaces[center].connections || [])) set.add(nb)
+			if (st.op === 'recruit' || st.op === 'build') {
+				/*
+				 * 【2026-10-07 修复】空军必须复用【空军力量】的部署原子：
+				 * can_deploy_air（air_host_check 载体校验 + unit_slot_free 槽位）。
+				 * 不可用 can_build_at / can_recruit_at —— 那套查"相邻补给陆军"，
+				 * 对靠海军搭载的海域空军一律误判非法，候选永远为空。
+				 * 15308《法国空军》等 steps:[{op:'build',type:'air'}] 的卡均受益。
+				 */
+				if (st.type === 'air')
+					return [...set].filter(sp => can_deploy_air(game, actor, sp).ok)
+				return [...set].filter(sp => (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, sp, st.type).ok)
+			}
+			if (st.op === 'eliminate')
+				return [...set].filter(sp => pieces_on(game, sp).some(p =>
+					faction_of_nation(game.piece_nation[p]) !== faction_of_nation(actor) &&
+					game.piece_type[p] !== 'air' &&
+					(st.type ? game.piece_type[p] === st.type : true)))
+			return [...set]
 		}
-		return st.spaces.slice()
 	}
 
 	/* 未配置：全图推举 */
@@ -3234,7 +11309,9 @@ function step_space_candidates(game, actor, st, arg) {
 		if (!sp) continue
 
 		if (st.op === 'recruit' || st.op === 'build') {
-			const chk = (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, i, st.type)
+			const chk = (st.type === 'air')
+				? can_deploy_air(game, actor, i)        // 空军复用【空军力量】部署原子(air_host_check + unit_slot_free)
+				: (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, i, st.type)
 			if (chk.ok) out.push(i)
 		} else if (st.op === 'battle') {
 			const want = (st.kind === 'sea') ? 'sea' : 'land'
@@ -3244,11 +11321,114 @@ function step_space_candidates(game, actor, st, arg) {
 			const hasMine = occ.some(p => faction_of_nation(game.piece_nation[p]) === myFaction)
 			if (hasMine) continue
 			/* 需要一支相邻的、处于补给状态的本国陆/海军 */
-			if (!battle_initiators(game, actor, i).length) continue
+			let canInit = battle_initiators(game, actor, i).length > 0
+			/*
+			 * 【2026-09-29】useNewPiece：用【前一步刚建/征召出的单位】发起。
+			 *
+			 * 典型卡：15325 莱茵河与多瑙河 = [build army, battle land(useNewPiece)]
+			 * —— 先建 1 支法国陆军，再用【这支新陆军】发起陆战。
+			 *
+			 * 但算候选时那个新单位【还不存在】，battle_initiators 返回空，
+			 * 候选就成了 0 个 -> event_card_needs 认为"不用选" ->
+			 * 服务端自动空打 -> 玩家【没有机会选攻击目标】。
+			 *
+			 * 所以这里额外接受"与前一步候选地区相邻"的目标。
+			 *
+			 * 【2026-10-07 修复·useNewPiece 收紧】一旦是战斗预算(budget.useNewPiece)，
+			 * 候选目标必须能由【这支新单位本身】发起 —— 排除其它相邻法军可发起的目标。
+			 * 否则表现为"任何法军都能作为发起者"（15325 的 bug）。
+			 * 注意：selection 阶段 newPiece 还不存在，靠下面的 prevSpaces 扩展兜底；
+			 * execution 阶段(预算)走 budget.newPiece 精确判定。
+			 */
+			if (!canInit && st.useNewPiece && prevSpaces && prevSpaces.length) {
+				for (const ps of prevSpaces) {
+					if (!data.spaces[ps]) continue
+					const nb = data.spaces[ps].connections || []
+					if (nb.indexOf(i) >= 0) { canInit = true; break }
+				}
+			}
+			if (budget && budget.useNewPiece) {
+				const np = budget.newPiece
+				const initsHere = battle_initiators(game, actor, i)
+				canInit = (np != null) && initsHere.some(x => x.id === np)
+			}
+			if (!canInit) continue
 			out.push(i)
 		}
 	}
 	return out
+}
+
+/*
+ * 【2026-09-30 德国增强·战术革新】自定义结算（两步交互，免费打状态卡）。
+ * ctx = { nation, actor, card_id, arg }
+ *   step 'discard'：玩家选 1 张德国场上的[状态卡]弃置 -> 进入 step 'play'
+ *   step 'play'   ：玩家选 1 张手牌中的[状态卡]免费打出（不占出牌名额）
+ * 全程停在 game.pending_echo，由 action 'resolve_effect' 驱动。
+ */
+function run_effect_tactics(game, ctx) {
+	const { nation, card_id, arg: argRaw } = ctx
+	const arg = argRaw || {}
+	const c = inst_card(card_id)
+	const table = (game.table && game.table[nation]) || []
+	const onTable = table.filter(id => {
+		const cc = inst_card(id)
+		return cc && cc.type === 'STATUS'
+	})
+
+	/* Step 2：免费打出 1 张状态卡（手牌） */
+	if (game.pending_echo && game.pending_echo.card === card_id && game.pending_echo.step === 'play') {
+		const pid = arg.play_status
+		const hand = game.hands[nation] || []
+		if (!pid || hand.indexOf(pid) < 0)
+			return { ok: false, reason: '请选择要免费打出的状态卡' }
+		const pc = inst_card(pid)
+		if (!pc || pc.type !== 'STATUS')
+			return { ok: false, reason: '只能免费打出状态卡' }
+		/* 从手牌移除并置入场（与 play_card STATUS 分支一致，但不占出牌名额） */
+		const idx = hand.indexOf(pid)
+		hand.splice(idx, 1)
+		game.table[nation] = game.table[nation] || []
+		game.table[nation].push(pid)
+		apply_status_ongoing(game, pid, nation)
+		request_responses(game, 'after_card_resolved', { nation, card: pid }, false)
+		after_card_resolved(game, nation, pid)
+		/* 本增强卡自身进弃牌堆 */
+		discard_card(game, nation, card_id)
+		game.pending_echo = null
+		return { ok: true, desc: '《战术革新》：弃置场上状态卡，免费打出《' + pc.name + '》' }
+	}
+
+	/* Step 1：弃置 1 张德国场上的状态卡 */
+	if (game.pending_echo && game.pending_echo.card === card_id && game.pending_echo.step === 'discard') {
+		const did = arg.discard_status
+		if (!did || onTable.indexOf(did) < 0)
+			return { ok: false, reason: '请选择要弃置的德国状态卡' }
+		const ti = table.indexOf(did)
+		if (ti >= 0) table.splice(ti, 1)
+		game.discard[nation] = game.discard[nation] || []
+		game.discard[nation].push(did)
+		/* 进入 Step 2：列出手牌中的状态卡供选择 */
+		const hand = game.hands[nation] || []
+		const handStatus = hand.filter(id => {
+			const cc = inst_card(id)
+			return cc && cc.type === 'STATUS'
+		})
+		game.pending_echo = { card: card_id, step: 'play', candidates: handStatus.map(id => obj_of(id)) }
+		return {
+			ok: true, pending: true, need: 'echo_play_status',
+			desc: '已弃置《' + inst_card(did).name + '》，请选择要免费打出的状态卡',
+		}
+	}
+
+	/* 初始进入：需要德国场上至少 1 张状态卡 */
+	if (!onTable.length)
+		return { ok: false, reason: '《战术革新》需要德国场上至少有 1 张[状态卡]可弃置，当前没有' }
+	game.pending_echo = { card: card_id, step: 'discard', candidates: onTable.map(id => obj_of(id)) }
+	return {
+		ok: true, pending: true, need: 'echo_discard_status',
+		desc: '选择要弃置的德国状态卡（空打前奏）',
+	}
 }
 
 /*
@@ -3265,8 +11445,38 @@ function resolve_event_card(game, nation, card_id, arg) {
 	if (!eff || !c)
 		return { ok: false, reason: '《' + (c ? c.name : '?') + '》的效果尚未实现' }
 
+	/*
+	/*
+	 * 【2026-10-01】"XX 后…"型增强卡（B 组）【不应走到这里】——
+	 * 它们留在手牌，由 use_armed_offer 打出；主动打出的路径已被
+	 * trigger_ready 的 load 分支拦下。这里只是防御性兜底。
+	 */
+	if (eff.armed) {
+		return {
+			ok: false,
+			reason: '《' + (eff.name || card_id) + '》不能主动打出，仅在对应事件后被询问是否打出',
+		}
+	}
+
 	arg = arg || {}
 	const actor = eff.actor || nation
+
+	/*
+	 * 【2026-09-30 新增】cond：卡面的【前提条件】。
+	 *
+	 * 典型卡面："若<罗斯>有德国或苏联陆军：…"（15236）、
+	 *          "若<意大利>未被控制：…"（15240）、
+	 *          "若<中东>有友方国家陆军：…"（6600）。
+	 *
+	 * 口径：条件不满足时卡【照常打出并占名额】，只是没有效果 ——
+	 *   与 run() 时代的写法保持一致（"条件不满足，无效果"），
+	 *   并且【不】给额外打出的权利（效果整体没生效）。
+	 */
+	if (typeof eff.cond === 'function') {
+		const cd = eff.cond(game, nation)
+		if (cd && cd.ok === false)
+			return { ok: true, noEffect: true, desc: '条件不满足（' + (cd.reason || '无') + '），无效果' }
+	}
 
 	/* ① 还缺玩家选择 -> 回报需要什么，不执行 */
 	const need = event_card_needs(game, nation, card_id, arg)
@@ -3275,37 +11485,174 @@ function resolve_event_card(game, nation, card_id, arg) {
 			ok: true, need: need, pending: true,
 			desc: need.need === 'choice'
 				? '《' + c.name + '》需先选择要执行哪一项'
-				: '《' + c.name + '》需先选择目标地区',
+				: (need.need === 'piece'
+					? '《' + c.name + '》需先选择 1 支部队'
+					: (need.need === 'one_step_pick'
+						? '《' + c.name + '》需先选择要打出的牌'
+						: '《' + c.name + '》需先选择目标地区')),
 		}
 	}
 
-	/* ② 代价：弃置 N 张手牌 */
-	const cost = eff.cost && eff.cost.discard
+	/*
+	 * ②a 代价：【损耗 N 张牌】（抽牌堆顶 N 张直接进弃牌堆）。
+	 *
+	 * 【2026-09-30 新增】《白色方案》《伊卡鲁斯行动》卡面写的是"损耗1张牌"，
+	 * 与"弃置 N 张手牌"（cost.discard）是【两种】代价，不能混用。
+	 * 见 attrition_cards 的口径：牌堆不足时不洗牌；
+	 * 主动代价牌堆不足则该卡【不能】打出（can_attrite）。
+	 */
+	const costDescs = []
+	const attr = eff.cost && eff.cost.attrition
+	if (attr) {
+		/*
+		 * can_attrite 返回【布尔】（牌库是否够），不是 { ok } 结构 —— 别记混。
+		 * 主动代价付不起 -> 整张卡【不能】打出（玩家口径：宁可漏不可错）。
+		 */
+		if (!can_attrite(game, nation, attr))
+			return { ok: false, reason: '需要损耗 ' + attr + ' 张牌，但牌库不足' }
+		const ar = attrition_cards(game, nation, attr)
+		costDescs.push('损耗 ' + attr + ' 张牌' +
+			(ar.length !== attr ? '（牌堆只剩 ' + ar.length + ' 张）' : ''))
+	}
+
+	/* ② 代价：弃置 N 张手牌（可限定牌类型 cost.filter）。
+	 * 【2026-10-06】cost.discard 支持函数 (game, nation) => count，
+	 * 用于「场上有某卡时弃牌数减少」之类的条件代价（如 17816 RDS-1）。 */
+	const rawCost = eff.cost && eff.cost.discard
+	const cost = (typeof rawCost === 'function') ? rawCost(game, nation) : rawCost
 	if (cost) {
 		const hand = game.hands[nation] || []
+		/*
+		 * 【2026-10-06】日本增强卡的代价是「弃置 1 张【响应卡】」
+		 * —— cost.filter 限定牌类型（'response'）。
+		 * 与国家技能的 cost.filter 同款口径（见 national_skill_cost_ok）。
+		 *
+		 * ⚠ is_card_type 不接受实例 id，必须先 inst_card_id 归一。
+		 */
+		const costFilter = (eff.cost && eff.cost.filter) || null
+		const wantType = costFilter
+			? (costFilter === 'response' ? 'RESPONSE'
+				: costFilter === 'build' ? 'BASIC' /* 【2026-10-07 修复】'build' = [建设陆军]（BASIC 且 name=建设陆军），不是字面 'BUILD' 类型 */
+				: String(costFilter).toUpperCase())
+			: null
+		const matchType = (id) => {
+			if (!wantType) return true
+			/* 【2026-10-07 修复】'build' 代价 = 弃 1 张【建设陆军】（BASIC 且 name=建设陆军），
+			 * 不是任意 BASIC 卡（否则会误弃《空军力量》等），与 national_skill 口径一致。 */
+			if (costFilter === 'build') {
+				const c = inst_card(String(inst_card_id(id)))
+				return !!c && c.type === 'BASIC' && c.name === '建设陆军'
+			}
+			return is_card_type(String(inst_card_id(id)), wantType)
+		}
+		const typeName = costFilter === 'response' ? '响应牌'
+			: (costFilter === 'build' ? '建设陆军' : (wantType || '手牌'))
 		/*
 		 * 弃牌代价只算【除本卡之外】的手牌 ——
 		 * 本卡打出后也要进弃牌堆，但它不算在"代价"里。
 		 */
+		const pool = hand.filter(id => id !== card_id && matchType(id))
 		const pay = (arg.cards && arg.cards.length)
 			? arg.cards
-			: hand.filter(id => id !== card_id).slice(0, cost)
-		const usable = pay.filter(id => hand.indexOf(id) >= 0 && id !== card_id)
+			: pool.slice(0, cost)
+		const usable = pay.filter(id =>
+			hand.indexOf(id) >= 0 && id !== card_id && matchType(id))
 		if (usable.length < cost)
 			return {
 				ok: false,
-				reason: '需要弃置 ' + cost + ' 张手牌（当前可用 ' + usable.length + ' 张）',
+				reason: '需要弃置 ' + cost + ' 张' + typeName +
+					'（当前可用 ' + usable.length + ' 张）',
 			}
-		for (const id of usable.slice(0, cost)) discard_card(game, nation, id)
+		const paid = usable.slice(0, cost)
+		/* 【2026-10-07 修复】needBuild：弃牌代价中至少需含 N 张[建设陆军]。
+		 * 用于 17810（弃 1[建设陆军]+2 手牌）。
+		 * 与 cost.filter='build' 不同——filter 要求【全部】是建设陆军，
+		 * needBuild 只要求【至少 N 张】，其余张数不限类型。 */
+		if ((eff.cost && eff.cost.needBuild) && costFilter !== 'build') {
+			const buildPaid = paid.filter(id => {
+				const c = inst_card(String(inst_card_id(id)))
+				return c && c.type === 'BASIC' && c.name === '建设陆军'
+			}).length
+			if (buildPaid < eff.cost.needBuild)
+				return {
+					ok: false,
+					reason: '需要弃置 ' + eff.cost.needBuild +
+						' 张[建设陆军]（当前弃置的牌中只含 ' + buildPaid + ' 张）',
+				}
+		}
+		for (const id of paid) discard_card(game, nation, id)
+		costDescs.push('弃置 ' + paid.length + ' 张' + typeName)
+	}
+
+	/*
+	 * 自定义 run 逃生口（复杂事件卡用，服务端自动结算）。
+	 *
+	 * 【2026-10-06 移位】原先排在 cond 之后、needs 与代价【之前】，
+	 * 后果是：带 cost 的 run 卡（15411/15412）【永远不付代价】——
+	 * 表现为"增强卡白嫖"。现在移到 needs 校验与代价支付【之后】，
+	 * 所有 run 卡与 steps 卡走同一条"先问齐参数 -> 再付代价 -> 再执行"链路。
+	 *
+	 * 已核对：顶层 run 且带 cost/steps/choice 的只有日本三张
+	 * （15411/15412 现在走这条；7900 已改为脚本卡），
+	 * 其余顶层 run（4436 掠夺 / 15407 / 15409）都无 cost、无 steps，行为不变。
+	 */
+	if (typeof eff.run === 'function') {
+		const r = eff.run(game, { nation, actor, card_id, arg })
+		const rd = (r && r.ok !== undefined)
+			? r
+			: { ok: true, desc: (r && r.desc) || (c.name + ' 已结算') }
+		if (rd.ok && costDescs.length)
+			rd.desc = costDescs.join('，') + '，' + (rd.desc || '')
+		return rd
 	}
 
 	/* ③ 依次执行各 step */
 	const steps = eff.choice ? (eff.choice[arg.choice] || []) : (eff.steps || [])
 	const descs = []
+	/*
+	 * 【2026-09-30 玩家口径 · 句号=各自独立】
+	 *
+	 * 卡面用「。」分开的几条效果，是【互不依赖】的独立子句：
+	 *   例《土耳其加入轴心国》"在<黑海>建设海军。在<中东>征召陆军。"
+	 *   —— 前半（黑海建海军）不合法时，后半（中东征召）【照常执行】，
+	 *      整张卡【可以】打出，只是前半不生效。
+	 *
+	 * 旧实现是"任一步失败 -> 整张卡 return ok:false 打不出来"，
+	 * 于是出现"明明后半能做、卡却完全用不了"的情况。
+	 *
+	 * 新口径：
+	 *   · 每步【独立】执行，失败只记一条"未执行（原因）"，继续下一步；
+	 *   · 只有【所有】子句都做不了时，整张卡才不能打出
+	 *     （此时打出没有任何意义，宁可留在手里）。
+	 */
+	const stepFails = []
+	const failStep = (st, reason) => {
+		stepFails.push(event_step_label(st) + ' 未执行（' + reason + '）')
+	}
 	let newPiece = null
+	/*
+	 * 【2026-09-29】prevSpaces：把上一个【产出单位】的 step（build/recruit）
+	 * 实际执行的地区累积下来，供后续 useNewPiece 的 step 计算候选
+	 * （15325 莱茵河与多瑙河 / 15317 史末资：建/征召后【用这支部队】发起陆战）。
+	 *
+	 * ⚠ 之前这里【没有】传 prevSpaces（只传了 arg），于是执行阶段
+	 *   step_space_candidates 对新单位一无所知 -> battle 候选 0 个
+	 *   -> spaces 取不到 -> 战斗【根本没执行】。
+	 *   （查询阶段 event_card_needs 已传，所以高亮能显示，
+	 *     但执行阶段没传 -> 玩家点了却什么都没发生。）
+	 */
+	let prevSpaces = null
 
 	for (let i = 0; i < steps.length; i++) {
 		const st = steps[i]
+		/* step 级 cond：前置条件不满足则跳过该步（按"无效果"处理，不阻断其它步） */
+		if (typeof st.cond === 'function') {
+			const cr = st.cond(game)
+			if (!cr || cr.ok === false) {
+				failStep(st, (cr && cr.reason) || '前置条件不满足')
+				continue
+			}
+		}
 		/*
 		 * 该 step 需要执行的【地区数组】。
 		 *   · 单选(默认) -> 长度 1
@@ -3313,9 +11660,11 @@ function resolve_event_card(game, nation, card_id, arg) {
 		 * 未显式传参时回落到"自动取前 N 个合法候选"。
 		 */
 		const need = step_pick_count(st)
-		const cands = step_space_candidates(game, actor, st, arg)
+		const minNeed = step_pick_min(st)
+		/* 关键：传 prevSpaces，让 useNewPiece 的 battle 能算出候选 */
+		const cands = step_space_candidates(game, actor, st, arg, prevSpaces)
 		let spaces = pick_spaces_for(arg, i, steps.length, need)
-		if (spaces.length < need) spaces = cands.slice(0, need)
+		if (spaces.length < minNeed) spaces = cands.slice(0, minNeed)
 		/* 兼容老写法：单选时若 picks 为空，仍允许 arg.space / arg.spaces[i] */
 		if (!spaces.length) {
 			const one = pick_space_for(arg, i, steps.length)
@@ -3359,6 +11708,21 @@ function resolve_event_card(game, nation, card_id, arg) {
 			continue
 		}
 
+		/* 【2026-10-06】op:'run'：自定义代码步骤（17816 加分 / 17823 临时邻接 /
+		 * 17827 收回陆军 / 17829 陆军后备 等需要非声明式逻辑时）。
+		 * 返回值：{ok:false, reason} 记失败；{ok:true, desc} 记描述；其它正常继续。 */
+		if (st.op === 'run') {
+			if (typeof st.run === 'function') {
+				const rr = st.run(game, nation, arg)
+				if (rr && rr.ok === false) {
+					failStep(st, (rr.reason || 'run 执行失败'))
+				} else if (rr && rr.desc) {
+					descs.push(rr.desc)
+				}
+			}
+			continue
+		}
+
 		/*
 		 * 【peek_reorder】观看对手手牌并重排到其牌堆顶（2026-09-25）
 		 * 《双十字系统》："随机选择并观看 2 张德国的手牌，
@@ -3387,7 +11751,14 @@ function resolve_event_card(game, nation, card_id, arg) {
 					const i = Math.floor(Math.random() * pool.length)
 					picked.push(pool.splice(i, 1)[0])
 				}
-				game.peek = { nation: target, cards: picked, card: c.id }
+				/*
+			 * 【2026-10-01 玩家口径】一旦把牌摊给玩家看（不管是对手手牌还是
+			 * 自己牌堆顶），就【不允许取消】—— 取消等于白拿信息优势：
+			 *   · 双十字系统 15305：看到对手秘密手牌
+			 *   · 卓越规划   15215：看到自己牌堆顶 5 张的顺序（可规划后续摸牌）
+			 * 两者都必须排完序点【确认】。
+			 */
+			game.peek = { nation: target, cards: picked, card: c.id }
 			}
 
 			/* ② 等玩家提交顺序 */
@@ -3443,84 +11814,243 @@ function resolve_event_card(game, nation, card_id, arg) {
 		}
 
 		/*
+		 * 【2026-09-30 德国增强·卓越规划】检视己方牌堆顶 N 张，
+		 * 任意顺序置于牌堆顶或牌堆底（st.topBottom）。
+		 *   ① 取牌堆顶 N 张进入 game.peek（玩家可看）
+		 *   ② 玩家提交 placement：[{id, where:'top'|'bottom', order}] ->
+		 *      按 order 把底边组压入牌堆底、顶边组逆序 unshift 到牌堆顶。
+		 */
+		if (st.op === 'deck_inspect') {
+			const cnt = st.count || 5
+			const deck = game.decks[nation] || []
+			if (deck.length < cnt)
+				return { ok: false, reason: '牌堆不足 ' + cnt + ' 张可供检视' }
+
+			let picked = (game.peek && game.peek.cards) || null
+			if (!picked) {
+				picked = deck.slice(0, cnt)
+				/*
+			 * 【2026-10-01 玩家口径】看自己牌堆顶同样是"看到信息"
+			 * （知道了接下来会摸到什么），取消等于免费偷看，一律不允许取消。
+			 */
+			game.peek = {
+				nation: nation, cards: picked, card: card_id,
+				topBottom: !!st.topBottom,
+			}
+			}
+
+			const placement = arg.placement
+			if (!placement || !Array.isArray(placement) || placement.length !== picked.length) {
+				return {
+					ok: true, pending: true, topBottom: true,
+					desc: '检视牌堆顶 ' + picked.length + ' 张，请选择每张置于牌堆顶或牌堆底的顺序',
+					peek: picked,
+				}
+			}
+			/* 校验 placement 的牌与检视的牌一致（防伪造） */
+			const ids = placement.map(p => p.id).slice().sort()
+			const pickedSorted = picked.slice().sort()
+			if (JSON.stringify(ids) !== JSON.stringify(pickedSorted)) {
+				game.peek = null
+				return { ok: false, reason: '放置的牌与检视的牌不一致' }
+			}
+			/* 从牌堆移除顶 N 张 */
+			game.decks[nation] = deck.slice(cnt)
+			const topGroup = placement.filter(p => p.where === 'top')
+				.sort((a, b) => a.order - b.order)
+			const botGroup = placement.filter(p => p.where === 'bottom')
+				.sort((a, b) => a.order - b.order)
+			/* 底边组：order 小者更靠近牌堆底（先 push） */
+			for (const p of botGroup) game.decks[nation].push(p.id)
+			/* 顶边组：order 小者更靠近牌堆顶（逆序 unshift） */
+			for (let k = topGroup.length - 1; k >= 0; k--)
+				game.decks[nation].unshift(topGroup[k].id)
+			game.peek = null
+			descs.push('检视牌堆顶 ' + cnt + ' 张，并重新排列到牌堆顶/底')
+			continue
+		}
+
+		/*
 		 * 【多选展开】pick > 1 时，对选中的每个地区【各执行一次】。
 		 * 例："在 西欧/非洲北部/非洲南部 之【二】征召法国陆军"
 		 *     -> 选 2 个地区，各征召 1 支，共 2 支。
 		 */
-		if (st.op === 'recruit') {
+		/*
+		 * 【2026-09-30】新增 op 'marker'：某地区增加 N 个计分标记。
+		 * 《伊朗加入轴心国》："<中东>增加 1 个计分标记，…"
+		 */
+		if (st.op === 'marker') {
 			const where = spaces.length ? spaces : [space]
-			if (!where.length) return { ok: false, reason: '没有可征召的地区' }
+			if (!where.length) { failStep(st, '没有可加标记的地区'); continue }
+			const n = st.count || 1
 			const names = []
 			for (const sp of where) {
-				const r = recruit_piece(game, actor, st.type, sp)
-				if (!r.ok) return { ok: false, reason: r.reason }
+				/*
+				 * add_marker(game, space, n, nation, faction)：
+				 * nation 用【执行国】（德国），faction 用该国所属阵营（AXIS）。
+				 */
+				add_marker(game, sp, n, actor, faction_of_nation(actor))
+				names.push(data.name_of(sp))
+			}
+			descs.push('在 ' + names.join('、') + ' 各增加 ' + n + ' 个计分标记')
+			continue
+		}
+
+		/*
+		 * 【2026-09-30】st.as：这一 step 由【哪个国家】执行。
+		 * 《巴尔干军政府》："在<巴尔干>征召【意大利】陆军" —— 卡是德国打的，
+		 * 但部队归意大利，所以要用 st.as 覆盖 actor。
+		 */
+		/*
+		 * 下面各 op 的失败处理统一按"独立子句"口径：
+		 *   单个地区失败 -> 跳过该地区（记录原因），其它地区照做；
+		 *   整步一个都没做成 -> failStep（这条子句不生效），继续下一条子句。
+		 */
+		if (st.op === 'recruit') {
+			const where = spaces.length ? spaces : [space]
+			if (!where.length) { failStep(st, '没有可征召的地区'); continue }
+			const names = [], bad = []
+			for (const sp of where) {
+				const r = recruit_piece(game, st.as || actor, st.type, sp)
+				if (!r.ok) { bad.push(data.name_of(sp) + '：' + r.reason); continue }
 				newPiece = r.id
 				if (st.grantSupply) grant_supply(game, r.id, game.turn || 1)
 				names.push(data.name_of(sp))
 			}
+			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
 			const extra = st.grantSupply ? '（本回合内始终处于补给状态）' : ''
 			descs.push('在 ' + names.join('、') + ' 各征召 1 支' +
-				piece_type_zh(st.type) + extra)
+				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			continue
 		}
 
 		if (st.op === 'build') {
 			const where = spaces.length ? spaces : [space]
-			if (!where.length) return { ok: false, reason: '没有可建设的地区' }
-			const names = []
+			if (!where.length) { failStep(st, '没有可建设的地区'); continue }
+			const names = [], bad = []
 			for (const sp of where) {
-				const r = build_piece(game, actor, st.type, sp)
-				if (!r.ok) return { ok: false, reason: r.reason }
+				const r = build_piece(game, st.as || actor, st.type, sp)
+				if (!r.ok) { bad.push(data.name_of(sp) + '：' + r.reason); continue }
 				newPiece = r.id
+				prevSpaces = (prevSpaces || []).concat([sp]) /* 供后续 useNewPiece */
 				names.push(data.name_of(sp))
 			}
-			descs.push('在 ' + names.join('、') + ' 各建设 1 支' + piece_type_zh(st.type))
+			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
+			descs.push('在 ' + names.join('、') + ' 各建设 1 支' + piece_type_zh(st.type) +
+				(bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			continue
 		}
 
 		if (st.op === 'eliminate') {
-			const sp = space != null ? space : (step_space_candidates(game, actor, st, arg)[0])
-			if (sp == null) return { ok: false, reason: '没有可消灭目标的地区' }
-			const r = eliminate_piece(game, actor, sp, arg.piece)
-			if (!r.ok) return { ok: false, reason: r.reason }
 			/*
-			 * 描述要体现【连带消灭】：
-			 * 与被消灭单位同地区的同国空军队一并移除（2026-09-24 定义）。
+			 * 【2026-10-06】多选(pick>1)时需要对"每个选中的地区"各消灭 1 支敌方。
+			 * 旧实现只取 space(单值)，导致多选取首位、其余地区漏打。
+			 * 改为遍历 spaces（含单选取 spaces[0] 的等价情形）。
 			 */
-			let d = '在 ' + data.name_of(sp) + ' 消灭 1 支敌方' +
-				piece_type_zh(st.type || 'army')
-			if (r.killed_airs && r.killed_airs.length)
-				d += '，并连带消灭同地区 ' + r.killed_airs.length + ' 支同国空军'
-			descs.push(d)
+			const where = (spaces && spaces.length) ? spaces : [space]
+			if (!where.length) {
+				const sc = step_space_candidates(game, actor, st, arg)[0]
+				if (sc == null) { failStep(st, '没有可消灭目标的地区'); continue }
+				where.push(sc)
+			}
+			let killed = 0
+			for (let wi = 0; wi < where.length; wi++) {
+				const sp = where[wi]
+				const pieceArg = (Array.isArray(arg.piece)) ? arg.piece[wi] : arg.piece
+				const r = eliminate_piece(game, actor, sp, pieceArg)
+				if (!r.ok) {
+					if (killed === 0 && wi === 0) { failStep(st, r.reason); continue }
+					descs.push('（' + data.name_of(sp) + ' 无敌方目标，跳过）')
+					continue
+				}
+				killed++
+				let d = '在 ' + data.name_of(sp) + ' 消灭 1 支敌方' +
+					piece_type_zh(st.type || 'army')
+				if (r.killed_airs && r.killed_airs.length)
+					d += '，并连带消灭同地区 ' + r.killed_airs.length + ' 支同国空军'
+				descs.push(d)
+			}
 			continue
 		}
 
 		if (st.op === 'battle') {
-			const sp = space != null ? space : (step_space_candidates(game, actor, st, arg)[0])
-			if (sp == null)
-				return { ok: false, reason: '没有可发起' + (st.kind === 'sea' ? '海战' : '陆战') + '的目标' }
 			/*
-			 * useNewPiece：用刚征召/建设的那支部队发起。
-			 * 它【不保证】处于补给状态（征召尤其如此），
-			 * 所以这里要显式授予补给，否则会被 do_battle 的
-			 * "发起单位不处于补给状态"挡回来 ——
-			 * 卡面说"以此陆军发起战斗"，意图显然是能打出去。
+			 * 【2026-09-30 重构·战斗预算(event_budget)】
+			 * 不再出牌时预选 N 个目标、也不再走挂起序列状态机(pending_seq)。
+			 * 改为建立「预算」：玩家在预算存续期间逐次点击目标发起战斗，
+			 * 每战都是一次完全原子的 do_battle（代受/抵消/响应/闪电战窗口/
+			 * 15245 二连打全部照常），期间可插入状态/免死/飞机代受等。
+			 *
+			 * 预算由 event_battle / event_finish 两个动作驱动；
+			 * event_finish 才触发 after_card_resolved（德国国家技能），
+			 * 且必然晚于最后一场战斗的闪电战时点（玩家先点完闪电战再点结束）。
 			 */
 			let from = arg.from
 			if (st.useNewPiece && newPiece != null) {
 				from = newPiece
 				grant_supply(game, newPiece, game.turn || 1)
 			}
-			const r = do_battle(game, actor, sp, arg.piece, st.kind || 'land', { from: from })
-			if (!r.ok) return { ok: false, reason: r.reason }
-			if (r.pending) return { ok: true, pending: true, desc: r.desc }
-			descs.push(battle_desc(r, sp, st.kind === 'sea' ? '海战' : '陆战'))
-			continue
+			const remaining = step_pick_count(st)
+			game.event_budget = {
+				card_id: card_id, nation: nation, as: st.as || actor,
+				kind: st.kind || 'land',
+				against: st.onlyNation || null,
+				remaining: remaining,
+				from: from,
+				/*
+				 * 【2026-10-07 修复·useNewPiece】记录"这张预算必须由【刚建/征召出的新单位】发起"。
+				 * 后续 event_battle_targets / event_battle / 视图 initiators 都据此把候选
+				 * 收紧到这支新单位，杜绝"任何相邻法军都能当发起者"（15325 莱茵河与多瑙河）。
+				 */
+				useNewPiece: !!(st.useNewPiece),
+				newPiece: (st.useNewPiece ? newPiece : null),
+				choice: arg.choice,     /* 回传给 event_battle_targets，供 choice 型卡定位分支 */
+				descs: [], battleOk: 0,
+			}
+			const kd = st.kind === 'sea' ? '海战' : '陆战'
+			const ag = st.onlyNation ? ('对' + st.onlyNation) : '对敌'
+			const desc = '《' + c.name + '》已建立战斗预算：可进行 ' + remaining +
+				' 次' + ag + kd + '；点「结束《' + c.name + '》」可放弃剩余机会。' +
+				'每战结算后可插入状态/免死/飞机代受等'
+			descs.push(desc)
+			return { ok: true, pending: true, cardResolved: true, desc: desc }
 		}
 	}
 
-	if (!descs.length) return { ok: false, reason: '《' + c.name + '》没有任何可执行的效果' }
-	return { ok: true, desc: descs.join('；') }
+	/* 【2026-09-30 德国增强·云雾/总体战】回合修正（modifiers，untilTurn=本回合）。
+	 * 放在"效果执行后、空效果判定前"，这样只有回合修正的卡也能正常打出。 */
+	if (eff.modifiers && eff.modifiers.length) {
+		for (const m of eff.modifiers) {
+			register_modifier(game, {
+				key: m.key,
+				nation: nation,
+				untilTurn: game.turn || 1,
+				card: String(inst_card_id(card_id)),
+			})
+		}
+		const mn = eff.modifiers.map(m => m.key).join('、')
+		descs.push('已激活回合修正：' + mn)
+	}
+
+	if (!descs.length && !costDescs.length)
+		return { ok: false, reason: '《' + c.name + '》没有任何可执行的效果' }
+
+	const all = costDescs.concat(descs)
+	const out = { ok: true, desc: all.join('；') }
+
+	/*
+	 * 【2026-09-30】extraPlay：本卡结算后可【额外打出】1 张。
+	 *
+	 * 卡面："…可打出 1 张手牌"（15227/15238/15240）、
+	 *      "…可打出 1 张[北方行动]"（15236）。
+	 * 权利记在 game.extra_play，由下一次 play_card 消耗；
+	 * filter 'drawn'（《战略规划》）的候选由运行期写入 ep.cards。
+	 */
+	if (eff.extraPlay) {
+		const ep = grant_extra_play(game, nation, String(inst_card_id(card_id)), c.name, eff.extraPlay)
+		out.extraPlay = { source: ep.source, source_name: ep.source_name, filter: ep.filter }
+	}
+	return out
 }
 
 /*
@@ -3662,6 +12192,41 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	}
 
 	/*
+	 * 【2026-10-08】17749 轴心协定（意大利状态卡）
+	 * 卡面：一回合一次，敌方国家部队因友方效果在其大本营或相邻地区被攻击或消灭时：获得1分。
+	 *
+	 * 玩家口径：
+	 *   · "因友方效果"【包含普通战斗发起】（基本卡/常规战斗），不限于卡牌效果
+	 *   · "被攻击或消灭" = 攻击发生即成立，【不要求】真的被移除
+	 *   · 自动加分，不弹窗
+	 * 实现：仿 17847 消耗战（status_used + freq_key 记账），挂在战斗成立处。
+	 * 重放路径（opt.resume）不重复计分。
+	 */
+	if (!opt || !opt.resume) {
+		try { status_on_axis_pact(game, nation, space, enemies) }
+		catch (e) { game.log.push('status_on_axis_pact 错误：' + e.message) }
+	}
+
+	/*
+	 * 状态卡：友方陆军被攻击时攻击方损耗。
+	 *
+	 * 【2026-10-06】opt.resume：战斗被"保护卡窗口"挂起后重放 do_battle 时，
+	 * 这次攻击【已经】触发过一次该钩子。再触发一次会让攻击方【损耗两次】
+	 * —— 重放只是"补做移除"，不是"又打了一场"。
+	 * 因此重放路径跳过；首次进入（opt.resume 为假）照常触发。
+	 */
+	if (!opt || !opt.resume) {
+		try { status_on_attacked(game, space, nation, kind) }
+		catch (e) { game.log.push('status_on_attacked 错误：' + e.message) }
+	}
+	/*
+	 * 注意：发起陆战/海战后的状态卡自动发动（after_land / after_naval）
+	 * 必须等到【受害者真正移除之后】再触发——否则像 15253「闪电战」
+	 * 在战斗地区建设陆军时，该地区仍有敌方部队（尚未移除），建设会被拒。
+	 * 因此这里【不】触发，改到 do_battle 末尾主成功路径（victim 已删除后）触发。
+	 */
+
+	/*
 	 * 空打：目标地区【没有可攻击的敌军】（无部队，或只有敌方空军）。
 	 *
 	 * 规则（2026-09-22 玩家明确）：只有目标地区没有敌军时，
@@ -3711,6 +12276,7 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	if (!neutralCheck.ok) return neutralCheck
 
 	/*
+	/*
 	 * ============================================================
 	 * 空军介入战斗（easy_rule 七，2026-09-22 玩家明确）
 	 *
@@ -3732,6 +12298,99 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	opt = opt || {}
 	const vType = game.piece_type[victim]
 	const vNation = game.piece_nation[victim]
+
+	/*
+	 * ------------------------------------------------------------
+	 * 【2026-10-06 玩家口径】保护卡窗口（日本 15410 武士道）= 【挂起战斗】
+	 *
+	 * 旧实现用 offer_armed_effects 弹"可选窗口"（不挂起），
+	 * 于是 do_battle 同步结算下去、受击单位在玩家表态前就被移除 ——
+	 * 保护永远来不及生效（只有恰好因"空军代受"挂起时才碰巧有效）。
+	 *
+	 * 现在改成与响应卡 / 空军代受同款的【挂起】：
+	 *   victim 已确定、尚未移除 -> 写 pending_battle(stage='guard')
+	 *   -> 由防守方提交 resolve_battle{guard, drop} 表态
+	 *   -> 重放 do_battle（opt.guard_done=true）完成结算，
+	 *      此时 protect 修饰器已生效，is_protected() 会挡下移除。
+	 *
+	 * 位置：排在"空军代受"挂起【之前】—— 保护成立就不需要再问代受了。
+	 * 候选为空（手上没有能发动的武士道）就【不挂起】，照常往下走。
+	 * ------------------------------------------------------------
+	 */
+	/*
+	 * ------------------------------------------------------------
+	 * 【2026-10-07】苏联响应卡 17837《KV-2 重型坦克》= 攻击方二选一（挂起）
+	 *
+	 * 卡面："苏联陆军被攻击时：攻击国家选择 弃置 4 张手牌 或
+	 *       使该陆军在本次战斗中不会被移除。"
+	 *
+	 * 与 15410 武士道同款【挂起】机制，但两阶段、且表态方不同：
+	 *
+	 *   ① 触发条件是"受击方=苏联陆军且为陆战"（见 kv2_response_for）。
+	 *   ② 【2026-10-07 玩家口径】先由【苏联（持有方）】决定"是否发动"
+	 *      （stage='kv2_ask'，等待方=持有方）；
+	 *      发动后才把选择权交给【攻击方】（stage='kv2'，等待方=攻击方），
+	 *      由其在"弃置 4 张手牌"与"该陆军本次战斗不被移除"之间二选一 ——
+	 *      卡面写的是"攻击国家选择"。不发动则卡【留于桌面】、战斗照常结算。
+	 *
+	 * 位置：排在 guard 之前 —— KV-2 若选择"不被移除"，保护即成立，
+	 *       不必再问武士道。暗置的 KV-2 不存在则【不挂起】。
+	 * ------------------------------------------------------------
+	 */
+	 if (!opt.guard_done && !opt.kv2_done) {
+	 const kv = kv2_response_for(game, victim, nation, space, kind)
+	 if (kv) {
+	 set_pending_battle(game, {
+	 stage: 'kv2_ask',
+	 space: space,
+	 kind: kind,
+	 attacker: nation,
+	 attacker_faction: myFaction,
+	 attacker_piece: (opt.from || null),
+	 victim_nation: vNation,
+	 victim: victim,
+	 victim_type: vType,
+	 defender: delegate_of_nation(vNation),
+	 defender_nation: delegate_of_nation(vNation),
+	 kv2_card: kv.card_id,
+	 kv2_owner_nation: (kv.owner_nation || '苏联'),
+	 })
+	 game.log.push('【响应】《KV-2 重型坦克》—— 由【苏联】决定是否发动')
+	 return {
+	 ok: true, pending: true, stage: 'kv2_ask',
+	 reason: 'kv2_ask',
+	 desc: '等待【苏联】决定是否发动《KV-2 重型坦克》',
+	 }
+	 }
+	 }
+
+	if (!opt.guard_done) {
+		const gc = guard_card_candidates(game, victim, nation, space, kind)
+		if (gc.length) {
+			const gDef = delegate_of_nation(vNation)
+			set_pending_battle(game, {
+				stage: 'guard',
+				space: space,
+				kind: kind,
+				attacker: nation,
+				attacker_faction: myFaction,
+				attacker_piece: (opt.from || null),
+				victim_nation: vNation,
+				victim: victim,
+				victim_type: vType,
+				defender: gDef,
+				defender_nation: gDef,
+				/* 客户端据此渲染"打出《武士道》/ 不使用" */
+				guard_cards: gc,
+			})
+			return {
+				ok: true, pending: true, removed: null, space: space,
+				guard: true, defender: gDef,
+				desc: '等待【' + gDef + '】决定是否打出保护卡（' +
+					gc.map(x => '《' + x.name + '》').join('、') + '）',
+			}
+		}
+	}
 
 	/* 与 victim 同地区、同国、且非 victim 自身的空军（可代为受创） */
 	const guardAirs = pieces_on(game, space).filter(p =>
@@ -3781,7 +12440,12 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 			air_nation: vNation,
 			victim: victim,
 			victim_type: vType,
-			airs: guardAirs.slice().sort(),
+			/*
+			 * 【2026-09-30 德国增强·云雾】air_no_defend 生效时，
+			 * 空军无法代替受创 -> 不提供代受选项（客户端据此灰置），但仍可撤离。
+			 */
+			airs: echo_mod_active(game, 'air_no_defend') ? [] : guardAirs.slice().sort(),
+			air_defend_disabled: echo_mod_active(game, 'air_no_defend'),
 			retreats: retreat_options(game, vNation, space),
 		})
 		return {
@@ -3800,6 +12464,8 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	/* 防守方代受：移除其同地区的本国空军 */
 	const defend_air = opt.defend_air
 	if (defend_air != null) {
+		if (echo_mod_active(game, 'air_no_defend'))
+			return { ok: false, reason: '《云雾》生效中：本回合空军无法代替受创' }
 		if (game.piece_type[defend_air] !== 'air')
 			return { ok: false, reason: '代替受创的必须是空军' }
 		if (game.location[defend_air] !== space)
@@ -3955,8 +12621,11 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 			if (is_protected(game, victim)) {
 				game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的' +
 					piece_type_zh(game.piece_type[victim]) + '受保护，本回合无法被移除')
+				/* 原目标保住、只掉了空军 -> 空军移除【不】触发总体战，此处不结算 */
 			} else {
 				delete game.location[victim]
+				/* 【总体战】仅【敌方陆军】被移除才触发（空军不触发） */
+				total_war_attrition(game, [{ nation: rmvNationC, type: rmvTypeC }])
 				/* 触发"被移除"响应钩子（15334 驱逐舰等）：原目标（船）被移除后，
 				 * 防守方/持有方可决定是否发动响应卡（如驱逐舰让船本回合不可移除）。 */
 				request_responses(game, 'piece_removed', {
@@ -3970,6 +12639,9 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 				}, false)
 			}
 			refresh(game)
+			/* 【2026-09-30 修复】抵消成立（原目标已移除）同样算发起陆战成功，
+			 * 武装 after_land（闪电战）窗口，否则空军互相抵消时窗口不出现。 */
+			arm_after_battle_status(game, nation, kind, space, opt)
 			return {
 				ok: true,
 				removed: victimRemovedC ? [defend_air, victim] : [defend_air],
@@ -3982,6 +12654,7 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 		}
 
 		/* 不抵消：代受成立 —— 防守方损失空军，原目标部队保住 */
+		/* 【总体战】此处只移除空军 -> 不触发损耗（空军移除不掉牌） */
 		delete game.location[defend_air]
 		refresh(game)
 		/*
@@ -3993,6 +12666,8 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 			result: { removed: defend_air, removed_nation: vNation, by_air: true },
 		}
 		request_responses(game, 'battle', battleCtxAir, false)
+		/* 【2026-09-30 修复】代受成立（原目标保住）也算发起陆战成功，武装 after_land 窗口。 */
+		arm_after_battle_status(game, nation, kind, space, opt)
 		return {
 			ok: true, removed: null, removed_type: 'air', removed_nation: vNation,
 			space: space, defended_by_air: defend_air,
@@ -4006,6 +12681,9 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	 * 放在"目标部队确实被移除"之后，保证代受等前置校验都已通过。
 	 */
 	maybe_end_neutral_by_attack(game, vNation, nation)
+
+	/* 17553 抗日义勇军：中国部队被发起战斗后，让权日本弃牌+损耗 */
+	if (rmvNation === '中国') offer_us_japan_delegate(game, '中国部队被发起战斗')
 
 	/*
 	 * 抓取被移除棋子的信息（删除前），供 piece_removed 响应钩子使用。
@@ -4024,6 +12702,8 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 			piece_type_zh(game.piece_type[victim]) + '受保护，本回合无法被移除')
 	} else {
 		delete game.location[victim]
+		/* 【总体战】陆军 / 空军 被移除 -> 其代表团所属国损耗 1（同国去重，敌方限定） */
+		total_war_attrition(game, [{ nation: rmvNation, type: rmvType }])
 		/* 触发"被移除"响应钩子（15330 防御姿态 / 15334 驱逐舰 等事后还原类）：
 		 * 让持有方（如英国）挂起决定是否发动。request_responses 无匹配会自动跳过。 */
 		request_responses(game, 'piece_removed', {
@@ -4037,6 +12717,27 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 			/* 同场英国空军因"不代受"将撤离的棋子集，供 15334 响应触发时一并归位 */
 			retreated_airs: guardAirs.slice().sort(),
 		}, false)
+		/*
+		 * 【2026-10-07 苏联增强卡】增强卡(ECHO)的 'piece_removed' 窗口。
+		 * 与上面响应卡的 piece_removed 共用同一派发点（不另造机制）。
+		 * 服务 17808 莫斯科战役（苏陆军被移除后）、17811 雅科夫列夫设计局（苏空军被移除后）。
+		 */
+		/* 16304/17543：移除瞬间记录上下文（含 piece id，供还原）并武装 STATUS 窗口 */
+		game.last_piece_removed = {
+			nation: rmvNation, type: rmvType, space: space,
+			reason: 'piece_removed', piece: victim,
+		}
+		arm_status_instant(game, 'piece_removed', rmvNation, space)
+		/* 16304 中国远征军：让权美国选相邻地区征召 */
+		offer_us_china_delegate(game, space, rmvNation, rmvType)
+		try {
+			offer_armed_effects(game, 'piece_removed', {
+				nation: rmvNation, piece: victim,
+				piece_nation: rmvNation, piece_type: rmvType,
+				space: space, reason: 'piece_removed',
+				was_supplied: rmvSupplied,
+			})
+		} catch (e) { game.log.push('arm piece_removed 错误：' + e.message) }
 	}
 
 	/*
@@ -4057,9 +12758,20 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	 */
 	const battleCtx = {
 		nation: nation, space: space, kind: kind, /* 'land' / 'sea' */
+		victimNation: vNation,
 		result: { removed: victimProtected ? null : victim, removed_nation: vNation },
 	}
 	request_responses(game, 'battle', battleCtx, false)
+	/*
+	 * 状态卡：发起陆战/海战后自动发动德国触发卡（after_land / after_naval）。
+	 * 放在 victim 已移除、battle 钩子已触发【之后】，保证「战斗地区」已清空，
+	 * 像 15253「闪电战」在战斗地区建设陆军时不会被残留的敌方部队挡住。
+	 * 15245/15247 的嵌套战斗也曾用 silent_status 跳过此处，现已移除——
+	 * 自递归由 once_per_turn 拦截，去掉后嵌套战斗也武装 after_land，支持跨卡互相触发。
+	 */
+	/* 发起陆战/海战成功后武装本国/同阵营"X 后立刻"状态卡（闪电战 15253/15245、after_ally_battle）。
+	 * 抽成 arm_after_battle_status，保证代受/抵消分支也能触发（见 _smoke_seq.js）。 */
+	arm_after_battle_status(game, nation, kind, space, opt)
 	return {
 		ok: true, removed: victimProtected ? null : victim, removed_type: vType, removed_nation: vNation,
 		space: space, defended_by_air: null,
@@ -4125,13 +12837,21 @@ function seize_air(game, nation, space, air_piece) {
 	const myFaction = faction_of_nation(nation)
 	const supNow = compute_supply(game)
 
+	/* 中立检查（与 do_battle 一致，先行拦截）：中立的苏联/美国不可夺取制空权 */
+	if (is_neutral(game, nation) && NEUTRAL_RULES[nation] && NEUTRAL_RULES[nation].enemies.length) {
+		return {
+			ok: false, neutral: true,
+			reason: '【' + nation + '】尚未参战（中立），不可以发动战斗或夺取制空权（可执行卡牌效果中的"消灭"）',
+		}
+	}
+
 	/* 目标地必须有敌方空军 */
 	const enemies = pieces_on(game, space).filter(p =>
 		game.piece_type[p] === 'air' && faction_of_nation(game.piece_nation[p]) !== myFaction)
 	if (!enemies.length)
 		return { ok: false, reason: data.name_of(space) + ' 没有敌方空军' }
 
-	/* 中立检查：中立的苏联/美国不可以夺取敌对方的制空权 */
+	/* 中立检查（针对具体敌对方再确认一次） */
 	const neutralCheck = neutral_attack_check(game, nation, game.piece_nation[enemies[0]])
 	if (!neutralCheck.ok) return neutralCheck
 
@@ -4164,6 +12884,7 @@ function seize_air(game, nation, space, air_piece) {
 	maybe_end_neutral_by_attack(game, game.piece_nation[enemies[0]], nation)
 
 	/* 仅移除敌方飞机；本国发起飞机留在原地（不进驻，与陆战发起单位一致） */
+	/* 【总体战】夺取制空权只移除空军 -> 不触发损耗（空军移除不掉牌） */
 	delete game.location[enemies[0]]
 	refresh(game)
 	return { ok: true, removed: enemies[0], space: space, initiator: initiator }
@@ -4212,6 +12933,26 @@ function air_host_check(game, nation, space) {
 	 * 见 docs/pitfalls.md：返回值要补齐调用方会用到的字段。
 	 */
 	return { ok: true, reason: '依托同格陆/海军' }
+}
+
+/*
+ * 复用【空军力量】的部署原子：air_host_check（载体校验）+ unit_slot_free（格位）。
+ * 供增强卡「部署/调度空军」类效果复用（如 15408 山本五十六）。
+ * opts.terrain 可限定只部署到 'sea' / 'land'。
+ * 注意：不能用 can_build_at 校验空军 —— 空军的载体是"同格"陆/海军，
+ * 而 can_build_at 只查"相邻"补给陆军，对靠海军搭载的海域空军一律误判非法。
+ */
+function can_deploy_air(game, nation, space, opts) {
+	opts = opts || {}
+	const sp = data.spaces[space]
+	if (!sp) return { ok: false, reason: '地区不存在' }
+	if (opts.terrain && sp.terrain !== opts.terrain)
+		return { ok: false, reason: '只能部署在' + (opts.terrain === 'sea' ? '海域' : '陆地') }
+	const host = air_host_check(game, nation, space)
+	if (!host.ok) return host
+	if (!unit_slot_free(game, nation, 'air', space).ok)
+		return { ok: false, reason: data.name_of(space) + ' 本国空军已满（每格 1 支）' }
+	return { ok: true, reason: host.reason }
 }
 
 /*
@@ -4755,17 +13496,23 @@ function battle_initiators(game, nation, space) {
  * arg = { discard: [3 张手牌 id], take: 牌堆中的基本卡 id }
  */
 function resource_swap(game, nation, arg) {
+	/* 17850 大清洗：苏联（其桌面有《大清洗》时）无法执行[资源再分配] */
+	if (nation === '苏联' && table_has(game, '苏联', 17850)) {
+		return { ok: false, reason: '【大清洗】：苏联无法执行资源再分配' }
+	}
 	const hand = game.hands[nation] || []
 	const deck = game.decks[nation] || []
 	const drop = (arg && arg.discard) || []
-	const take = arg && arg.take
+	let take = arg && arg.take
 
 	game.resource_swaps = game.resource_swaps || {}
 	if (game.resource_swaps[nation])
 		return { ok: false, reason: '资源再分配每回合只能执行一次（本回合已用过）' }
 
-	if (!Array.isArray(drop) || drop.length !== 3)
-		return { ok: false, reason: '需要恰好 3 张手牌作为代价' }
+	/* 17548 胜利花园：美国桌面有该卡时，[资源再分配]弃置手牌数改为 1 */
+	const rsMin = (nation === '美国' && table_has(game, '美国', 17548)) ? 1 : 3
+	if (!Array.isArray(drop) || drop.length !== rsMin)
+		return { ok: false, reason: '需要恰好 ' + rsMin + ' 张手牌作为代价' }
 	/*
 	 * 代价校验（2026-09-22 玩家明确）：
 	 *   · 必须是 3 张【不同的实体牌】—— 同一个实例不能重复充当多张代价
@@ -4781,23 +13528,38 @@ function resource_swap(game, nation, arg) {
 		seen[id] = true
 	}
 
+	/* 17551 战时国债：美国桌面有该卡时，可在【弃牌堆】搜寻 1 张基本卡作为换取目标 */
+	let takeFromDiscard = false
+	if (nation === '美国' && table_has(game, '美国', 17551) && arg && arg.take_discard) {
+		const disc = (game.discard[nation] || [])
+		if (disc.indexOf(arg.take_discard) < 0)
+			return { ok: false, reason: '弃牌堆中没有这张牌' }
+		take = arg.take_discard
+		takeFromDiscard = true
+	}
 	/* take 是牌堆中的【实体牌】id */
-	if (deck.indexOf(take) < 0)
+	if (!takeFromDiscard && deck.indexOf(take) < 0)
 		return { ok: false, reason: '牌堆中没有这张牌' }
 	const c = inst_card(take)
 	if (!c) return { ok: false, reason: '未指定要挑选的牌' }
 	if (c.type !== 'BASIC') return { ok: false, reason: '资源再分配只能挑选【基本卡】' }
 
 	for (const id of drop) discard_card(game, nation, id)
-	game.decks[nation] = deck.filter(id => id !== take)
+	if (takeFromDiscard) {
+		const di = (game.discard[nation] || []).indexOf(take)
+		if (di >= 0) game.discard[nation].splice(di, 1)
+	} else {
+		game.decks[nation] = deck.filter(id => id !== take)
+	}
 	game.hands[nation].push(take)
-	shuffle_deck(game, nation)
+	if (!takeFromDiscard) shuffle_deck(game, nation)
 
 	game.resource_swaps[nation] = (game.resource_swaps[nation] || 0) + 1
 
 	return {
 		ok: true, gained: c,
-		desc: '弃 3 张手牌，换取基本卡《' + c.name + '》',
+		desc: '弃 ' + drop.length + ' 张手牌，换取基本卡《' + c.name + '》' +
+			(takeFromDiscard ? '（来自弃牌堆）' : ''),
 	}
 }
 
@@ -4805,6 +13567,20 @@ function resource_swap(game, nation, arg) {
 function deck_basics(game, nation) {
 	const out = []
 	for (const id of (game.decks[nation] || [])) {
+		const c = inst_card(id)
+		if (c && c.type === 'BASIC')
+			out.push({
+				id: id, card_id: inst_card_id(id),
+				name: c.name, type: c.type, text: c.text || '', img: c.img,
+			})
+	}
+	return out
+}
+
+/* 弃牌堆中可被[资源再分配]搜寻的基本卡（17551 战时国债） */
+function discard_basics(game, nation) {
+	const out = []
+	for (const id of (game.discard[nation] || [])) {
 		const c = inst_card(id)
 		if (c && c.type === 'BASIC')
 			out.push({
@@ -4837,9 +13613,45 @@ function current_phase(game) {
 function phase_play(game, nation) {
 	game.play_done = game.play_done || {}
 	game.play_done[nation] = false
+	/* 额外打出只在【本回合自己的出牌阶段】有效：进入出牌阶段时先清掉 */
+	clear_extra_play(game)
+	/*
+	 * 【2026-10-09 16701 意大利万岁】权利类状态必须【两处】清：
+	 * 进入出牌阶段时清一次（防止跨回合残留），阶段推进时再清一次
+	 * （防止跨阶段残留）。只清本国的，不动他国。
+	 */
+	if (nation === '意大利') { game.it_viva = false; game.it_viva_used = 0 }
 
 	/* 友方出牌回合开始的「收回部队」询问：开关打开才挂起，默认跳过 */
 	prepare_remove_ask(game, nation)
+
+	/*
+	 * 【2026-10-04】出牌阶段开始时：触发响应卡的 play_start 时点。
+	 *
+	 * 日本响应牌大量使用"出牌阶段开始时"（15427/15428/15429/15433/15434/
+	 * 15438/7903/7904/7905），而响应卡 trigger.on 原先只有
+	 * play_card / build / piece_removed / battle，**没有 play_start**，
+	 * 这些卡会永远触发不了。故在此新增该时点。
+	 *
+	 * 与 piece_removed / build 等一致走"事后类"（pre=false）：
+	 * 挂起询问，由响应卡持有方决定是否触发。
+	 */
+	request_responses(game, 'play_start', { nation: nation }, false)
+
+	/*
+	 * 【2026-10-07】出牌阶段开始时：触发 armed 增强卡的 play_start 窗口。
+	 * 这是「出牌阶段开始时」增强卡（如 17809 苏联骑兵师）的派发点。
+	 * 与日本 15408 等用 CARD_TRIGGERS kind:'play_start' 的卡走不同通道，
+	 * 此处走 armed 系统的 offer_armed_effects，支持「移除己方棋子 + 建设」等多步交互。
+	 * 按当前行动国过滤（actor === nation 才给窗口）。
+	 */
+	offer_armed_effects(game, 'play_start', { nation: nation })
+
+	/*
+	 * 【2026-10-07】17805 红色管弦乐队：苏联/德国/英国 出牌阶段开始时挂起苏联询问是否使用。
+	 * 自定义派发（offer_su_red），不走通用 armed 扫描。
+	 */
+	if (nation === '苏联' || nation === '德国' || nation === '英国') offer_su_red(game, nation)
 
 	game.phase_note = nation + ' 出牌阶段：打出 1 张手牌 / 弃 1 张手牌 / 减 1 分（三选一）'
 	return { play_done: false, note: game.phase_note }
@@ -4862,6 +13674,18 @@ function check_play_phase(game, nation, card) {
 		return { ok: true, free: true }     /* 空军阶段等行为独立结算 */
 	if (game.play_done && game.play_done[nation])
 		return { ok: false, reason: nation + ' 本回合出牌阶段已行动（三选一）' }
+	/*
+	 * 【2026-10-09 16701 意大利万岁】
+	 * 本卡生效期间（it_viva），出牌阶段【只能打基本卡】。
+	 * ⚠ 服务端与客户端口径必须同源（通用教训 3）——
+	 *   客户端 play.js 的 check_phase_for_card 要镜像这段判定，
+	 *   否则会出现"服务端拒绝、客户端却可点"。
+	 * ⚠ 增强卡(EFFECT)/响应卡(RESPONSE)走 is_timing_card 已在上面放行，
+	 *   不受本限制影响（它们不计入出牌阶段三选一）。
+	 */
+	if (game.it_viva && nation === '意大利' && card)
+		if (!it_viva_allows(card))
+			return { ok: false, reason: '《意大利万岁》生效中：本回合出牌阶段只能打出[基本卡]' }
 	return { ok: true }
 }
 
@@ -4869,7 +13693,41 @@ function mark_play_done(game, nation) {
 	if (game.turn_phase === 'play') {
 		game.play_done = game.play_done || {}
 		game.play_done[nation] = true
+		/*
+		 * 【2026-10-09 意大利 16701 意大利万岁】
+		 * 卡面：本回合出牌阶段【行动 2 次】，但只能打出[战略卡]（= 基本卡）。
+		 *
+		 * 实现：出牌阶段用完第 1 次行动时，若本卡已生效则【不置 play_done】，
+		 * 改记 extra_used，从而允许第 2 次行动；第 2 次用完才真正置 play_done。
+		 * 只针对【意大利】，且不改别国的配额语义。
+		 */
+		if (it_italy_viva_left(game, nation) > 0) {
+			game.play_done[nation] = false
+			game.it_viva_used = (game.it_viva_used || 0) + 1
+		}
 	}
+}
+
+/*
+ * 【2026-10-09 16701】意大利本回合还剩几次"额外出牌机会"。
+ * 只在出牌阶段生效；未打出 16701 时恒为 0（不影响任何既有行为）。
+ */
+function it_italy_viva_left(game, nation) {
+	if (nation !== '意大利') return 0
+	if (!game.it_viva) return 0
+	if (game.turn_phase !== 'play') return 0
+	/* 额外机会只给 1 次：第 1 次行动后放行第 2 次，第 2 次后不再放行 */
+	return (game.it_viva_used || 0) >= 1 ? 0 : 1
+}
+
+/*
+ * 【2026-10-09 16701】当前这张牌在"意大利万岁"限制下能否打出。
+ * 卡面：只能打出[战略卡] —— 玩家口径（2026-10-09）=【基本卡】。
+ */
+function it_viva_allows(card_id) {
+	const c = inst_card(String(inst_card_id(card_id)))
+	/* 非基本卡一律拒绝；打不出时给出明确原因，不静默 */
+	return !!c && c.type === 'BASIC'
 }
 
 /*
@@ -4936,6 +13794,66 @@ function has_phase_note(c, phaseZh) {
 }
 
 /*
+ * 【2026-09-28 修正】阶段 key -> 卡面关键词（has_phase_note 的第二个参数）。
+ *
+ * 为什么需要单独一张表：卡面写的是「资源再分配」（不带"阶段"），
+ * 而 PHASE_ZH 给玩家看的中文名是「资源再分配阶段」——
+ * 直接拿 PHASE_ZH 去 indexOf 会匹配不上。这里统一用【卡面实际写法】。
+ *
+ * 【为什么必须指定阶段】见下方 check_phase_for_card ④：
+ * 不传第二个参数的话，只要卡面出现【任意】阶段名就被当成"可打出"，
+ * 而 15345/15338 这类状态卡的"出牌阶段"是【触发代价】的描述
+ * （"跳过出牌阶段行动：…"），不是"可在该阶段打出"——
+ * 结果它们在资源/空军/计分等任何阶段都被判为可打出、显示为彩色。
+ */
+const PHASE_KEYWORD = {
+	resource: '资源再分配',
+	play: '出牌阶段',
+	airforce: '空军阶段',
+	supply: '补给阶段',
+	scoring: '计分阶段',
+	discard: '弃牌阶段',
+	draw: '摸牌阶段',
+}
+
+/*
+ * 【2026-09-28 玩家口径】卡面【打出/执行时机】的声明。
+ *
+ * 规则：
+ *   · 卡面声明了时机的卡（"计分阶段【开始时】：…"、"摸牌阶段【结束时】：…"）
+ *     -> 【只能】在声明的那个阶段打出，其他阶段【含出牌阶段】都不能打。
+ *   · 没有这种声明的卡（事件/状态/响应/基本/经济战卡…）
+ *     -> 【只能】在【出牌阶段】打出。
+ *
+ * 判据为什么是"开始时/结束时"（很关键）：
+ *   卡面提到阶段名有【两种语义】，必须区分：
+ *     ① 打出/执行时机：「计分阶段**开始时**：在<北非>征召陆军…」(14923 隆美尔)
+ *     ② 被动结算说明：「计分阶段：<加拿大>…获得1分」(15340 国家资源动员法)
+ *   ② 是"打出后在计分阶段自动结算"，打出时机仍是出牌阶段（A1①）。
+ *   若不区分，② 类状态卡将永远打不出来（因为计分阶段不允许打它）。
+ *   实测 64 张含"计分阶段"的卡里，两类都大量存在。
+ */
+const PHASE_DECL_RE =
+	/(资源再分配|出牌阶段|空军阶段|补给阶段|计分阶段|弃牌阶段|摸牌阶段)\s*(?:开始时|结束时)/
+const PHASE_NAME_TO_KEY = {
+	'资源再分配': 'resource',
+	'出牌阶段': 'play',
+	'空军阶段': 'airforce',
+	'补给阶段': 'supply',
+	'计分阶段': 'scoring',
+	'弃牌阶段': 'discard',
+	'摸牌阶段': 'draw',
+}
+
+/* 卡面声明的【打出/执行阶段】key；无声明返回 null */
+function declared_phase_of(c) {
+	if (!c || !c.text) return null
+	const m = c.text.match(PHASE_DECL_RE)
+	if (!m) return null
+	return PHASE_NAME_TO_KEY[m[1]] || null
+}
+
+/*
  * 某张卡能否在【当前阶段】打出。返回 { ok, reason }。
  *
  * 调度相位参数 arg.mode 只用于《空军力量》：它的部署/夺取制空权
@@ -4945,9 +13863,50 @@ function check_phase_for_card(game, nation, c, arg) {
 	const ph = (current_phase(game) || {}).key
 	const mode = arg && arg.mode
 
-	/* ① 增强卡：随时可打，不受阶段限制 */
-	if (c.type === 'EFFECT')
+	/*
+	 * 【2026-09-28 玩家口径 · 阶段限制总纲】
+	 *
+	 *   ① 卡面【声明了打出时机】的卡（"计分阶段开始时：…"）
+	 *      -> 只能在【声明的那个阶段】打出；其他阶段【含出牌阶段】一律不行。
+	 *   ② 没有这种声明的卡（事件/状态/响应/基本/经济战卡…）
+	 *      -> 只能在【出牌阶段】打出。
+	 *
+	 * 因此这里【最先】拦掉"声明了别的阶段却在当前阶段打"的情况，
+	 * 包括出牌阶段（旧逻辑在出牌阶段无条件放行，是个漏洞）。
+	 */
+	/*
+	 * 【2026-09-30 B 组修正】卡面声明阶段（如 15211"计分阶段开始时"）只对
+	 * 非增强卡生效；增强卡（EFFECT）一律走下方的 trigger_ready（CARD_TRIGGERS），
+	 * 由各自的 kind（play_start / load）决定何时可打，避免"计分阶段"等说明文字
+	 * 被 declared_phase_of 误判而拒绝打出。
+	 */
+	const decl = declared_phase_of(c)
+	if (c.type !== 'EFFECT' && decl && ph !== decl)
+		return {
+			ok: false,
+			reason: '《' + c.name + '》卡面说明只能在' + phase_zh(decl) +
+				'打出（当前是' + phase_zh(ph) + '）',
+		}
+
+	/*
+	 * ① 增强卡：按【时点声明】打出（与客户端同源）。
+	 *
+	 * 【2026-09-28 修正】旧逻辑是 `if (c.type === 'EFFECT') return ok`
+	 * （无条件放行）—— 与客户端"查 view.card_triggers"的口径不一致，
+	 * 会出现"客户端置灰、服务端却放行"的漂移（pitfalls 通用教训 3）。
+	 * 现在统一走 trigger_ready()（A 类 self：阶段匹配 + 本方回合）。
+	 */
+	if (c.type === 'EFFECT') {
+		const cid = (c && c.id != null) ? c.id : c
+		const tr = CARD_TRIGGERS[String(inst_card_id(cid))]
+		if (tr) {
+			const r = trigger_ready(game, cid, nation)
+			if (!r.ok) return r
+			return { ok: true, timing: true }
+		}
+		/* 未声明时点：保持旧行为（随时可打，不占名额） */
 		return { ok: true, timing: true }
+	}
 
 	/* ② 出牌阶段：打 1 张（名额由 play_done 管） */
 	if (ph === 'play') {
@@ -4960,8 +13919,16 @@ function check_phase_for_card(game, nation, c, arg) {
 				ok: false,
 				reason: '《空军力量》的说明限定其只能在空军阶段打出',
 			}
-		if (game.play_done && game.play_done[nation])
+		if (game.play_done && game.play_done[nation]) {
+			/*
+			 * 【2026-09-30】额外打出：名额已用掉，但手里还有一次"因《XX》的额外打出"，
+			 * 且这张牌在允许范围内 -> 放行（标记 extra:true，由 play_card 消耗）。
+			 */
+			const cid = (c && c.id != null) ? c.id : c
+			if (extra_play_allows(game, nation, cid))
+				return { ok: true, extra: true }
 			return { ok: false, reason: nation + ' 本回合出牌阶段已打出 1 张牌（每回合 1 张）' }
+		}
 		return { ok: true }
 	}
 
@@ -4988,13 +13955,42 @@ function check_phase_for_card(game, nation, c, arg) {
 		}
 	}
 
-	/* ④ 其余阶段（资源/补给/计分/弃牌/摸牌）：只收"卡面有特殊说明"的卡 */
-	if (has_phase_note(c))
+	/*
+	 * ④ 其余阶段（资源/补给/计分/弃牌/摸牌）：
+	 *    只允许【卡面声明了本阶段为打出时机】的卡（decl === ph）。
+	 *
+	 * 【2026-09-28 修正】判据从 has_phase_note（只要卡面出现该阶段名）
+	 * 收紧为 declared_phase_of（必须是"XX阶段开始时/结束时"的【打出时机声明】）。
+	 *
+	 * 原因：卡面提到阶段名还有【被动结算】这一种语义，例如
+	 *   15340「计分阶段：<加拿大>…获得1分」、17739「计分阶段：若<巴尔干>…获得1分」
+	 * 这些卡是【打出后】在计分阶段自动加分，打出时机仍是【出牌阶段】；
+	 * 若按旧判据放行，它们会在计分阶段被当成"可打出"（语义错误）。
+	 *
+	 * 注意：decl === ph 的情况在上面【总纲】处已放行判断，
+	 * 能走到这里说明 decl !== ph（含 decl 为 null），一律拒绝。
+	 */
+	/*
+	 * 【2026-10-01】额外打出通道：即便在【非出牌阶段】，只要此刻持有一次
+	 * 额外打出权且这张牌在其允许范围内，就放行（标记 extra:true，由 play_card 消耗）。
+	 *
+	 * 为什么必须放宽：英国国家技能在【摸牌阶段】触发 —— 玩家弃 3 张手牌后
+	 * 要当场打出 1 张事件牌/状态牌。若卡在"只能在出牌阶段打出"这条规则上，
+	 * 技能变成了"付了代价却打不出"，等于废的。
+	 *
+	 * 安全性：extra_play_allows 内部已校验 phase / turn / count / filter，
+	 * 不会放行任意卡（filter='event_status' 只认事件牌与状态牌）。
+	 */
+	const cidExtra = (c && c.id != null) ? c.id : c
+	if (extra_play_allows(game, nation, cidExtra))
+		return { ok: true, extra: true }
+
+	if (decl && decl === ph)
 		return { ok: true }
 	return {
 		ok: false,
-		reason: '只有卡面有特殊说明的卡牌才能在' + ((current_phase(game) || {}).zh) +
-			'打出（《' + c.name + '》没有相关说明）',
+		reason: '《' + c.name + '》只能在出牌阶段打出' +
+			'（当前是' + ((current_phase(game) || {}).zh) + '，且卡面未声明可在此阶段打出）',
 	}
 }
 
@@ -5245,6 +14241,16 @@ function end_neutral(game, nation, reason) {
 	game.neutral_reason = game.neutral_reason || {}
 	game.neutral_reason[nation] = reason
 	game.log.push('【' + nation + '】结束中立，参战！（' + reason + '）')
+	/* 17850 大清洗：苏联结束中立时，若《大清洗》在其桌面，给出一次性"弃此牌可打1张[状态卡]"机会 */
+	if (nation === '苏联' && table_has(game, '苏联', 17850)) {
+		game.su_purge_offer = true
+		game.log.push('【大清洗】发动：苏联可弃置《大清洗》并打出 1 张[状态卡]')
+	}
+	/* 17555 大萧条的余波：美国结束中立时，可弃置此牌 -> <美国>增加 1 个计分标记 */
+	if (nation === '美国' && table_has(game, '美国', 17555)) {
+		game.us_depression_offer = true
+		game.log.push('【大萧条的余波】发动：美国可弃置此牌，<美国>增加 1 个计分标记')
+	}
 	return true
 }
 
@@ -5997,6 +15003,19 @@ function score_of_bloc(game, space, nation, bloc, occupants) {
  */
 function phase_scoring(game, nation) {
 	/*
+	 * 【2026-09-30 德国增强 B 组】[北方行动]计分阶段开始时，触发 scoring_north 装载卡
+	 * （如 威瑟堡行动：在<北海>征召陆军；可打出 1 张[北方行动]）。
+	 * 仅在德国计分阶段触发。
+	 */
+	if (nation === '德国')
+		offer_armed_effects(game, 'scoring_north', { nation: '德国' })
+	/*
+	 * 【2026-10-04 玩家口径】日本国家技能的触发时机 = 【计分阶段】。
+	 * 与英国（抽牌后）一样，这里只【开窗】，不替玩家决定用不用；
+	 * 玩家点"使用"后在自己的界面弃 1 张响应牌，再暗置 1 张响应牌。
+	 */
+	maybe_offer_national_skill(game, nation, 'scoring')
+	/*
 	 * 【2026-09-26 修正】代表团成员【逐个独立结算】，再汇总到代表国阵营。
 	 *
 	 * 玩家口径（本次）：
@@ -6066,32 +15085,52 @@ function phase_scoring(game, nation) {
 	 * 只在【英国】计分阶段触发（卡组归属英国）。
 	 * 卡在桌上且未被敌方 15343 压制才生效。
 	 */
-	if (nation === '英国') {
-		for (const n2 of Object.keys(game.table || {})) {
-			if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
-			for (const cid of (game.table[n2] || [])) {
-				if (!status_active(game, cid, n2)) continue
-				const cfg = status_config_of(cid)
-				if (!cfg || !cfg.auto || cfg.auto.phase !== 'scoring') continue
-				if (cfg.auto.kind !== 'score_per_unit') continue
-				const sps = (cfg.auto.spaces || []).map(space_id).filter(x => x != null)
-				let bonus = 0
-				for (const sp of sps) {
-					for (const p of pieces_on(game, sp)) {
-						if (game.piece_nation[p] !== cfg.auto.nation) continue
-						if ((cfg.auto.types || []).indexOf(game.piece_type[p]) < 0) continue
-						bonus += cfg.auto.per
-					}
-				}
-				if (bonus > 0) {
-					results.push({
-						nation: '英国', skipped: false, gained: bonus,
-						items: [{ kind: 'status', card: cid, bonus: bonus }],
-					})
+	/*
+	 * 【2026-10-06 通用化·跨阵营计分】
+	 * 去掉原 nation==='英国'||'德国' 硬守卫，改为遍历所有阵营桌面，
+	 * 用 cfg.auto.trigger_nation 精确匹配当前计分国：
+	 *   · 有 trigger_nation 且 !== nation → 跳过（如 8601 只在苏联阶段触发）
+	 *   · 无 trigger_nation（旧卡）→ 回退"同阵营"过滤，保持原行为
+	 * 现有 4 张 auto 卡已补 trigger_nation：15340→'英国'，15241/15244/6601→'德国'。
+	 */
+	for (const n2 of Object.keys(game.table || {})) {
+		for (const cid of (game.table[n2] || [])) {
+			if (!status_active(game, cid, n2)) continue
+			const cfg = status_config_of(cid)
+			if (!cfg || !cfg.auto || cfg.auto.phase !== 'scoring') continue
+			if (cfg.auto.trigger_nation) {
+				if (cfg.auto.trigger_nation !== nation) continue
+			} else {
+				if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
+			}
+			if (cfg.auto.kind === 'run') {
+				const bonus = (cfg.auto.run(game, n2) || 0)
+				if (bonus !== 0) {
+					results.push({ nation: (cfg.auto.affects || n2), skipped: false, gained: bonus, items: [{ kind: 'status', card: cid, bonus: bonus }] })
 					total += bonus
-					game.log.push('《' + (inst_card(cid) || {}).name +
-						'》：英国在指定地区有部队，额外得 ' + bonus + ' 分')
+					game.log.push('《' + (inst_card(cid) || {}).name + '》：' +
+						(bonus > 0 ? '额外得 ' : '扣 ') + Math.abs(bonus) + ' 分')
 				}
+				continue
+			}
+			if (cfg.auto.kind !== 'score_per_unit') continue
+			const sps = (cfg.auto.spaces || []).map(space_id).filter(x => x != null)
+			let bonus = 0
+			for (const sp of sps) {
+				for (const p of pieces_on(game, sp)) {
+					if (game.piece_nation[p] !== cfg.auto.nation) continue
+					if ((cfg.auto.types || []).indexOf(game.piece_type[p]) < 0) continue
+					bonus += cfg.auto.per
+				}
+			}
+			if (bonus !== 0) {
+				results.push({
+					nation: (cfg.auto.affects || '英国'), skipped: false, gained: bonus,
+					items: [{ kind: 'status', card: cid, bonus: bonus }],
+				})
+				total += bonus
+				game.log.push('《' + (inst_card(cid) || {}).name +
+					'》：' + (bonus > 0 ? '额外得 ' : '扣 ') + Math.abs(bonus) + ' 分')
 			}
 		}
 	}
@@ -6225,6 +15264,16 @@ function phase_draw(game, nation) {
 	const drawn = draw_cards(game, nation, need)
 	game.phase_note = nation + ' 摸牌阶段：补到 ' +
 		game.hands[nation].length + ' 张（摸 ' + drawn.length + ' 张）'
+	/*
+	 * 【2026-10-01 玩家口径】英国国家技能的触发时机 = **抽牌后**。
+	 * 摸牌阶段把牌补到 7 张之后，给英国一个可选窗口：
+	 *   使用 -> 弃 3 张手牌 -> 从手牌打出 1 张事件牌或状态牌
+	 * 不用就直接放弃；之后进入下一国回合会清掉（offer 不跨动作残留）。
+	 *
+	 * ⚠ 这里只【开窗】，不结算 —— 打出动作由玩家随后点手牌触发
+	 *   （走 extra_play 通道，不占出牌名额），与德国同款。
+	 */
+	maybe_offer_national_skill(game, nation, 'draw')
 }
 
 /* 进入某阶段时自动执行其中"无需玩家决策"的部分 */
@@ -6249,6 +15298,14 @@ function on_turn_start(game) {
 		}
 	}
 	if ((game.turn || 1) > 6) purge_basic_cards(game)
+	/*
+	 * 【2026-09-30 德国增强 B 组】回合（轮）开始时，触发 turn_start 装载卡
+	 * （如 JU-52 空投补给：若场上有德国空军，本回合内所有德国部队处于补给状态）。
+	 * 【2026-10-07 修复】原先硬编码 nation:'德国'，导致苏联等其它国家 turn_start 武装卡
+	 * （如 17809 骑兵师）永远无法触发。改为不传 nation —— offer_armed_effects 按 actorNation 过滤，
+	 * 该值为 undefined 时对所有成员国开放 turn_start 窗口。
+	 */
+	offer_armed_effects(game, 'turn_start', {})
 }
 
 /* 第 6 回合后，把各国【手中】的基础卡移出游戏 */
@@ -6270,6 +15327,32 @@ function purge_basic_cards(game) {
 }
 
 /*
+ * 【2026-09-28】状态卡"跳过出牌阶段"发动后的【延迟推进】补做。
+ *
+ * 场景：发动状态时若恰好有响应卡待答复（response_queue 非空），
+ * 不能立刻推进阶段（否则会跳过响应窗口），于是置 game.pending_advance_phase
+ * 等待；待玩家答完响应、队列清空后，由本函数补推进。
+ *
+ * 守卫（缺一不可）：
+ *   · 必须仍有待推进标记
+ *   · 必须仍在出牌阶段（已被别处推进过就不再动）
+ *   · 必须队列已清空且无其它挂起（响应 / 战斗 / 经济战 / 高速公路）
+ */
+function maybe_advance_after_skip_play(game) {
+	if (!game.pending_advance_phase) return game
+	if (game.turn_phase !== 'play') { game.pending_advance_phase = false; return game }
+	if ((game.response_queue || []).length || 		game.pending_trigger ||
+		game.pending_battle || game.pending_econ || game.pending_autobahn || game.event_budget) {
+		return game   /* 还有未决事项（含战斗预算），继续等 */
+	}
+	game.pending_advance_phase = false
+	const from = game.turn_phase
+	const adv = advance_phase(game)
+	game.log.push('响应结算完毕 —— 跳过出牌阶段，自动进入' + phase_zh(adv.phase))
+	return game
+}
+
+/*
  * 推进到下一阶段。若当前国家 7 阶段跑完则轮转到下一国家；
  * 6 国都跑完则回合 +1。
  */
@@ -6280,6 +15363,12 @@ function advance_phase(game) {
 	/* 还有后续阶段 */
 	if (i >= 0 && i < PHASES.length - 1) {
 		game.turn_phase = PHASES[i + 1].key
+		/*
+		 * 【2026-10-09 16701 意大利万岁】出牌阶段结束即失效。
+		 * 权利类状态必须【两处】清：进入出牌阶段时清一次（跨回合），
+		 * 阶段推进时再清一次（跨阶段）；只清一次会残留。
+		 */
+		if (game.turn_phase !== 'play') { game.it_viva = false; game.it_viva_used = 0 }
 		run_phase_entry(game, game.turn_phase, nation)
 		return { nation_changed: false, phase: game.turn_phase, turn_changed: false, nation: nation }
 	}
@@ -6289,6 +15378,8 @@ function advance_phase(game) {
 	const ni = ORDER_OF_NATIONS.indexOf(nation)
 	const nextNation = ORDER_OF_NATIONS[(ni + 1) % ORDER_OF_NATIONS.length]
 	game.current_nation = nextNation
+	/* 17732 借用状态卡：跨回合后失效（防御性清理；本回合内由 current_nation 守卫拦截） */
+	if (game.italy_borrow && game.italy_borrow.turn !== game.turn) game.italy_borrow = null
 
 	let turn_changed = false
 	let finalWin = null
@@ -6367,6 +15458,25 @@ function create_empty_game_state(seed, scenario) {
 		 * 用 play_done[nation] 标记（无行动点概念）。
 		 */
 		play_done: {},
+		/*
+		 * 【2026-09-30】额外打出的权利（德国事件卡「可打出 1 张手牌」）。
+		 * 结构见上方 extra_play helper 的注释；同一时刻最多存在一次。
+		 */
+		extra_play: null,
+		/*
+		 * 【2026-09-30】多步脚本卡的挂起（15229/15239/14503）。
+		 * 见上方 pending_script 一节的注释。
+		 * script_return_active = 让权前的操作权（结算完归还）。
+		 */
+		pending_script: null,
+		script_return_active: null,
+		/*
+		 * 【2026-09-30】国家技能：
+		 *   national_skill_used   nation -> 用过的回合数（"一回合一次"）
+		 *   national_skill_offer  当前可选的机会窗口（null = 没有）
+		 */
+		national_skill_used: {},
+		national_skill_offer: null,
 		/* 空军阶段是否已行动（打出空军力量 / 调度空军 二选一） */
 		air_done: {},
 		/* 资源再分配是否已用（每回合一次，进入资源阶段清零） */
@@ -6539,6 +15649,52 @@ exports.setup = function (seed, scenario, options) {
 	/* 初始化各国牌堆并发起手牌（从第 1 回合的行动阶段开始） */
 	on_turn_start(game)
 
+	/*
+	 * 【2026-10-10 玩家口径】开局布阵
+	 *
+	 *   ① 各国大本营各有 1 支本国陆军。
+	 *      【2026-10-10 补充】含委托国 法国（<西欧>）与中国（<中国东部>）——
+	 *      共 8 支，不是只放 6 个轮转国家。
+	 *   ② 开局状态卡【直接在桌面】，不从手牌打出：
+	 *        英国 15348《殖民帝国》/ 苏联 17850《大清洗》/ 美国 17555《大萧条的余波》
+	 *
+	 * ⚠ 状态卡必须【从牌堆或手牌中移除】再放桌面，否则同一实体牌会同时
+	 *   存在于牌堆/手牌与桌面（重复）。
+	 *   卡可能已被发到手里，故两处都要找。
+	 */
+	/* 遍历 HOME_SPACE 的【全部 8 国】（含委托国 法国 / 中国），而非只 6 个轮转国 */
+	for (const n of Object.keys(HOME_SPACE)) {
+		const sp = home_base_of(n)
+		if (sp == null) continue
+		const id = new_piece_id(game)
+		game.location[id] = sp
+		game.piece_nation[id] = n
+		game.piece_type[id] = 'army'
+	}
+
+	const INITIAL_STATUS = [['英国', '15348'], ['苏联', '17850'], ['美国', '17555']]
+	for (const pair of INITIAL_STATUS) {
+		const n = pair[0], face = pair[1]
+		const match = x => String(inst_card_id(x)) === face
+		let inst = null
+		const deck = game.decks[n] || []
+		const di = deck.findIndex(match)
+		if (di >= 0) inst = deck.splice(di, 1)[0]
+		else {
+			const hand = game.hands[n] || []
+			const hi = hand.findIndex(match)
+			if (hi >= 0) inst = hand.splice(hi, 1)[0]
+		}
+		if (!inst) continue
+		game.table[n] = game.table[n] || []
+		game.table[n].push(inst)
+		const c = inst_card(inst)
+		game.log.push('开局状态：' + n + ' 桌面置《' + (c ? c.name : face) + '》')
+	}
+
+	/* 部队与桌面都变了 -> 重算连通/海峡 */
+	refresh(game)
+
 	/* 操作权与当前行动国所属阵营保持一致（开局是德国 -> 轴心） */
 	game.active = faction_role_of_nation(game.current_nation)
 
@@ -6586,8 +15742,25 @@ exports.view = function (state, current) {
 	/* 局部补给快照（复用连通性快照，避免重复计算） */
 	const supply = compute_supply(game, snap)
 
-	/* 当前玩家位所"代表"的国家 —— 只有它是自己的手牌可看 */
-	const my_nation = nation_of_player(game, current)
+	/*
+	 * 【2026-10-05 修复】当前玩家位所"代表"的国家 —— 只有它的手牌可看牌面。
+	 *
+	 * ⚠ 原先直接取 nation_of_player()，它返回本阵营【排最前】的国家
+	 *    （ORDER_OF_NATIONS = 德/英/日/苏/意/美 -> 轴心=德国、同盟=英国）。
+	 *    于是轮到【日本/意大利】行动时，my_nation 仍是德国/英国：
+	 *      · view.hands['日本'].cards = null（只看得到张数）
+	 *      · 客户端画不出日本手牌 -> "到日本玩家时看不到日本手牌"
+	 *    但出牌/建设/战斗都是按【当前行动国】(game.current_nation) 判定的，
+	 *    于是出现"手牌看不见、却能操作"的割裂。
+	 *
+	 * 修法：若当前行动国属于本方阵营，my_nation 就用【当前行动国】；
+	 *   否则（对方回合 / 无行动国）退回"排最前"的代表国，保证身份稳定。
+	 */
+	const my_nation = (() => {
+		const cur = game.current_nation
+		if (cur && faction_of_nation(cur) === side) return cur
+		return nation_of_player(game, current)
+	})()
 
 	/* 供客户端绘制：每格位在本方视角下的邻居 */
 	const adjacency_view = {}
@@ -6644,6 +15817,45 @@ exports.view = function (state, current) {
 				enabled: !!o.enabled,
 				navies: (o.navies || []).map(p => p),
 			})),
+		}
+	})()
+
+	/* 17805 红色管弦乐队：等待德国二选一。仅等待方（德国阵营）可见带选项的面板，
+	 * 另一方只看到"等待【德国】选择"的提示（无 options）。 */
+	const pendingRed = (() => {
+		const pr = game.pending_red
+		if (!pr) return null
+		if (faction_of_nation(pr.waiting_for) !== side) {
+			return { waiting_for: pr.waiting_for, card_name: pr.card_name, target_name: pr.target_name }
+		}
+		return {
+			card_name: pr.card_name,
+			target_name: pr.target_name,
+			target: pr.target,
+			waiting_for: pr.waiting_for,
+			options: [
+				{ id: 0, label: '本回合内无效', enabled: true },
+				{ id: 1, label: '损耗 2 张牌', enabled: true },
+			],
+		}
+	})()
+
+	/* 17805 红色管弦乐队：苏联询问是否使用（仅苏联阵营可见） */
+	const suRedAsk = (() => {
+		const a = game.su_red_ask
+		if (!a) return null
+		if (faction_of_nation('苏联') !== side) return null
+		return { card_name: a.card_name, trigger: a.trigger }
+	})()
+
+	/* 17805 红色管弦乐队：苏联选卡（仅苏联阵营可见，候选为德国桌面状态卡） */
+	const suRedPick = (() => {
+		const p = game.su_red_pick
+		if (!p) return null
+		if (faction_of_nation('苏联') !== side) return null
+		return {
+			card_name: p.card_name,
+			candidates: german_status_on_table(game).map(id => obj_of(id)),
 		}
 	})()
 
@@ -6710,6 +15922,37 @@ exports.view = function (state, current) {
 			'苏联': neutral_status(game, '苏联'),
 			'美国': neutral_status(game, '美国'),
 		},
+		/* 17850 大清洗：苏联结束中立给出的一次性出牌机会（客户端据此展示按钮） */
+		su_purge_offer: !!(game.su_purge_offer && table_has(game, '苏联', 17850)),
+		/* 17555 大萧条的余波：美国结束中立给出的一次性机会（弃此牌 -> <美国>+1 计分标记） */
+		us_depression_offer: !!(game.us_depression_offer && table_has(game, '美国', 17555)),
+		/* 16304 中国远征军：让权美国选相邻地区征召中国陆军（自己/他人回合都能触发） */
+		us_china_delegate: (function () {
+			const dg = game.us_china_delegate
+			if (!dg) return null
+			const isUS = faction_of_nation('美国') === side
+			return {
+				step: dg.step,
+				sea: dg.sea,
+				/* 候选地区只在轮到美国时下发（美国点地图） */
+				candidates: isUS ? dg.candidates.map(nb => ({ id: nb, name: data.name_of(nb) })) : [],
+				waiting_for: isUS ? null : '美国',
+			}
+		})(),
+		/* 17553 抗日义勇军：让权日本的挂起（仅日本可见弃牌面板；美国看到 waiting） */
+		us_japan_delegate: (function () {
+			const dg = game.us_japan_delegate
+			if (!dg) return null
+			if (faction_of_nation('日本') !== side)
+				return { waiting_for: '日本', reason: dg.reason, hand_count: (game.hands['日本'] || []).length }
+			return {
+				reason: dg.reason,
+				need_discard: 1,
+				hand_count: (game.hands['日本'] || []).length,
+			}
+		})(),
+		/* 17817 进攻是最好的防守：已打出、待大清洗结算后建立对德战斗预算（客户端据此展示"继续进攻"按钮） */
+		su_17817_pending: !!game.su_17817_pending,
 
 		/*
 		 * 补给点（走动态层，按阵营分别给出）。
@@ -6740,6 +15983,7 @@ exports.view = function (state, current) {
 			return {
 				nation: pk.nation,
 				card: pk.card,
+				topBottom: !!pk.topBottom,
 				count: (pk.cards || []).length,
 				cards: (pk.cards || [])
 					.map(id => inst_card(id))
@@ -6795,6 +16039,221 @@ exports.view = function (state, current) {
 		 * 也必须按当前行动国判定，不能用 my_nation。
 		 */
 		my_play_done: !!(game.play_done && game.play_done[game.current_nation]),
+
+		/*
+		 * 【2026-10-09 16701 意大利万岁】本回合"只能打基本卡"的限制是否生效。
+		 * 与 my_play_done 同一口径：按【当前行动国】判定（不是 my_nation）。
+		 * 客户端 check_phase_for_card 据此镜像服务端限制，不自己猜。
+		 */
+		it_viva: !!game.it_viva && game.current_nation === '意大利',
+
+		/*
+		 * 【2026-10-01】手牌每张卡的"此刻能否打出"——**服务端同源算好**给客户端。
+		 *
+		 * 背景（本轮两个症状的共同根因）：
+		 *   客户端 check_phase_for_card 里有一句兜底
+		 *     `if (is_enhance_card(c)) return { ok: true }`
+		 *   即"增强卡永远可打"。而服务端早已改成按时点判定（trigger_ready），
+		 *   于是增强卡（15213 云雾 / 15212 G7e 鱼雷…）在客户端【永远不置灰】，
+		 *   点了却被服务端拒绝 —— 典型的服务端/客户端判定漂移（见 pitfalls R3）。
+		 *
+		 * 修法：把服务端自己的 check_phase_for_card + trigger_ready 结果直接下发，
+		 * 客户端不再自己猜。键是【实例 id】（手牌里的 c.id）。
+		 */
+		hand_ready: (() => {
+			const out = {}
+			for (const n of Object.keys(game.hands || {})) {
+				if (faction_of_nation(n) !== side) continue
+				for (const cid of (game.hands[n] || [])) {
+					const face = inst_card(cid)
+					if (!face) continue
+					let r
+					try {
+						/*
+						 * 只调 check_phase_for_card —— 它内部对 EFFECT 卡
+						 * 已经会走 trigger_ready()（见其 `if (c.type === 'EFFECT')` 分支），
+						 * 与 play_card 的判定链路完全一致。
+						 *
+						 * ⚠ 不要在这里【再】单独调一次 trigger_ready：
+						 * 该函数对"无 CARD_TRIGGERS 条目"的卡返回"未声明时点"，
+						 * 会把 BASIC / ECON / STATUS 卡也判成不可打出（2026-10-01 踩坑）。
+						 */
+						r = check_phase_for_card(game, n, face, {})
+
+						/*
+						 * 【2026-10-07】《空军力量》三选一的【预检特判】
+						 *
+						 * 它是"先选模式才有 mode"的卡：上面用【空 arg】预检时，
+						 * check_phase_for_card 的空军阶段分支只在 mode 是
+						 * deploy / seize 时才放行（见该函数 is_airforce_only 分支），
+						 * 于是预检【恒定 ok:false】—— 客户端据此把手牌置灰，
+						 * 并在点击门槛处直接 toast 拒绝，模式选择框
+						 * （show_mode_chooser）永远弹不出来，
+						 * 表现就是"《空军力量》打不出 / 点了没反应"。
+						 *
+						 * 修法：预检按各候选 mode 取【或】（阶段 + 合法目标都要过），
+						 * 并把可行 mode 列表下发（hand_ready[c.id].modes），
+						 * 客户端的模式框只列这些可选项，避免"选了才被拒"。
+						 * 真正 play_card 时仍带 mode 走严格判定，这里不放宽执行口径。
+						 */
+						if (face.name === '空军力量') {
+							const okModes = []
+							let why = ''
+							for (const m of ['deploy', 'seize']) {
+								const r1 = check_phase_for_card(game, n, face, { mode: m })
+								if (!r1.ok) { why = why || r1.reason; continue }
+								const lt = has_legal_target(game, n, face, { mode: m })
+								if (!lt.ok) { why = why || lt.reason; continue }
+								okModes.push(m)
+							}
+							r = okModes.length
+								? { ok: true, modes: okModes }
+								: {
+									ok: false,
+									modes: [],
+									reason: why ||
+										'当前没有可用的空军行动（部署 / 夺取制空权均无合法目标）',
+								}
+						}
+					} catch (e) {
+						r = { ok: false, reason: '判定出错' }
+					}
+					out[cid] = {
+						ok: !!r.ok,
+						reason: r && r.reason ? r.reason : '',
+						/* 仅《空军力量》有：当前可执行的模式列表 */
+						modes: (r && r.modes) ? r.modes : null,
+					}
+				}
+			}
+			return out
+		})(),
+
+		/*
+		 * 【2026-09-30】额外打出的权利（德国事件卡「可打出 1 张手牌」）。
+		 * 只在【权利归属国 == 当前行动国】时才给客户端，避免残留在别人的 view 里。
+		 */
+		/*
+		 * 【2026-09-30】国家技能的机会窗口（只给窗口归属那方）。
+		 * usable 由服务端【同源】算好给客户端，客户端不要自己再判一次，
+		 * 否则会"按钮能点但点了被拒"（pitfalls 通用教训 3）。
+		 */
+		/*
+		 * 【2026-10-01】国家技能的机会窗口（只给窗口归属那方）。
+		 *
+		 * cost 描述也由【服务端】算好下发：
+		 *   · 德国 -> "损耗 1 张牌，额外打出 1 张状态卡"
+		 *   · 英国 -> "弃 3 张手牌，额外打出 1 张事件牌或状态卡"
+		 * 客户端直接显示 desc 即可，不要自己拼文案（避免两边不一致）。
+		 */
+		national_skill: (() => {
+			const off = game.national_skill_offer
+			if (!off) return null
+			if (faction_of_nation(off.nation) !== side) return null
+			const cfg = NATIONAL_SKILL[off.nation] || {}
+			const cost = cfg.cost || {}
+			const grant = cfg.grant || {}
+			let costText = ''
+			if (cost.discard)
+				costText = '弃 ' + cost.discard + ' 张' +
+					(cost.filter === 'response' ? '响应牌' : (cost.filter === 'build' ? '建造陆军' : '手牌'))
+			else if (cost.attrition) costText = '损耗 ' + cost.attrition + ' 张牌'
+			else if (cost.points) costText = '减 ' + cost.points + ' 分'
+			let grantText = '1 张状态卡'
+			if (grant.filter === 'event_status') grantText = '1 张事件牌或状态卡'
+			else if (grant.filter === 'response') grantText = '1 张响应牌（暗置）'
+			else if (grant.filter === 'north') grantText = '1 张[北方行动]'
+			else if (grant.filter === 'status_econ') grantText = '1 张状态卡或经济战卡'
+			return {
+				nation: off.nation,
+				source_name: off.source_name,
+				usable: national_skill_usable(game, off.nation),
+				used_this_turn: (game.national_skill_used || {})[off.nation] === game.turn,
+				cost: cost,
+				/*
+				 * 【2026-10-05】one_step / grant 一并下发：
+				 * 客户端弹框据此决定要不要再渲染"选择要打出的牌"区域，
+				 * 并用 grant.filter 过滤该区域的候选 —— 不写死国家。
+				 */
+				one_step: !!cfg.one_step,
+				grant: { filter: grant.filter || null },
+				desc: costText + (costText && grantText ? '，额外打出 ' : '') + grantText,
+			}
+		})(),
+
+		/*
+		 * 【2026-10-04】响应卡效果需要玩家选择目标时的窗口。
+		 * 只给该响应卡的持有方；candidates 已归一化成
+		 * [{ id, name }]（客户端 highlight_event_targets 直接吃这个格式）。
+		 */
+		response_choice: (() => {
+			const pc = game.pending_response_choice
+			if (!pc) return null
+			if (pc.owner_side !== side) return null
+			return {
+				card_id: pc.card_id,
+				name: pc.name,
+				kind: pc.kind,
+				prompt: pc.prompt,
+				candidates: (pc.candidates || []).map(x =>
+					(x && typeof x === 'object')
+						? { id: x.id, name: x.name || '' }
+						: { id: x, name: data.name_of(x) || String(x) }),
+			}
+		})(),
+
+		/*
+		 * 【2026-10-01】"打出XX后…"型增强卡的手牌机会窗口（G7e 鱼雷等）。
+		 * 只给窗口归属方；cards 里的每张都已在服务端校验过"付得起代价"，
+		 * 客户端直接按 card_id 发 use_armed_offer 即可（同源，别自己再判）。
+		 */
+		armed_offer: (() => {
+			const off = game.armed_offer
+			if (!off) return null
+			if (faction_of_nation(off.nation) !== side) return null
+			return {
+				nation: off.nation,
+				when: off.when,
+				/* 多步交互待收集信息（need='piece'/'space'/'choice'），客户端据此高亮选点 */
+				pending: off.pending ? {
+					need: off.pending.need,
+					candidates: off.pending.candidates,
+					pick: off.pending.pick,
+					pickMin: off.pending.pickMin,
+					choiceOptions: off.pending.choiceOptions,
+				} : null,
+				cards: off.cards.map(x => ({
+					card: x.card_id,
+					name: x.name,
+					desc: x.desc,
+					cost: x.cost,
+					img: (inst_card(x.card_id) || {}).img || null,
+					text: (inst_card(x.card_id) || {}).text || '',
+				})),
+			}
+		})(),
+
+		/*
+		 * 【2026-10-06】《气球炸弹》结算后的可选窗口（弃3手牌→本卡回手）。
+		 * 只给窗口归属方（对方看不到这条内部决策，与国家技能同款口径）。
+		 * can_pay = 手牌是否够 3 张（弃牌是代价，付不起则按钮置灰）。
+		 */
+		balloon: (() => {
+			const pb = game.pending_balloon
+			if (!pb) return null
+			if (faction_of_nation(pb.actor) !== side) return null
+			const hand = game.hands[pb.actor] || []
+			return { actor: pb.actor, card: pb.card, can_pay: hand.length >= 3 }
+		})(),
+
+		extra_play: (game.extra_play && game.extra_play.nation === game.current_nation)
+			? {
+				source: game.extra_play.source,
+				source_name: game.extra_play.source_name,
+				filter: game.extra_play.filter,
+				cards: game.extra_play.cards ? game.extra_play.cards.slice() : null,
+			}
+			: null,
 		/* 空军阶段是否已行动（打出空军力量 / 弃牌调度 二选一） */
 		my_air_done: !!(game.air_done && game.air_done[game.current_nation]),
 
@@ -6812,12 +16271,154 @@ exports.view = function (state, current) {
 		 */
 		pending_trigger: pendingTrigger,
 
+		/* 【2026-10-07 诊断】当前是哪种挂起在拦常规动作（play_card 不在白名单时看这个） */
+		block_reason: game.block_reason || null,
+
 		/*
 		 * 【2026-09-26】经济战链式询问（15314）。
 		 * 只有【当前待答复国所属阵营】看得到面板；另一方看到的是下面的
 		 * waiting_for（"等待【德国】选择…"）。
 		 */
 		pending_econ: pendingEcon,
+		pending_red: pendingRed,
+
+		/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态 */
+		pending_armed_delegate: game.pending_armed_delegate || null,
+
+		/* 【2026-10-08】17721 钢铁条约：意大利→德国链式委托（德国可打1状态卡，打完归还） */
+		it_delegate: game.it_delegate || null,
+
+		/* 高速公路（15228）/ 西伯利亚大铁路（17827）：玩家逐一选择建设位置期间的状态 */
+		pending_autobahn: game.pending_autobahn || null,
+
+		/*
+		 * 【2026-09-30 德国增强·战术革新】两步交互挂起。
+		 * candidates 为当前步骤可选的状态卡 id（客户端据此弹选择框）。
+		 * step='discard'：选择德国场上状态卡弃置；step='play'：选择手牌状态卡免费打出。
+		 */
+		pending_echo: game.pending_echo || null,
+
+		/*
+		 * 【2026-09-30 德国增强 B 组】已装载、等待事件触发的增强卡清单。
+		 * 客户端据此展示"已装载"面板。
+		 */
+		armed_effects: (game.armed_effects || []).map(a => {
+			const c = inst_card(a.card_id)
+			return { card_id: a.card_id, nation: a.nation, name: c ? c.name : a.card_id }
+		}),
+
+		/*
+		 * 【2026-09-30】多步脚本卡（15229/15239/14503）的挂起。
+		 * 与经济战同理：只有【待回答国所属阵营】看得到，"另一方"看到的是
+		 * waiting_for 的提示；候选内容（牌堆/暗牌）【绝不】发给对方。
+		 */
+		pending_script: (function () {
+			const ps = game.pending_script
+			if (!ps) return null
+			const waitNation = script_answer_nation(game)
+			if (!waitNation || faction_of_nation(waitNation) !== side) return null
+			return {
+				kind: ps.kind,
+				actor: ps.actor,
+				answer_nation: waitNation,
+				source: ps.source,
+				source_name: ps.source_name,
+				stage: ps.stage,
+				total: ps.total,
+				step_kind: script_step_kind(ps),
+				need_pick: ps.need_pick,
+				need_discard: ps.need_discard,
+				prompt: script_prompt(ps),
+				drawn: ps.drawn.slice(),
+				}
+				})(),
+
+				/* 【2026-10-08】17729 卡佩里尼链 + 16703 罗马尼亚铁卫团委托德国弃牌摸牌 */
+				italy_chain: (function () {
+				if (!game.italy_chain) return null
+				const ch = game.italy_chain
+				let picked = null
+				if (ch.pickedNation && ch.pickedCard) {
+					const c = inst_card(String(inst_card_id(ch.pickedCard)))
+					picked = {
+						card_id: ch.pickedCard,
+						name: c ? c.name : ch.pickedCard,
+						type: c ? c.type : null,
+						nation: ch.pickedNation,
+						playable: !!c && c.type === 'BASIC',
+					}
+				}
+				return {
+					order: ch.order,
+					step: ch.step,
+					pickedNation: ch.pickedNation,
+					pickedCard: picked,
+					sub: ch.sub,
+				}
+				})(),
+				italy_german_draw: (function () {
+				if (!game.it_delegate || game.it_delegate.mode !== 'german_draw') return null
+				const handCount = (game.hands && game.hands['德国']) ? game.hands['德国'].length : 0
+				return { canDraw: handCount > 0, handCount: handCount }
+				})(),
+
+				/* 【2026-10-08】17732 德国军事顾问：借用德国状态卡（pending 待选 / 已锁定） */
+				italy_borrow: (function () {
+				if (!game.italy_borrow) return null
+				const ib = game.italy_borrow
+				if (ib.pending) {
+					return {
+						pending: true,
+						nation: ib.nation,
+						options: (ib.options || []).map(cid => {
+							const c = inst_card(String(inst_card_id(cid)))
+							return { card_id: cid, name: c ? c.name : cid }
+						}),
+					}
+				}
+				const c = inst_card(String(inst_card_id(ib.card_face)))
+				return {
+					pending: false,
+					nation: ib.nation,
+					card_face: ib.card_face,
+					name: c ? c.name : ib.card_face,
+					turn: ib.turn,
+				}
+				})(),
+
+				/* 【2026-09-30 重构·战斗预算(event_budget)】只有预算持有方阵营看得到预算面板。
+		 * 预算面板展示剩余机会、可攻击目标(动态重算)、已结算战斗日志，并提供"结束"按钮。 */
+		event_budget: (function () {
+			const b = game.event_budget
+			if (!b) return null
+			if (faction_of_nation(b.nation) !== side) return null
+			const targets = event_battle_targets(game, b)
+			/*
+			 * 【2026-10-01】每个候选目标对应的【可发起单位】列表。
+			 * 客户端据此高亮发起单位，并在有多个时让玩家选择由谁发起
+			 * （卡面说"其相邻本国部队发起"，玩家应能选）。
+			 */
+			const inits = {}
+			for (const sp of targets) {
+				let lst = battle_initiators(game, b.as, sp)
+				/* 【2026-10-07 修复·useNewPiece】只给那支新单位，不让玩家选其它法军 */
+				if (b.useNewPiece && b.newPiece != null)
+					lst = lst.filter(x => x.id === b.newPiece)
+				inits[sp] = lst
+			}
+			return {
+				card_id: b.card_id,
+				card_name: (inst_card(b.card_id) || {}).name || b.card_id,
+				nation: b.nation,
+				against: b.against,
+				kind: b.kind,
+				remaining: b.remaining,
+				can_finish: !game.pending_battle,
+				targets: targets,
+				initiators: inits,
+				descs: (b.descs || []).slice(),
+			}
+		})(),
 
 		/*
 		 * 【2026-09-26】最近一次战斗的结果（供 15346 法国反击窗口取战斗地区）。
@@ -6839,22 +16440,57 @@ exports.view = function (state, current) {
 					const cfg = status_config_of(cid)
 					if (!cfg) continue
 					const trig = cfg.trigger
-					const ready = (trig && (!game.pending_battle && !game.pending_econ &&
-							(game.response_queue || []).length === 0))
-							? status_window_ready(game, n, cid, trig)
-							: { ok: false, reason: '有挂起未决事项' }
+					/*
+					 * 【2026-09-28】卡图：卡面由 cards.js 的 img 字段给出，
+					 * 客户端按 "cards/<img>" 拼 URL（与手牌同款 card_image_url）。
+					 * 状态区要显示卡图，必须由服务端把 img 发过去——
+					 * 客户端拿不到 CARDS（它在 rules.js 里 require，浏览器无此模块）。
+					 */
+					const face = inst_card(cid) || {}
+					/*
+					 * 【2026-09-28】与 build_actions 同源：
+					 * 原先这里【漏了】status_active（15343 压制）判定，
+					 * 导致被敌方《霍巴特滑稽坦克》压制时，view 仍显示 ready=true
+					 * （彩色可点），但点击后服务端 activate_status 会拒绝
+					 * —— 典型的"能点的 ≠ 能成功的"（通用教训 3）。
+					 * 现在两侧都先查 status_active，再查窗口。
+					 */
+					let ready
+					if (!trig)
+						ready = { ok: false, reason: '该卡没有可触发效果' }
+					else if (!status_active(game, cid, n))
+						ready = { ok: false, reason: '被敌方《霍巴特滑稽坦克》压制' }
+					else if (game.pending_battle || game.pending_econ ||
+						(game.response_queue || []).length)
+						ready = { ok: false, reason: '有挂起未决事项' }
+					else
+						ready = status_window_ready(game, n, cid, trig)
 					out.push({
 						card: cid,
-						name: (inst_card(cid) || {}).name || '',
+						name: face.name || '',
+						/* 卡图文件名（客户端按 "cards/<img>" 拼 URL），无图则 null */
+						img: face.img || null,
+						text: face.text || '',
 						nation: n,
 						ongoing: !!cfg.ongoing,
 						trigger: !!trig,
+						/*
+						 * 【2026-09-28】"可用来替换建设"标记（15341/15342）。
+						 *
+						 * 这类卡的窗口是【事件驱动】（正在建设陆军），
+						 * status_window_ready 恒为 false（保证其余时间不可点），
+						 * 真正放行靠客户端带 from_status:true。
+						 * 但客户端需要知道"桌上有这种卡"：
+						 * 打出《建设陆军》却没有合法建设位置时，
+						 * 若这里有 true 就【不要】取消选卡（否则状态卡点不动）。
+						 */
+						forgo_build: !!(trig && trig.cost && trig.cost.forgo_build_army),
 						ready: !!(trig && ready.ok),
 						ready_reason: ready.reason || '',
 						/* 触发窗口给定的战斗地区（15346 法国反击用），无则 null */
 						ready_space: (ready && ready.space) || null,
 						once_per_turn: !!(trig && trig.once_per_turn),
-						used_this_turn: (game.status_used || {})[cid] === game.turn,
+						used_this_turn: (game.status_used || {})[cid] === freq_key(game),
 						desc: (cfg.ongoing && cfg.ongoing.desc) ||
 							(trig && trig.desc) || '',
 					})
@@ -6917,6 +16553,14 @@ exports.view = function (state, current) {
 		can_resource_swap: !!(my_nation && game.turn_phase === 'resource' &&
 			(game.hands[my_nation] || []).length >= 3 &&
 			!(game.resource_swaps && game.resource_swaps[my_nation])),
+
+		/* 17548 胜利花园：美国资源再分配弃置手牌数改为 1 */
+		rs_min_drop: (my_nation && game.turn_phase === 'resource')
+			? ((my_nation === '美国' && table_has(game, '美国', 17548)) ? 1 : 3) : 3,
+		/* 17551 战时国债：美国可在弃牌堆搜寻基本卡 */
+		rs_can_discard_take: !!(my_nation && my_nation === '美国' && table_has(game, '美国', 17551)
+			&& game.turn_phase === 'resource'
+			&& !(game.resource_swaps && game.resource_swaps[my_nation])),
 
 		/* ---- 收回本国部队（easy_rule 五.1）---- */
 		ask_remove: !!(game.ask_remove || {})[side],
@@ -7110,12 +16754,22 @@ exports.view = function (state, current) {
  */
 function pending_wait_nation(pb) {
 	if (!pb) return null
+	/* 【2026-10-07】kv2_ask：KV-2 —— 先由【持有方苏联】决定是否发动 */
+	if (pb.stage === 'kv2_ask') return pb.kv2_owner_nation || pb.defender_nation
+	/* 【2026-10-07】kv2：苏联 17837 KV-2 —— 发动后由【攻击方】二选一 */
+	if (pb.stage === 'kv2') return pb.attacker
 	return (pb.stage === 'counter') ? pb.attacker : pb.defender_nation
 }
 
 /* 挂起环节的人话说明（供日志 / prompt 用） */
 function pending_stage_zh(pb) {
 	if (!pb) return ''
+	/* 【2026-10-06】guard：保护卡窗口（日本 15410 武士道） */
+	if (pb.stage === 'guard') return '是否打出保护卡'
+	/* 【2026-10-07】kv2_ask：KV-2 持有方决定是否发动 */
+	if (pb.stage === 'kv2_ask') return '是否发动《KV-2 重型坦克》'
+	/* 【2026-10-07】kv2：KV-2 攻击方二选一 */
+	if (pb.stage === 'kv2') return 'KV-2 重型坦克：选择弃置 4 张手牌 或 该陆军本次战斗不被移除'
 	return (pb.stage === 'counter')
 		? '是否用相邻的空军抵消这次代受'
 		: '是否用空军代受'
@@ -7191,8 +16845,22 @@ function battle_reconcile_active(game) {
  * resolve_battle —— 否则它连"要不要代受 / 要不要抵消"都答不了。
  */
 function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
+	if (game.last_built && !game.__status_firing_ba) { game.__status_firing_ba = true; try { if (game.last_built.type === 'army') arm_status_instant(game, 'after_build_army', game.last_built.nation, game.last_built.space); if (game.last_built.type === 'navy') arm_status_instant(game, 'after_build_navy', game.last_built.nation, game.last_built.space) } catch (e) {} delete game.__status_firing_ba }
+	game.last_built = null
+	/* 【2026-10-07 诊断】先清空，避免上一帧的原因残留 */
+	game.block_reason = null
+	/*
+	 * 【2026-10-07 诊断】记录"当前是哪种挂起在拦常规动作"。
+	 * 本函数有多处【排他式提前 return】（响应队列/战斗/经济战/echo/高速公路/
+	 * 脚本卡/armed_offer），任一命中都会让 play_card 消失，表现为"点了没反应"。
+	 * 这里把原因写进 game.block_reason，view 会带出去，便于现场定位。
+	 */
 	if (pendingTrigger) {
 		/* 响应卡挂起：只有持有方阵营可"触发 / 不触发"，其余操作暂停 */
+		const hd = (game.response_queue && game.response_queue[0]) || null
+		game.block_reason = 'pending_trigger: 响应队列待' +
+			(hd ? ('【' + (hd.owner_side || '?') + '】《' + (hd.name || hd.card_id || '?') + '》') : '?') +
+			' 表态（需持有方点 发动/不发动 才清空）'
 		return { trigger_response: 1, pass_response: 1, log: 1 }
 	}
 	if (pendingBattle) {
@@ -7219,10 +16887,143 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	 */
 	if (game.pending_econ) {
 		const wait = econ_waiting_nation(game)
+		game.block_reason = 'pending_econ: 经济战等待【' + (wait || '?') + '】'
 		if (wait && faction_of_nation(wait) === side)
 			return { resolve_econ: 1, log: 1 }
 		return { log: 1 }
 	}
+	/*
+	 * 【2026-09-30 德国增强·战术革新】两步交互：只有【打出方所属阵营】能提交。
+	 * 漏掉这段 -> 客户端 send_action 因 view.actions 无此 key 静默 return false。
+	 */
+	if (game.pending_echo) {
+		const card = inst_card(game.pending_echo.card)
+		if (card && faction_of_nation(card.nation) === side)
+			return { resolve_effect: 1, log: 1 }
+		return { log: 1 }
+	}
+	/*
+	 * 【2026-09-28】高速公路（15228）结算：玩家逐一在地图选建设位置期间，
+	 * 只有德国（actor）阵营可提交 resolve_autobahn。
+	 * 与上面的经济战挂起同理：build_actions 必须显式放行该 action，
+	 * 否则客户端 send_action 会因 view.actions 无此 key 而静默 return false（点不动）。
+	 */
+	if (game.pending_autobahn) {
+		game.block_reason = 'pending_autobahn: 高速公路/西伯利亚大铁路 等待【' +
+			(game.pending_autobahn.actor || '?') + '】选建设位置'
+		if (faction_of_nation(game.pending_autobahn.actor) === side)
+			return { resolve_autobahn: 1, log: 1 }
+		return { log: 1 }
+	}
+	/*
+	 * 【2026-09-30】多步脚本卡：只有【待回答国所属阵营】能提交 resolve_script。
+	 * 漏掉这段 -> 客户端 send_action 因 view.actions 无此 key 静默 return false
+	 * （表现为"点了没反应"，见 pitfalls R28/R29）。
+	 */
+	if (game.pending_script) {
+		const waitNation = script_answer_nation(game)
+		game.block_reason = 'pending_script: 多步脚本卡等待【' + (waitNation || '?') + '】'
+		if (waitNation && faction_of_nation(waitNation) === side)
+			return { resolve_script: 1, log: 1 }
+		return { log: 1 }
+	}
+	/*
+	 * 【2026-09-30】国家技能的机会窗口：属于【当前行动国】自己，
+	 * 只给该国所属阵营（对方看不到这条"要不要用"的内部决策）。
+	 */
+	if (game.national_skill_offer &&
+		faction_of_nation(game.national_skill_offer.nation) === side) {
+		/*
+		 * 【2026-10-07 修复】同 armed_offer：这里原是【排他 return】，
+		 * 不含 play_card —— 德国★卡结算后挂上国家技能窗口，
+		 * 若玩家未点"使用/放弃"，后续【任何牌都打不出】（空军力量打不出）。
+		 * 补 play_card 解阻塞（国家技能窗口"错过即失效"，打别的牌不会错乱）。
+		 */
+		game.block_reason = 'national_skill_offer: 【' +
+			(game.national_skill_offer.nation || '?') + '】国家技能窗口待 使用/放弃'
+		return {
+			use_national_skill: 1, skip_national_skill: 1, log: 1,
+			play_card: 1,
+		}
+	}
+	/*
+	 * 【2026-10-07】17900 八月风暴的"让权挂起"：友方攻击中国东北后把 active 翻给苏联。
+	 * 挂起期间只放行 打出/放弃，其余动作全拦（让权语义：友方须等苏联决定）。
+	 */
+	if (game.pending_armed_delegate) {
+		game.block_reason = 'pending_armed_delegate: 苏联《八月风暴》让权挂起待 打出/放弃'
+		const delNation = game.pending_armed_delegate.nation
+		if (faction_of_nation(delNation) === side)
+			return { use_armed_offer: 1, skip_armed_offer: 1, log: 1 }
+		return { log: 1 }
+	}
+
+	/*
+	 * 【2026-10-08】16703 罗马尼亚铁卫团：意大利打出后委托德国弃牌摸牌。
+	 * 挂起期间只放行 italy_german_draw / event_delegate_decline，归属【德国阵营】(AXIS)。
+	 */
+	if (game.it_delegate && game.it_delegate.mode === 'german_draw') {
+		game.block_reason = 'it_delegate[german_draw]: 《罗马尼亚铁卫团》等待【德国】弃牌摸牌'
+		if (faction_of_nation('德国') === side)
+			return { italy_german_draw: 1, event_delegate_decline: 1, log: 1 }
+		return { log: 1 }
+	}
+
+	/*
+	 * 【2026-10-08】17729 卡佩里尼：轴心依次链，等待当前待处置国处置抽到的牌。
+	 */
+	if (game.italy_chain) {
+		const cur = game.italy_chain.pickedNation
+		const sub = game.italy_chain.sub
+		game.block_reason = 'italy_chain: 《卡佩里尼》等待【' + (cur || '?') + '】处置抽到的牌'
+		if (cur && faction_of_nation(cur) === side)
+			return {
+				resolve_italy_chain: sub ? 0 : 1,
+				resolve_italy_play: sub ? 1 : 0,
+				log: 1,
+			}
+		return { log: 1 }
+	}
+	/*
+	 * 【2026-10-01】"打出XX后…"型增强卡的手牌机会窗口。
+	 * ⚠ 必须登记白名单：不在册 = 客户端【静默不发】（点了毫无反应，见 pitfalls #18）。
+	 * 与 national_skill 同款：属于本方内部决策，不受 is_my_turn 限制。
+	 */
+	if (game.armed_offer &&
+		faction_of_nation(game.armed_offer.nation) === side)
+		/*
+		 * 【2026-10-07 修复】必须保留 play_card。
+		 * 原实现在这里【提前 return】一个排他白名单（只有 use/skip），
+		 * 导致只要本方存在未处理的 armed_offer，【任何牌都打不出去】：
+		 *   出牌阶段打架 -> after_battle 挂上 offer -> 进空军阶段后
+		 *   《空军力量》的 play_card 不在白名单 -> 客户端静默不发（点了没反应）。
+		 * 同时玩家又无法执行"其它动作"去触发 clear_armed_offer（白名单里没有），
+		 * 形成"想清掉它必须先清掉它"的死锁。
+		 * 补上 play_card 先解阻塞（armed_offer 本身"错过即失效"，
+		 * 玩家去打别的牌时会自然清掉）。
+		 */
+		return {
+			use_armed_offer: 1, skip_armed_offer: 1, log: 1,
+			play_card: 1,
+		}
+	/*
+	 * 【2026-10-06】《气球炸弹》可选窗口（弃3手牌→回手本卡 / 完成）。
+	 * ⚠ 必须登记白名单：不在册 = 客户端 send_action 静默不发（点了没反应）。
+	 */
+	if (game.pending_balloon &&
+		faction_of_nation(game.pending_balloon.actor) === side)
+		return {
+			balloon_discard: 1, balloon_done: 1, log: 1,
+		}
+	/*
+	 * 【2026-10-04】响应卡效果需要玩家选择目标时的提交窗口。
+	 * ⚠ 必须登记白名单：不在册 = 客户端 send_action 静默不发（点了没反应）。
+	 */
+	if (game.pending_response_choice &&
+		game.pending_response_choice.owner_side === side)
+		return {
+			resolve_response_choice: 1, log: 1,
+		}
 
 	if (!is_my_turn)
 		return null
@@ -7234,16 +17035,103 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	const acts = {}
 	if (game.table && !game.pending_battle && !game.pending_econ &&
 		!(game.response_queue || []).length) {
+		/* 17732 借用德国状态卡：借用生效时，只暴露本国卡 + 借来的那张德国卡（其余轴心卡不再跨国产激活） */
+		const borrowActive = game.italy_borrow && game.italy_borrow.turn === game.turn &&
+			game.italy_borrow.card_face && game.current_nation === game.italy_borrow.nation
 		for (const n of Object.keys(game.table)) {
 			if (faction_of_nation(n) !== side) continue
+			if (borrowActive && n !== game.current_nation &&
+				(game.table[n] || []).indexOf(game.italy_borrow.card_face) < 0) continue
 			for (const cid of (game.table[n] || [])) {
 				const cfg = status_config_of(cid)
 				if (!cfg || !cfg.trigger) continue
 				if (!status_active(game, cid, n)) continue
 				const r = status_window_ready(game, n, cid, cfg.trigger)
-				if (r.ok) acts['activate_status:' + cid] = 1
+				/*
+				 * 【2026-09-28】"替换建设"类卡（15341/15342，cost.forgo_build_army）
+				 * 的窗口是【事件驱动】—— status_window_ready 恒为 false
+				 * （这是刻意的：保证其余时间 UI 不可点、白名单也不给）。
+				 *
+				 * 但玩家【正在选地块】时又必须点得动，而服务端感知不到
+				 * "客户端正在选地块"这个 UI 状态。所以这里给这类卡
+				 * 【无条件登记发送权】（activate_status），
+				 * 由 activate_status 分支做真正的校验：
+				 *   必须 arg.from_status === true 才放行；
+				 *   否则仍走 status_window_ready（false）被拒。
+				 * 即：放的是"发送权"，不是"执行权"，安全性不受影响。
+				 */
+				const isForgoBuild = !!(cfg.trigger.cost && cfg.trigger.cost.forgo_build_army)
+				if (r.ok || isForgoBuild) {
+					acts['activate_status:' + cid] = 1
+					/*
+					 * 【2026-09-28 R29】必须同时登记【不带后缀】的 verb。
+					 * 客户端 on_click_table_status 发的是
+					 *   send_action('activate_status', { card: cid })
+					 * 而 client.js 的 send_action 查的是
+					 * view.actions['activate_status']（不带后缀）；
+					 * 只登记 'activate_status:<cid>' 两者对不上，
+					 * 点击会静默失败（见 docs/pitfalls.md 通用教训 18）。
+					 * 服务端 activate_status 分支仍有完整权威校验，不影响安全。
+					 */
+					acts['activate_status'] = 1
+				}
 			}
 		}
+		if (game.italy_borrow && game.italy_borrow.pending &&
+			game.current_nation === game.italy_borrow.nation)
+			acts.resolve_italy_borrow = 1
+	}
+
+	/*
+	 * 【2026-09-30 重构·战斗预算(event_budget)】预算进行中且轮到持有方阵营时，
+	 * 放行 event_battle（点目标发兵）与 event_finish（结算/放弃剩余）。
+	 * after_land 窗口（闪电战/15245）由上方通用逻辑照常提供 activate_status。
+	 */
+	if (game.event_budget && faction_of_nation(game.event_budget.nation) === side) {
+		acts.event_battle = 1
+		acts.event_finish = 1
+	}
+
+	/* 17850 大清洗：苏联结束中立的一次性出牌机会（仅苏联所属阵营可见） */
+	if (game.su_purge_offer && faction_of_nation('苏联') === side &&
+		table_has(game, '苏联', 17850)) {
+		acts.su_purge_play = 1
+	}
+
+	/* 16304 中国远征军：让权美国期间，仅美国可选地区（追加而非替换，避免死锁） */
+	if (game.us_china_delegate && faction_of_nation('美国') === side) {
+		acts.resolve_china_delegate = 1
+	}
+
+	/* 17553 抗日义勇军：让权日本期间，仅日本可提交弃牌（追加而非替换，避免死锁） */
+	if (game.us_japan_delegate && faction_of_nation('日本') === side) {
+		acts.resolve_japan_delegate = 1
+	}
+
+	/* 17555 大萧条的余波：美国结束中立的一次性机会（仅美国所属阵营可见） */
+	if (game.us_depression_offer && faction_of_nation('美国') === side &&
+		table_has(game, '美国', 17555)) {
+		acts.us_depression_use = 1
+	}
+
+	/* 17817 进攻是最好的防守：待结算时给出"继续进攻"动作（建立对德战斗预算）。
+	 * 仅苏联阵营可见；若有大清洗机会则提示玩家先处理大清洗。 */
+	if (game.su_17817_pending && faction_of_nation('苏联') === side) {
+		acts.su_17817_proceed = 1
+	}
+
+	/* 17805 红色管弦乐队：等待德国玩家在其本国回合内二选一 */
+	if (game.pending_red && faction_of_nation(game.pending_red.waiting_for) === side) {
+		acts.resolve_red = 1
+	}
+
+	/* 17805 红色管弦乐队：苏联询问是否使用 / 选择目标德国状态卡（仅苏联阵营可见） */
+	if (game.su_red_ask && faction_of_nation('苏联') === side) {
+		acts.su_red_use = 1
+		acts.su_red_decline = 1
+	}
+	if (game.su_red_pick && faction_of_nation('苏联') === side) {
+		acts.su_red_pick = 1
 	}
 
 	return Object.assign({
@@ -7270,6 +17158,26 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	}, acts)
 }
 
+/*
+ * 复用：把一张状态卡从手牌正面朝上放到桌面并应用持续效果（不检查出牌阶段、不占出牌名额）。
+ * play_card 的 STATUS 分支与「17850 大清洗」结束中立奖励共用。
+ */
+function play_status_card_impl(game, nation, card_id) {
+	const c = inst_card(card_id)
+	const hi = (game.hands[nation] || []).indexOf(card_id)
+	if (hi < 0) return { ok: false, reason: '手牌中没有《' + (c ? c.name : card_id) + '》' }
+	game.hands[nation].splice(hi, 1)
+	game.table[nation] = game.table[nation] || []
+	game.table[nation].push(card_id)
+	const ogDesc = apply_status_ongoing(game, card_id, nation)
+	game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
+	game.log.push('【' + nation + '】打出状态卡《' + c.name + '》' +
+		(ogDesc ? '—— ' + ogDesc : '—— 已放置在桌面'))
+	request_responses(game, 'play_card', { nation: nation, card: card_id, card_obj: c }, false)
+	after_card_resolved(game, nation, card_id)
+	return { ok: true }
+}
+
 /* ---- action ---- */
 
 /*
@@ -7281,6 +17189,39 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 exports.action = function (state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+
+	/*
+	 * 【2026-09-30】国家技能的机会窗口【不能跨动作残留】：
+	 * 它是"打出某张★卡之后紧接着"的一次可选窗口，
+	 * 玩家一旦去做别的事（推进阶段、再打别的牌…）就视为放弃。
+	 * 放在最前面，保证在自己的两个 action 之外一律清掉。
+	 */
+	if (action !== 'use_national_skill' && action !== 'skip_national_skill')
+		clear_national_skill_offer(game)
+	/*
+	 * 【2026-10-01】手牌机会窗口同样"错过即失效"：
+	 * 玩家一旦去做别的事就清掉（与国家技能同款口径）。
+	 */
+	if (action !== 'use_armed_offer' && action !== 'skip_armed_offer')
+		clear_armed_offer(game)
+	/*
+	 * 【2026-10-06】《气球炸弹》可选窗口同样"错过即失效"：
+	 * 玩家一旦去做别的事（再打牌、推进阶段…）就视为放弃，窗口关闭。
+	 * 自身的两个动作（弃牌回手/完成）不清除。
+	 */
+	if (action !== 'balloon_discard' && action !== 'balloon_done')
+		game.pending_balloon = null
+
+	/*
+	 * 【2026-09-30】"X 后立刻"状态卡窗口【不能跨动作残留】：
+	 * game.status_instant 是在"发起陆战 / 建设陆军"那一瞬武装的手动发动窗口，
+	 * 玩家一旦去做别的事（出牌、弃牌、推进阶段、再发起战斗…）就视为放弃，
+	 * 窗口立即关闭。放在最前面，保证任何"其它动作"都清掉。
+	 * 例外：activate_status 本身不清除（由发动分支在成功后清空）；
+	 * 调试动作（debug_*）不清除，便于开发期单独武装后检视。
+	 */
+	if (action !== 'activate_status' && !String(action).startsWith('debug_'))
+		game.status_instant = []
 
 	/* 【向后兼容】老对局缺 markers 字段时补齐，否则卡牌改标记会崩 */
 	ensure_markers(game)
@@ -7373,6 +17314,8 @@ exports.action = function (state, current, action, arg) {
 
 	/* 推进行动顺序国家（德→英→日→苏→意→美） */
 	if (action === 'next_nation') {
+		/* 【2026-10-08】17321 委托未结清则在此作废，避免跨国家残留 */
+		if (game.it_delegate) { game.it_delegate = null; clear_extra_play(game) }
 		/* 老 state 可能没有 current_nation，兜底为顺序中的第一个 */
 		let i = ORDER_OF_NATIONS.indexOf(game.current_nation)
 		if (i < 0) i = ORDER_OF_NATIONS.length - 1   /* 未知 -> 从头开始 */
@@ -7412,13 +17355,23 @@ exports.action = function (state, current, action, arg) {
 	 * 【2026-09-25 第 3 步】响应卡结算中：等待持有方决定是否触发，
 	 * 期间【禁止其它操作】（与战斗挂起同理）。
 	 *
-	 * 跨阵营情况由“让权”处理：若持有方是【对方阵营】，request_responses 已把
+	 * 跨阵营情况由"让权"处理：若持有方是【对方阵营】，request_responses 已把
 	 * game.active 翻到持有方，当前操作者被锁（无响应框、is_my_turn=false），
 	 * 持有方在自己的会话里看到响应框并决定；结算后 response_reconcile_active
 	 * 把操作权交还原先的操作方。因此这里一律阻塞非响应动作即可，不会死锁。
 	 */
+	/*
+	 * 【2026-10-07 修复】resolve_response_choice 必须放行。
+	 * trigger_response 结算时若 effect 返回 pending，会写 game.pending_response_choice
+	 * 但【保留队列头】（不消耗卡）—— 此时队列非空，若这里不放行，
+	 * 玩家提交选择的 resolve_response_choice 会被挡下，表现为"选了没反应"、
+	 * 队列永远清不掉（真·死锁）。受影响：日本 15433/15434/7903/7905/8600，
+	 * 苏联 17830/17831。安全性由 resolve_response_choice 自身保证
+	 * （校验 pending_response_choice 存在且 owner_side === side）。
+	 */
 	if (game.response_queue && game.response_queue.length &&
 		action !== 'trigger_response' && action !== 'pass_response' &&
+		action !== 'resolve_response_choice' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		const hd = game.response_queue[0]
 		game.log.push('响应结算中：等待【' + (hd.owner_side === 'axis' ? '轴心国' : '同盟国') +
@@ -7433,7 +17386,7 @@ exports.action = function (state, current, action, arg) {
 	 * 让权由 set_pending_econ 负责（把 game.active 翻到待答复方），
 	 * 因此界面顶栏会切到那一方，不会"挂着看不出来"（R22 的教训）。
 	 */
-	if (game.pending_econ && action !== 'resolve_econ' &&
+	if (game.pending_econ && action !== 'resolve_econ' && action !== 'resolve_red' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('经济战结算中：正在等待【' +
 			econ_waiting_nation(game) + '】选择（损耗 3 张牌 / 移除地中海的 1 支海军），' +
@@ -7441,10 +17394,48 @@ exports.action = function (state, current, action, arg) {
 		return game
 	}
 
+	/*
+	 * 【2026-09-30 德国增强·战术革新】两步交互挂起：
+	 * 期间只放行 resolve_effect，禁止其它动作。
+	 */
+	if (game.pending_echo && action !== 'resolve_effect' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push('《战术革新》结算中：请选择要弃置/免费打出的状态卡，期间不能进行其它操作')
+		return game
+	}
+
+	/*
+	 * 【2026-09-27】高速公路结算中：玩家逐一在地图选择建设位置期间，
+	 * 禁止其它操作（与上面的经济战挂起同理，只放行 resolve_autobahn）。
+	 */
+	if (game.pending_autobahn && action !== 'resolve_autobahn' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push('高速公路结算中：请依次在地图上选择建设位置（剩余 ' +
+			game.pending_autobahn.remaining + ' 次）')
+		return game
+	}
+
+	/*
+	 * 【2026-09-30】多步脚本卡结算中（15229/15239/14503）：
+	 * 同上，只放行 resolve_script。
+	 */
+	if (game.pending_script && action !== 'resolve_script' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push(script_prompt(game.pending_script) +
+			'（当前这一步：第 ' + game.pending_script.stage + '/' +
+			game.pending_script.total + ' 步）')
+		return game
+	}
+
 	/* 推进到下一阶段（跑完 7 阶段则轮转国家，6 国跑完则回合 +1） */
 	if (action === 'next_phase') {
 		const nation = game.current_nation || ORDER_OF_NATIONS[0]
 		const from = game.turn_phase || PHASES[0].key
+		/*
+		 * 【2026-09-30】推进阶段 = 放弃还没用的额外打出的权利。
+		 * （额外打出是【可选】权利，玩家可以不用；这里统一作废，避免跨阶段残留。）
+		 */
+		clear_extra_play(game)
 		const r = advance_phase(game)
 		const msg = '【' + nation + '】' + phase_zh(from) + ' -> ' +
 			(r.nation_changed
@@ -7631,8 +17622,83 @@ exports.action = function (state, current, action, arg) {
 			game.log.push('当前没有等待排序的手牌')
 			return game
 		}
-		game.peek = null
-		game.log.push('取消了对手手牌的排序（本次不生效）')
+		/*
+		 * 【2026-10-01 玩家口径】**任何 peek 弹窗都【不允许取消】**。
+		 *
+		 * 理由：牌一旦摊给玩家看，信息就已经拿到手了 ——
+		 *   · 双十字系统 15305：看到对手秘密手牌；
+		 *   · 卓越规划   15215：看到自己牌堆顶 5 张的顺序（可规划后续摸牌）。
+		 * 无论哪种，取消都等于【免费偷看】，因此一律拒绝，必须排完序确认。
+		 *
+		 * 这里是【服务端兜底】：客户端已隐藏取消/关闭按钮，
+		 * 但仍要防住直接发 action / 旧客户端 / 脚本绕过。
+		 */
+		game.log.push('已观看卡牌，不能取消 —— 请完成排序后确认')
+		return game
+	}
+
+	/*
+	 * 【2026-10-04】响应卡效果需要玩家选择目标时，提交选择。
+	 * arg = { choice } —— space 类传地区 id；piece 类传棋子 id；
+	 *                     card 类传牌 id；option 类传选项下标。
+	 *
+	 * 与 trigger_response 配套：effect 返回 pending 后挂起，
+	 * 玩家选完走这里，用【同一个 effect】+ choice 再调一次完成结算，
+	 * 然后才消耗该响应卡、弹出队列。
+	 */
+	if (action === 'resolve_response_choice') {
+		const pc = game.pending_response_choice
+		if (!pc) {
+			game.log.push('当前没有等待选择的响应卡')
+			return game
+		}
+		if (pc.owner_side !== side) {
+			game.log.push('只有该响应卡的持有方可以选择')
+			return game
+		}
+		const choice = arg && arg.choice
+		if (choice == null) {
+			game.log.push('请选择一个目标')
+			return game
+		}
+		/* 校验选择确实在候选里（防伪造） */
+		const candIds = (pc.candidates || []).map(x =>
+			(x && x.id != null) ? x.id : x)
+		if (candIds.indexOf(choice) < 0 && candIds.indexOf(Number(choice)) < 0) {
+			game.log.push('所选目标不在《' + pc.name + '》的合法候选内')
+			return game
+		}
+		const impl = RESPONSE_EFFECT_IMPL[pc.card_face]
+		let intercepted = false
+		if (impl) {
+			try {
+				/* 第 5 个参数把挂起时记住的 extra（如新征召的海军 id）传回 effect */
+				const r = impl(game, pc.owner_side, pc.ctx, choice, pc.extra)
+				game.log.push('【响应】《' + pc.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
+				if (r && r.cancel) intercepted = true
+			} catch (e) {
+				console.warn('[resolve_response_choice] effect error', pc.card_face, e)
+				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
+			}
+		}
+		game.pending_response_choice = null
+		consume_response(game, pc.card_id, pc.owner_side)
+		/* 队列里还有别的响应卡等待决定 -> 收尾并让 UI 继续询问 */
+		game.response_queue = (game.response_queue || []).filter(
+			x => !(x.candidates || []).some(c => c.card_id === pc.card_id))
+		response_reconcile_active(game)
+		if (intercepted) {
+			/* 拦截类：被拦截的牌进弃牌堆（与 trigger_response 的拦截分支同口径） */
+			const dn = pc.ctx && pc.ctx.nation
+			const ic = pc.ctx && pc.ctx.card
+			if (dn && ic) {
+				const hi = (game.hands[dn] || []).indexOf(ic)
+				if (hi >= 0) game.hands[dn].splice(hi, 1)
+				game.discard[dn] = game.discard[dn] || []
+				if (!game.discard[dn].includes(ic)) game.discard[dn].push(ic)
+				mark_play_done(game, dn)
+			}
+		}
 		return game
 	}
 
@@ -7661,19 +17727,61 @@ exports.action = function (state, current, action, arg) {
 			response_reconcile_active(game)
 			if (resume) {
 				game.__skip_play_intercept = true
-				const r = exports.action(game, current, resume.action, resume.arg)
+				/* 用【原打出方】的 role 重放，保证回合归属校验通过 */
+				const r = exports.action(game, head.play_role || current, resume.action, resume.arg)
 				game.__skip_play_intercept = null
+				/*
+				 * 【2026-09-28】重放的是被挂起的【出牌动作】，它可能自己改变阶段
+				 * （如打出卡后阶段推进）。若此时仍有"待推进"标记且已不在出牌阶段，
+				 * 说明阶段已经动过了，清掉标记避免二次推进。
+				 */
+				if (game.pending_advance_phase && game.turn_phase !== 'play')
+					game.pending_advance_phase = false
 				return r || game
 			}
-			return game
+			/* 无重放动作：若之前因响应卡延后了推进，这里补上 */
+			return maybe_advance_after_skip_play(game)
 		}
-		/* trigger_response：逐张执行 effect，并消耗该卡 */
+		/*
+		 * trigger_response：逐张执行 effect，并消耗该卡。
+		 *
+		 * 【2026-10-04】effect 可返回 pending（需要玩家选择目标/部队/牌）：
+		 *   { pending: true, kind:'space'|'piece'|'card'|'option',
+		 *     candidates:[...], prompt:'...' }
+		 * 此时【挂起】：保留该响应卡在队列头，写 game.pending_response_choice，
+		 * 等玩家通过 resolve_response_choice 提交选择后再结算。
+		 * 客户端复用事件卡的 highlight_event_targets 高亮流程（不另造一套）。
+		 */
+		let intercepted = false
 		for (const c of head.candidates) {
 			const impl = RESPONSE_EFFECT_IMPL[c.card_face]
 			if (impl) {
 				try {
 					const r = impl(game, c.owner_side, head.ctx)
+					if (r && r.pending) {
+						/* 挂起等选择 —— 不消耗卡、不弹出队列 */
+						game.pending_response_choice = {
+							card_id: c.card_id,
+							card_face: c.card_face,
+							name: c.name,
+							owner_side: c.owner_side,
+							kind: r.kind || 'space',
+							candidates: r.candidates || [],
+							prompt: r.prompt || ('请选择《' + c.name + '》的目标'),
+							ctx: head.ctx || {},
+							/*
+							 * 【2026-10-05】extra：挂起期间要记住的自定义数据。
+							 * 例如 7903 菊水特攻要先征召海军、再用【这支】海军开战，
+							 * 必须把新海军 id 带过"挂起 -> 提交"这一步。
+							 */
+							extra: r.extra || null,
+						}
+						game.log.push('【响应】《' + c.name + '》需要选择：' +
+							game.pending_response_choice.prompt)
+						return game
+					}
 					game.log.push('【响应】《' + c.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
+					if (r && r.cancel) intercepted = true
 				} catch (e) {
 					console.warn('[trigger_response] effect error', c.card_face, e)
 					game.log.push('【响应】《' + c.name + '》结算出错：' + e.message)
@@ -7681,11 +17789,62 @@ exports.action = function (state, current, action, arg) {
 			}
 			consume_response(game, c.card_id, c.owner_side)
 		}
+		/*
+		 * 15329 反潜战术拦截生效（cancel）：被拦截的牌【进弃牌堆、效果无效】。
+		 * 该牌已在"打出"时占出牌名额（见 play_card 拦截分支的 mark_play_done），
+		 * 这里只负责把它从手牌移到弃牌堆；ECON 效果从未执行，故"无效"。
+		 */
+		if (intercepted && head.intercept_card) {
+			const dn = head.intercept_nation || (head.ctx && head.ctx.nation)
+			const hi = (game.hands[dn] || []).indexOf(head.intercept_card)
+			if (hi >= 0) game.hands[dn].splice(hi, 1)
+			game.discard[dn] = game.discard[dn] || []
+			if (!game.discard[dn].includes(head.intercept_card))
+				game.discard[dn].push(head.intercept_card)
+			game.log.push('《' + (head.ctx && head.ctx.card_obj ? head.ctx.card_obj.name : '经济战卡') +
+				'》被《15329 反潜战术》拦截，进弃牌堆（效果无效）')
+			/* 占出牌名额：被拦截的牌视为"已打出"但被无效，仍消耗本方出牌阶段名额 */
+			mark_play_done(game, dn)
+		}
 		game.response_queue.shift()
 		response_reconcile_active(game)
-		return game
+		/*
+		 * 【2026-10-01 玩家口径】经济战【被 15329 拦截后】，
+		 * 手牌里的"打出[经济战]后…"型增强卡（G7e 鱼雷等）【照常】要给机会窗口：
+		 * 卡面是"打出…后"，被拦截的牌【确实打出过】（只是效果无效），
+		 * 所以触发成立 —— 且玩家明确要求"在英国拦截后弹出 ask，照常可以选择打出"。
+		 *
+		 * 这里是唯一能覆盖"拦截成功"这条路径的钩子点：
+		 * 拦截分支不重放 play_card，ECON 分支与 econ_used 钩子都不会跑到。
+		 *
+		 * tag / target 从被拦截的卡与 resume.arg 还原（ctx 里没直接存）。
+		 */
+		if (intercepted && head.intercept_card) {
+			const iCfg = econ_config_of(head.intercept_card)
+			const iTag = (iCfg && iCfg.tag) || ''
+			const iArg = (head.resume && head.resume.arg) || {}
+			const iNat = head.intercept_nation || (head.ctx && head.ctx.nation)
+			offer_armed_effects(game, 'econ_used', {
+				tag: iTag,
+				targets: iArg.target ? [iArg.target] : [],
+				nation: iNat,
+				space: null,
+			})
+		}
+		/*
+		 * 【2026-09-28】状态卡"跳过出牌阶段"发动后，若当时有响应卡待答复，
+		 * 推进被延后（game.pending_advance_phase）。现在队列已清空，补推进。
+		 * （不在这里推进的话，玩家答完响应后还停在出牌阶段，体验割裂。）
+		 */
+		return maybe_advance_after_skip_play(game)
 	}
 
+	/*
+	 * 【2026-09-30 重构】战斗预算(event_budget)模型下，单场战斗内部触发空军代受/
+	 * 抵消由 resolve_battle 解出后即算结算完毕；预算状态(game.event_budget)始终
+	 * 保留，剩余机会(remaining)已在 event_battle 中扣减，无需"续打序列"层。
+	 * 因此不再需要 event_battle_resume 这类序列续打函数。
+	 */
 	if (action === 'resolve_battle') {
 		const pb = game.pending_battle
 		if (!pb) {
@@ -7693,6 +17852,205 @@ exports.action = function (state, current, action, arg) {
 			return game
 		}
 		const stage = pb.stage || 'defend'
+
+		/*
+		 * ---------- 阶段零：防守方决定是否打出保护卡（2026-10-06）----------
+		 *
+		 * 日本 15410《武士道》：日本陆军被攻击时，弃 1 张响应牌
+		 * -> 该部队在【本次战斗中】无法被移除。
+		 *
+		 * 为什么必须挂起（而不是"可选窗口"）：保护要在 victim 被移除
+		 * 【之前】生效，而 do_battle 不挂起就会一路同步结算到底。
+		 *
+		 * 流程：
+		 *   ① 玩家选《武士道》+ 指定要弃的响应牌（arg.drop）
+		 *      —— 服务端【不】替玩家挑：drop 不够就拒绝，挂起保留可重选
+		 *   ② 付代价 + 注册 protect 修饰器 + 卡进弃牌堆
+		 *   ③ 重放 do_battle（guard_done=true）完成这一战
+		 *   ④ 玩家选"不使用" -> 直接重放，原部队照常被移除
+		 *
+		 * 候选（guard_cards）由服务端算好下发，客户端不再二次判。
+		 */
+		/*
+		 * ---------- 阶段零 KV2：攻击方二选一（2026-10-07）----------
+		 *
+		 * 苏联响应卡 17837《KV-2 重型坦克》："苏联陆军被攻击时：攻击国家选择
+		 *   ① 弃置 4 张手牌      -> 战斗照常结算（该陆军被移除）
+		 *   ② 使该陆军在本次战斗中不会被移除 -> 注册 protect，重放后保住
+		 *
+		 * 表态方是【攻击方】（与 guard 的防守方相反），由 pending_wait_nation
+		 * 的 'kv2' 分支保证让权方向。arg.kv2 = 'discard' | 'protect'。
+		 */
+		/*
+		 * ---------- 阶段零 KV2_ASK：持有方决定是否发动（2026-10-07）----------
+		 *
+		 * 苏联响应卡 17837《KV-2 重型坦克》。玩家口径：
+		 *   先由【苏联（持有方）】决定是否发动；发动后权力才交给攻击方。
+		 *
+		 * arg.kv2_trigger = truthy -> 发动：就地改 stage='kv2' 并重新挂起，
+		 *                            由 set_pending_battle 把 active 让给攻击方。
+		 * arg.kv2_trigger = falsy  -> 不发动：卡【留于桌面】（不消耗），
+		 *                            重放战斗（kv2_done=true）照常结算。
+		 */
+		if (stage === 'kv2_ask') {
+			const ownerNation = pb.kv2_owner_nation || pb.defender_nation
+			if (faction_of_nation(ownerNation) !== side) {
+				game.log.push('只有【' + ownerNation + '】可以决定是否发动《KV-2 重型坦克》')
+				return game
+			}
+			const want = !!(arg && arg.kv2_trigger)
+			if (!want) {
+				game.log.push('【' + ownerNation + '】不发动《KV-2 重型坦克》（留于桌面）')
+				game.pending_battle = null
+				const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', {
+					from: pb.attacker_piece || null,
+					kv2_done: true,
+					resume: true,
+				})
+				if (!r.ok) {
+					set_pending_battle(game, pb)
+					game.log.push(r.reason || '战斗无法结算')
+					return game
+				}
+				battle_reconcile_active(game)
+				game.log.push(battle_desc(r, pb.space, '战斗'))
+				return game
+			}
+			/* 发动：切到 kv2，让权给攻击方 */
+			pb.stage = 'kv2'
+			set_pending_battle(game, pb)
+			game.log.push('【' + ownerNation + '】发动《KV-2 重型坦克》—— 由【' +
+				pb.attacker + '】选择：弃置 4 张手牌，或使该陆军在本次战斗中不被移除')
+			return game
+		}
+
+		if (stage === 'kv2') {
+			if (faction_of_nation(pb.attacker) !== side) {
+				game.log.push('只有【' + pb.attacker + '】可以对《KV-2 重型坦克》做出选择')
+				return game
+			}
+			const pick = (arg && arg.kv2) ? String(arg.kv2) : null
+			if (pick !== 'discard' && pick !== 'protect') {
+				game.log.push('请选择：弃置 4 张手牌（discard）或 该陆军本次战斗不被移除（protect）')
+				return game
+			}
+			/* 消耗这张暗置的响应卡（无论选哪个分支，卡都算用掉） */
+			const list = game.table_responses || []
+			const idx = list.findIndex(t => t.card_id === pb.kv2_card)
+			if (idx >= 0) {
+				const used = list.splice(idx, 1)[0]
+				const ownNation = '苏联'
+				game.discard[ownNation] = game.discard[ownNation] || []
+				if (!game.discard[ownNation].includes(used.card_id))
+					game.discard[ownNation].push(used.card_id)
+			}
+			if (pick === 'protect') {
+				register_modifier(game, {
+					key: 'protect', nation: pb.victim_nation, type: 'army',
+					spaces: [pb.space], untilTurn: game.turn, card: '17837',
+				})
+				game.log.push('【' + pb.attacker + '】选择：该《' + pb.victim_nation +
+					'》陆军在本次战斗中不会被移除')
+			} else {
+				const hand = game.hands[pb.attacker] || []
+				const n = Math.min(4, hand.length)
+				for (let i = 0; i < n; i++) discard_card(game, pb.attacker, hand[0])
+				game.log.push('【' + pb.attacker + '】选择：弃置 ' + n + ' 张手牌')
+			}
+			game.pending_battle = null
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', {
+				from: pb.attacker_piece || null,
+				guard_done: true,
+				kv2_done: true,
+				resume: true,
+			})
+			if (!r.ok) {
+				set_pending_battle(game, pb)
+				game.log.push(r.reason || '战斗无法结算')
+				return game
+			}
+			battle_reconcile_active(game)
+			game.log.push(battle_desc(r, pb.space, '战斗'))
+			return game
+		}
+
+		if (stage === 'guard') {
+			if (faction_of_nation(pb.defender_nation) !== side) {
+				game.log.push('只有【' + pb.defender_nation + '】可以决定是否打出保护卡')
+				return game
+			}
+			const want = (arg && arg.guard != null) ? arg.guard : null
+			if (want != null) {
+				const entry = (pb.guard_cards || []).find(x => x.card_id === want)
+				if (!entry) {
+					game.log.push('这张卡当前不在可打出的保护卡内')
+					return game
+				}
+				const owner = entry.nation
+				if ((game.hands[owner] || []).indexOf(want) < 0) {
+					game.log.push('【' + owner + '】手中没有这张牌')
+					return game
+				}
+				/* 代价：玩家指定；未指定/不够就拒绝（服务端永不替玩家挑） */
+				const need = entry.cost || 0
+				const filter = entry.cost_filter || null
+				const typeName = filter === 'response' ? '响应牌' : '手牌'
+				const pool = (game.hands[owner] || []).filter(id =>
+					id !== want && (!filter || filter_matches_card(id, filter)))
+				const drop = ((arg && arg.drop) || [])
+					.map(String)
+					.filter(id => pool.indexOf(id) >= 0 && id !== want)
+				if (drop.length < need) {
+					game.log.push('《' + entry.name + '》需弃置 ' + need + ' 张' +
+						typeName + '（当前指定 ' + drop.length + ' 张）')
+					return game
+				}
+				for (const id of drop.slice(0, need)) discard_card(game, owner, id)
+				if (need) game.log.push('【' + owner + '】弃置 ' + need + ' 张' + typeName)
+
+				const eff = ECHO_EFFECTS[String(inst_card_id(want))]
+				const r = (eff && eff.armed && eff.armed.run)
+					? eff.armed.run(game, {
+						nation: owner, card_id: want,
+						space: pb.space, kind: pb.kind,
+						piece: pb.victim, attacker: pb.attacker,
+					})
+					: null
+				if (!r || r.skip) {
+					/*
+					 * 条件没满足：不消耗卡、不重放战斗。
+					 * 挂起【保留】，玩家可以改用另一张或选不使用。
+					 */
+					game.log.push('《' + entry.name + '》本次未满足发动条件：' +
+						((r && r.desc) || ''))
+					return game
+				}
+				const hi = (game.hands[owner] || []).indexOf(want)
+				if (hi >= 0) game.hands[owner].splice(hi, 1)
+				game.discard[owner] = game.discard[owner] || []
+				if (!game.discard[owner].includes(want)) game.discard[owner].push(want)
+				game.log.push('【' + owner + '】打出《' + entry.name + '》—— ' + (r.desc || ''))
+			} else {
+				game.log.push('【' + pb.defender_nation + '】不使用保护卡')
+			}
+			/* 重放这一战：protect 已生效时 is_protected() 会挡下移除 */
+			game.pending_battle = null
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', {
+				from: pb.attacker_piece || null,
+				guard_done: true,
+				/* resume：跳掉"被攻击"类钩子，避免重放被当成又打了一场 */
+				resume: true,
+			})
+			if (!r.ok) {
+				/* 参数不合法：把挂起放回去，让防守方重选 */
+				set_pending_battle(game, pb)
+				game.log.push(r.reason || '战斗无法结算')
+				return game
+			}
+			battle_reconcile_active(game)
+			game.log.push(battle_desc(r, pb.space, '战斗'))
+			return game
+		}
 
 		/* ---------- 阶段二：发起方决定是否抵消 ---------- */
 		if (stage === 'counter') {
@@ -7721,8 +18079,13 @@ exports.action = function (state, current, action, arg) {
 			game.log.push('【' + pb.attacker + '】' +
 				(r.countered_by_air ? '用空军抵消了这次代受' : '不抵消（代受成立）') +
 				' —— ' + battle_desc(r, pb.space, '战斗'))
-			return game
-		}
+				/*
+				* 战斗预算(event_budget)模型下，单场战斗结算完即结束：
+				* 发起方若仍有剩余机会(remaining>0)可继续点 event_battle，
+				* 预算状态(game.event_budget)始终保留，无需"续打序列"层。
+				*/
+				return game
+				}
 
 		/* ---------- 阶段一：防守方决定是否代受 ---------- */
 		if (faction_of_nation(pb.defender_nation) !== side) {
@@ -7769,6 +18132,122 @@ exports.action = function (state, current, action, arg) {
 		game.log.push('【' + pb.defender_nation + '】' +
 			(r.defended_by_air ? '用空军代受' : '不代受（照常移除）') +
 			' —— ' + battle_desc(r, pb.space, '战斗'))
+		/*
+		 * 战斗预算(event_budget)模型下，单场战斗结算完即结束：
+		 * 预算状态(game.event_budget)始终保留，无需"续打序列"层。
+		 */
+		return game
+	}
+
+	/* 【2026-09-30 重构·战斗预算】逐次发起战斗（每战都是一次完全原子的 do_battle），
+	 * 代受/抵消/响应/闪电战窗口/15245 二连打全部照常，期间可插入状态/免死/飞机代受。 */
+	if (action === 'event_battle') {
+		const b = game.event_budget
+		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
+		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可发起战斗预算'); return game }
+		if (b.remaining <= 0) { game.log.push('战斗机会已用尽，请点「结束《' + ((inst_card(b.card_id) || {}).name) + '》」结算'); return game }
+		/* 单场战斗的代受/抵消尚未结算时，禁止续战，否则会打断 counter 对话框 */
+		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再发起下一场'); return game }
+		const target = arg && arg.target
+		if (target == null) { game.log.push('请选择一个含' + (b.against || '敌') + '的' + (b.kind === 'sea' ? '海域' : '陆地') + '作为目标'); return game }
+		const cands = event_battle_targets(game, b)
+		if (cands.indexOf(Number(target)) < 0) {
+			game.log.push('「' + data.name_of(Number(target)) + '」不是合法目标（需含' + (b.against || '敌') + '部队且可发起）')
+			return game
+		}
+		/*
+		 * 【2026-10-07 修复 · useNewPiece】若预算标记了"必须用新单位发起"，
+		 * 发起单位强制为那支新单位，忽略玩家传来的 arg.from（防止指定任意法军）。
+		 * 新单位不存在(极端情况)时退回默认 b.from，避免卡死。
+		 */
+		if (b.useNewPiece) {
+			if (b.newPiece != null) {
+				const okHere = battle_initiators(game, b.as, Number(target))
+					.some(x => x.id === b.newPiece)
+				if (!okHere) {
+					game.log.push('「' + data.name_of(game.location[b.newPiece]) +
+						'」无法对「' + data.name_of(Number(target)) + '」发起战斗（须相邻且处于补给状态）')
+					return game
+				}
+				/* 强制作发起者为新单位（即便客户端传了别的 arg.from 也覆盖） */
+				const r0 = do_battle(game, b.as, Number(target), null, b.kind, { from: b.newPiece })
+				if (!r0.ok) { game.log.push(r0.reason); return game }
+				b.battleOk = (b.battleOk || 0) + 1
+				b.descs.push(battle_desc(r0, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
+				b.remaining -= 1
+				if (r0.pending) {
+					game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
+					return game
+				}
+				game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
+				return game
+			}
+			/* newPiece 为 null 的兜底：走下面的通用逻辑 */
+		}
+		/*
+		 * 【2026-10-01 修复 · 一类问题】发起单位应由玩家选择。
+		 * view 下发了每个候选目标的可发起单位(event_budget.initiators)，
+		 * 玩家点击后把选中的单位放在 arg.from 里回传；服务端校验它确实
+		 * 属于该目标格的合法发起者，防止任意指定。
+		 */
+		let from = b.from
+		const wantFrom = arg && arg.from
+		if (wantFrom != null) {
+			const okInits = battle_initiators(game, b.as, Number(target))
+			if (!okInits.some(x => x.id === wantFrom)) {
+				game.log.push('「' + data.name_of(game.location[wantFrom]) +
+					'」不能作为该场战斗的发起单位（须相邻且处于补给状态）')
+				return game
+			}
+			from = wantFrom
+		}
+		const r = do_battle(game, b.as, Number(target), null, b.kind, { from: from })
+		if (!r.ok) { game.log.push(r.reason); return game }
+		b.battleOk = (b.battleOk || 0) + 1
+		b.descs.push(battle_desc(r, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
+		b.remaining -= 1
+		if (r.pending) {
+			/* 空军代受挂起：pending_battle 已设置，预算保留(remaining 已扣减)，等 resolve_battle 解出后预算仍在 */
+			game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
+			return game
+		}
+		game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
+		return game
+	}
+
+	/* 【2026-09-30 重构·战斗预算】结算预算：放弃剩余机会 + 触发德国国家技能。
+	 * 必然晚于最后一场战斗的 after_land(闪电战)窗口（玩家先点完闪电战再点结束）。 */
+	if (action === 'event_finish') {
+		const b = game.event_budget
+		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
+		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可结算战斗预算'); return game }
+		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再结算预算'); return game }
+		const nm = ((inst_card(b.card_id) || {}).name) || b.card_id
+		game.log.push('《' + nm + '》战斗预算结束（' + b.battleOk + ' 场已结算，剩余 ' + b.remaining + ' 次机会放弃）')
+		if (b.descs.length) game.log.push('—— ' + b.descs.join('；'))
+		game.event_budget = null
+
+		/*
+		 * 【2026-10-07】armed 型预算（15205《JU-87》）：卡【仍留在手牌】，
+		 * 代价是"发动"的代价 —— 至少真打了 1 场才付；一场都没发动 = 等同放弃，
+		 * 卡留手牌、不付代价（与 use_armed_offer 的 skip 口径一致）。
+		 */
+		if (b.source === 'armed' && !(b.battleOk > 0)) {
+			game.log.push('《' + nm + '》未发动任何战斗 —— 卡留在手牌，不付代价')
+			return game
+		}
+		if (b.cost && b.cost.attrition) {
+			if (!can_attrite(game, b.nation, b.cost.attrition)) {
+				game.log.push('《' + nm + '》需损耗 ' + b.cost.attrition + ' 张牌，但牌库不足')
+			} else {
+				attrition_cards(game, b.nation, b.cost.attrition)
+				game.log.push('【' + b.nation + '】损耗 ' + b.cost.attrition + ' 张牌')
+			}
+		}
+		/* 【2026-09-30 德国增强】预算卡（含英国战斗事件卡）结算后入弃牌堆 */
+		discard_card(game, b.nation, b.card_id)
+		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
+		after_card_resolved(game, b.nation, b.card_id)
 		return game
 	}
 
@@ -7838,6 +18317,11 @@ exports.action = function (state, current, action, arg) {
 
 		game.location[air] = target
 		refresh(game)
+		/*
+		 * 【2026-09-30 德国增强 B 组】调度空军后，触发 after_deploy_air 装载卡
+		 * （如 JU-87 俯冲轰炸机）。
+		 */
+		offer_armed_effects(game, 'after_deploy_air', { space: target, nation: nation })
 		game.air_done = game.air_done || {}
 		game.air_done[nation] = true
 		game.log.push('【' + nation + '】空军阶段：调度空军到 ' +
@@ -7878,8 +18362,12 @@ exports.action = function (state, current, action, arg) {
 			game.log.push('桌面上没有这张状态卡')
 			return game
 		}
-		if (faction_of_nation(owner) !== side) {
-			game.log.push('不能触发对方的状态卡')
+		/* 17732 借用：借来的德国状态卡本回合可被意大利免费激活（绕过"须本国"校验） */
+		const borrowed = !!(game.italy_borrow && game.italy_borrow.turn === game.turn &&
+			game.italy_borrow.card_face === cardId &&
+			game.current_nation === game.italy_borrow.nation)
+		if (!borrowed && owner !== game.current_nation) {
+			game.log.push('不能触发非本方的状态卡')
 			return game
 		}
 
@@ -7897,19 +18385,35 @@ exports.action = function (state, current, action, arg) {
 			return game
 		}
 		/* 一回合一次 */
-		if (tr.once_per_turn && (game.status_used || {})[cardId] === game.turn) {
+		if (tr.once_per_turn && (game.status_used || {})[cardId] === freq_key(game)) {
 			game.log.push('《' + cName + '》本回合已经发动过')
 			return game
 		}
 
+		/*
+		 * 【2026-09-28】【替换建设】专用通道。
+		 *
+		 * 客户端在"打出《建设陆军》后、正在选地块"时点本卡，会带 from_status:true。
+		 * 这类窗口（build_army）是**事件驱动**的：服务端无法感知"正在选地块"
+		 * 这个客户端 UI 状态，所以 status_window_ready 默认返回 false
+		 * （保证其余时间 UI 不显示可点）。这里凭 from_status 放行，并：
+		 *   · **不检查阶段** —— 玩家明确说"不受阶段影响"，
+		 *     别人回合触发的英国建设，英国照样能替换。
+		 *   · **不额外占出牌名额** —— 名额由那张被替换的建设卡自己占。
+		 *
+		 * 安全性：客户端只能对【本方桌面】的卡发此动作（上面已校验 owner），
+		 * 且服务端仍校验 status_active / once_per_turn / 卡在桌面。
+		 */
+		const isForgoBuild = !!(arg && arg.from_status) && !!(tr.cost && tr.cost.forgo_build_army)
 		const ready = status_window_ready(game, owner, cardId, tr)
-		if (!ready.ok) {
+		if (!ready.ok && !isForgoBuild) {
 			game.log.push('《' + cName + '》现在不能发动：' + ready.reason)
 			return game
 		}
 
 		/* ---------------- 付代价 ---------------- */
-		const cost = tr.cost || {}
+		/* 17732 借用：免付任何代价（含闪电战"损耗自己牌库"），仅执行有益效果 */
+		const cost = borrowed ? {} : (tr.cost || {})
 		if (cost.skip_play) {
 			game.skip_play_done = game.skip_play_done || {}
 			game.skip_play_done[owner] = game.turn
@@ -7926,8 +18430,54 @@ exports.action = function (state, current, action, arg) {
 			game.log.push('【' + owner + '】弃置 ' + cost.discard + ' 张手牌')
 		}
 		if (cost.forgo_build_army) {
-			/* S4：放弃本次建设陆军 —— 由 build_army 窗口保证语义 */
-			game.log.push('【' + owner + '】放弃建设陆军')
+			/*
+			 * S4：放弃本次建设陆军 —— 由 build_army 窗口保证语义。
+			 *
+			 * 【2026-09-28】被放弃的那张《建设陆军》卡【必须真正打出】
+			 * （进弃牌堆），而不是悄悄退回手牌。
+			 *
+			 * 原因：玩家这次出牌行动打的就是《建设陆军》——
+			 * 状态卡只是把【结果】从"建设"换成"征召"，
+			 * 那张建设卡作为本次出牌是【已经打出去了】的。
+			 * 若退回手牌，等于白嫖：既征召了陆军，建设卡还能再用一次。
+			 *
+			 * 客户端在提交时把建设卡实例 id 放在 arg.build_card。
+			 */
+			const bc = (arg && arg.build_card) || null
+			if (bc) {
+				discard_card(game, owner, bc)
+				/*
+				 * 出牌名额由【这张建设卡】占掉（状态卡本身不额外占）。
+				 * mark_play_done 内部只在 turn_phase === 'play' 时才置位，
+				 * 所以在别人回合/非出牌阶段触发时不会误伤（本卡"不受阶段影响"）。
+				 */
+				mark_play_done(game, owner)
+				game.log.push('【' + owner + '】放弃建设陆军（《建设陆军》已打出进弃牌堆）')
+			} else {
+				/*
+				 * 【2026-09-29】没有 build_card 时【禁止】从手牌里猜一张打出。
+				 *
+				 * 原因：无法区分两种来源——
+				 *   ① 玩家打出《建设陆军》后替换，但客户端漏传 build_card
+				 *   ② 【卡牌效果】让他国建设，例如美国 17526《民主兵工厂》
+				 *      「英国按任意顺序执行：建设1支海军 及 建设1支陆军」
+				 *      —— 此时英国【根本没打出】《建设陆军》卡，
+				 *         若兜底去手牌里找一张打掉，就是凭空扣牌（规则错误）。
+				 *
+				 * 权衡：
+				 *   兜底命中 ① -> 正确；命中 ② -> 【误扣玩家一张牌】。
+				 *   漏掉 ①    -> 建设卡退回手牌（白嫖，玩家得利、易发现、可修客户端）。
+				 *   "误扣"远比"白嫖"严重且难发现，所以【禁止猜】。
+				 *
+				 * 结论：build_card 是【唯一权威来源】。没有它 = 没有建设卡被打出，
+				 *       只替换建设的结果、不扣任何手牌、不占名额。
+				 *
+				 * （若将来要实现"效果触发的建设也允许替换"，同样走这里：
+				 *   不扣卡，仅把 build 的结果换成 recruit。）
+				 */
+				game.log.push('【' + owner + '】放弃建设陆军' +
+					'【说明】未指定被放弃的建设卡，故不扣除任何手牌')
+			}
 		}
 		if (cost.lose_score) {
 			const f = faction_of_nation(owner)
@@ -7936,25 +18486,103 @@ exports.action = function (state, current, action, arg) {
 				game.log.push('【' + owner + '】失去 ' + cost.lose_score + ' 分')
 			}
 		}
+		/*
+		 * 【2026-09-29 主动损耗】牌库不足时【无法发动】。
+		 *
+		 * 与 cost.discard（手牌不足则拒绝）同款口径：
+		 * 代价付不出来就【不能发动】，而不是"少损耗几张凑合"。
+		 * 注意这里【不】走 attrition_passive 的"差额扣分"——
+		 * 那条规则只适用于【被别国损耗】，自己主动付代价不适用。
+		 */
+		if (cost.attrition) {
+			if (!can_attrite(game, owner, cost.attrition)) {
+				game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
+					' 张牌，但牌库不足，无法发动')
+				return game
+			}
+			attrition_cards(game, owner, cost.attrition)
+			game.log.push('【' + owner + '】损耗 ' + cost.attrition + ' 张牌')
+		}
 
 		/* ---------------- 执行效果 ---------------- */
-		const r = run_status_effect(game, owner, cardId, tr, arg || {})
+		/*
+		 * 【2026-09-30】"X 后立刻"卡（after_land / after_build_army）在武装瞬间
+		 * 把事件地区存进了 game.status_instant，这里把对应 entry 的地区传进
+		 * run，确保手动发动时用到的是"发起陆战 / 建设陆军"那一刻的地区，
+		 * 而不是已被清空的 game.last_built。
+		 */
+		const instEntry = (game.status_instant || []).find(x => x.card_id === cardId)
+		/*
+		 * 【2026-09-30 互相触发修复】发动前先快照当前已武装的窗口集合。
+		 * 本卡效果内部可能又发起了战斗/建设（15245/15247/15248 的嵌套动作），
+		 * 那次嵌套动作会武装【新的】after_land/after_build_army 窗口——
+		 * 这些新窗口应保留给玩家作为下一个动作（互相触发：15247→15245、
+		 * 15253→15247…），只清掉"发动前就已存在"的窗口（即本卡自己的那一个）。
+		 */
+		const beforeKeys = new Set((game.status_instant || []).map(e => e.card_id + ':' + e.window))
+		const r = run_status_effect(game, owner, cardId, tr, arg || {}, instEntry && instEntry.space)
 		if (!r.ok) {
 			/* 效果没成立：代价已付的不回滚（玩家确认过才点的），只记日志 */
 			game.log.push('《' + cName + '》效果未能执行：' + r.reason)
 			return game
 		}
+		/*
+		 * 发动成功：消耗本卡自身的"立刻"窗口，但【保留嵌套动作武装的新窗口】。
+		 * 下一次其它动作仍会在 exports.action 顶部清空，所以保留的新窗口
+		 * 也只对本回合的下一个动作有效（与"X 后立刻"口径一致）。
+		 */
+		game.status_instant = (game.status_instant || []).filter(e => !beforeKeys.has(e.card_id + ':' + e.window))
 
 		/* 一回合一次记账（A3① 卡保留） */
 		if (tr.once_per_turn) {
 			game.status_used = game.status_used || {}
-			game.status_used[cardId] = game.turn
+			game.status_used[cardId] = freq_key(game)
 		}
+		/*
+		 * 【2026-09-28】"放弃建设陆军" = 用状态卡【替代】本次出牌行动，
+		 * 因此必须【占掉出牌名额】。
+		 *
+		 * 否则会出现两个问题：
+		 *   ① 本回合可反复点击该卡（每次白嫖 1 支征召陆军）——
+		 *      build_army 窗口里的 play_done 检查也会失效（因为始终 false）；
+		 *   ② 玩家相当于凭空多了一次行动（既征召、又还能正常出牌）。
+		 */
+		/*
+		 * 注意【不】在这里 mark_play_done：
+		 * 15341/15342 是【替换】已经打出的《建设陆军》卡的结果，
+		 * 出牌名额由那张建设卡自己占掉，状态卡本身不再额外占用
+		 * （玩家 2026-09-28 口径："不影响出牌"）。
+		 */
 		game.log.push('【' + owner + '】发动《' + cName + '》—— ' + r.desc)
 		request_responses(game, 'play_card', {
 			nation: owner, card: cardId, card_obj: inst_card(cardId),
 			from_status: true,
 		}, false)
+
+		/*
+		 * 【2026-09-28 玩家口径】代价是【跳过出牌阶段】的状态卡发动后，
+		 * 出牌阶段即告结束，【立刻自动进入下一个阶段】（空军阶段），
+		 * 不必玩家再手动点一次"下一阶段"。
+		 *
+		 * 只对 cost.skip_play 生效：15348 这类代价是"失去 1 分"的卡
+		 * 不结束出牌阶段，玩家还能继续出牌。
+		 *
+		 * 【重要】响应卡询问（request_responses）可能因此挂起，
+		 * 此时不能推进阶段——等玩家答完（pending_trigger 清空）再推进，
+		 * 否则会跳过响应卡的询问窗口。推进放在下面统一处理。
+		 */
+		if (cost.skip_play && game.turn_phase === 'play') {
+			if (game.pending_trigger || (game.response_queue || []).length) {
+				/* 有响应卡待答复：先答，记一个标记，答完由 finish_response 推进 */
+				game.pending_advance_phase = true
+				game.log.push('《' + cName + '》发动完毕 —— 等待响应卡答复后自动进入下一阶段')
+			} else {
+				const from = game.turn_phase
+				const adv = advance_phase(game)
+				game.log.push('【' + owner + '】跳过出牌阶段 —— ' +
+					phase_zh(from) + ' 结束，自动进入' + phase_zh(adv.phase))
+			}
+		}
 		return game
 	}
 
@@ -7970,6 +18598,48 @@ exports.action = function (state, current, action, arg) {
 	 *
 	 * arg = { choice: 'attrite'|'remove', piece?: <piece_id> }
 	 */
+	if (action === 'resolve_effect') {
+		const pe = game.pending_echo
+		if (!pe) {
+			game.log.push('当前没有待进行的增强结算')
+			return game
+		}
+		const cardId = pe.card
+		const c = inst_card(cardId)
+		if (!c) {
+			game.log.push('待结算增强卡不存在')
+			game.pending_echo = null
+			return game
+		}
+		/* 苏联增强卡（17812/17813）用 run + pending_echo(kind:'su')，
+		 * 复用同一挂起机制，但驱动函数是其 ECHO_EFFECTS.run；
+		 * 美国状态卡（17546 等）用 pending_echo(kind:'status')，驱动函数是 STATUS_EFFECTS 里 trigger.run；
+		 * 战术革新 / 15214 仍走 run_effect_tactics。 */
+		let r
+		if (pe.kind === 'su')
+			r = ECHO_EFFECTS[cardId].run(game, { nation: c.nation, actor: c.nation, card_id: cardId, arg: arg || {} })
+		else if (pe.kind === 'status')
+			r = (STATUS_EFFECTS[cardId] && STATUS_EFFECTS[cardId].trigger)
+				? STATUS_EFFECTS[cardId].trigger.run(game, { nation: c.nation, actor: c.nation, card_id: cardId, arg: arg || {} })
+				: { ok: false, reason: '该状态卡无可执行效果' }
+		else
+			r = run_effect_tactics(game, { nation: c.nation, actor: c.nation, card_id: cardId, arg: arg || {} })
+		const _tag = (pe.kind === 'su') ? '增强卡' : '战术革新'
+		if (!r.ok) {
+			game.log.push('【' + _tag + '】' + (r.reason || '无法结算'))
+			/* 失败时保留挂起，让玩家重新选择（不丢状态） */
+			return game
+		}
+		if (r.pending) {
+			game.log.push('【' + _tag + '】' + (r.desc || '请继续'))
+			return game
+		}
+		game.log.push('【' + _tag + '】' + (r.desc || '结算完成'))
+		request_responses(game, 'after_card_resolved', { nation: c.nation, card: cardId }, false)
+		after_card_resolved(game, c.nation, cardId)
+		return game
+	}
+
 	if (action === 'resolve_econ') {
 		const pe = game.pending_econ
 		if (!pe) {
@@ -8026,7 +18696,494 @@ exports.action = function (state, current, action, arg) {
 		request_responses(game, 'play_card', {
 			nation: actorNation, card: card, card_obj: inst_card(card), econ_tag: tag,
 		}, false)
+		/*
+		 * 国家技能：链式经济战全部答复完才算"效果结算完毕"，
+		 * 钩子必须放在【结算收尾】这里，不能放在打出时。
+		 */
+		after_card_resolved(game, actorNation, card)
+		/*
+		 * 【2026-09-30 德国增强 B 组】经济战结算完成，触发 econ_used 装载卡
+		 * （如 轰炸伦敦（目标英国损耗+2）、G7e 鱼雷（潜艇行动后海战））。
+		 * actorNation 必须等于装载卡声明的 actor（德国）才会结算。
+		 */
+		offer_armed_effects(game, 'econ_used', {
+			tag: tag,
+			targets: (pe.resolved || []).map(x => x.nation),
+			nation: actorNation,
+		})
 		return game
+	}
+
+	/*
+	 * 【2026-09-27】高速公路（15228）逐次建设陆军的答复动作。
+	 * 卡已离手（在 autobahn_handle 里进弃牌堆），故用独立 action 驱动，
+	 * 不复用 play_card（否则会因"手中无此卡"被拒）。
+	 * arg = { space: <space_id> }
+	 */
+	if (action === 'resolve_autobahn') {
+		return autobahn_resolve(game, game.current_nation, arg || {})
+	}
+
+	/*
+	 * 【2026-09-30】多步脚本卡的答复（15229/15239/14503）。
+	 * 与 resolve_autobahn 同款：卡已离手，不能用 play_card 再发一次。
+	 * arg = { pick: [id,...] } 或 { discard: id }
+	 */
+	/*
+	 * 【2026-09-30】国家技能：使用 / 放弃。
+	 * arg 不需要参数（要走哪张状态卡由玩家随后点手牌决定）。
+	 */
+	if (action === 'use_national_skill') {
+		if (!game.national_skill_offer || game.national_skill_offer.nation !== game.current_nation) {
+			game.log.push('当前没有可用的国家技能窗口')
+			return game
+		}
+		/* arg.play 供一步模式（日本）使用：同时选代价牌 + 要打出的牌 */
+		return use_national_skill(game, game.current_nation,
+			(arg && arg.drop) || null, (arg && arg.play) || null)
+	}
+	if (action === 'skip_national_skill') {
+		if (game.national_skill_offer) {
+			game.log.push('【' + game.current_nation + '】不使用国家技能')
+			clear_national_skill_offer(game)
+		}
+		return game
+	}
+
+	/* 【2026-10-06】《气球炸弹》可选窗口：弃 3 张手牌（条件）→ 本卡回手（效果） */
+	if (action === 'balloon_discard') {
+		const pb = game.pending_balloon
+		if (!pb || pb.actor !== game.current_nation) {
+			game.log.push('当前没有《气球炸弹》的可选窗口')
+			return game
+		}
+		const drops = (arg && arg.drop) || []
+		if (drops.length !== 3) {
+			game.log.push('《气球炸弹》需要弃置恰好 3 张手牌作为代价')
+			return game
+		}
+		const hand = game.hands[pb.actor] || []
+		if (!drops.every(cid => hand.indexOf(cid) >= 0)) {
+			game.log.push('《气球炸弹》的 3 张弃牌必须都在手牌中')
+			return game
+		}
+		let n = 0
+		for (const cid of drops) if (discard_card(game, pb.actor, cid)) n++
+		/* 代价已付 → 触发效果：把刚打出的《气球炸弹》回手牌 */
+		const di = (game.discard[pb.actor] || []).indexOf(pb.card)
+		if (di >= 0) {
+			game.discard[pb.actor].splice(di, 1)
+			game.hands[pb.actor].push(pb.card)
+			game.log.push('【' + pb.actor + '】弃置 ' + n + ' 张手牌，《气球炸弹》回手')
+		} else {
+			game.log.push('【' + pb.actor + '】弃置 ' + n + ' 张手牌（本卡已不在弃牌堆）')
+		}
+		game.pending_balloon = null
+		return game
+	}
+	if (action === 'balloon_done') {
+		if (game.pending_balloon)
+			game.log.push('【' + game.current_nation + '】放弃《气球炸弹》的回手')
+		game.pending_balloon = null
+		return game
+	}
+
+	/*
+	 * 【2026-10-01】"打出XX后…"型增强卡：从【手牌】打出（响应 ask 框的选择）。
+	 * arg = { card: <手牌实例 id> }
+	 *
+	 * 顺序刻意是 **先 run 再付代价**：
+	 *   run 返回 skip（本次条件不满足，如"相邻无敌舰"）时不扣牌、不消耗卡，
+	 *   玩家不白亏；卡留在手牌等下一次同样的事件。
+	 */
+	if (action === 'use_armed_offer') {
+		const off = game.armed_offer
+		const cardId = arg && arg.card
+		if (!off || !cardId) {
+			game.log.push('当前没有可打出的增强卡')
+			return game
+		}
+		const entry = (off.cards || []).find(x => x.card_id === cardId)
+		if (!entry) {
+			game.log.push('这张卡当前不在可打出窗口内')
+			return game
+		}
+		const owner = entry.nation
+		if (faction_of_nation(owner) !== side) {
+			game.log.push('不能打出对方的牌')
+			return game
+		}
+		/* 必须仍在手牌（防止窗口残留后重复打出） */
+		if ((game.hands[owner] || []).indexOf(cardId) < 0) {
+			game.log.push('【' + owner + '】手中没有这张牌')
+			clear_armed_offer(game)
+			return game
+		}
+		const eff = ECHO_EFFECTS[String(inst_card_id(cardId))]
+		const ar = eff && eff.armed
+		const nm = (inst_card(cardId) || { name: '?' }).name
+		if (!ar) {
+			game.log.push('《' + nm + '》配置异常')
+			return game
+		}
+		/*
+		 * 【2026-10-07 修复】多步交互支持。
+		 * 旧逻辑只调一次 ar.run 且【不把玩家选择传进去】，run 返回 need:'piece'/'space'
+		 * 直接被忽略 —— 凡是"选棋子/选地区"的 armed 卡（17806/17808/17809/17811）实战中
+		 * 效果都不会结算（窗口能弹、代价会扣，但移除/建设不落地）。
+		 *
+		 * 新逻辑：把客户端逐步传来的选择（piece/space/choice）与已收集部分合并成 gathered，
+		 * 作为第 3 参传给 ar.run；若 run 返回 need，则把待收集信息写进
+		 * armed_offer.pending 下发，【不付代价、不移除卡、不清除窗口】，等待下一步输入；
+		 * 客户端把选择随下一次 use_armed_offer 回传，handler 重新跑 run（gathered 已暂存）。
+		 */
+		const _sel = {}
+		if (arg && arg.piece != null) _sel.piece = arg.piece
+		if (arg && arg.space != null) _sel.space = arg.space
+		if (arg && arg.status != null) _sel.status = arg.status
+		if (arg && arg.choice != null) _sel.choice = arg.choice
+		const gathered = Object.assign({}, off.arg || {}, _sel)
+		game.armed_offer.arg = gathered
+		/* 先执行；条件不满足就保留手牌、不付代价 */
+		const r = ar.run(game, Object.assign({ nation: owner, card_id: cardId }, off.ctx || {}), gathered)
+		if (!r || r.skip) {
+			game.log.push('《' + nm + '》本次未满足发动条件：' + ((r && r.desc) || ''))
+			clear_armed_offer(game)
+			return game
+		}
+		/*
+		 * 多步交互：需要玩家进一步选择。不付代价、不移除卡、不清窗口，
+		 * 等客户端回传选择后重跑（gathered 已落盘到 game.armed_offer.arg）。
+		 * 候选为空是防御性兜底，避免死锁。
+		 */
+		if (r.need) {
+			if (!r.candidates || !r.candidates.length) {
+				game.log.push('《' + nm + '》没有合法选择，发动结束')
+				clear_armed_offer(game)
+				refresh(game)
+				return game
+			}
+			game.armed_offer.pending = {
+				need: r.need,
+				candidates: r.candidates || [],
+				pick: r.pick || 1,
+				pickMin: r.pickMin || 1,
+				choiceOptions: r.choiceOptions || null,
+			}
+			game.log.push('【' + owner + '】《' + nm + '》—— 请' +
+				(r.need === 'piece' ? '选择一支部队' :
+					r.need === 'space' ? '选择一个地区' : '做出选择'))
+			refresh(game)
+			return game
+		}
+		/*
+		 * 【2026-10-07】15205《JU-87》型：run 建立的是【战斗预算】而不是立即结算。
+		 *
+		 * 此时【不能】走下面的"付代价 + 卡进弃牌堆"—— 战斗还没打，
+		 * 损耗 1 张牌是【发动】的代价；且卡若现在离手，预算面板的
+		 * card_id 就指向一张已弃的牌了。
+		 *
+		 * 处理：卡留在手牌、代价延后（记在 budget.cost），
+		 * 由 event_finish 决定付不付（至少发动 1 场才付，见该处）。
+		 */
+		if (r.budget) {
+			game.log.push('【' + owner + '】《' + nm + '》—— ' + (r.desc || ''))
+			clear_armed_offer(game)
+			refresh(game)
+			return game
+		}
+		/* 成功后才付代价 + 消耗 */
+		const need = (ar.cost && ar.cost.attrition) || 0
+		if (need) {
+			if (!can_attrite(game, owner, need)) {
+				game.log.push('《' + nm + '》需损耗 ' + need + ' 张牌，但牌库不足')
+				clear_armed_offer(game)
+				return game
+			}
+			attrition_cards(game, owner, need)
+			game.log.push('【' + owner + '】损耗 ' + need + ' 张牌')
+		}
+		/*
+		 * 【2026-10-06】弃置代价（日本增强卡：「弃置 1 张【响应卡】」）。
+		 *
+		 * 原先只处理 attrition（损耗），日本卡的 discard 代价会被【跳过】
+		 * —— 表现为"技能/装载卡白嫖，没付代价"。
+		 *
+		 * cost.discard 可带 filter（限定牌类型）；玩家用 arg.drop 指定要弃的牌，
+		 * 未指定时自动取第一张符合类型的（服务端兜底，客户端应让玩家选）。
+		 */
+		const discNeed = (ar.cost && ar.cost.discard) || 0
+		if (discNeed) {
+			const costFilter = (ar.cost && ar.cost.filter) || null
+			const wantType = costFilter
+				? (costFilter === 'response' ? 'RESPONSE'
+					: costFilter === 'build' ? 'BASIC'   /* 【2026-10-07 修复】'build' 对应 BASIC 基础卡（[建设陆军]），不是字面 'BUILD'（无此类型） */
+					: String(costFilter).toUpperCase())
+				: null
+			const typeName = costFilter === 'response' ? '响应牌' : (wantType || '手牌')
+			const handNow = game.hands[owner] || []
+			const matchType = (id) => {
+				if (!wantType) return true
+				/* 【2026-10-07 修复】'build' 代价 = 弃置 1 张【建设陆军】（BASIC 且 name=建设陆军），
+				   不是任意 BASIC 卡（否则会误弃《空军力量》等其它基础卡，与卡面代价不符）。
+				   与 national_skill 的 'build' 口径（rules.js:~1621）保持一致。 */
+				if (costFilter === 'build') {
+					const c = inst_card(String(inst_card_id(id)))
+					return !!c && c.type === 'BASIC' && c.name === '建设陆军'
+				}
+				return is_card_type(String(inst_card_id(id)), wantType)
+			}
+			const pool = handNow.filter(id => id !== cardId && matchType(id))
+			const want = (arg && arg.drop && arg.drop.length)
+				? arg.drop.filter(id =>
+					handNow.indexOf(id) >= 0 && id !== cardId && matchType(id))
+				: pool.slice(0, discNeed)
+			if (want.length < discNeed) {
+				game.log.push('《' + nm + '》需弃置 ' + discNeed + ' 张' + typeName +
+					'（当前可用 ' + want.length + ' 张）')
+				return game
+			}
+			for (const id of want.slice(0, discNeed)) discard_card(game, owner, id)
+			game.log.push('【' + owner + '】弃置 ' + discNeed + ' 张' + typeName)
+		}
+		/* 从手牌移除 -> 进弃牌堆 */
+		const hi = (game.hands[owner] || []).indexOf(cardId)
+		if (hi >= 0) game.hands[owner].splice(hi, 1)
+		game.discard[owner] = game.discard[owner] || []
+		if (!game.discard[owner].includes(cardId)) game.discard[owner].push(cardId)
+		game.log.push('【' + owner + '】打出《' + nm + '》—— ' + (r.desc || ''))
+		clear_armed_offer(game)
+		refresh(game)
+		return game
+	}
+	if (action === 'skip_armed_offer') {
+		if (game.armed_offer) {
+			game.log.push('【' + game.armed_offer.nation + '】放弃打出增强卡')
+			clear_armed_offer(game)
+		}
+		return game
+	}
+	/* 【2026-10-08】17721 钢铁条约：德国放弃状态卡打出，控制权归还意大利 */
+	if (action === 'event_delegate_decline') {
+		if (game.it_delegate) {
+			game.current_nation = game.it_delegate.return_nation || '意大利'
+			game.it_delegate = null
+			clear_extra_play(game)
+			game.log.push('【德国】放弃《钢铁条约》的状态卡打出，控制权归还意大利')
+		}
+		return game
+	}
+
+	/* 【2026-10-08】16703 罗马尼亚铁卫团：德国弃置1张手牌并摸1张 */
+	if (action === 'italy_german_draw') {
+		if (!game.it_delegate || game.it_delegate.mode !== 'german_draw')
+			return game
+		const cid = (arg && arg.card_id) ? String(arg.card_id) : null
+		if (cid) {
+			const ok = discard_card(game, '德国', cid)
+			if (ok) {
+				const drawn = draw_cards(game, '德国', 1)
+				game.log.push('【德国】因《罗马尼亚铁卫团》弃置 1 张手牌，摸 ' + drawn.length + ' 张')
+			} else {
+				game.log.push('【德国】弃置失败（手牌中无该牌）')
+			}
+		} else {
+			game.log.push('【德国】放弃《罗马尼亚铁卫团》的弃牌摸牌')
+		}
+		game.current_nation = game.it_delegate.return_nation || '意大利'
+		game.it_delegate = null
+		clear_extra_play(game)
+		return game
+	}
+
+	/* 【2026-10-08】17729 卡佩里尼：处置当前抽到的牌 */
+	if (action === 'resolve_italy_chain') {
+		const ch = game.italy_chain
+		if (!ch || !ch.pickedNation) return game
+		const nat = ch.pickedNation
+		const cid = ch.pickedCard
+		const choice = (arg && arg.choice) || 'discard'
+		const c = inst_card(String(inst_card_id(cid)))
+		if (choice === 'play') {
+			if (c && c.type === 'BASIC') {
+				/* 进入"选目标"子状态，暂停链，等待 resolve_italy_play */
+				game.current_nation = nat
+				ch.sub = { kind: 'play', nation: nat, card: cid }
+				game.log.push('【' + nat + '】选择打出《' + c.name + '》（请在地图选择位置）')
+				return game
+			}
+			game.log.push('【' + nat + '】《' + (c ? c.name : cid) + '》非基本卡，不可经《卡佩里尼》打出，仅可置顶或弃置')
+		} else if (choice === 'decktop') {
+			const di = (game.discard[nat] || []).indexOf(cid)
+			if (di >= 0) game.discard[nat].splice(di, 1)
+			game.decks[nat] = game.decks[nat] || []
+			game.decks[nat].unshift(cid)
+			game.log.push('【' + nat + '】将《' + (c ? c.name : cid) + '》置于牌堆顶')
+		} else {
+			game.log.push('【' + nat + '】将《' + (c ? c.name : cid) + '》留在弃牌堆')
+		}
+		ch.results.push({ nation: nat, card: cid, choice: choice })
+		ch.step++
+		ch.pickedNation = null
+		ch.pickedCard = null
+		ch.sub = null
+		advance_italy_chain(game)
+		return game
+	}
+
+	/* 【2026-10-08】17732 德国军事顾问：从候选德国状态卡中选 1 张借用 */
+	if (action === 'resolve_italy_borrow') {
+		const ib = game.italy_borrow
+		if (!ib || !ib.pending) {
+			game.log.push('当前没有待选择的借用状态卡')
+			return game
+		}
+		const face = arg && arg.face
+		if (!face || (ib.options || []).indexOf(face) < 0) {
+			game.log.push('请选择桌上有效的德国状态卡')
+			return game
+		}
+		const c = inst_card(String(inst_card_id(face)))
+		game.italy_borrow = { card_face: face, nation: ib.nation, turn: ib.turn, pending: false }
+		game.log.push('【' + ib.nation + '】借用德国状态卡《' + (c ? c.name : face) +
+			'》（本回合可免费激活）')
+		return game
+	}
+
+	/* 【2026-10-08】17729 卡佩里尼：打出基本卡时选目标位置 */
+	if (action === 'resolve_italy_play') {
+		const ch = game.italy_chain
+		if (!ch || !ch.sub || ch.sub.kind !== 'play') return game
+		const nat = ch.sub.nation
+		const cid = ch.sub.card
+		const space = (arg && arg.space != null) ? arg.space : null
+		const nm = (inst_card(String(inst_card_id(cid))) || {}).name || cid
+		const r = resolve_basic_card(game, nat, cid, { space: space })
+		if (r && r.pending) {
+			game.log.push('【' + nat + '】《卡佩里尼》打出《' + nm + '》需要额外目标，本次跳过战斗，该牌留在弃牌堆')
+		} else if (!r || !r.ok) {
+			game.log.push('【' + nat + '】《卡佩里尼》打出《' + nm + '》失败：' + ((r && r.reason) || '未知') + '，该牌留在弃牌堆')
+		} else {
+			game.log.push('【' + nat + '】《卡佩里尼》打出了《' + nm + '》')
+		}
+		ch.results.push({ nation: nat, card: cid, choice: 'play' })
+		ch.step++
+		ch.pickedNation = null
+		ch.pickedCard = null
+		ch.sub = null
+		advance_italy_chain(game)
+		return game
+	}
+
+	if (action === 'resolve_red') {
+		const pr = game.pending_red
+		if (!pr) {
+			game.log.push('当前没有待德国选择的红色管弦乐队')
+			return game
+		}
+		const waitNation = pr.waiting_for
+		if (!waitNation) {
+			game.log.push('红色管弦乐队挂起状态异常')
+			return game
+		}
+		if (faction_of_nation(waitNation) !== side) {
+			game.log.push('现在轮到【' + waitNation + '】选择，' +
+				(side === ALLIES_ROLE ? '同盟' : '轴心') + '暂不能提交')
+			return game
+		}
+		const choice = (arg && arg.choice)
+		const need = 2
+		if (choice === 0) {
+			game.su_red_suppressed = game.su_red_suppressed || {}
+			game.su_red_suppressed[String(inst_card_id(pr.target))] = game.turn
+			game.log.push('【' + waitNation + '】《' + pr.card_name + '》—— 德国状态卡《' + pr.target_name + '》本回合内无效')
+		} else if (choice === 1) {
+			if (!can_attrite(game, waitNation, need)) {
+				game.log.push('《' + pr.card_name + '》德国需损耗 ' + need + ' 张牌，但牌库不足')
+				return game
+			}
+			attrition_cards(game, waitNation, need)
+			game.log.push('【' + waitNation + '】《' + pr.card_name + '》—— 德国损耗 ' + need + ' 张牌')
+		} else {
+			game.log.push('《' + pr.card_name + '》无效的选择项')
+			return game
+		}
+		game.pending_red = null
+		refresh(game)
+		return game
+	}
+
+	/* 17805 红色管弦乐队：苏联在出牌阶段开始时决定是否使用 */
+	if (action === 'su_red_use' || action === 'su_red_decline') {
+		const ask = game.su_red_ask
+		if (!ask) { game.log.push('当前没有待苏联确认的《红色管弦乐队》'); return game }
+		if (faction_of_nation('苏联') !== side) {
+			game.log.push('只有苏联阵营可以确认《红色管弦乐队》')
+			return game
+		}
+		if (action === 'su_red_decline') {
+			game.log.push('【苏联】放弃使用《红色管弦乐队》')
+			game.su_red_ask = null
+			refresh(game)
+			return game
+		}
+		/* su_red_use：把 17805 移出手牌（一次性使用），转交苏联选卡 */
+		const hand = (game.hands['苏联'] || [])
+		const idx = hand.findIndex(c => String(inst_card_id(c)) === '17805')
+		if (idx < 0) { game.log.push('苏联手牌中找不到《红色管弦乐队》'); return game }
+		const played = hand.splice(idx, 1)[0]
+		;(game.discard['苏联'] = game.discard['苏联'] || []).push(played)
+		game.su_red_ask = null
+		game.su_red_pick = { card_name: '红色管弦乐队' }
+		game.log.push('【苏联】使用《红色管弦乐队》：请选择 1 张德国桌面[状态卡]')
+		refresh(game)
+		return game
+	}
+
+	/* 17805 红色管弦乐队：苏联选完目标德国状态卡后，挂起德国二选一 */
+	if (action === 'su_red_pick') {
+		const pk = game.su_red_pick
+		if (!pk) { game.log.push('当前没有待苏联选择的《红色管弦乐队》目标'); return game }
+		if (faction_of_nation('苏联') !== side) {
+			game.log.push('只有苏联阵营可以选择目标状态卡')
+			return game
+		}
+		const pick = arg && arg.status
+		if (pick == null) { game.log.push('请选择 1 张德国桌面[状态卡]'); return game }
+		const cands = german_status_on_table(game)
+		if (cands.indexOf(String(pick)) < 0) {
+			game.log.push('所选卡不是德国桌面上的[状态卡]')
+			return game
+		}
+		const nm = (inst_card(inst_card_id(pick)) || { name: '?' }).name
+		game.pending_red = {
+			target: String(pick),
+			target_name: nm,
+			waiting_for: '德国',
+			card_name: '红色管弦乐队',
+		}
+		game.su_red_pick = null
+		game.log.push('【苏联】《红色管弦乐队》指定德国状态卡《' + nm + '》，等待德国选择')
+		refresh(game)
+		return game
+	}
+
+	if (action === 'resolve_script') {
+		if (!game.pending_script) {
+			game.log.push('当前没有待结算的脚本卡')
+			return game
+		}
+		/*
+		 * 校验口径与 resolve_econ 一致：按【阵营】判定（让权的是操作权，
+		 * 不是国家），否则"英国必须自己点"在 6 国轮转下会判错。
+		 */
+		const waitNation = script_answer_nation(game)
+		if (faction_of_nation(waitNation) !== side) {
+			game.log.push('现在轮到【' + waitNation + '】选择，' +
+				(side === ALLIES ? '同盟' : '轴心') + '暂不能提交')
+			return game
+		}
+		return script_resolve(game, waitNation, arg || {})
 	}
 
 	/*
@@ -8053,8 +19210,12 @@ exports.action = function (state, current, action, arg) {
 		/*
 		 * 【2026-09-25 第 3 步】play_card 拦截类响应（15329 反潜战术）：
 		 * 在卡生效【前】挂起询问，等待持有方是否令其无效。
-		 * 卡保持在手牌，等 trigger/pass 后再决定。
-		 * （15329 目前需 ECON 类型卡真正可打，此分支暂不会触发）
+		 * 被拦截的牌【暂未真正打出】—— 占出牌名额分两种情况：
+		 *   · 放弃发动（pass）：重放时由正常 ECON 流程自然 mark_play_done；
+		 *   · 发动拦截（cancel）：在 trigger_response 取消分支显式 mark_play_done。
+		 * 注意：此处【不能】提前 mark_play_done，否则重放会被"每回合 1 张"拦下，
+		 * 导致放弃发动时经济战无法结算（见 _smoke_econ.js 15329 组）。
+		 * 牌仍留手牌待定。
 		 */
 		if (c && !game.__skip_play_intercept) {
 			const preC = fire_trigger(game, 'play_card', {
@@ -8065,12 +19226,17 @@ exports.action = function (state, current, action, arg) {
 				game.response_queue = game.response_queue || []
 				game.response_queue.push({
 					on: 'play_card', pre: true, owner_side: intercept[0].owner_side,
+					/* 重放时需用【原打出方】的 role，否则回合归属校验会拦下重放 */
+					play_role: current,
 					candidates: intercept.map(x => ({
 						card_id: x.card_id, card_face: String(x.card_face),
 						owner_side: x.owner_side, name: x.name,
 					})),
 					ctx: { nation, card: card_id, card_obj: c },
-					resume: { action: 'play_card', arg: { card: card_id } },
+					/* 被拦截的牌（仍留手牌）：发动拦截时送进弃牌堆 */
+					intercept_card: card_id, intercept_nation: nation,
+					/* 完整 arg（含 target）随重放带回，确保 15313 等需参数的经济战能正常结算 */
+					resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
 				})
 				return game
 			}
@@ -8141,6 +19307,41 @@ exports.action = function (state, current, action, arg) {
 		}
 		const timing = !!chk.timing
 
+		/*
+		 * 【2026-09-30】本次出牌若是【额外打出】（chk.extra 由 check_phase_for_card 给出）：
+		 *   · 消耗这次权利（乐观消耗：check 通过即算用掉）
+		 *   · 在日志里记成「因《XX》的额外打出」—— 玩家要求的可见留痕
+		 * 不想用就不打，直接 next_phase 推进即可（next_phase 会把它作废）。
+		 */
+		if (chk.extra) {
+			const ep = game.extra_play
+			const srcName = ep ? ep.source_name : '?'
+			game.log.push('【' + nation + '】因《' + srcName + '》的【额外打出】：《' +
+				(c ? c.name : card_id) + '》')
+			consume_extra_play(game, nation)
+			/*
+			 * 【2026-10-08】17721 钢铁条约：意大利打出响应卡后，链式挂起给德国。
+			 * 意大利与德国同属 AXIS，set_pending_armed_delegate 不会切 current_nation，
+			 * 故这里直接切 current_nation='德国' + 授予德国状态 extra_play；
+			 * 德国打完状态卡（同 source）或放弃后，归还意大利。
+			 */
+			if (ep && ep.source === '17721' && ep.nation === '意大利') {
+				game.it_delegate = { return_nation: game.current_nation }
+				grant_extra_play(game, '德国', '17721', '钢铁条约', { filter: 'status' })
+				/* 德国接手时其出牌名额尚未使用，状态卡会走"普通打出"而非 extra，
+				 * 导致下方钩子（仅 extra 触发）不归还 active。故此处预置其名额已用，
+				 * 使德国那张状态卡成为 extra 打出，钩子才能触发归还。 */
+				game.play_done = game.play_done || {}
+				game.play_done['德国'] = true
+				game.current_nation = '德国'
+				game.log.push('【德国】因《钢铁条约》可打出 1 张状态卡（打完后归还意大利）')
+			} else if (ep && ep.source === '17721' && ep.nation === '德国') {
+				game.current_nation = (game.it_delegate && game.it_delegate.return_nation) || '意大利'
+				game.it_delegate = null
+				game.log.push('【钢铁条约】德国已打出状态卡，控制权归还意大利')
+			}
+		}
+
 		/* ---------- 基本卡：先执行效果，成功才弃牌 ---------- */
 		if (c.type === 'BASIC') {
 			/*
@@ -8157,7 +19358,13 @@ exports.action = function (state, current, action, arg) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
 				return game
 			}
-			discard_card(game, nation, card_id)
+			/* 17844 女性义务兵役：打出[建设陆军]后，该[建设陆军]置回手牌（可循环） */
+			if (c.name === '建设陆军' && table_has(game, nation, 17844)) {
+				game.log.push('（女性义务兵役：《建设陆军》置回手牌）')
+				/* 不进弃牌堆，保持手牌循环 */
+			} else {
+				discard_card(game, nation, card_id)
+			}
 			mark_play_done(game, nation)
 			/*
 			 * 空军阶段打出的是《空军力量》 —— 用掉空军阶段的二选一名额。
@@ -8175,6 +19382,15 @@ exports.action = function (state, current, action, arg) {
 			request_responses(game, 'play_card', {
 				nation: nation, card: card_id, card_obj: c,
 			}, false)
+			/*
+			 * 【2026-10-10】17541 工业巨头：打出[战略卡]（=基本卡）后【立刻】
+			 * 武装 after_play_basic 瞬间窗口，并记录"刚打出的牌"
+			 * （跨 action 必须落 state，见踩坑 R25.1）。
+			 */
+			game.last_basic_played = { nation: nation, card: card_id, space: (arg && arg.space) || null }
+			arm_status_instant(game, 'after_play_basic', nation, (arg && arg.space) || null)
+			/* 国家技能：★卡结算完毕后给出机会窗口 */
+			after_card_resolved(game, nation, card_id)
 			return game
 		}
 
@@ -8190,6 +19406,17 @@ exports.action = function (state, current, action, arg) {
 		 *   玩家 2026-09-25 明确"所有涉及阶段的时机都是【自己】回合"。
 		 */
 		if (c.type === 'EFFECT') {
+			/*
+			 * 【2026-10-06】多步脚本卡（日本 7900 竭泽而渔）。
+			 * 原先 SCRIPT_CARD_KIND 只在 EVENT 分支里查，
+			 * 增强卡的"弃 4 张 -> 弃牌堆挑 1 张"这类【依赖上一步结果】的
+			 * 流程就走不到脚本机（会被 resolve_event_card 当成普通卡）。
+			 * 增强卡【不占】出牌名额，所以 timing 传 true。
+			 */
+			const scriptKind = SCRIPT_CARD_KIND[String(inst_card_id(card_id))]
+			if (scriptKind && !game.pending_script)
+				return script_start(game, nation, card_id, true, scriptKind)
+
 			/* ① 时点校验 */
 			const tr = trigger_ready(game, card_id, nation)
 			console.log('[ECHO server] card_id=', card_id, 'nation=', nation,
@@ -8198,6 +19425,37 @@ exports.action = function (state, current, action, arg) {
 				game.log.push('【' + nation + '】《' + c.name + '》现在不能打出：' + tr.reason)
 				return game
 			}
+			/*
+			 * 【2026-10-09 意大利 16700 一日之狮】
+			 *
+			 * 卡面：敌方国家打出[增强卡]时，损耗 1 张牌：使其无效。
+			 * 玩家口径（2026-10-09）：等同 15329《反潜战术》的拦截口径 ——
+			 *   照常打出、占名额、但【效果不发生】。
+			 *
+			 * 必须在【resolve_event_card 之前】询问：效果一旦执行就无法挽回。
+			 * 与 17736 拦截 ECON 同款模式，但这里【不重放】——
+			 * 16700 的 run 自己会把被拦截的卡移进弃牌堆，
+			 * 效果不发生正是依靠"提前 return"达成。
+			 *
+			 * ⚠ __skip_echo_intercept 是【一次性】标记：
+			 *   16700 结算后置位，下次任何 play_card 开头先清除，
+			 *   避免"一次拦截后永久不再询问"。
+			 */
+			if (!game.__skip_echo_intercept) {
+				try {
+					offer_armed_effects(game, 'enemy_echo_played', {
+						nation: nation, card: card_id, space: null,
+					})
+				} catch (e) { game.log.push('arm enemy_echo_played 错误：' + e.message) }
+				if (game.armed_offer) {
+					game.log.push('【' + nation + '】打出增强《' + c.name +
+						'》—— 等待《一日之狮》应答')
+					return game
+				}
+			}
+			/* 一次性标记：用掉即清 */
+			delete game.__skip_echo_intercept
+
 			/* ② 执行（与事件卡同一个执行器） */
 			const r = resolve_event_card(game, nation, card_id, arg || {})
 			console.log('[ECHO server] resolve r=', JSON.stringify(r).slice(0, 300))
@@ -8225,6 +19483,8 @@ exports.action = function (state, current, action, arg) {
 			request_responses(game, 'play_card', {
 				nation: nation, card: card_id, card_obj: c,
 			}, false)
+			/* 国家技能：★卡结算完毕后给出机会窗口 */
+			after_card_resolved(game, nation, card_id)
 			return game
 		}
 
@@ -8249,20 +19509,21 @@ exports.action = function (state, current, action, arg) {
 			 *   · card_id   = 实例 id（保留 #n 后缀，便于同名牌区分）
 			 *   · owner_side = 'axis' / 'allies'（持有方阵营）
 			 */
-			game.table_responses = game.table_responses || []
-			game.table_responses.push({
-				card_id: card_id,
-				owner_side: side,
-				nation: nation,
-			})
-			/* 从手牌移除（不进弃牌堆——它现在在桌面上） */
-			const handIdx = game.hands[nation].indexOf(card_id)
-			if (handIdx >= 0)
-				game.hands[nation].splice(handIdx, 1)
-			/* 占出牌名额（与 EVENT 同口径） */
-			mark_play_done(game, nation)
+			/* 复用暗置原子：从手牌移除 + 背面朝上放到桌面响应区（不进弃牌堆） */
+			const fr = facedown_response(game, nation, card_id, 'hand')
+			if (!fr.ok) {
+				game.log.push('暗置失败：' + fr.reason)
+				return game
+			}
+			/*
+			 * 【2026-10-04】若本次是【额外打出】（日本国家技能：暗置 1 张响应牌），
+			 * 【不占】出牌名额 —— 权利的消耗已在上面 chk.extra 分支做过。
+			 * 正常出牌阶段打出的响应卡才占名额（与 EVENT 同口径）。
+			 */
+			if (!chk.extra) mark_play_done(game, nation)
 			game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
-			game.log.push('【' + nation + '】打出响应《' + c.name + '》（背面向上置于桌面，等时机触发）')
+			game.log.push('【' + nation + '】打出响应《' + c.name + '》（背面向上置于桌面，等时机触发）' +
+				(chk.extra ? '（额外打出，不占名额）' : ''))
 			console.log('[RESPONSE] nation=', nation, 'card=', card_id,
 				'table_responses len=', game.table_responses.length,
 				'hand len=', (game.hands[nation] || []).length,
@@ -8294,27 +19555,12 @@ exports.action = function (state, current, action, arg) {
 				return game
 			}
 
-			/* 从手牌移到桌面（正面朝上） */
-			const hi = game.hands[nation].indexOf(card_id)
-			if (hi < 0) {
-				game.log.push('手牌中没有《' + c.name + '》')
+			const r = play_status_card_impl(game, nation, card_id)
+			if (!r.ok) {
+				game.log.push(r.reason)
 				return game
 			}
-			game.hands[nation].splice(hi, 1)
-			game.table[nation] = game.table[nation] || []
-			game.table[nation].push(card_id)
-
-			/* 持续效果（含 15344 的打出即时征召） */
-			const ogDesc = apply_status_ongoing(game, card_id, nation)
-			if (!timing)
-				mark_play_done(game, nation)
-			game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
-
-			game.log.push('【' + nation + '】打出状态卡《' + c.name + '》' +
-				(ogDesc ? '—— ' + ogDesc : '—— 已放置在桌面'))
-			request_responses(game, 'play_card', {
-				nation: nation, card: card_id, card_obj: c,
-			}, false)
+			if (!timing) mark_play_done(game, nation)
 			return game
 		}
 
@@ -8338,6 +19584,8 @@ exports.action = function (state, current, action, arg) {
 				face: String(inst_card_id(card_id)), tag: cfg.tag,
 				actor: nation, at_turn: game.turn,
 			}
+			/* 本次结算前各国弃牌堆长度，用于事后算出真实损耗张数 */
+			const __econDiscBefore = econ_discard_snapshot(game)
 
 			/* ① 需要打出方选目标国（15313） */
 			if (cfg.targets) {
@@ -8347,12 +19595,35 @@ exports.action = function (state, current, action, arg) {
 						cfg.targets.join(' 或 ') + '）')
 					return game
 				}
+				/* 17736 王牌飞行员：成为[轰炸行动]目标时本回合无效（拦截类，镜像 15329） */
+				if (cfg.tag === '轰炸行动' && t === '意大利' && !game.__skip_play_intercept) {
+					const preC = fire_trigger(game, 'econ_bombing',
+						{ nation: nation, card: card_id, card_obj: c, target: t, tag: cfg.tag })
+					const intercept = preC.filter(x => RESPONSE_PRE_CANCEL.has(String(x.card_face)))
+					if (intercept.length) {
+						game.response_queue = game.response_queue || []
+						game.response_queue.push({
+							on: 'econ_bombing', pre: true, owner_side: intercept[0].owner_side,
+							play_role: current,
+							candidates: intercept.map(x => ({
+								card_id: x.card_id, card_face: String(x.card_face),
+								owner_side: x.owner_side, name: x.name,
+							})),
+							ctx: { nation, card: card_id, card_obj: c, target: t },
+							intercept_card: card_id, intercept_nation: nation,
+							resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
+						})
+						return game
+					}
+				}
 				const r = cfg.run(game, nation, t)
+				try { status_on_econ(game, cfg.tag, t, nation) } catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
 				if (!r.ok) {
 					game.log.push('《' + c.name + '》无法执行：' + r.reason)
 					return game
 				}
 				discard_card(game, nation, card_id)
+				if (cfg.post) cfg.post(game, card_id, nation)
 				if (!timing)
 					mark_play_done(game, nation)
 				game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
@@ -8361,10 +19632,30 @@ exports.action = function (state, current, action, arg) {
 				request_responses(game, 'play_card', {
 					nation: nation, card: card_id, card_obj: c, econ_tag: cfg.tag,
 				}, false)
+				/* 国家技能：★卡结算完毕后给出机会窗口 */
+				after_card_resolved(game, nation, card_id)
+				/*
+				 * 【2026-09-30 修复】非链式经济战（15217~15222 等单目标卡）此前
+				 * 【完全不触发】econ_used 窗口，导致装载的 G7e 鱼雷(15212) 等
+				 * 「打出[潜艇行动]后…」永远等不到触发（只能在 15314 链式卡后才响）。
+				 * 这里补齐一次，参数与链式收尾处（resolve_econ）保持一致。
+				 */
+				offer_armed_effects(game, 'econ_used', {
+					tag: cfg.tag,
+					targets: [t],
+					nation: nation,
+					/*
+					 * 【2026-10-09 意大利 17708 皇家空军】
+					 * 带上本次各国【真实损耗张数】，供"不执行损耗"做回滚。
+					 * 与德国状态卡 15246 的 reduce_attrition 同款思路：
+					 * 损耗已发生也无妨，把牌从弃牌堆顶拿回牌库顶即可等价"没损耗"。
+					 */
+					attrited: econ_attrited_count(game, t, __econDiscBefore),
+				})
 				return game
-			}
+				}
 
-			/* ② 需要对方依次答复（15314） */
+				/* ② 需要对方依次答复（15314） */
 			if (cfg.chain) {
 					set_pending_econ(game, {
 						card: card_id,
@@ -8402,6 +19693,41 @@ exports.action = function (state, current, action, arg) {
 		 * 事件卡语义：出牌阶段打出，【占】出牌名额（timing 为 falsy 时）。
 		 */
 		if (c.type === 'EVENT') {
+			/*
+			 * 高速公路（15228）：先收回全部德军陆军，再由玩家逐一选择建设位置。
+			 * 用独立 action resolve_autobahn 驱动（卡已离手，不能再走 play_card）。
+			 */
+			if (inst_card_id(card_id) === '15228' && !game.pending_autobahn) {
+				return autobahn_handle(game, nation, card_id, arg || {}, timing)
+			}
+			/*
+			 * 【2026-09-30】多步脚本卡（15229/15239/14503）。
+			 * 这些卡的每一步都依赖上一步的结果，必须停在中间等玩家操作，
+			 * 由独立 action resolve_script 驱动（见 pending_script 一节）。
+			 */
+			const scriptKind = SCRIPT_CARD_KIND[inst_card_id(card_id)]
+			if (scriptKind && !game.pending_script)
+				return script_start(game, nation, card_id, timing, scriptKind)
+			/*
+			 * 【2026-10-06】17817 进攻是最好的防守：打出即结束中立，并【先】触发
+			 * 17850 大清洗的一次性出牌机会，之后（玩家消费大清洗、或主动继续后）
+			 * 才建立对德战斗预算。不能走通用 resolve_event_card，否则预算会先于
+			 * 大清洗建立，玩家被引导先打陆战、错过/错乱大清洗时机。
+			 */
+			if (inst_card_id(card_id) === '17817' && nation === '苏联') {
+				if (is_neutral(game, '苏联')) {
+					end_neutral(game, '苏联', '打出事件《进攻是最好的防守》')
+				}
+				/* 打出此卡：占出牌名额，从手牌移除并暂存待结算 */
+				const hi = (game.hands[nation] || []).indexOf(card_id)
+				if (hi >= 0) game.hands[nation].splice(hi, 1)
+				if (!timing) mark_play_done(game, nation)
+				game.su_17817_pending = card_id
+				game.log.push('【苏联】打出《进攻是最好的防守》：已结束中立' +
+					(table_has(game, '苏联', 17850) ? '，《大清洗》机会开启' : '') +
+					'；待处理后再发起对德陆战')
+				return game
+			}
 			const r = resolve_event_card(game, nation, card_id, arg || {})
 			if (!r.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
@@ -8411,7 +19737,12 @@ exports.action = function (state, current, action, arg) {
 			 * 还缺玩家选择（二选一 / 多地区选一个）-> 不弃牌、不结算，
 			 * 等客户端把参数补齐后重新提交。
 			 */
-			if (r.pending) {
+			/*
+			 * 还缺玩家选择（二选一 / 多地区选一个）-> 不弃牌、不结算，
+			 * 等客户端把参数补齐后重新提交。
+			 * （cardResolved 的战斗挂起例外：卡已打出、仅待续打剩余目标）
+			 */
+			if (r.pending && !r.cardResolved) {
 				game.log.push('【' + nation + '】《' + c.name + '》：' + r.desc)
 				return game
 			}
@@ -8425,6 +19756,14 @@ exports.action = function (state, current, action, arg) {
 				mark_play_done(game, nation)
 			game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
 			game.log.push('【' + nation + '】打出《' + c.name + '》—— ' + r.desc)
+			/*
+			 * 国家技能：★卡结算完毕后给出机会窗口。
+			 * 战斗预算卡（cardResolved）的战斗在 play_card 时尚未真正打完，
+			 * 国家技能改由 event_finish（玩家点「结束《...》」）时才触发，
+			 * 必然晚于最后一场战斗的闪电战(after_land)窗口，避免"战斗未结束就弹技能窗口"。
+			 */
+			if (!r.cardResolved)
+				after_card_resolved(game, nation, card_id)
 			return game
 		}
 
@@ -8445,6 +19784,138 @@ exports.action = function (state, current, action, arg) {
 		}, false)
 		game.log.push('【' + nation + '】打出《' + c.name + '》' +
 			(c.type !== 'STATUS' && c.type !== 'EFFECT' ? '（效果待实现）' : '（留置桌面）'))
+		return game
+	}
+
+	/* ---------- 17850 大清洗：苏联结束中立奖励 ---------- */
+	if (action === 'su_purge_play') {
+		/*
+		 * 苏联结束中立时若 17850《大清洗》在其桌面，玩家可一次性：
+		 * 弃置《大清洗》并打出 1 张[状态卡]（不占出牌名额、不查出牌阶段）。
+		 * arg = { card: <状态卡实体 id> }
+		 */
+		if (!game.su_purge_offer) {
+			game.log.push('当前没有「大清洗」出牌机会（苏联尚未结束中立或已用过）')
+			return game
+		}
+		if (!table_has(game, '苏联', 17850)) {
+			game.log.push('【大清洗】已不在桌面，无法发动')
+			game.su_purge_offer = false
+			return game
+		}
+		const card = arg && arg.card
+		if (!card) { game.log.push('请指定要打出的状态卡'); return game }
+		const c = inst_card(card)
+		if (!c || c.type !== 'STATUS') { game.log.push('只能打出 1 张[状态卡]'); return game }
+		if ((game.hands['苏联'] || []).indexOf(card) < 0) { game.log.push('手牌中没有该状态卡'); return game }
+		/* 弃置《大清洗》 */
+		const purgeInst = game.table['苏联'].find(x => String(inst_card_id(x)) === '17850')
+		const pi = game.table['苏联'].indexOf(purgeInst)
+		if (pi >= 0) game.table['苏联'].splice(pi, 1)
+		game.discard['苏联'] = game.discard['苏联'] || []
+		game.discard['苏联'].push(purgeInst)
+		/* 打出奖励状态卡（复用 play_status_card_impl，不占名额） */
+		const r = play_status_card_impl(game, '苏联', card)
+		if (!r.ok) {
+			/* 极端情况：打不出则把大清洗放回桌面，避免丢失 */
+			game.table['苏联'].push(purgeInst)
+			game.log.push('奖励状态卡打出失败：' + r.reason)
+			return game
+		}
+		game.su_purge_offer = false
+		game.log.push('（大清洗）苏联结束中立：弃置《大清洗》，打出《' + c.name + '》')
+		/* 大清洗消费后，若 17817 待结算，自动建立对德战斗预算 */
+		if (game.su_17817_pending) {
+			const r2 = resolve_event_card(game, '苏联', '17817', {})
+			if (r2.ok) game.log.push('（大清洗后）《进攻是最好的防守》战斗预算已建立')
+			else game.log.push('（大清洗后）战斗预算建立失败：' + r2.reason)
+			game.su_17817_pending = null
+		}
+		return game
+	}
+
+	/* ---------- 16304 中国远征军：让权美国选相邻地区征召 ---------- */
+	if (action === 'resolve_china_delegate') {
+		const dg = game.us_china_delegate
+		if (!dg) {
+			game.log.push('当前没有待美国结算的《中国远征军》')
+			return game
+		}
+		if (faction_of_nation('美国') !== side) {
+			game.log.push('现在轮到【美国】选择征召地区，另一阵营暂不能提交')
+			return game
+		}
+		resolve_us_china_delegate(game, arg || {})
+		return game
+	}
+
+	/* ---------- 17553 抗日义勇军：让权日本弃牌结算 ---------- */
+	if (action === 'resolve_japan_delegate') {
+		const dg = game.us_japan_delegate
+		if (!dg) {
+			game.log.push('当前没有待日本结算的《抗日义勇军》')
+			return game
+		}
+		if (faction_of_nation('日本') !== side) {
+			game.log.push('现在轮到【日本】弃牌，另一阵营暂不能提交')
+			return game
+		}
+		resolve_us_japan_delegate(game, arg || {})
+		return game
+	}
+
+	/* ---------- 17555 大萧条的余波：美国结束中立奖励 ---------- */
+	if (action === 'us_depression_use') {
+		/*
+		 * 美国结束中立时若 17555《大萧条的余波》在其桌面，玩家可一次性：
+		 * 弃置此牌 -> <美国>增加 1 个计分标记（owner=美国 / faction=allies）。
+		 */
+		if (!game.us_depression_offer) {
+			game.log.push('当前没有「大萧条的余波」机会（美国尚未结束中立或已用过）')
+			return game
+		}
+		if (!table_has(game, '美国', 17555)) {
+			game.log.push('【大萧条的余波】已不在桌面，无法发动')
+			game.us_depression_offer = false
+			return game
+		}
+		const depInst = game.table['美国'].find(x => String(inst_card_id(x)) === '17555')
+		const di = game.table['美国'].indexOf(depInst)
+		if (di >= 0) game.table['美国'].splice(di, 1)
+		game.discard['美国'] = game.discard['美国'] || []
+		game.discard['美国'].push(depInst)
+		/* <美国> = space id 27，增加 1 个计分标记（仅美国/同盟可计分） */
+		const usSpace = space_id('美国')
+		if (usSpace != null) {
+			add_marker(game, usSpace, 1, '美国', 'allies')
+			game.log.push('【大萧条的余波】弃置此牌：<美国>增加 1 个计分标记')
+		} else {
+			game.log.push('【大萧条的余波】<美国>地区未配置，未能增加计分标记')
+		}
+		game.us_depression_offer = false
+		refresh(game)
+		return game
+	}
+
+	/* 【2026-10-06】17817 进攻是最好的防守：大清洗处理完（或玩家主动放弃）后，
+	 * 由本动作建立对德战斗预算。arg 为空。
+	 * 若玩家尚未使用大清洗机会（game.su_purge_offer 仍为真），视为放弃。 */
+	if (action === 'su_17817_proceed') {
+		if (!game.su_17817_pending) {
+			game.log.push('当前没有待结算的《进攻是最好的防守》')
+			return game
+		}
+		if (game.su_purge_offer) {
+			game.log.push('（放弃《大清洗》机会）')
+			game.su_purge_offer = false
+		}
+		game.su_17817_pending = null
+		const r = resolve_event_card(game, '苏联', '17817', {})
+		if (!r.ok) {
+			game.log.push('【进攻是最好的防守】无法建立战斗预算：' + r.reason)
+			return game
+		}
+		game.log.push('【苏联】《进攻是最好的防守》战斗预算已建立')
 		return game
 	}
 
@@ -8609,8 +20080,42 @@ exports.query = function (state, current, query, params) {
 		const eff = card_effect_of(card)
 		if (!eff) return null
 
-		const need = event_card_needs(game, my, card, {})
-		if (!need) return { need: null, actor: eff.actor }
+		/*
+		 * 【2026-10-06】多步脚本卡（德 15229/15239/14503、日 7900）：
+		 * 它们的代价与选择都在【脚本阶段里】完成，客户端不该再弹
+		 * "选 N 张弃牌"框（否则玩家选一次、脚本又问一次，白选一场）。
+		 * 返回 need:'script' 让客户端直接 play_card，交给 pending_script 驱动。
+		 */
+		if (SCRIPT_CARD_KIND[String(inst_card_id(card))])
+			return { need: 'script', actor: eff.actor }
+
+		/*
+		 * 【2026-09-29 修复】必须把 params 里玩家【已经作出的选择】透传给
+		 * event_card_needs，否则会陷入死循环：
+		 *
+		 *   客户端流程（play.js show_event_choice）：
+		 *     选完 choice -> send_query('event_targets', {card, choice})
+		 *     -> 期望这次返回 need:'space' 或 need:null
+		 *   但这里原先硬编码 {} —— 服务端永远"看不见" choice，
+		 *   于是又返回 need:'choice' -> 客户端再弹一次同样的二选一框
+		 *   -> 玩家点了"建设陆军"却反复弹框、永远无法进入选地区/执行
+		 *      （表现为"点击建设陆军时无发光地点，也无法加建设"）。
+		 *
+		 * 所以把 params（去掉 card 本身）作为 arg 传入，
+		 * 让 choice / space / spaces / order / picks 都能被识别为"已指定"。
+		 */
+		const need_arg = {}
+		if (params) for (const k in params) if (k !== 'card') need_arg[k] = params[k]
+		const need = event_card_needs(game, my, card, need_arg)
+		/*
+		 * 【2026-09-28 修复】单候选卡（如 15312 华沙起义只有<东欧>一个候选）
+		 * 的 event_card_needs 返回 null，这里原本只回 { need:null, actor }
+		 * 【不带 cost】—— 客户端因此【看不到】弃牌代价，
+		 * 直接 send_action 不带 cards，服务端就 .slice(0,cost) 自动弃前 N 张
+		 * （表现为"自选弃牌未实现"）。
+		 * 现在无论 need 为何都附带 cost，让客户端能先弹弃牌框。
+		 */
+		if (!need) return { need: null, actor: eff.actor, cost: eff.cost || null }
 
 		/*
 		 * 【2026-09-25 新增】peek_reorder 类型：需要玩家选排序顺序。
@@ -8650,15 +20155,67 @@ exports.query = function (state, current, query, params) {
 			}
 		}
 
+		/*
+		 * 【2026-10-06】一步式：弃 N 张 + 同时指定要打出的那张（15412 御前会议）。
+		 * cost / play 都下发，客户端据此复用【日本国家技能】的一步式弹窗。
+		 */
+		if (need.need === 'one_step_pick') {
+			return {
+				need: 'one_step_pick',
+				actor: eff.actor,
+				cost: need.cost || null,
+				play: need.play || null,
+				desc: need.desc || (eff.desc || ''),
+			}
+		}
+
+		/*
+		 * 【2026-10-06】选 1 支部队（15411 夜间运输：选 1 支无补给的）。
+		 * 候选是【算子 id】，出口统一转成 { id, name } 供客户端高亮
+		 * （name 里带兵种与所在地，玩家才知道自己点的是哪支）。
+		 */
+		if (need.need === 'piece') {
+			return {
+				need: 'piece',
+				actor: eff.actor,
+				candidates: (need.candidates || []).map(pid => ({
+					id: pid,
+					name: (piece_type_zh(game.piece_type[pid]) || '部队') +
+						'@' + (data.name_of(game.location[pid]) || '?'),
+				})),
+				pick: 1,
+				pickMin: 1,
+				cost: eff.cost || null,
+			}
+		}
+
 		if (need.need === 'choice') {
 			const c = inst_card(card)
+			/*
+			 * 【2026-10-06 修复】必须用 event_card_needs 实际返回的 options / cost，
+			 * 而不是从 eff.choice 重新生成——否则像 15408 这种【自定义分支】
+			 * （options 含 disabled 暗置标记、cost 含 filter）会被覆盖成空数组/丢代价：
+			 *   · 15408 的 EVENT_EFFECTS 没有 eff.choice -> 原代码 options=[] -> 客户端只有"取消"
+			 *   · 原代码 choice 分支【从不下发 cost】 -> 客户端拿不到弃牌代价框
+			 * 仅当 need 没给 options 时（通用 choice 卡）才回退到 eff.choice 生成。
+			 */
+			const options = (need.options && need.options.length)
+				? need.options
+				: (eff.choice || []).map((steps, i) => ({
+					index: i,
+					label: steps.map(st => event_step_label(st)).join('；'),
+				}))
 			return {
 				need: 'choice',
 				actor: eff.actor,
-				options: (eff.choice || []).map((steps, i) => ({
-					index: i,
-					label: steps.map(st => event_step_label(st)).join('；'),
-				})),
+				options,
+				/*
+				 * 仅用 event_card_needs 在本步显式返回的 need.cost
+				 * （如 15408 自定义分支的 {discard, filter}）；
+				 * 【不】回退 eff.cost —— 否则通用 choice 卡的代价会被提前到选
+				 * 项步、与后续 space 步的 eff.cost 重复收取。
+				 */
+				cost: (need.cost !== undefined ? need.cost : null),
 				card_name: c ? c.name : '',
 			}
 		}
@@ -8670,10 +20227,13 @@ exports.query = function (state, current, query, params) {
 			candidates: need.candidates.map(id => ({ id: id, name: data.name_of(id) })),
 			/*
 			 * 【2026-09-25 新增】附带代价信息，让客户端先弹"选 N 张弃牌"框。
-			 * 没有 cost 就不附带（undefined），客户端据此判断是否需要选弃牌。
-			 * 卡名不附带——客户端已通过 pending_event_card 知道是哪张卡。
+			 *
+			 * 【2026-10-06 修复】cost 以 event_card_needs 在【当前步】返回的 need.cost 为准：
+			 *   · need.cost 已定义（含显式 null，如 15408 的 space 步已收过代价）
+			 *     -> 直接用 need.cost，不再从 eff.cost 兜底（避免二次弹弃牌框）。
+			 *   · need.cost 未定义（通用 space 卡）-> 回退 eff.cost || null。
 			 */
-			cost: eff.cost || null,
+			cost: (need.cost !== undefined ? need.cost : (eff.cost || null)),
 			/*
 			 * 【2026-09-25 新增】附带 pick（要选几个地区），
 			 * event_card_needs 返回的 need.pick 已含此值（默认 1）。
@@ -8681,7 +20241,80 @@ exports.query = function (state, current, query, params) {
 			 * 也被当成单选处理，玩家点第一个地区就 send_action 提交了。
 			 */
 			pick: need.pick || 1,
+			/*
+			 * 【2026-09-30】pickMin = 至少选几个（"1 或 2 次"《进攻美国》、
+			 * "选择…的 3 支"《巴巴罗萨》）。缺省等于 pick（必须选满）——
+			 * 客户端据此决定 Done 按钮何时可点。
+			 */
+			pickMin: need.pickMin || need.pick || 1,
+			/*
+			 * 【2026-09-29 新增】total = 总步数。
+			 * 客户端据此识别【多步卡】：必须逐步累积选择、都选齐了才提交。
+			 * 漏带的话客户端当成单步卡、选完第 1 步就 send_action，
+			 * 服务端发现后续 step 没选 -> 返回 pending -> 整张卡不执行
+			 * （15325 莱茵河与多瑙河"点了没反应"的根因）。
+			 */
+			total: need.total || 1,
 		}
+	}
+
+	/*
+	 * 【2026-09-27】高速公路（15228）逐次建设陆军的可选目标查询。
+	 * 返回当前所有"处于补给中的德国可建陆军"地区，供客户端高亮、
+	 * 玩家点选（每选一次走一次 resolve_autobahn）。
+	 */
+	/*
+	 * 【2026-09-30】多步脚本卡（15229/15239/14503）的当前候选。
+	 *
+	 * 为什么不把候选塞进 view：牌堆内容对【对方】是机密，
+	 * 而且每张卡每次操作后候选都会变（抽完 2 张就少了 2 张），
+	 * 用 query 拿最新状态最稳（与 battle_initiators 同款做法）。
+	 *
+	 * 返回 null = 当前没有可被【这一方】回答的内容。
+	 */
+	if (query === 'script_state') {
+		const ps = game.pending_script
+		if (!ps) return null
+		const waitNation = script_answer_nation(game)
+		if (!waitNation || faction_of_nation(waitNation) !== side) return null
+		const stepKind = script_step_kind(ps)
+		const candsRaw = script_raw_candidates(game, ps)
+		/*
+		 * 弃牌阶段的可选的就是【本国手牌】（客户端 view.hands 里也有），
+		 * 这里统一用 card_info 转换后返回，让客户端不必自己拼字段。
+		 */
+		const cands = (stepKind === 'discard')
+			? ((game.hands[ps.actor] || []).map(card_info))
+			: candsRaw.map(card_info)
+		return {
+			kind: ps.kind,
+			/*
+			 * source = 来源卡的【卡面 id】：客户端用它判断"是不是同一张卡的
+			 * 同一个阶段"，避免每次 update_ui 都重复 query（见 play.js）。
+			 */
+			source: ps.source,
+			step_kind: stepKind,
+			stage: ps.stage,
+			total: ps.total,
+			source_name: ps.source_name,
+			prompt: script_prompt(ps),
+			/* pick / discard 各自的数量要求（不足按候选数收敛） */
+			need: (stepKind === 'discard') ? ps.need_discard
+				: script_pick_need(ps, candsRaw),
+			candidates: cands,
+		}
+	}
+
+	if (query === 'autobahn_targets') {
+		/*
+		 * 复用建设陆军的可选地区逻辑：step_space_candidates 内部就是
+		 * can_build_at(game, actor, sp, 'army')，与建设阶段高亮完全一致。
+		 * 这样高速公路/西伯利亚大铁路的选位高亮 = 建设陆军的高亮，不两套口径分叉。
+		 * actor 取当前 pending_autobahn 的持有国（德国 or 苏联）。
+		 */
+		const actor = (game.pending_autobahn && game.pending_autobahn.actor) || '德国'
+		const cands = step_space_candidates(game, actor, { op: 'build', type: 'army' }, {})
+		return { spaces: cands.map(id => ({ id: id, name: data.name_of(id) })) }
 	}
 
 	/* 某国的计分明细（哪些地块、多少分、是否共同占领） */
@@ -8701,6 +20334,13 @@ exports.query = function (state, current, query, params) {
 		const my = nation_of_player(game, current)
 		if (!my) return []
 		return deck_basics(game, my)
+	}
+
+	/* 资源再分配：弃牌堆中可搜寻的基本卡（17551 战时国债） */
+	if (query === 'discard_basics') {
+		const my = nation_of_player(game, current)
+		if (!my) return []
+		return discard_basics(game, my)
 	}
 
 	/*
@@ -8817,7 +20457,63 @@ if (typeof module !== 'undefined') {
 		/* 建设与战斗 */
 		can_build_at,
 		unit_slot_free,
+		build_candidate_spaces,
 		build_piece,
+		can_deploy_air,
+		recruit_piece,
+		/* 【2026-10-01】发起战斗的最小原子（供增强卡与其它效果复用） */
+		battle_initiators,
+		battle_initiators_at,
+		all_sea_space_ids, seize_air, CARD_TRIGGERS, ECHO_EFFECTS,
+		/* 【2026-10-09】海域部署/调度空军的共享原子（15408 与 17706 共用） */
+		sea_air_deploy_candidates,
+		run_sea_air_deploy,
+		/* 【2026-10-09】17711 维希法国殖民地：五地范围与触发判定 */
+		vichy_spaces,
+		vichy_hit,
+		/* 【2026-10-10】17553 抗日义勇军：让权日本弃牌（挂起委托） */
+		offer_us_japan_delegate,
+		resolve_us_japan_delegate,
+		/* 【2026-10-10】16304 中国远征军：让权美国选地征召（挂起委托） */
+		offer_us_china_delegate,
+		resolve_us_china_delegate,
+		/* 【2026-10-09】16701 意大利万岁：额外行动次数与基本卡限制 */
+		it_italy_viva_left,
+		it_viva_allows,
+		/* 【2026-10-09】17708 皇家空军：损耗回滚与空军候选 */
+		econ_discard_snapshot,
+		econ_attrited_count,
+		rollback_attrition,
+		it_air_pieces,
+		can_initiate_battle_at,
+		find_battle_target,
+		event_battle_targets,
+		offer_armed_effects,
+		offer_su_red,
+		has_card_in_hand,
+		/* 【2026-10-06】保护卡挂起（15410 武士道） */
+		guard_card_candidates,
+		/* 【2026-10-06】响应卡测试 seam：直接触发指定时点的响应钩子 */
+		request_responses,
+		fire_trigger,
+		RESPONSE_EFFECTS,
+		RESPONSE_EFFECT_IMPL,
+		/* 【2026-10-08】17749 轴心协定：战斗成立钩子（测试 seam） */
+		status_on_axis_pact,
+		/* 【2026-10-06】共用原子：牌类型过滤 / 无补给部队候选 / 暗置打出 */
+		filter_matches_card,
+		pick_unit_candidates,
+		jp_facedown_play,
+		discard_and_facedown,
+		/* 【2026-10-06】多步脚本卡（含 7900 弃牌堆版） */
+		SCRIPT_CARD_KIND,
+		script_start,
+		script_resolve,
+		script_step_kind,
+		script_raw_candidates,
+		script_advance_7900,
+		clear_armed_offer,
+		is_armed_hand_card,
 		do_battle,
 		get_connections,
 		is_adjacent,
@@ -8828,6 +20524,10 @@ if (typeof module !== 'undefined') {
 		shuffle_deterministic,
 		draw_cards,
 		discard_card,
+		/* 损耗（2026-09-29 新口径：不洗牌 / 被动差额扣分 / 主动不足不可用） */
+		attrition_cards,
+		attrition_passive,
+		can_attrite,
 		enforce_hand_limit,
 		hand_view,
 		/* 回合状态机 */
@@ -8894,6 +20594,7 @@ if (typeof module !== 'undefined') {
 		new_piece_id,
 		can_build_at,
 		build_piece,
+		auto_fire_status,
 		do_battle,
 		seize_air,
 		my_air_pieces,
@@ -8904,6 +20605,8 @@ if (typeof module !== 'undefined') {
 		PLACE_ALIAS,
 		space_id_of,
 		space_ids_of,
+		REGION_GROUPS,
+		space_ids_expand,
 		EVENT_EFFECTS,
 		ECHO_EFFECTS,
 		/* 时点接口（2026-09-25） */
@@ -8941,6 +20644,16 @@ if (typeof module !== 'undefined') {
 		axis_supply_points_held,
 		check_neutral_end_on_turn,
 		maybe_end_neutral_by_attack,
+		/*
+		 * 【2026-09-30】国家技能（供测试 / 预览工具检查带★卡与可用性）。
+		 * STARRED_CARDS 是【待玩家确认】的清单，测试脚本用 is_starred_card
+		 * 校验具体某一张，避免把"表里写了哪几张"写死在测试里。
+		 */
+		NATIONAL_SKILL, STARRED_CARDS, is_starred_card, national_skill_usable,
+		after_card_resolved, use_national_skill, is_card_type,
+		maybe_offer_national_skill, national_skill_grant_ok, national_skill_cost_ok,
+		NATIONAL_SKILL, facedown_response, use_national_skill,
+		extra_play_allows, has_extra_play, extra_play_filter_desc,
 		/* 响应卡（2026-09-25，供预览工具读取触发/效果） */
 		RESPONSE_EFFECTS,
 		RESPONSE_EFFECT_IMPL,
@@ -8960,6 +20673,7 @@ if (typeof module !== 'undefined') {
 		 * 状态卡（2026-09-26，供预览工具读取触发/效果，与 ECON 同款原因）。
 		 */
 		STATUS_EFFECTS,
+		data,
 		status_config_of,
 		/* 供测试 / 预览页调用的工具函数 */
 		effective_home_base,

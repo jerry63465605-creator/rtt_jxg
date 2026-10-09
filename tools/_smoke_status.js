@@ -172,7 +172,8 @@ g = rules.action(g, 'Allies', 'activate_status', { card: '15348#1' })
 ok('15348 一次扣分 + 摸牌',
 	g.score.allies === scBefore - 1 &&
 	(g.hands['英国'] || []).length === hBefore + 1,
-	'score_delta=' + (g.score.ALLIES - scBefore) +
+	/* 注意：阵营 key 是小写 'allies'（'ALLIES' 是 undefined，会打出 NaN） */
+	'score_delta=' + (g.score.allies - scBefore) +
 		' hand_delta=' + ((g.hands['英国'] || []).length - hBefore))
 
 console.log('\nPASS=' + pass + '  FAIL=' + fail)

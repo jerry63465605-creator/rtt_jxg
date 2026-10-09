@@ -1,0 +1,88 @@
+deck,card_id,sheet,row,col,name_CN,type,ops,effect_CN,img_file,read
+CORE,15200,152,0,0,建设陆军,BASIC,,在相邻有补给的我方单位的陆地或本土建设1支陆军,cards_sliced/sheet152_r0_c0.png,沿用英国组文本（卡面无文本区）
+CORE,15201,152,0,1,发起陆战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次陆战,cards_sliced/sheet152_r0_c1.png,沿用英国组文本（卡面无文本区）
+CORE,15202,152,0,2,建设海军,BASIC,,相邻有补给我方部队的海域建设海军,cards_sliced/sheet152_r0_c2.png,沿用英国组文本（卡面无文本区）
+CORE,15203,152,0,3,发起海战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次海战,cards_sliced/sheet152_r0_c3.png,沿用英国组文本（卡面无文本区）
+CORE,15204,152,0,4,空军力量,BASIC,,部署空军/夺取制空权/调度空军(三选一)调度空军不需要空军力量而需要弃1手牌,cards_sliced/sheet152_r0_c4.png,沿用英国组文本（卡面无文本区）
+CORE,15205,152,0,5,JU-87 俯冲轰炸机,EFFECT,1,部署或调度空军后，损耗1张牌：对相邻地区发起1次陆战。,cards_sliced/sheet152_r0_c5.png,逐张
+CORE,15206,152,0,6,轰炸伦敦,EFFECT,1,打出[经济战]时，若目标是英国：<不列颠>2地区内每有1支德国空军，该经济战损耗数加2。,cards_sliced/sheet152_r0_c6.png,逐张
+CORE,15207,152,0,7,JU-52 空投补给,EFFECT,1,回合开始时，若场上有德国空军，损耗1张牌：本回合内所有德国部队处于补给状态。,cards_sliced/sheet152_r0_c7.png,逐张
+CORE,15208,152,0,8,齐柏林伯爵号,EFFECT,1,建设海军后，损耗1张牌：在该海域部署或调度1支空军。,cards_sliced/sheet152_r0_c8.png,逐张
+CORE,15209,152,0,9,伞兵,EFFECT,1,出牌阶段开始时，损耗1张牌：对1个相邻德国空军的地区发起1次陆战。,cards_sliced/sheet152_r0_c9.png,逐张
+CORE,15210,152,1,0,施佩伯爵海军上将号,EFFECT,1,建设海军后，损耗1张牌：在<亚速尔>相邻地区发起1次海战。,cards_sliced/sheet152_r1_c0.png,逐张
+CORE,15211,152,1,1,威瑟堡行动,EFFECT,1,[北方行动] 计分阶段开始时，损耗1张牌：在<北海>征召陆军。可打出1张[北方行动]。,cards_sliced/sheet152_r1_c1.png,逐张
+CORE,15212,152,1,2,G7e 鱼雷,EFFECT,1,打出[潜艇行动]后，损耗1张牌：发起1次海战。,cards_sliced/sheet152_r1_c2.png,逐张
+CORE,15213,152,1,3,云雾,EFFECT,1,出牌阶段开始时：本回合中空军无法防御战斗。,cards_sliced/sheet152_r1_c3.png,逐张
+CORE,15214,152,1,4,战术革新,EFFECT,1,出牌阶段开始时，弃置德国场上1张[状态卡]：打出1张[状态卡]。,cards_sliced/sheet152_r1_c4.png,逐张
+CORE,15215,152,1,5,卓越规划,EFFECT,1,出牌阶段开始时：检视牌堆顶的5张牌，将其以任意顺序置于牌堆顶或牌堆底。,cards_sliced/sheet152_r1_c5.png,逐张
+CORE,15216,152,1,6,总体战,EFFECT,1,出牌阶段开始时：本回合内，陆军被移除后，其所有者损耗1张牌。,cards_sliced/sheet152_r1_c6.png,逐张
+CORE,15217,152,1,7,电动潜艇,ECON,1,[潜艇行动] 选择1个敌方国家，其损耗3张牌。获得2分。,cards_sliced/sheet152_r1_c7.png,逐张
+CORE,15218,152,1,8,季风艇群,ECON,1,[潜艇行动] <印度洋>相邻地区每有1支友方国家陆军，选择英国或美国，其损耗2张牌。获得2分。,cards_sliced/sheet152_r1_c8.png,逐张
+CORE,15219,152,1,9,强行封锁,ECON,1,[潜艇行动] <北海>或相邻地区每有1支德国部队，英国损耗1张牌，德国获得1分。,cards_sliced/sheet152_r1_c9.png,逐张
+CORE,15220,152,2,0,袭击摩尔曼斯克运输船队,ECON,1,[潜艇行动][北方行动] <北欧>或相邻地区每有1支德国部队，苏联损耗1张牌，德国获得1分。,cards_sliced/sheet152_r2_c0.png,逐张
+CORE,15221,152,2,1,袭击无防备运输船,ECON,1,[潜艇行动] <亚速尔>相邻地区每有1个未被同盟国控制，英国损耗2张牌，德国获得1分。,cards_sliced/sheet152_r2_c1.png,待核（原文疑似掉"的地区"）
+CORE,15222,152,2,2,主导大西洋海战,ECON,1,[潜艇行动] 每有1支德国部队位于海域，英国损耗2张牌，德国获得1分。,cards_sliced/sheet152_r2_c2.png,逐张
+CORE,15223,152,2,3,V2 飞弹,ECON,1,若<西欧>有德国陆军：英国损耗1张牌，德国获得3分。,cards_sliced/sheet152_r2_c3.png,逐张
+CORE,15224,152,2,4,攻陷阿尔汉格尔斯克,ECON,1,[北方行动] 若<北欧><罗斯>都被德国控制：苏联损耗4张牌，德国获得2分。,cards_sliced/sheet152_r2_c4.png,逐张
+CORE,15225,152,2,5,阿登闪击战,EVENT,1,对<西欧>发起陆战。在<西欧>建设陆军。,cards_sliced/sheet152_r2_c5.png,逐张
+CORE,15226,152,2,6,巴巴罗萨,EVENT,1,选择在本回合开始时与德国陆军相邻的3支苏联陆军，按任意顺序对其发起陆战。,cards_sliced/sheet152_r2_c6.png,逐张
+CORE,15227,152,2,7,白色方案,EVENT,1,损耗1张牌：在<东欧>征召陆军。可打出1张手牌。,cards_sliced/sheet152_r2_c7.png,逐张
+CORE,15228,152,2,8,高速公路,EVENT,1,按任意顺序收回所有德国陆军。按任意顺序建设这些陆军。,cards_sliced/sheet152_r2_c8.png,逐张
+CORE,15229,152,2,9,生产构思,EVENT,1,检视牌堆，选择并打出1张[状态卡]。洗混牌堆。,cards_sliced/sheet152_r2_c9.png,逐张
+CORE,15230,152,3,0,海狮计划,EVENT,1,在<北海>建设海军。对<不列颠>发起陆战。,cards_sliced/sheet152_r3_c0.png,逐张
+CORE,15231,152,3,1,进攻美国,EVENT,1,在<北大西洋>建设海军。对相邻地区发起1或2次陆战。,cards_sliced/sheet152_r3_c1.png,逐张
+CORE,15232,152,3,2,巴尔干军政府,EVENT,1,在<巴尔干>征召意大利陆军。在<乌克兰>消灭1支敌方国家陆军。,cards_sliced/sheet152_r3_c2.png,逐张
+CORE,15233,152,3,3,掠夺,EVENT,1,每有1个德国控制的友方大本营之外的地区，获得1分。上述地区失去1个计分标记。,cards_sliced/sheet152_r3_c3.png,逐张
+CORE,15234,152,3,4,枪支或黄油,EVENT,1,该卡可视作任意非[空军力量]的[战略卡]打出。,cards_sliced/sheet152_r3_c4.png,逐张
+CORE,15235,152,3,5,强制征兵,EVENT,1,在<德国>及相邻地区之一或之二征召陆军。,cards_sliced/sheet152_r3_c5.png,逐张
+CORE,15236,152,3,6,瑞典支援芬兰,EVENT,1,[北方行动] 若<罗斯>有德国或苏联陆军：在<波罗的海>建设海军，在<北欧>征召陆军。可打出1张[北方行动]。,cards_sliced/sheet152_r3_c6.png,逐张
+CORE,15237,152,3,7,土耳其加入轴心国,EVENT,1,在<黑海>建设海军。在<中东>征召陆军。,cards_sliced/sheet152_r3_c7.png,逐张
+CORE,15238,152,3,8,伊卡鲁斯行动,EVENT,1,损耗1张牌：在<冰岛>或<亚速尔>征召陆军。可打出1张手牌。,cards_sliced/sheet152_r3_c8.png,逐张
+CORE,15239,152,3,9,战略规划,EVENT,1,检视牌堆并选择2张牌抽取，弃置1张手牌，洗混牌堆。可打出1张以此法抽到的牌。,cards_sliced/sheet152_r3_c9.png,逐张
+CORE,15240,152,4,0,轴心行动,EVENT,1,若<意大利>未被控制：在<意大利>建设陆军。可打出1张手牌。,cards_sliced/sheet152_r4_c0.png,逐张
+CORE,15241,152,4,1,瑞典铁矿,STATUS,,[北方行动] 计分阶段：若<波罗的海>有德国海军，获得1分，若<北欧>也有德国陆军，获得1分。,cards_sliced/sheet152_r4_c1.png,逐张
+CORE,15242,152,4,2,人民冲锋队,STATUS,,跳过出牌阶段行动，弃置1张[发起陆战]：在<德国>消灭1支敌方国家陆军。然后可损耗1张牌：在<德国>征召陆军。,cards_sliced/sheet152_r4_c2.png,逐张
+CORE,15243,152,4,3,大西洋防线,STATUS,,<西欧>的友方陆军被攻击时：攻击的国家损耗3张牌。,cards_sliced/sheet152_r4_c3.png,逐张
+CORE,15244,152,4,4,丰富的资源,STATUS,,计分阶段：<罗斯><乌克兰><中亚>每有1支德国陆军，获得1分。,cards_sliced/sheet152_r4_c4.png,逐张
+CORE,15245,152,4,5,俯冲式轰炸机,STATUS,,一回合一次，发起陆战后，损耗1张牌：在战斗地区或相邻地区发起1次陆战。,cards_sliced/sheet152_r4_c5.png,逐张
+CORE,15246,152,4,6,Flak-40 高射炮,STATUS,,敌方国家对<德国>发起陆战时，无法使用飞机进攻。成为[轰炸行动]目标时：损耗数减3。,cards_sliced/sheet152_r4_c6.png,逐张
+CORE,15247,152,4,7,贵在行动,STATUS,,一回合一次，建设陆军后，损耗1张牌：对相邻地区发起1次陆战。,cards_sliced/sheet152_r4_c7.png,逐张
+CORE,15248,152,4,8,合成燃料,STATUS,,一回合一次，建设陆军后，损耗2张牌：在相邻地区建设1支陆军。,cards_sliced/sheet152_r4_c8.png,逐张
+CORE,15249,152,4,9,狼群战术,STATUS,,[北方行动] [潜艇行动]被使用时：可使损耗数加1，得分加1。若<北欧>有德国陆军，可使损耗数加1。,cards_sliced/sheet152_r4_c9.png,逐张
+CORE,15250,152,5,0,陆地巡航者,STATUS,,德国陆军被攻击时：攻击的国家损耗2张牌。,cards_sliced/sheet152_r5_c0.png,逐张
+CORE,15251,152,5,1,喷气式战斗机,STATUS,,损耗或被损耗时：可观看被损耗的牌。成为[轰炸行动]目标时：来源国家损耗3张牌。,cards_sliced/sheet152_r5_c1.png,逐张
+CORE,15252,152,5,2,齐格飞防线,STATUS,,<德国>的友方陆军被攻击时：攻击的国家损耗3张牌。,cards_sliced/sheet152_r5_c2.png,逐张
+CORE,15253,152,5,3,闪电战,STATUS,,一回合一次，发起陆战后，损耗1张牌：在战斗地区建设1支陆军。,cards_sliced/sheet152_r5_c3.png,逐张
+CORE,15254,152,5,4,战争海军,STATUS,,<北海>与<波罗的海>在任何情况下仅对轴心国相邻。若<波罗的海>没有敌对国家海军：可通过<波罗的海>连接补给线。,cards_sliced/sheet152_r5_c4.png,逐张
+CORE,15255,152,5,5,征兵,STATUS,,跳过出牌阶段行动，损耗2张牌：建设1支陆军。,cards_sliced/sheet152_r5_c5.png,逐张
+SUPP,6600,66,0,0,伊朗加入轴心国,EVENT,1,若<中东>有友方国家陆军：<中东>增加1个计分标记，在<乌克兰><中亚>之一消灭1支苏联陆军。,cards_sliced/sheet66_r0_c0.png,逐张
+SUPP,6601,66,0,1,大德意志帝国,STATUS,,<西欧><德国><东欧>被友方控制时可打出：<德国>增加1个计分标记。计分阶段：若<东欧>有德国陆军，获得1分。,cards_sliced/sheet66_r0_c1.png,逐张
+SUPP,14500,145,0,0,黄色方案,EFFECT,1,出牌阶段开始时，损耗2张牌：对<西欧>发起陆战。,cards_sliced/sheet145_r0_c0.png,逐张
+SUPP,14501,145,0,1,攻陷阿斯特拉罕,ECON,1,若<乌克兰><中亚>都被德国控制：苏联损耗4张牌，德国获得2分。,cards_sliced/sheet145_r0_c1.png,逐张
+SUPP,14502,145,0,2,但泽或战争,EVENT,1,在<东欧>征召陆军。在<波罗的海>建设海军。,cards_sliced/sheet145_r0_c2.png,逐张
+SUPP,14503,145,0,3,提尔比茨号,EVENT,1,英国选择并暗牌弃置1张暗置的英国响应。,cards_sliced/sheet145_r0_c3.png,逐张
+PRELUDE,14900,149,0,0,德奥合并,PRELUDE,,[紧张度+1] 打出1张前奏手牌 或 前奏牌堆顶的牌。[弃置1张手牌] 检视牌堆，选择并将1张[战略卡]置入手牌。,cards_sliced/sheet149_r0_c0.png,逐张
+PRELUDE,14901,149,0,1,瓜分捷克斯洛伐克,PRELUDE,,[紧张度+1] 在<东欧>征召1支陆军。[失去2分] <东欧>增加1个计分标记。,cards_sliced/sheet149_r0_c1.png,逐张
+PRELUDE,14902,149,0,2,建设高速公路,PRELUDE,,将1张[高速公路]洗入正式牌堆。[失去2分] 打出1张前奏手牌。,cards_sliced/sheet149_r0_c2.png,逐张
+PRELUDE,14903,149,0,3,进军莱茵兰,PRELUDE,,[紧张度+2] 检视前奏牌堆，选择并打出1张[军备卡]。[除非英国弃置2张手牌] 打出1张前奏手牌。,cards_sliced/sheet149_r0_c3.png,逐张
+PRELUDE,14904,149,0,4,撕毁海军协定,PRELUDE,,[紧张度+1] 建设1支海军。,cards_sliced/sheet149_r0_c4.png,逐张
+PRELUDE,14905,149,0,5,四年计划,PRELUDE,,将1张[枪支与黄油]洗入正式牌堆。[紧张度+1] 打出1张前奏手牌。,cards_sliced/sheet149_r0_c5.png,逐张
+PRELUDE,14906,149,0,6,秃鹰军团,PRELUDE,,[紧张度+1] 所有敌方国家损耗1张前奏牌。打出手中和前奏牌堆顶的[军备卡]。,cards_sliced/sheet149_r0_c6.png,逐张
+PRELUDE,14907,149,0,7,威廉皇帝学会,PRELUDE,,[紧张度+1] 检视牌堆前10张牌，选择并打出1张[状态卡] 或 将1张牌置入手牌。,cards_sliced/sheet149_r0_c7.png,逐张
+PRELUDE,14908,149,0,8,作战指挥条令,PRELUDE,,获得1分。部署1支空军。,cards_sliced/sheet149_r0_c8.png,逐张
+PRELUDE,14909,149,0,9,88mm 防空炮,ARMAMENT,,德国陆军被攻击时：对发起攻击的陆军发起1次陆战。,cards_sliced/sheet149_r0_c9.png,逐张
+PRELUDE,14910,149,1,0,俾斯麦级战列舰,ARMAMENT,,计分阶段开始时，发起1次海战。,cards_sliced/sheet149_r1_c0.png,逐张
+PRELUDE,14911,149,1,1,合成橡胶,ARMAMENT,,建设陆军后：建设1支陆军。,cards_sliced/sheet149_r1_c1.png,逐张
+PRELUDE,14912,149,1,2,滑翔机突击,ARMAMENT,,发起陆战后：发起1次陆战。,cards_sliced/sheet149_r1_c2.png,逐张
+PRELUDE,14913,149,1,3,继续战争,ARMAMENT,,计分阶段开始时：在<罗斯>消灭1支苏联陆军。若<北欧>有德国陆军：在<罗斯>建设陆军。,cards_sliced/sheet149_r1_c3.png,逐张
+PRELUDE,14914,149,1,4,弗莱雅-维尔茨堡,ARMAMENT,,德国部队被攻击时：在战斗地区部署1支空军，在发起战斗的地区消灭1支空军。,cards_sliced/sheet149_r1_c4.png,逐张
+PRELUDE,14915,149,1,5,轰炸纽约,ARMAMENT,,计分阶段开始时：若<北大西洋>相邻地区有德国部队：美国损耗2张牌，德国获得4分。,cards_sliced/sheet149_r1_c5.png,逐张
+PRELUDE,14916,149,1,6,佩内明德研发中心,ARMAMENT,,计分阶段开始时，若<北海>没有英国空军：英国损耗1张牌，德国获得3分。,cards_sliced/sheet149_r1_c6.png,逐张
+PRELUDE,14917,149,1,7,斯洛伐克军事化,ARMAMENT,,计分阶段开始时：在<东欧>征召陆军。,cards_sliced/sheet149_r1_c7.png,逐张
+PRELUDE,14918,149,1,8,替代物资,ARMAMENT,,任意时机：检视弃牌堆，选择1张[状态卡]，本回合内可以使用该卡。,cards_sliced/sheet149_r1_c8.png,逐张
+PRELUDE,14919,149,1,9,西墙,ARMAMENT,,<德国>的友方陆军被攻击时：使其在本回合内不会被移除。,cards_sliced/sheet149_r1_c9.png,逐张
+PRELUDE,14920,149,2,0,铀工程,ARMAMENT,,计分阶段开始时，若<北欧>有德国陆军：选择一个敌方国家损耗2张牌，德国获得2分。,cards_sliced/sheet149_r2_c0.png,逐张
+PRELUDE,14921,149,2,1,装甲掷弹兵,ARMAMENT,,发起陆战后：在战斗地区建设陆军。,cards_sliced/sheet149_r2_c1.png,逐张
+PRELUDE,14922,149,2,2,古德里安,ARMAMENT,,计分阶段开始时：发起1次陆战。,cards_sliced/sheet149_r2_c2.png,逐张
+PRELUDE,14923,149,2,3,隆美尔,ARMAMENT,,计分阶段开始时：在<北非>征召陆军。以此陆军发起1次陆战。,cards_sliced/sheet149_r2_c3.png,逐张
+PRELUDE,14924,149,2,4,曼施坦因,ARMAMENT,,对<西欧><乌克兰>发起陆战后：对战斗地区发起1次陆战。在战斗地区建设陆军。,cards_sliced/sheet149_r2_c4.png,逐张

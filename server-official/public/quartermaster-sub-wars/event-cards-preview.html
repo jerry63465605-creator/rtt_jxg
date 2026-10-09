@@ -25,6 +25,11 @@
 	.actor { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 12px; background: #444; }
 	.actor[data-a="英国"] { background: #2d5a8a; }
 	.actor[data-a="法国"] { background: #5a2d5a; }
+	.actor[data-a="德国"] { background: #4a4a55; }
+	.actor[data-a="日本"] { background: #8a2d2d; }
+	.actor[data-a="苏联"] { background: #b22222; }
+	.actor[data-a="意大利"] { background: #6b21a8; }
+	.actor[data-a="美国"] { background: #1e3a5f; }
 	.text { color: #bbb; font-size: 13px; margin: 8px 0; }
 	.trig { display: inline-block; background: #3a3a20; border: 1px solid #6a6a30;
 		color: #dd8; font-size: 11px; padding: 1px 7px; border-radius: 3px; margin: 6px 0; }
@@ -130,6 +135,51 @@ function descOfStep(st, ctx) {
 	return head + ' ＠ ' + bits.join('，')
 }
 
+/*
+ * 【2026-09-30】命令式特殊卡说明表（仅用于预览展示，不参与游戏逻辑）。
+ *
+ * 这几张卡是【命令式/过程式】实现：效果不在 EVENT_EFFECTS[id].steps 的
+ * 声明式结构里，而是拆成独立 action 状态机（高速公路走 pending_autobahn，
+ * 其余走 pending_script）。预览页的通用 card_effect_of() 读不到它们的分步
+ * 配置，故在此列出人类可读说明，避免显示空白或误导性的"（尚未实现）"。
+ */
+const SPECIAL_CARDS = {
+	'15228': {
+		kind: '状态机卡（高速公路 / autobahn）',
+		desc: '打出即占名额并收回全部德国陆军；随后由玩家逐一在「处于补给中的德国可建陆军地区」选择建设位置，每次走真实 build_piece，共重建 N 次（N = 收回的陆军数）。由独立 action resolve_autobahn 驱动。'
+	},
+	'15229': {
+		kind: '脚本卡（生产构思 / play_status_from_deck）',
+		desc: '检视牌堆，选择 1 张[状态卡]打出（放桌面并生效），然后洗混牌堆。由 pending_script 阶段机 + resolve_script 驱动。'
+	},
+	'15239': {
+		kind: '脚本卡（战略规划 / draw_pick_discard）',
+		desc: '检视牌堆选 2 张抽入手牌 → 弃 1 张手牌 → 洗混牌堆，并可额外打出 1 张「以此法抽到的牌」。候选为空则跳过该阶段。由 pending_script + resolve_script 驱动。'
+	},
+	'14503': {
+		kind: '脚本卡（提尔比茨号 / uk_facedown_discard）',
+		desc: '让权给【英国】：从英国桌面暗置的响应卡中选 1 张暗弃（牌堆内容对对方保密）。由 pending_script + resolve_script 驱动。'
+	},
+}
+
+/* 命令式特殊卡：用说明表渲染，而非尝试读 card_effect_of 的 steps */
+function specialHtml(c, info, ctx) {
+	const eff = ctx.I.card_effect_of(String(c.id))
+	const actor = eff ? eff.actor : (c.nation || '')
+	const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+	return '<td class="meta">' +
+		'<div class="id">' + esc(c.id) + '　' + esc(c.deck) + '　类型 ' + esc(c.type) + '</div>' +
+		'<div class="name">' + esc(c.name) +
+			(actor ? ' <span class="actor" data-a="' + esc(actor) + '">' + esc(actor) + '</span>' : '') +
+		'</div>' +
+		'<div class="text">' + esc(c.text) + '</div>' +
+		(trig ? trigChip(trig, ctx) : '') +
+		'<div class="impl"><span style="color:#7ec97e">已接入（命令式卡）</span>　' +
+			'<span class="k">' + esc(info.kind) + '</span></div>' +
+		'<div class="impl"><span class="sub2">' + esc(info.desc) + '</span></div>' +
+		'</td>'
+}
+
 function implHtml(eff, ctx) {
 	if (!eff) return '<span class="no">（尚未实现）</span>'
 
@@ -153,7 +203,7 @@ function implHtml(eff, ctx) {
 }
 
 /* 类型中文标签（卡面 type 是大写英文，如 RESPONSE） */
-const TYPE_LABEL = { EVENT: '事件', EFFECT: '增强', RESPONSE: '响应', STATUS: '状态', ECON: '经济战', BASIC: '基本' }
+const TYPE_LABEL = { EVENT: '事件', EFFECT: '增强', RESPONSE: '响应', STATUS: '状态', ECON: '经济战', BASIC: '基本', PRELUDE: '前奏', ARMAMENT: '军备' }
 
 function trigChip(trig, ctx) {
 	if (!trig) return ''
@@ -285,10 +335,10 @@ function statusHtml(c, ctx) {
 		'</td>'
 }
 
-function render(ctx, type) {
+function render(ctx, nation, type) {
 	const tbl = document.getElementById('tbl')
 	const list = ctx.CARDS
-		.filter(c => type === 'ALL' || c.type === type)
+		.filter(c => (nation === 'ALL' || c.nation === nation) && (type === 'ALL' || c.type === type))
 		.sort((a, b) => String(a.id).localeCompare(String(b.id)))
 
 	tbl.innerHTML = list.map(c => {
@@ -313,16 +363,27 @@ function render(ctx, type) {
 			metaCell = statusHtml(c, ctx)  /* 2026-09-26：状态卡独立配置表 */
 		} else {
 			/*
+			 * 命令式特殊卡（高速公路 / 生产构思 / 战略规划 / 提尔比茨号）：
+			 * 效果不在 EVENT_EFFECTS[id].steps 声明式里，而在 autobahn / pending_script
+			 * 状态机里，card_effect_of 读不到分步配置，先走 SPECIAL_CARDS 说明表。
+			 */
+			const spInfo = SPECIAL_CARDS[String(c.id)]
+			if (spInfo) {
+				metaCell = specialHtml(c, spInfo, ctx)
+			} else {
+			/*
 			 * 用【统一入口】card_effect_of()：
 			 * 事件卡(EVENT)与增强卡(ECHO)共用一套配置结构，
 			 * 分开取会让增强卡显示成"尚未实现"。
 			 */
 			const eff = ctx.I.card_effect_of(String(c.id))
 			const trig = ctx.I.CARD_TRIGGERS[String(c.id)]
+			/* 国家徽章：优先取效果配置的 actor；德国卡未实现配置时回退到 c.nation */
+			const actor = eff ? eff.actor : (c.nation || '')
 			metaCell = '<td class="meta">' +
 				'<div class="id">' + esc(c.id) + '　' + esc(c.deck) + '</div>' +
 				'<div class="name">' + esc(c.name) +
-					(eff ? ' <span class="actor" data-a="' + esc(eff.actor) + '">' + esc(eff.actor) + '</span>' : '') +
+					(actor ? ' <span class="actor" data-a="' + esc(actor) + '">' + esc(actor) + '</span>' : '') +
 				'</div>' +
 				'<div class="text">' + esc(c.text) + '</div>' +
 				(trig ? trigChip(trig, ctx) : '') +
@@ -330,40 +391,69 @@ function render(ctx, type) {
 				(eff ? '<details><summary>配置原文</summary><pre>' +
 					esc(JSON.stringify(eff, null, 1)) + '</pre></details>' : '') +
 				'</td>'
+			}
 		}
 		return '<tr class="top">' + cardCell + metaCell + '</tr>'
 	}).join('')
 }
 
-function buildBar(ctx, current) {
+function buildBar(ctx, curNation, curType) {
 	const bar = document.getElementById('bar')
-	const counts = {}
-	ctx.CARDS.forEach(c => { counts[c.type] = (counts[c.type] || 0) + 1 })
+
+	/* 第一排：国家筛选（按 CSV 的 nation 字段自动收集） */
+	const nationOrder = []
+	const nationCounts = {}
+	ctx.CARDS.forEach(c => {
+		if (nationOrder.indexOf(c.nation) < 0) nationOrder.push(c.nation)
+		nationCounts[c.nation] = (nationCounts[c.nation] || 0) + 1
+	})
+
+	/* 第二排：类型筛选，计数按当前国家过滤后的卡 */
+	const filtered = ctx.CARDS.filter(c => curNation === 'ALL' || c.nation === curNation)
+	const typeCounts = {}
+	filtered.forEach(c => { typeCounts[c.type] = (typeCounts[c.type] || 0) + 1 })
 	/* 固定顺序：事件 / 增强 / 响应，其余按字母排，最后全部 */
 	const fixed = ['EVENT', 'EFFECT', 'RESPONSE']
 	const types = fixed.concat(
-		Object.keys(counts).filter(t => fixed.indexOf(t) < 0).sort())
+		Object.keys(typeCounts).filter(t => fixed.indexOf(t) < 0).sort())
 	types.push('ALL')
 
-	bar.innerHTML = types.map(t => {
+	let html = ''
+	html += nationOrder.map(n =>
+		'<button data-n="' + esc(n) + '"' + (n === curNation ? ' class="on"' : '') + '>' +
+		esc(n) + ' (' + (nationCounts[n] || 0) + ')</button>').join('')
+	html += '<button data-n="ALL"' + (curNation === 'ALL' ? ' class="on"' : '') + '>全部 (' +
+		ctx.CARDS.length + ')</button>'
+	html += '<span style="display:inline-block;width:16px"></span>'
+	html += types.map(t => {
 		const label = (t === 'ALL') ? '全部' :
-			(t + '　' + (TYPE_LABEL[t] || '') + ' (' + (counts[t] || 0) + ')')
-		return '<button data-t="' + t + '"' +
-			(t === current ? ' class="on"' : '') + '>' + esc(label.trim()) + '</button>'
+			(t + '　' + (TYPE_LABEL[t] || '') + ' (' + (typeCounts[t] || 0) + ')')
+		return '<button data-t="' + esc(t) + '"' +
+			(t === curType ? ' class="on"' : '') + '>' + esc(label.trim()) + '</button>'
 	}).join('')
+	bar.innerHTML = html
 
-	bar.querySelectorAll('button').forEach(b => {
-		b.onclick = () => { current = b.dataset.t; buildBar(ctx, current); render(ctx, current) }
+	bar.querySelectorAll('button[data-n]').forEach(b => {
+		b.onclick = () => {
+			buildBar(ctx, b.dataset.n, curType)
+			render(ctx, b.dataset.n, curType)
+		}
+	})
+	bar.querySelectorAll('button[data-t]').forEach(b => {
+		b.onclick = () => {
+			buildBar(ctx, curNation, b.dataset.t)
+			render(ctx, curNation, b.dataset.t)
+		}
 	})
 }
 
 loadAll().then(ctx => {
 	/*
-	 * 默认 Tab：跟着本次开发重点走（2026-09-26 起做 STATUS 状态卡）。
-	 * 历史：RESPONSE -> STATUS（核验）-> ECON。
+	 * 默认 Tab：跟着本次开发重点走。
+	 * 历史：RESPONSE -> STATUS（核验）-> ECON -> 德国卡组核验（2026-09-27，国家+类型双筛选）。
 	 */
-	buildBar(ctx, 'STATUS')
-	render(ctx, 'STATUS')
+	buildBar(ctx, '德国', 'ALL')
+	render(ctx, '德国', 'ALL')
 }).catch(e => {
 	document.getElementById('err').style.display = 'block'
 	document.getElementById('errmsg').textContent = (e && e.stack) || String(e)

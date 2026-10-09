@@ -86,6 +86,10 @@
 		<div id="resource_box" class="hide"></div>
 		<!-- 通用询问面板 -->
 		<div id="ask_box" class="hide"></div>
+		<!-- 战斗预算(event_budget)面板：独立于 ask_box，避免与代受/抵消框争抢 -->
+		<div id="event_budget_box" class="hide"></div>
+		<!-- 17817 进攻是最好的防守 + 17850 大清洗 联动面板（先大清洗，再建战斗预算） -->
+		<div id="su_17817_box" class="hide"></div>
 	</div>
 
 	<div id="turn_info">
@@ -124,6 +128,12 @@
 		<div id="mode_chooser" class="hide"></div>
 	</div>
 
+	<!-- 各国牌库/弃牌堆数量（点击按钮展开，2026-09-29） -->
+	<div id="deck_panel">
+		<button id="deck_toggle" type="button">各国牌库</button>
+		<div id="deck_list" class="hide"></div>
+	</div>
+
 	<div id="log"></div>
 </aside>
 
@@ -159,6 +169,45 @@
 </div>
 
 <!--
+	【2026-10-01】英国国家技能"弃牌代价"弹框
+	格式与"资源再分配"一致（modal + modal-section + card-grid + modal-foot），
+	区别是【手牌区也能点选】：点手牌区域的卡片同样会切换选中状态，
+	与资源再分配的"代价"体验完全同款（序号 badge + 选满才亮确认）。
+-->
+<div id="skill_discard_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span id="skill_discard_title">国家技能：支付代价</span>
+			<span class="modal-sub" id="skill_discard_sub"></span>
+			<button class="modal-close" onclick="cancel_skill_discard()">×</button>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				选择要弃的手牌
+				<span id="skill_cost_note" class="modal-hint">0/3</span>
+			</div>
+			<div id="skill_cost" class="card-grid"></div>
+		</div>
+		<!--
+			【2026-10-05】一步模式（日本国家技能）专用：
+			同一弹窗里再选 1 张【要打出的响应牌】，与"要弃的响应牌"一次提交。
+			两步模式（英国）时该区域由 JS 隐藏。
+		-->
+		<div class="modal-section" id="skill_play_section" style="display:none">
+			<div class="modal-label">
+				选择要打出的响应牌（暗置于桌面）
+				<span id="skill_play_note" class="modal-hint">0/1</span>
+			</div>
+			<div id="skill_play" class="card-grid"></div>
+		</div>
+		<div class="modal-foot">
+			<button id="skill_confirm" class="action primary" onclick="submit_skill_discard()">确认使用</button>
+			<button class="action" onclick="cancel_skill_discard()">取消</button>
+		</div>
+	</div>
+</div>
+
+<!--
 	双十字系统弹框：观看对手手牌并重排到其牌堆顶
 	格式与"资源再分配"一致（modal + modal-section + card-grid + modal-foot）。
 -->
@@ -167,7 +216,12 @@
 		<div class="modal-head">
 			<span>双十字系统</span>
 			<span class="modal-sub">观看对手手牌 → 按你点击的顺序置于其牌堆顶</span>
-			<button class="modal-close" onclick="cancel_peek()">×</button>
+			<!--
+				【2026-10-01】取消/关闭按钮已【移除】：
+				牌一旦摊给玩家看，信息就已拿到（看对手手牌 = 知道对手秘密；
+				看自己牌堆顶 = 知道接下来摸什么），取消等于免费偷看。
+				故 peek 弹框一律不可退出，必须排完序点【确认顺序】。
+			-->
 		</div>
 		<div class="modal-section">
 			<div class="modal-label">
@@ -188,7 +242,7 @@
 		<div class="modal-foot">
 			<button id="peek_confirm" class="action primary" onclick="submit_peek()">确认顺序</button>
 			<button class="action" onclick="reset_peek_order()">重排</button>
-			<button class="action" onclick="cancel_peek()">取消</button>
+			<!-- 【2026-10-01】取消按钮已移除（见 peek_close 处注释） -->
 		</div>
 	</div>
 </div>
@@ -214,6 +268,75 @@
 		<div class="modal-foot">
 			<button id="echo_discard_confirm" class="action primary" onclick="confirm_echo_discard()">确认弃牌</button>
 			<button class="action" onclick="cancel_echo_discard()">取消</button>
+		</div>
+	</div>
+</div>
+
+<!--
+	【2026-09-30 德国增强·战术革新】15214 两步选牌弹框。
+	第 1 步弃置德国场上 1 张状态卡，第 2 步免费打出 1 张状态卡（不占出牌名额）。
+	内容由 update_pending_echo_box 动态生成。
+-->
+<div id="pending_echo_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-10-07 苏联增强】17805 红色管弦乐队：第一步让苏联选 1 张德国桌面[状态卡]。
+	内容由 update_su_red_pick_box 动态生成（card-grid 渲染候选状态卡）。
+-->
+<div id="su_red_pick_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-10-07 苏联增强】17805 红色管弦乐队：苏联在苏/德/英出牌阶段开始时的"是否使用"询问框。
+	内容由 update_su_red_ask_box 动态生成（使用 / 不使用 两个按钮）。
+-->
+<div id="red_orchestra_ask_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-10-07 苏联增强】17805 红色管弦乐队：德国玩家在其本国回合内二选一。
+	内容由 update_pending_red_box 动态生成（仅等待方可见两个按钮）。
+-->
+<div id="red_orchestra_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-09-30 德国增强·卓越规划】15215 检视牌堆顶 N 张，置顶/底。
+	内容由 update_deck_inspect_box 动态生成（每张牌可切置顶/置底，确认后重组牌堆）。
+-->
+<div id="deck_inspect_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-09-30】多步脚本卡的选牌弹框（15229 生产构思 / 15239 战略规划 /
+	14503 提尔比茨号）。
+	三类来源共用这一套网格：
+	  · pick    从【本国牌堆】挑 N 张（15229 挑状态卡、15239 挑 2 张抽入手牌）
+	  · discard 从【本国手牌】挑 1 张弃置（15239 第 2 步）
+	  · answer  让权：从【桌面暗置的英国响应】挑 1 张暗弃（14503）
+	没有"取消"按钮 —— 这些步骤都必须完成，服务端在结算期间也会
+	锁住其它动作（放行 cancel 会留下无法推进的死局）。
+-->
+<div id="script_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span id="script_title" class="modal-title">请选择</span>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				<span id="script_name" class="modal-name">候选</span>
+				<span id="script_note" class="modal-hint">0/N</span>
+			</div>
+			<div id="script_grid" class="card-grid"></div>
+		</div>
+		<div class="modal-foot">
+			<button id="script_confirm" class="action primary" onclick="confirm_script_pick()">确认选择</button>
 		</div>
 	</div>
 </div>

@@ -46,7 +46,17 @@ I.set_skip_turn_guard(true);
 console.log("=== 0. 5 张基本卡清单 ===");
 console.log("  共 " + BASIC.length + " 张:");
 for (const c of BASIC) console.log("    id=" + c.id + " 《" + c.name + "》 " + c.text);
-ok(BASIC.length === 5, "基本卡 5 张");
+/*
+ * 【2026-09-28】原先写死 BASIC.length === 5，但录入六国卡组后
+ * 基本卡是【每个国家各 5 张】（英/德/日/苏/意/美 = 30 张），
+ * 断言恒失败。改为按国家分组、每组各 5 张。
+ */
+const basicByNation = {}
+for (const c of BASIC)
+	(basicByNation[c.nation] = basicByNation[c.nation] || []).push(c)
+const basicNations = Object.keys(basicByNation)
+ok(basicNations.length > 0 && basicNations.every(n => basicByNation[n].length === 5),
+	"每个国家各有 5 张基本卡（共 " + BASIC.length + " 张 / " + basicNations.length + " 国）");
 ok(!!ID["建设陆军"] && !!ID["建设海军"] && !!ID["发起陆战"] && !!ID["发起海战"] && !!ID["空军力量"],
 	"5 张卡的名称齐全（建设陆军/建设海军/发起陆战/发起海战/空军力量）");
 
@@ -468,9 +478,10 @@ console.log("\n=== 6. 《空军力量》三选一（均在空军阶段） ===");
 	I.refresh(g3);
 	I.run_phase_entry(g3, "airforce", "英国");
 	rules.action(g3, "Allies", "play_card",
-		{ card: ID["空军力量"], mode: "seize", piece: "uk_air", space: SPACE["北海"] });
+		{ card: ID["空军力量"], mode: "seize", from: "uk_air", space: SPACE["北海"] });
 	ok(g3.location["de_air"] == null, "mode=seize：敌方空军被移除");
-	ok(g3.location["uk_air"] === SPACE["北海"], "mode=seize：本国空军进驻该地区");
+	/* seize 设计：仅移除敌方飞机，本国发起飞机留在原地（与陆战发起单位一致，见 seize_air） */
+	ok(g3.location["uk_air"] === SPACE["不列颠"], "mode=seize：本国发起空军留原地（进驻由 move 模式完成）");
 
 	/* 6d. 未指定 mode -> 拒绝 */
 	const g4 = mkGame();
@@ -1632,7 +1643,18 @@ console.log("\n=== 12f. 非出牌阶段：只允许卡面有特殊说明的卡 =
 	I.refresh(g);
 	rules.action(g, "Allies", "play_card", { card: ID["建设陆军"], space: SPACE["不列颠"] });
 	ok(g.hands["英国"].length === 1, "补给阶段：无说明的建设陆军被拒");
-	ok(/只有卡面有特殊说明的卡牌/.test(g.log[g.log.length - 1]),
+	/*
+	 * 【2026-09-28】文案已改为"只有卡面有<当前阶段>特殊说明的卡牌才能在此阶段打出"
+	 * （见 rules.js check_phase_for_card ④：原先不指定阶段，只要卡面出现任意
+	 *   阶段名就放行，会让"跳过出牌阶段行动：…"这类状态卡在任何阶段都可打出）。
+	 * 行为没变（仍然是拒绝），这里只放宽正则以兼容更精确的新文案。
+	 */
+	/*
+	 * 【2026-09-28】文案又变了（阶段限制总纲改为"卡面声明"判据）：
+	 * 现在是「《建设陆军》只能在出牌阶段打出（当前是补给阶段，…）」。
+	 * 行为始终是【拒绝】，这里只匹配稳定的中文片段"只能在出牌阶段打出"。
+	 */
+	ok(/只能在出牌阶段打出/.test(g.log[g.log.length - 1]),
 		"  理由说明只收卡面带说明的牌：" + g.log[g.log.length - 1]);
 
 	/* 弃牌阶段：同样不能打牌（弃牌要走专门的 action） */

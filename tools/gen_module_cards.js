@@ -1,14 +1,14 @@
 /*
- * 把 out/uk_cards.csv 编译成模块的 cards.js
+ * 把 out/uk_cards.csv + out/de_cards.csv 编译成模块的 cards.js
  *
  * 卡牌字段（保留原始语义，效果文本原文照存，供后续规则实现与 UI 显示）：
  *   id       卡牌编号（CardID）
- *   deck     CORE（核心牌堆）/ SUPP（增援牌堆）
+ *   deck     CORE（核心牌堆）/ SUPP（增援牌堆）/ PRELUDE（前奏牌堆）
  *   name     卡名（中）
- *   type     BASIC|EVENT|ECON|RESPONSE|STATUS|EFFECT
- *   ops      行动点（EVENT/ECON/RESPONSE 为 1；BASIC/STATUS/EFFECT 为空）
+ *   type     BASIC|EVENT|ECON|RESPONSE|STATUS|EFFECT|PRELUDE|ARMAMENT
+ *   ops      行动点（EVENT/ECON/RESPONSE/EFFECT 为 1；BASIC/STATUS/PRELUDE/ARMAMENT 为空）
  *   text     效果原文（中）
- *   nation   所属国家（当前仅英国卡组）
+ *   nation   所属国家（英国 = uk_cards.csv；德国 = de_cards.csv）
  *
  * 用法: node tools/gen_module_cards.js
  * 输出: server-official/public/quartermaster-sub-wars/cards.js
@@ -18,65 +18,73 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const SRC = path.join(ROOT, "out", "uk_cards.csv");
 const DST_DIR = path.join(ROOT, "server-official", "public", "quartermaster-sub-wars");
 const DST = path.join(DST_DIR, "cards.js");
 
+/* 多国卡源：新增国家时在这里加一行（CSV 结构与 uk_cards.csv 相同） */
+const SOURCES = [
+	{ file: path.join(ROOT, "out", "uk_cards.csv"), nation: "英国" },
+	{ file: path.join(ROOT, "out", "de_cards.csv"), nation: "德国" },
+	{ file: path.join(ROOT, "out", "ja_cards.csv"), nation: "日本" },
+	{ file: path.join(ROOT, "out", "su_cards.csv"), nation: "苏联" },
+	{ file: path.join(ROOT, "out", "it_cards.csv"), nation: "意大利" },
+	{ file: path.join(ROOT, "out", "us_cards.csv"), nation: "美国" },
+];
+
 /* ---------- 1. 解析 CSV ---------- */
 /*
- * 注意：效果文本里含逗号（如 "建设陆军;或消耗1支陆军进行1次战斗" 无逗号，
- * 但某些行有），因此不能简单 split(',')。
+ * 注意：效果文本里可能含英文逗号，因此不能简单按列取。
  * 这里用"从右往左"定位固定列：img_file 与 read 是最后两列且不含逗号。
  */
-const raw = fs.readFileSync(SRC, "utf8").replace(/^\uFEFF/, "");
-const lines = raw.split(/\r?\n/).filter(l => l.trim());
-const header = lines[0].split(",");
-console.log("CSV 表头: " + header.join(" | "));
+function parseCardsCsv(file, nation) {
+	const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+	const lines = raw.split(/\r?\n/).filter(l => l.trim());
+	const header = lines[0].split(",");
+	console.log("\n[" + nation + "] " + path.basename(file) + " 表头: " + header.join(" | "));
 
-const cards = [];
-let skipped = 0;
+	const out = [];
+	let skipped = 0;
 
-for (let i = 1; i < lines.length; i++) {
-	const line = lines[i];
+	for (let i = 1; i < lines.length; i++) {
+		const line = lines[i];
+		/*
+		 * 列数固定为 11：
+		 *  0 deck 1 card_id 2 sheet 3 row 4 col 5 name_CN 6 type 7 ops
+		 *  8 effect_CN 9 img_file 10 read
+		 */
+		const parts = line.split(",");
+		if (parts.length < 10) { skipped++; continue; }
 
-	/*
-	 * 列数固定为 11：
-	 *  0 deck 1 card_id 2 sheet 3 row 4 col 5 name_CN 6 type 7 ops
-	 *  8 effect_CN 9 img_file 10 read
-	 * effect_CN 可能含逗号 -> 用"已知前后列"夹逼。
-	 */
-	const parts = line.split(",");
-	if (parts.length < 10) { skipped++; continue; }
+		const read = parts[parts.length - 1].trim();
+		const img = parts[parts.length - 2].trim();
+		const effect = parts.slice(8, parts.length - 2).join(",").trim();
 
-	/* 后两列（img_file / read）从右往左取 */
-	const read = parts[parts.length - 1].trim();
-	const img = parts[parts.length - 2].trim();
-	/* 效果文本 = 第 9 列（index 8）到倒数第 3 列之间，全部用逗号还原 */
-	const effect = parts.slice(8, parts.length - 2).join(",").trim();
+		const deck = parts[0].trim();
+		const card_id = parseInt(parts[1], 10);
+		const name = parts[5].trim();
+		const type = parts[6].trim();
+		const opsRaw = parts[7].trim();
 
-	const deck = parts[0].trim();
-	const card_id = parseInt(parts[1], 10);
-	const name = parts[5].trim();
-	const type = parts[6].trim();
-	const opsRaw = parts[7].trim();
+		if (!card_id || !name) { skipped++; continue; }
 
-	if (!card_id || !name) { skipped++; continue; }
+		out.push({
+			id: card_id,
+			deck: deck,
+			name: name,
+			type: type,
+			ops: opsRaw === "" ? null : parseInt(opsRaw, 10),
+			text: effect,
+			/* 卡图文件名（如 sheet153_r0_c3.png），对应模块 cards/ 目录 */
+			img: img.replace(/^.*\//, ""),
+			nation: nation,
+		});
+	}
 
-	cards.push({
-		id: card_id,
-		deck: deck,
-		name: name,
-		type: type,
-		ops: opsRaw === "" ? null : parseInt(opsRaw, 10),
-		text: effect,
-		/* 卡图文件名（如 sheet153_r0_c3.png），对应模块 cards/ 目录 */
-		img: img.replace(/^.*\//, ""),
-		/* 当前只有英国卡组 */
-		nation: "英国",
-	});
+	console.log("[" + nation + "] 解析出卡牌 " + out.length + " 张（跳过 " + skipped + " 行）");
+	return out;
 }
 
-console.log("解析出卡牌 " + cards.length + " 张（跳过 " + skipped + " 行）");
+const cards = SOURCES.flatMap(s => parseCardsCsv(s.file, s.nation));
 
 /* ---------- 1.5 复制用到的卡图到模块目录 ---------- */
 /*
@@ -106,10 +114,11 @@ if (missing.length)
 		(missing.length > 5 ? " ..." : ""));
 
 /* ---------- 2. 统计 ---------- */
-const byType = {}, byDeck = {};
+const byType = {}, byDeck = {}, byNation = {};
 for (const c of cards) {
 	byType[c.type] = (byType[c.type] || 0) + 1;
 	byDeck[c.deck] = (byDeck[c.deck] || 0) + 1;
+	byNation[c.nation] = (byNation[c.nation] || 0) + 1;
 }
 
 /* 卡牌类型说明（供 UI 与规则使用） */
@@ -138,6 +147,8 @@ const TYPE_INFO = {
 	RESPONSE: { zh: "响应卡", ops: true, desc: "在特定条件满足时打出" },
 	STATUS: { zh: "状态卡", ops: false, desc: "持续生效，置于桌面" },
 	EFFECT: { zh: "增强卡", ops: true, desc: "在对应时机打出，置入弃牌堆并执行效果；不占出牌名额" },
+	PRELUDE: { zh: "前奏卡", ops: false, desc: "前奏牌堆专用（书图标），代价为[紧张度]/弃牌/失分体系" },
+	ARMAMENT: { zh: "军备卡", ops: false, desc: "由前奏卡打出（▣▣▣图标），打出后持续生效" },
 };
 
 /* ---------- 3. 生成文件 ---------- */
@@ -149,7 +160,8 @@ L.push(" *");
 L.push(" * 由 tools/gen_module_cards.js 从 out/uk_cards.csv 自动生成，请勿手改。");
 L.push(" * 生成时间: " + new Date().toISOString());
 L.push(" *");
-L.push(" * 当前仅含【英国卡组】" + cards.length + " 张。");
+L.push(" * 当前含卡组: " + Object.entries(byNation).map(([k, v]) => k + " " + v + " 张").join("，")
+	+ "，共 " + cards.length + " 张。");
 L.push(" * 效果文本保留原文（text 字段），供后续逐条实现规则与 UI 显示。");
 L.push(" */");
 L.push("");
@@ -186,6 +198,7 @@ fs.writeFileSync(DST, L.join("\n"), "utf8");
 console.log("\n已生成 " + DST);
 console.log("");
 console.log("卡牌 " + cards.length + " 张");
+console.log("  国家: " + Object.entries(byNation).map(([k, v]) => k + " " + v).join(" / "));
 console.log("  牌堆: " + Object.entries(byDeck).map(([k, v]) => k + " " + v).join(" / "));
 console.log("  类型: " + Object.entries(byType).map(([k, v]) => k + " " + v).join(" / "));
 console.log("");

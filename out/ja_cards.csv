@@ -1,0 +1,79 @@
+deck,card_id,sheet,row,col,name_CN,type,ops,effect_CN,img_file,read
+CORE,15400,154,0,0,建设陆军,BASIC,,在相邻有补给的我方单位的陆地或本土建设1支陆军,cards_sliced/sheet154_r0_c0.png,沿用英国组文本（卡面无文本区）
+CORE,15401,154,0,1,发起陆战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次陆战,cards_sliced/sheet154_r0_c1.png,沿用英国组文本（卡面无文本区）
+CORE,15402,154,0,2,建设海军,BASIC,,相邻有补给我方部队的海域建设海军,cards_sliced/sheet154_r0_c2.png,沿用英国组文本（卡面无文本区）
+CORE,15403,154,0,3,发起海战,BASIC,,选择1支处于补给状态的本国陆军或海军发起1次海战,cards_sliced/sheet154_r0_c3.png,沿用英国组文本（卡面无文本区）
+CORE,15404,154,0,4,空军力量,BASIC,,部署空军/夺取制空权/调度空军(三选一)调度空军不需要空军力量而需要弃1手牌,cards_sliced/sheet154_r0_c4.png,沿用英国组文本（卡面无文本区）
+CORE,15405,154,0,5,大日本帝国海军,EFFECT,1,建设海军后，弃置1张[响应卡]：建设1支海军。,cards_sliced/sheet154_r0_c5.png,逐张
+CORE,15406,154,0,6,南云忠一指挥航空队,EFFECT,1,在海域部署或调度飞机后，弃置1张[响应卡]：对相邻地区发起1次战斗。,cards_sliced/sheet154_r0_c6.png,逐张
+CORE,15407,154,0,7,秋水火箭战斗机,EFFECT,1,弃牌阶段开始时：消灭1支相邻日本空军的敌方国家空军。,cards_sliced/sheet154_r0_c7.png,逐张
+CORE,15408,154,0,8,山本五十六指挥大和号,EFFECT,1,出牌阶段开始时，弃置1张[响应卡]：在海域部署或调度1支空军。,cards_sliced/sheet154_r0_c8.png,逐张
+CORE,15409,154,0,9,太平洋帝国,EFFECT,1,计分阶段开始时：<太平洋>每有1支日本海军，获得1分。,cards_sliced/sheet154_r0_c9.png,逐张
+CORE,15410,154,1,0,武士道,EFFECT,1,日本陆军被攻击时，弃置1张[响应卡]：使其在本次战斗中无法被移除。,cards_sliced/sheet154_r1_c0.png,逐张
+CORE,15411,154,1,1,夜间运输,EFFECT,1,任意时机，弃置1张[响应卡]，选择1支日本陆军或海军：其在本回合内总是处于补给状态。,cards_sliced/sheet154_r1_c1.png,逐张
+CORE,15412,154,1,2,御前会议,EFFECT,1,摸牌阶段结束时，弃置1张[响应卡]：打出1张[响应卡]。,cards_sliced/sheet154_r1_c2.png,逐张
+CORE,15413,154,1,3,诸岛要塞,EFFECT,1,计分阶段开始时，弃置1张[响应卡]：在<硫磺岛><菲律宾><印度尼西亚><新几内亚>之一征召1支陆军。,cards_sliced/sheet154_r1_c3.png,逐张
+CORE,15414,154,1,4,封锁海参崴,ECON,1,<东海><北太平洋>每有1支日本部队，获得1分。苏联损耗1张牌。,cards_sliced/sheet154_r1_c4.png,逐张
+CORE,15415,154,1,5,气球炸弹,ECON,1,获得1分。打出后，可弃置3张手牌：置入手牌。,cards_sliced/sheet154_r1_c5.png,待核（"置入手牌"对象疑似缺"将其"）
+CORE,15416,154,1,6,潜艇支援太平洋诸岛,ECON,1,[潜艇行动] <东太平洋>或相邻地区每有1支日本海军，获得2分。美国损耗2张牌。,cards_sliced/sheet154_r1_c6.png,逐张
+CORE,15417,154,1,7,印度洋警备队,ECON,1,<印度洋>或相邻地区每有1支日本海军，获得2分。英国损耗2张牌。,cards_sliced/sheet154_r1_c7.png,逐张
+CORE,15418,154,1,8,轰炸重庆,ECON,1,<中国西部>2地区内每有1支日本空军，获得1分。美国损耗2张牌。,cards_sliced/sheet154_r1_c8.png,逐张
+CORE,15419,154,1,9,万岁冲锋,RESPONSE,1,发起陆战后：对战斗地区或相邻地区发起1次陆战。,cards_sliced/sheet154_r1_c9.png,逐张
+CORE,15420,154,2,0,本土决战,RESPONSE,1,任意时机：使<日本><东海>的日本部队在本回合内不会被移除。,cards_sliced/sheet154_r2_c0.png,逐张
+CORE,15421,154,2,1,关东军,RESPONSE,1,<中国东北>或相邻地区的补给状态的日本陆军被移除时：使其在本回合内不会被移除。,cards_sliced/sheet154_r2_c1.png,逐张
+CORE,15422,154,2,2,太平洋海岸线攻势,RESPONSE,1,对<美洲>发起陆战后：在战斗地区建设陆军。在<美洲>建设1支陆军。,cards_sliced/sheet154_r2_c2.png,逐张
+CORE,15423,154,2,3,潜艇支援,RESPONSE,1,建设海军后：对相邻地区发起1或2次海战。,cards_sliced/sheet154_r2_c3.png,逐张
+CORE,15424,154,2,4,海军特别陆战队,RESPONSE,1,建设海军后：在相邻地区建设1或2支陆军。,cards_sliced/sheet154_r2_c4.png,逐张
+CORE,15425,154,2,5,海军空降部队,RESPONSE,1,建设海军后：对相邻地区发起1或2次陆战。,cards_sliced/sheet154_r2_c5.png,逐张
+CORE,15426,154,2,6,驱逐舰运输,RESPONSE,1,发起海战后：在相邻地区建设1或2支陆军。,cards_sliced/sheet154_r2_c6.png,逐张
+CORE,15427,154,2,7,机动舰队,RESPONSE,1,出牌阶段开始时：在<北太平洋>或相邻地区征召1支海军。,cards_sliced/sheet154_r2_c7.png,逐张
+CORE,15428,154,2,8,舰队决战,RESPONSE,1,出牌阶段开始时：发起1次海战。,cards_sliced/sheet154_r2_c8.png,逐张
+CORE,15429,154,2,9,卢沟桥事变,RESPONSE,1,出牌阶段开始时：对<中国东部>发起1次陆战。,cards_sliced/sheet154_r2_c9.png,逐张
+CORE,15430,154,3,0,奇袭,RESPONSE,1,发起海战后：发起1次海战，发起1次陆战。,cards_sliced/sheet154_r3_c0.png,逐张
+CORE,15431,154,3,1,全面侵华,RESPONSE,1,对<中国>发起陆战后：在战斗地区建设陆军。对相邻地区发起1次陆战。,cards_sliced/sheet154_r3_c1.png,逐张
+CORE,15432,154,3,2,神风敢死队,RESPONSE,1,敌方国家相邻日本海军建设海军后：消灭建设的海军。,cards_sliced/sheet154_r3_c2.png,逐张
+CORE,15433,154,3,3,皖南事变,RESPONSE,1,出牌阶段开始时：消灭1支中国陆军。,cards_sliced/sheet154_r3_c3.png,逐张
+CORE,15434,154,3,4,伪满洲国,RESPONSE,1,出牌阶段开始时：在<中国东北>消灭1支敌方国家陆军。在<中国东北>征召陆军。,cards_sliced/sheet154_r3_c4.png,逐张
+CORE,15435,154,3,5,攻陷新加坡,RESPONSE,1,对<东南亚>发起陆战后：在战斗地区征召陆军，对<南海>发起1次海战。,cards_sliced/sheet154_r3_c5.png,逐张
+CORE,15436,154,3,6,战舰修理,RESPONSE,1,补给状态的日本海军被移除时：使其在本回合内不会被移除。,cards_sliced/sheet154_r3_c6.png,逐张
+CORE,15437,154,3,7,支援印度民族主义者,RESPONSE,1,对<印度>发起陆战后：在战斗地区建设陆军。,cards_sliced/sheet154_r3_c7.png,逐张
+CORE,15438,154,3,8,偷袭珍珠港,RESPONSE,1,出牌阶段开始时：对<夏威夷>相邻地区发起1次海战。,cards_sliced/sheet154_r3_c8.png,逐张
+CORE,15439,154,3,9,北进论,STATUS,,计分阶段：<海参崴>及相邻地区每有1支日本陆军，获得1分。,cards_sliced/sheet154_r3_c9.png,逐张
+CORE,15440,154,4,0,大东亚共荣圈,STATUS,,计分阶段：<印度尼西亚><新几内亚><东南亚>每有1支日本陆军，获得1分。,cards_sliced/sheet154_r4_c0.png,逐张
+CORE,15441,154,4,1,绝对国防圈,STATUS,,计分阶段：若场上有至少3支日本海军，获得1分。,cards_sliced/sheet154_r4_c1.png,逐张
+CORE,15442,154,4,2,控制南洋诸岛,STATUS,,计分阶段：若<中太平洋>有日本海军，获得1分。,cards_sliced/sheet154_r4_c2.png,逐张
+CORE,15443,154,4,3,前进基地,STATUS,,<马达加斯加>成为仅对日本的补给点并增加1个计分标记。计分阶段：若<东太平洋>相邻地区有日本陆军，获得2分。,cards_sliced/sheet154_r4_c3.png,逐张
+CORE,15444,154,4,4,丘克群岛,STATUS,,<硫磺岛>视为日本港口。计分阶段：若<硫磺岛>相邻地区都有日本海军，获得1分。,cards_sliced/sheet154_r4_c4.png,逐张
+CORE,15445,154,4,5,商船安全运输,STATUS,,计分阶段：若<夏威夷>没有敌方国家陆军，获得1分。,cards_sliced/sheet154_r4_c5.png,逐张
+CORE,15446,154,4,6,太平洋共荣圈,STATUS,,计分阶段：<东太平洋>相邻地区每有1支日本陆军，获得1分。,cards_sliced/sheet154_r4_c6.png,逐张
+CORE,15447,154,4,7,帝国之野望,STATUS,,计分阶段：若<硫磺岛>或<菲律宾>有日本陆军，获得1分。,cards_sliced/sheet154_r4_c7.png,逐张
+SUPP,7900,79,0,0,竭泽而渔,EFFECT,1,出牌阶段开始时，弃置4张手牌：检视弃牌堆，选择并将1张牌置入手牌。,cards_sliced/sheet79_r0_c0.png,逐张
+SUPP,7901,79,0,1,强占马六甲海峡,ECON,1,若<东南亚>有日本陆军，相邻地区有日本海军：英国损耗2张牌，日本获得2分。,cards_sliced/sheet79_r0_c1.png,逐张
+SUPP,7902,79,0,2,澳洲海岸线攻势,RESPONSE,1,对<澳大利亚><新西兰>发起陆战后：在战斗地区建设陆军。,cards_sliced/sheet79_r0_c2.png,逐张
+SUPP,7903,79,0,3,菊水特攻,RESPONSE,1,出牌阶段开始时：在<东海>征召海军。以此海军发起1次海战。,cards_sliced/sheet79_r0_c3.png,逐张
+SUPP,7904,79,0,4,亡命之计,RESPONSE,1,出牌阶段开始时：检视弃牌堆，选择并打出1张[响应卡]。,cards_sliced/sheet79_r0_c4.png,逐张
+SUPP,7905,79,0,5,豫湘桂战役,RESPONSE,1,出牌阶段开始时：在<中国东部>消灭1支敌方国家陆军。,cards_sliced/sheet79_r0_c5.png,逐张
+SUPP,8600,86,0,0,南方作战计划,RESPONSE,1,出牌阶段开始时：对<印度尼西亚><新几内亚><东南亚><菲律宾>之一发起1次陆战。在战斗地区建设陆军。,cards_sliced/sheet86_r0_c0.png,逐张
+SUPP,8601,86,0,1,远东共和国,STATUS,,<海参崴>的日本陆军不会因补给移除。苏联的计分阶段：若<海参崴>或相邻地区有日本陆军，失去1分。,cards_sliced/sheet86_r0_c1.png,逐张
+PRELUDE,18400,184,0,0,九一八事变,PRELUDE,,[紧张度+1] 在<中国东北>征召陆军。[弃置1张手牌][持续] <中国东北>的日本陆军总是处于补给状态。,cards_sliced/sheet184_r0_c0.png,逐张
+PRELUDE,18401,184,0,1,非暴力不合作运动,PRELUDE,,英国损耗3张前奏牌。[除非英国弃置1张手牌] 英国损耗2张前奏牌。,cards_sliced/sheet184_r0_c1.png,逐张
+PRELUDE,18402,184,0,2,撕毁海军条约,PRELUDE,,[紧张度+1] 在<硫磺岛>相邻地区征召1支海军。,cards_sliced/sheet184_r0_c2.png,逐张
+PRELUDE,18403,184,0,3,帝国陆军航空队,PRELUDE,,获得1分 或 在陆地地区部署1支空军。,cards_sliced/sheet184_r0_c3.png,逐张
+PRELUDE,18404,184,0,4,黑龙会,PRELUDE,,弃置1张[响应卡]：获得2分。[紧张度+1] 打出1张[响应卡]。摸1张牌。,cards_sliced/sheet184_r0_c4.png,逐张
+PRELUDE,18405,184,0,5,卢沟桥事变,PRELUDE,,[紧张度+2] 在<中国东部>消灭1支中国陆军。[紧张度+3][弃置1张手牌] 在<中国东部>征召陆军。,cards_sliced/sheet184_r0_c5.png,逐张
+PRELUDE,18406,184,0,6,仆从国军,PRELUDE,,[若<中国>有日本陆军] 紧张度-1。增加1支陆军后备。[否则弃置1张手牌] 增加1支陆军后备。,cards_sliced/sheet184_r0_c6.png,逐张
+PRELUDE,18407,184,0,7,日苏中立条约,PRELUDE,,[紧张度-1][持续] 若日本未对苏联发起战斗，苏联对日本发起战斗后：其失去4分。[除非弃置1张手牌] 从苏联前奏牌堆打出[苏日中立条约]。,cards_sliced/sheet184_r0_c7.png,逐张
+PRELUDE,18408,184,0,8,天津事变,PRELUDE,,[紧张度+1] 美国损耗3张前奏牌。[紧张度-1][失去2分] 日本损耗1张前奏牌。,cards_sliced/sheet184_r0_c8.png,逐张
+PRELUDE,18409,184,0,9,天羽声明,PRELUDE,,[紧张度+1] 获得1分。[除非英国或美国弃置1张手牌] 获得3分。,cards_sliced/sheet184_r0_c9.png,逐张
+PRELUDE,18410,184,1,0,伪满洲国,PRELUDE,,[紧张度-1] <中国东北>增加1个计分标记。[失去2分] 在<中国东北>征召1支陆军。,cards_sliced/sheet184_r1_c0.png,逐张
+PRELUDE,18411,184,1,1,血盟团事件,PRELUDE,,选择并弃置至多3张手牌，摸等量牌。[失去2分] 改为洗入牌堆。,cards_sliced/sheet184_r1_c1.png,逐张
+PRELUDE,18412,184,1,2,近卫文麿上台组阁,PRELUDE,,[紧张度+1] 检视牌堆前10张牌，选择并打出1张[响应卡]。[弃置1张手牌][失去2分] 选择并将1张牌加入手牌。,cards_sliced/sheet184_r1_c2.png,逐张
+PRELUDE,18413,184,1,3,阿留申前进基地,ARMAMENT,,计分阶段：<阿拉斯加><北太平洋>每有一个被日本控制，获得2分。,cards_sliced/sheet184_r1_c3.png,逐张
+PRELUDE,18414,184,1,4,赤城号航空母舰,ARMAMENT,,计分阶段开始时：建设1支海军。,cards_sliced/sheet184_r1_c4.png,逐张
+PRELUDE,18415,184,1,5,空袭达尔文港,ARMAMENT,,出牌阶段开始时，若<澳大利亚>相邻地区有日本海军：英国损耗2张牌，日本获得2分。,cards_sliced/sheet184_r1_c5.png,逐张
+PRELUDE,18416,184,1,6,国家总动员法,ARMAMENT,,计分阶段开始时：打出1张[响应卡]。,cards_sliced/sheet184_r1_c6.png,逐张
+PRELUDE,18417,184,1,7,帝国海军航空队,ARMAMENT,,发起海战后：对相邻地区发起1次海战。,cards_sliced/sheet184_r1_c7.png,逐张
+PRELUDE,18418,184,1,8,联合舰队,ARMAMENT,,建设海军后：对相邻地区发起1次海战。,cards_sliced/sheet184_r1_c8.png,逐张
+PRELUDE,18419,184,1,9,莫尔兹比港前进基地,ARMAMENT,,计分阶段：<新几内亚><南太平洋>每有一个被日本控制，获得2分。,cards_sliced/sheet184_r1_c9.png,逐张
+PRELUDE,18420,184,2,0,珍珠港前进基地,ARMAMENT,,计分阶段：<夏威夷><中太平洋>每有一个被日本控制，获得2分。,cards_sliced/sheet184_r2_c0.png,逐张
+PRELUDE,18421,184,2,1,增援太平洋诸岛,ARMAMENT,,计分阶段开始时：在<硫磺岛><新几内亚>之一征召1支陆军。,cards_sliced/sheet184_r2_c1.png,逐张

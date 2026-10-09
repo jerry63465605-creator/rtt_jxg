@@ -101,6 +101,57 @@ ok('操作权交还同盟', g.active === 'Allies', 'active=' + g.active)
 ok('15314 已进弃牌堆', (g.discard['英国'] || []).indexOf('15314#1') >= 0)
 ok('英国占了出牌名额', !!(g.play_done && g.play_done['英国']))
 
+console.log('\n=== 15329 反潜战术拦截（敌方 ECON：德国 15217） ===')
+{
+	g.current_nation = '德国'
+	g.active = 'Axis'
+	g.turn_phase = 'play'
+	g.play_done = {}
+	g.table_responses = [{ card_id: '15329#1', owner_side: 'allies', nation: '英国' }]
+	g.hands['德国'] = ['15217#1']
+	const ukDeckBefore = (g.decks['英国'] || []).length
+
+	/* 敌方打出 ECON -> 被 15329 拦截（挂起期间出牌名额尚未占，待结算时占） */
+	g = rules.action(g, 'Axis', 'play_card', { card: '15217#1', target: '英国' })
+	ok('拦截挂起（response_queue 含 15329）',
+		(g.response_queue || []).some(q => q.candidates.some(c => c.card_face === '15329')))
+	ok('15217 效果未结算（英国牌库未损耗）',
+		(g.decks['英国'] || []).length === ukDeckBefore,
+		'英国牌库=' + (g.decks['英国'] || []).length + ' before=' + ukDeckBefore)
+
+	/* 同盟发动拦截 -> 15217 进弃牌堆、效果无效 */
+	g = rules.action(g, 'Allies', 'trigger_response', {})
+	ok('拦截后 15217 进弃牌堆（不在德国手牌）', !g.hands['德国'].includes('15217#1'))
+	ok('15217 进入德国弃牌堆', (g.discard['德国'] || []).includes('15217#1'),
+		'德国弃牌堆=' + JSON.stringify(g.discard['德国']))
+	ok('效果仍无效（英国牌库未损耗）', (g.decks['英国'] || []).length === ukDeckBefore)
+	ok('15329 自身消耗进弃牌堆', (g.discard['英国'] || []).includes('15329#1'))
+	ok('拦截后占出牌名额（play_done 已记）', !!(g.play_done && g.play_done['德国']))
+	ok('拦截后无挂起', (g.response_queue || []).length === 0)
+}
+
+console.log('\n=== 15329 拦截：同盟放弃发动（原样结算） ===')
+{
+	g.current_nation = '德国'
+	g.active = 'Axis'
+	g.turn_phase = 'play'
+	g.play_done = {}
+	g.table_responses = [{ card_id: '15329#1', owner_side: 'allies', nation: '英国' }]
+	g.hands['德国'] = ['15217#1']
+	const ukDeckBefore = (g.decks['英国'] || []).length
+
+	g = rules.action(g, 'Axis', 'play_card', { card: '15217#1', target: '英国' })
+	ok('(放弃) 拦截挂起', (g.response_queue || []).some(q => q.candidates.some(c => c.card_face === '15329')))
+	/* 同盟放弃 -> 重放，15217 正常结算 */
+	g = rules.action(g, 'Allies', 'pass_response', {})
+	const lost = ukDeckBefore - (g.decks['英国'] || []).length
+	ok('(放弃) 15217 已结算：英国牌库损耗 3 张', lost === 3, 'lost=' + lost)
+	ok('(放弃) 15217 进德国弃牌堆', (g.discard['德国'] || []).includes('15217#1'))
+	ok('(放弃) 15329 仍留桌面（未消耗）',
+		(g.table_responses || []).some(r => r.card_id === '15329#1'))
+	ok('(放弃) 出牌名额已占', !!(g.play_done && g.play_done['德国']))
+}
+
 console.log('\n=== 最近日志 ===')
 lastLogs(8).forEach(l => console.log('  ' + l))
 console.log('\nDONE exitCode=' + (process.exitCode || 0))
