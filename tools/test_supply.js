@@ -4,7 +4,9 @@
  *
  * 覆盖规则书第三节的原文口径：
  *   陆军：位于★ 或 与处于补给状态的【本国】部队相邻
- *   海军：与处于补给状态的【本国】部队相邻 且 与【本国或友军】的陆地部队相邻
+ *   海军：与处于补给状态的【本国陆军】相邻才有补给（大本营/预备役/友军[非组内]陆军均不算）。
+ *         —— 2026-10-11 收紧：默认必须邻接【本国】陆军；
+ *            17549 盟军远征部队最高司令部激活时，组内盟国（英/法/美）陆军可充当本国陆军。
  */
 const path = require("path");
 const DIR = path.join(__dirname, "..", "server-official", "public", "quartermaster-sub-wars");
@@ -163,31 +165,58 @@ console.log("\n=== 6. 海军：两条条件都必须满足 ===");
 }
 
 /* ============================================================ */
-console.log("\n=== 7. 海军第2条允许【友军】陆军（原文『本国或友军』） ===");
+console.log("\n=== 7. 海军必须邻接【本国】陆军（2026-10-11 收紧）===");
 {
-	/* 构造：德国海军所在海域，邻接一片陆地，陆地上只有意大利陆军（友军）。
-	 * 意大利陆军需自己有补给（站在★上），否则它不构成"陆地部队"…
-	 * 注意：原文第2条只说"与本国或友军的陆地部队相邻"，
-	 *       并未要求该陆军处于补给状态。这里按原文实现。 */
-	let combo = null;
+	/* 找一个既是★补给点、又邻接海域的陆地，作测试锚点 */
+	let anchor = null;
 	for (const sp of SP) {
 		for (const nb of data.spaces[SPACE[sp.name]].connections.map(nm)) {
-			if (data.spaces[SPACE[nb]].terrain === "sea") { combo = { land: sp.name, sea: nb }; break; }
+			if (data.spaces[SPACE[nb]].terrain === "sea") { anchor = { land: sp.name, sea: nb }; break; }
 		}
-		if (combo) break;
+		if (anchor) break;
 	}
-	if (combo) {
-		const g = mk([
-			{ id: "it_land", nation: "意大利", type: "army", at: combo.land },
-			{ id: "de_navy", nation: "德国", type: "navy", at: combo.sea },
-			{ id: "de_land", nation: "德国", type: "army", at: combo.land },   /* 本国陆军，提供第1条 */
-		]);
-		/* 意大利陆军在★上，与德国海军同格位所在陆地相邻 */
-		const s = sup(g);
-		ok(s["de_land"] === true, "德国陆军在★上有补给");
-		ok(s["de_navy"] === true, "德国海军：第1条由本国陆军满足，第2条可由友军满足");
+	if (!anchor) {
+		ok(false, "未找到『★陆地 + 相邻海域』组合");
 	} else {
-		ok(false, "未找到测试组合");
+		console.log("  锚点: 陆军在★「" + anchor.land + "」，海军在「" + anchor.sea + "」");
+
+		/* 7a. 仅友军(意大利)陆军、无本国陆军 -> 断补（大本营/友军不算） */
+		{
+			const g = mk([
+				{ id: "it_land", nation: "意大利", type: "army", at: anchor.land },
+				{ id: "de_navy", nation: "德国", type: "navy", at: anchor.sea },
+			]);
+			const s = sup(g);
+			ok(s["it_land"] === true, "意大利陆军在★上有补给");
+			ok(s["de_navy"] !== true, "德国海军仅邻友军(意大利)陆军、无本国陆军 -> 断补（新规则）");
+		}
+
+		/* 7b. 补上本国(德国)陆军 -> 满足两条 -> 有补给 */
+		{
+			const g = mk([
+				{ id: "it_land", nation: "意大利", type: "army", at: anchor.land },
+				{ id: "de_navy", nation: "德国", type: "navy", at: anchor.sea },
+				{ id: "de_land", nation: "德国", type: "army", at: anchor.land },
+			]);
+			const s = sup(g);
+			ok(s["de_navy"] === true, "补上本国陆军后 -> 有补给");
+		}
+
+		/* 7c. 17549 盟军远征部队最高司令部：组内(英/法/美)陆军可补给对方海军 */
+		{
+			const g = mk([
+				{ id: "fr_land", nation: "法国", type: "army", at: anchor.land },
+				{ id: "uk_navy", nation: "英国", type: "navy", at: anchor.sea },
+			]);
+			/* 默认（无 17549）：法国陆军对英国海军不算"本国陆军" -> 断补 */
+			const s0 = sup(g);
+			ok(s0["uk_navy"] !== true, "默认：英国海军邻法国陆军(非本国) -> 断补");
+			/* 激活 17549 光环：组内盟国陆军可当港口
+			 * （与 apply_status_ongoing 一致，存为扁平数组 ['英国','法国','美国']） */
+			g.status_aura.shared_supply_group = ["英国", "法国", "美国"];
+			const s1 = sup(g);
+			ok(s1["uk_navy"] === true, "激活17549后：英国海军可用法国陆军作港口 -> 有补给");
+		}
 	}
 }
 

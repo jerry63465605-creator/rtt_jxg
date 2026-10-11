@@ -155,26 +155,33 @@ g.status_used['15339#1'] = g.turn
 const cfg = I.status_config_of('15339#1')
 ok('status_used 标记生效', cfg && cfg.trigger.once_per_turn)
 
-console.log('\n=== 11. 15348 最多 N 次 ===')
+console.log('\n=== 11. 15348 殖民帝国：出牌前可发动（2026-10-11 修订） ===')
 g.turn = (g.turn || 1) + 1
 g.play_done = {}
 g.skip_play_done = {}
-g.hands['英国'].push('15348#1')
-g = rules.action(g, 'Allies', 'play_card', { card: '15348#1' })
-ok('15348 进桌面', (g.table['英国'] || []).indexOf('15348#1') >= 0)
-/* 加拿大+印度+南非各放 1 英国陆军 = 3 次 */
+/* 模拟：15348 是上一回合打到桌面的状态卡（本回合开始时已在桌面） */
+g.table['英国'] = g.table['英国'] || []
+if (g.table['英国'].indexOf('15348#1') < 0) g.table['英国'].push('15348#1')
+ok('15348 在桌面', (g.table['英国'] || []).indexOf('15348#1') >= 0)
+/* 加拿大+印度+非洲南部 各放 1 英国陆军 = 最多 3 次 */
 put(g, 'uk_ca2', '英国', 'army', '加拿大')
 put(g, 'uk_in2', '英国', 'army', '印度')
-put(g, 'uk_sa2', '英国', 'army', '南非')
+put(g, 'uk_sa2', '英国', 'army', '非洲南部')
 const scBefore = g.score.allies
 const hBefore = (g.hands['英国'] || []).length
 g = rules.action(g, 'Allies', 'activate_status', { card: '15348#1' })
-ok('15348 一次扣分 + 摸牌',
+ok('15348 出牌前发动：一次扣分 + 摸牌',
 	g.score.allies === scBefore - 1 &&
 	(g.hands['英国'] || []).length === hBefore + 1,
 	/* 注意：阵营 key 是小写 'allies'（'ALLIES' 是 undefined，会打出 NaN） */
 	'score_delta=' + (g.score.allies - scBefore) +
 		' hand_delta=' + ((g.hands['英国'] || []).length - hBefore))
+/* 出牌后（play_done 置位）不能再发动 —— 复用 EFFECT/RESPONSE play_start 的 play_done 把关 */
+g.play_done['英国'] = g.turn
+const scAfter = g.score.allies
+g = rules.action(g, 'Allies', 'activate_status', { card: '15348#1' })
+ok('15348 出牌后不可再发动（play_done 把关）',
+	g.score.allies === scAfter, 'score_delta=' + (g.score.allies - scAfter))
 
 console.log('\nPASS=' + pass + '  FAIL=' + fail)
 process.exitCode = fail ? 1 : 0
