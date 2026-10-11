@@ -10,6 +10,41 @@
 	--allies-light: #c8d8f0;
 	--land: #d8c9a8;
 	--sea: #9fc4d8;
+
+	/*
+	 * 算子描边（2026-10-11 改版：白内黑外双层）。
+	 * clip-path 会裁掉 border 与 box-shadow，形状的描边只能用
+	 * 4 个方向的 drop-shadow（spread=0）叠加模拟。
+	 * 结构：【紧贴部队 = 白色描边】(偏移 1.5) + 【外圈 = 黑色描边】(偏移 3) +
+	 * 柔和外阴影。白边把部队色从任意底色（深蓝灰页面 / 土黄陆地 / 浅蓝海洋）
+	 * 中"托"出来，黑边再提供最终对比。好处是描边【贴合形状】
+	 * （三角/方/圆都能包住），不是方框。
+	 */
+	--piece-edge:
+		drop-shadow(1.5px 0 0 #fff) drop-shadow(-1.5px 0 0 #fff)
+		drop-shadow(0 1.5px 0 #fff) drop-shadow(0 -1.5px 0 #fff)
+		drop-shadow(3px 0 0 #000) drop-shadow(-3px 0 0 #000)
+		drop-shadow(0 3px 0 #000) drop-shadow(0 -3px 0 #000)
+		drop-shadow(0 2px 4px #0008);
+
+	/* 空军：更大的投影，视觉上"浮在空中" */
+	--piece-edge-air:
+		drop-shadow(1.5px 0 0 #fff) drop-shadow(-1.5px 0 0 #fff)
+		drop-shadow(0 1.5px 0 #fff) drop-shadow(0 -1.5px 0 #fff)
+		drop-shadow(3px 0 0 #000) drop-shadow(-3px 0 0 #000)
+		drop-shadow(0 3px 0 #000) drop-shadow(0 -3px 0 #000)
+		drop-shadow(0 6px 10px #0008);
+
+	/*
+	 * 日本（白底）：白内边融入底色不可见，故等同于"白底 + 加粗黑边"；
+	 * 黑边加至 3.5 并加重投影，防止在浅色地图上隐形。
+	 */
+	--piece-edge-jp:
+		drop-shadow(2px 0 0 #fff) drop-shadow(-2px 0 0 #fff)
+		drop-shadow(0 2px 0 #fff) drop-shadow(0 -2px 0 #fff)
+		drop-shadow(3.5px 0 0 #000) drop-shadow(-3.5px 0 0 #000)
+		drop-shadow(0 3.5px 0 #000) drop-shadow(0 -3.5px 0 #000)
+		drop-shadow(0 3px 6px #000a);
 }
 
 main { background-color: #2b3a45; }
@@ -128,6 +163,14 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 
 /* ---- 算子 ---- */
 
+/*
+ * 算子 = 透明容器 + ::before 形状层（2026-10-11 改版）
+ *
+ * 为什么拆两层：形状靠 clip-path，而 clip-path 会【裁掉 border 和 box-shadow】。
+ * 若直接裁 .unit，下面这些状态样式会全部失效：
+ *     .tip / .target / .pickable / .out_of_supply 红框 / @keyframes supply_warn
+ * 所以形状画在 ::before 上，.unit 保持透明容器继续承载状态外框。
+ */
 .unit {
 	position: absolute;
 	box-sizing: border-box;
@@ -135,7 +178,6 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 	height: 46px;
 	margin: -23px 0 0 -23px;
 	border-radius: 50%;
-	border: 3px solid #000;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -145,44 +187,79 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 	line-height: 1;
 	color: #fff;
 	text-shadow: 0 1px 2px #000;
-	box-shadow: 0 2px 5px #0006;
 	cursor: pointer;
 	z-index: 10;
 	user-select: none;
 }
 
-.unit.army  { background-color: #4a6b3a; border-radius: 6px; }
-.unit.navy  { background-color: #2a4a7a; border-radius: 6px; }
-
-/* 空军：圆形 + 更大的投影，视觉上"浮在空中" */
-.unit.air {
-	background-color: #7a5a2a;
-	border-radius: 50%;
-	box-shadow: 0 6px 10px #0008;
+/* 形状层：底色 = 国家（见下），描边/投影贴合形状 */
+.unit::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	background-color: #888;      /* 兜底：未知国家 */
+	filter: var(--piece-edge);
 }
 
-.unit.germany   { outline: 3px solid #333; }
-.unit.japan     { outline: 3px solid #c00; }
-.unit.italy     { outline: 3px solid #0a0; }
-.unit.uk        { outline: 3px solid #06c; }
-.unit.france    { outline: 3px solid #08c; }
-.unit.ussr      { outline: 3px solid #c30; }
-.unit.usa       { outline: 3px solid #069; }
-.unit.china     { outline: 3px solid #a80; }
+/* ---- 兵种形状：陆军正三角 / 海军正方形 / 空军圆形 ---- */
+.unit.army::before { clip-path: polygon(50% 4%, 96% 94%, 4% 94%); }
+.unit.navy::before { clip-path: inset(4% round 5px); }
+.unit.air::before {
+	clip-path: circle(46% at 50% 50%);
+	filter: var(--piece-edge-air);
+}
 
-.unit:hover { filter: brightness(1.25); }
+/* 状态外框尽量贴合形状（三角仍是圆角方，作为"选中框"已足够醒目） */
+.unit.army, .unit.navy { border-radius: 6px; }
+
+/* ---- 国家 = 底色（英法、美中同屏操作，色相必须拉开）---- */
+.unit.germany::before { background-color: #2b2b2b; }  /* 黑 */
+.unit.uk::before      { background-color: #b8860b; }  /* 深土黄（避开陆地 #d8c9a8）*/
+.unit.france::before  { background-color: #2e7d32; }  /* 绿 */
+.unit.japan::before   { background-color: #f5f5f5; }  /* 白 */
+.unit.ussr::before    { background-color: #b22222; }  /* 红 */
+.unit.italy::before   { background-color: #6b21a8; }  /* 紫 */
+.unit.usa::before     { background-color: #1e3a5f; }  /* 蓝 */
+.unit.china::before   { background-color: #e879a8; }  /* 粉 */
+
+/* 日本白：描边加粗 + 投影加强，防止在浅色地图上隐形 */
+.unit.japan::before { filter: var(--piece-edge-jp); }
+
+/*
+ * 文字颜色：亮底用黑字、暗底用白字（各取对比更强的一方）。
+ * text-shadow 反向配合（黑字配白描边），避免糊成一团。
+ */
+.unit.germany, .unit.france, .unit.ussr,
+.unit.italy, .unit.usa {
+	color: #fff;
+	text-shadow: 0 1px 2px #000;
+}
+.unit.uk, .unit.japan, .unit.china {
+	color: #000;
+	text-shadow: 0 1px 2px #ffffffcc;
+}
+
+/* hover 作用在【形状层】，且必须带上各自那套描边，否则 hover 时黑边消失 */
+.unit:hover::before { filter: var(--piece-edge) brightness(1.25); }
+.unit.air:hover::before { filter: var(--piece-edge-air) brightness(1.25); }
+/* 白底再提亮没有视觉反馈，改为【压暗】产生对比 */
+.unit.japan:hover::before { filter: var(--piece-edge-jp) brightness(.9); }
+
 .unit.tip { box-shadow: 0 0 0 3px #ffea00, 0 2px 5px #0006; }
 .unit.attract { animation: attract_pulse .5s ease-out 2; }
 
 /*
  * 补给状态：
- *   有补给 -> 细绿边（弱化，不干扰视觉）
- *   断补   -> 红色粗圈 + 呼吸动画（强警示，规则上将在补给阶段被移除）
+ *   有补给 -> 淡绿细框（弱化，不干扰视觉）
+ *   断补   -> 红色粗框 + 呼吸动画（强警示，规则上将在补给阶段被移除）
+ *
+ * 原实现是 outline-color / border-color，但国家色已改占 background、
+ * .unit 也不再有 border，所以这里要【显式声明】outline，只留 box-shadow。
  */
-.unit.in_supply { outline-color: #2d7a2d; }
+.unit.in_supply { outline: 2px solid #2d7a2d99; }
 
 .unit.out_of_supply {
-	border-color: #d00;
 	box-shadow: 0 0 0 4px #ff0000aa, 0 2px 5px #0006;
 	animation: supply_warn 1.2s ease-in-out infinite;
 }
@@ -213,9 +290,16 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 
 /* 同格位多个算子：横向错开，由 update_pieces 设置 left 偏移 */
 .unit .unit_label {
+	/* ::before 是 absolute，会盖住同为 static 的文字 —— 必须抬起来 */
+	position: relative;
+	z-index: 1;
 	font-size: 11px;
 	letter-spacing: .5px;
 }
+
+/* 正三角形的可用面积偏下，把文字挪到重心处（约 2/3 高度）才不会顶出尖角 */
+.unit.army { justify-content: flex-end; }
+.unit.army .unit_label { margin-bottom: 6px; }
 
 /* ================= 侧栏 ================= */
 

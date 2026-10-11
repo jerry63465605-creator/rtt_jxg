@@ -330,8 +330,10 @@ function update_phase_buttons() {
 	 * 先做状态清理，再更新 UI 文案 —— 顺序反了会让按钮显示上一次的
 	 * 数量（曾经出现"已选 0 张"却写着"确认弃牌（1 张）"）。
 	 */
-	/* 阶段切换后清掉上一阶段的弃牌选择，避免误提交旧牌 */
-	if (view.turn_phase !== "discard" && discard_pick.length)
+	/* 阶段切换后清掉上一阶段的弃牌选择，避免误提交旧牌。
+	 * 初始阶段：仅当"不在我方回合"时清（切到对方国家弃牌时，
+	 * 把本方上一轮的旧选择清掉；我方自己弃牌途中要保留）。 */
+	if (view.turn_phase !== "discard" && !(view.opening && is_my_turn()) && discard_pick.length)
 		discard_pick = []
 
 	/*
@@ -341,11 +343,20 @@ function update_phase_buttons() {
 	const confirmBtn = document.getElementById("btn_confirm_discard")
 	if (confirmBtn) {
 		const inDiscard = mine && view.turn_phase === "discard"
-		confirmBtn.classList.toggle("hide", !inDiscard)
-		confirmBtn.disabled = !discard_pick.length
-		confirmBtn.textContent = discard_pick.length
-			? "确认弃牌（" + discard_pick.length + " 张）"
-			: "确认弃牌"
+		const inOpening = !!view.opening && is_my_turn()
+		const show = inDiscard || inOpening
+		confirmBtn.classList.toggle("hide", !show)
+		if (inOpening) {
+			confirmBtn.disabled = discard_pick.length !== 3
+			confirmBtn.textContent = discard_pick.length === 3
+				? "确认弃 3 张"
+				: "请选 3 张（" + discard_pick.length + "/3）"
+		} else {
+			confirmBtn.disabled = !discard_pick.length
+			confirmBtn.textContent = discard_pick.length
+				? "确认弃牌（" + discard_pick.length + " 张）"
+				: "确认弃牌"
+		}
 	}
 
 	/* 资源弹框开着时，若已不可再换（阶段变了 / 已用过）则自动关闭 */
@@ -420,6 +431,20 @@ function update_phase_buttons() {
 	update_us_japan_box()
 	/* 【2026-10-10】16304 中国远征军：让权美国选相邻地区（高亮地图） */
 	update_us_china_box()
+	/* 【2026-10-10】17526 民主兵工厂：让权英国建设（高亮地图） */
+	update_uk_build_box()
+	/* 【2026-10-10】17529 摩尔曼斯克运输船队：让权苏联建设（高亮地图） */
+	update_su_build_box()
+	/* 【2026-10-10】17537 美国人民同情中国：美国帮中国征召（高亮地图） */
+	update_us_china_build()
+	/* 【2026-10-10】17532 战区移动：美国移除己方棋子 + 建设（高亮地图/棋子） */
+	update_us_theater_box()
+	/* 【2026-10-10】17528/17531/17535 美国事件卡挂起项 */
+	update_us_replay()
+	update_us_merchant()
+	update_us_lend_lease()
+	/* 【2026-10-11】17510 我们的政治哲学：英国弃牌堆选响应卡打出 */
+	update_us_political()
 	/* 【2026-10-10】17555 大萧条的余波：结束中立奖励按钮 */
 	update_us_depression_box()
 	/* 桌面状态卡渲染（含可触发高亮） */
@@ -444,6 +469,22 @@ let discard_pick = []
 
 /* 确认弃掉当前选中的所有手牌 */
 function confirm_discard() {
+	if (view.opening) {
+		if (!is_my_turn()) {
+			toast("初始阶段：等待【" + view.opening.current_nation + "】弃 3 张，本方暂不可操作")
+			return
+		}
+		if (discard_pick.length !== 3) {
+			toast("初始阶段：必须恰好选 3 张弃牌")
+			return
+		}
+		send_action("opening_discard", { cards: discard_pick.slice() })
+		toast("已提交弃 3 张")
+		discard_pick = []
+		update_hand_panel()
+		update_phase_buttons()
+		return
+	}
 	if (view.turn_phase !== "discard") {
 		toast("只有弃牌阶段才能主动弃牌")
 		return
@@ -507,13 +548,23 @@ function is_my_turn() {
  * 会冒出德国的"出牌阶段三选一"按钮。
  */
 function can_act_in_turn() {
-	return is_my_turn() && !view.pending_battle &&
+	return is_my_turn() && !view.opening && !view.pending_battle &&
 		!view.pending_trigger && !view.pending_econ && !view.pending_autobahn &&
 		!view.pending_script && !view.pending_armed_delegate &&
 		!view.italy_chain && !view.italy_german_draw &&
 		!(view.italy_borrow && view.italy_borrow.pending) &&
 		/* 17553 让权日本期间：双方都不能顺手做回合内操作 */
-		!view.us_japan_delegate
+		!view.us_japan_delegate &&
+		/* 17526/17529 让权英国/苏联建设期间：被让权方只能回答该建设事项 */
+		!view.uk_build_delegate && !view.su_build_delegate &&
+		/* 17537 美国帮中国征召期间：美国只能回答该事项 */
+		!view.us_china_build &&
+		/* 17532 战区移动期间：美国只能回答该事项 */
+		!view.us_theater_delegate &&
+		/* 17528/17531/17535 美国事件卡挂起期间：只能回答对应事项 */
+		!view.us_replay && !view.us_merchant && !view.us_lend_lease &&
+		/* 17510 我们的政治哲学：美国选英国弃牌堆响应卡期间 */
+		!view.us_political
 	}
 
 /* 推进阶段 */
@@ -790,8 +841,14 @@ function extra_play_allows_card(c) {
 		return Array.isArray(ep.cards) && ep.cards.indexOf(c.id) >= 0
 	/* 【2026-09-30】国家技能：只能额外打出【状态卡】 */
 	if (ep.filter === "status") return c.type === "STATUS"
+	/* 【2026-10-01】英国国家技能：事件牌或状态牌 */
+	if (ep.filter === "event_status") return c.type === "STATUS" || c.type === "EVENT"
 	/* 【2026-10-07】意大利国家技能：状态卡或经济战卡 */
 	if (ep.filter === "status_econ") return c.type === "STATUS" || c.type === "ECON"
+	/* 【2026-10-08】日本国家技能：响应牌 */
+	if (ep.filter === "response") return c.type === "RESPONSE"
+	/* 【2026-10-10】17542 空中堡垒：轰炸行动 */
+	if (ep.filter === "bombing") return c.type === "EVENT" && (c.text || "").indexOf("轰炸行动") >= 0
 	return true
 }
 
@@ -802,7 +859,10 @@ function extra_play_hint() {
 	if (ep.filter === "north") return "可额外打出 1 张[北方行动]"
 	if (ep.filter === "drawn") return "可额外打出 1 张刚刚抽到的牌"
 	if (ep.filter === "status") return "可额外打出 1 张状态卡（国家技能，不占名额）"
+	if (ep.filter === "event_status") return "可额外打出 1 张事件牌或状态牌（国家技能，不占名额）"
 	if (ep.filter === "status_econ") return "可额外打出 1 张状态卡或经济战卡（国家技能，不占名额）"
+	if (ep.filter === "response") return "可额外打出 1 张响应牌（国家技能，不占名额）"
+	if (ep.filter === "bombing") return "可额外打出 1 张[轰炸行动]牌（不占名额）"
 	return "可额外打出 1 张手牌"
 }
 
@@ -999,6 +1059,200 @@ function update_us_china_box() {
 	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '中国征召候选' })) })
 	render_ask_box('中国远征军：选择征召地区',
 		'<东南亚>的中国陆军被移除。点击地图上高亮的相邻地区之一，中国在该地区征召陆军。', [])
+}
+
+/* 【2026-10-10】17526 民主兵工厂：让权英国执行建设（多步，交互式点地图）。
+ * 复用既有地图高亮 highlight_targets + on_click_space 点选（与 us_china_delegate 同款）。 */
+function update_uk_build_box() {
+	const dg = view && view.uk_build_delegate
+	if (!dg) return
+	if (dg.waiting_for) {
+		render_ask_box('民主兵工厂：等待【' + dg.waiting_for + '】建设',
+			'美国打出《民主兵工厂》，让权【' + dg.waiting_for + '】执行：建设1支海军与1支陆军。', [])
+		return
+	}
+	const cands = dg.candidates || []
+	if (!cands.length) return
+	const opName = dg.current_op === 'build' ? '建设' : '征召'
+	const typeName = dg.current_type === 'navy' ? '海军' : '陆军'
+	/* 高亮候选地区（服务端已按 can_build_at 过滤） */
+	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '英国' + opName + '候选' })) })
+	render_ask_box('民主兵工厂：英国执行建设（' + (dg.step + 1) + '/' + dg.total + '）',
+		'点击地图上高亮的地区，英国' + opName + '1支' + typeName + '。', [])
+}
+
+/* 【2026-10-10】17529 摩尔曼斯克运输船队：让权苏联执行建设（多步，交互式点地图）。 */
+function update_su_build_box() {
+	const dg = view && view.su_build_delegate
+	if (!dg) return
+	if (dg.waiting_for) {
+		render_ask_box('摩尔曼斯克运输船队：等待【' + dg.waiting_for + '】建设',
+			'美国打出《摩尔曼斯克运输船队》，让权【' + dg.waiting_for + '】在<罗斯>征召1支陆军并建设1支陆军。', [])
+		return
+	}
+	const cands = dg.candidates || []
+	if (!cands.length) return
+	const opName = dg.current_op === 'build' ? '建设' : '征召'
+	const typeName = dg.current_type === 'navy' ? '海军' : '陆军'
+	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '苏联' + opName + '候选' })) })
+	render_ask_box('摩尔曼斯克运输船队：苏联执行（' + (dg.step + 1) + '/' + dg.total + '）',
+		'点击地图上高亮的地区，苏联' + opName + '1支' + typeName + '。', [])
+}
+
+/* 【2026-10-10】17537 美国人民同情中国：美国帮中国在"大本营或相邻"征召（多步，交互式点地图）。
+ * 美国直接操作（非挂起），高亮候选地区由服务端按 中国大本营或相邻 + can_recruit_at 过滤。 */
+function update_us_china_build() {
+	const dg = view && view.us_china_build
+	if (!dg) return
+	if (dg.waiting_for) {
+		render_ask_box('美国人民同情中国：等待【' + dg.waiting_for + '】操作',
+			'美国打出《美国人民同情中国》，由【' + dg.waiting_for + '】选择中国大本营或相邻地区征召1支中国陆军。', [])
+		return
+	}
+	const cands = dg.candidates || []
+	if (!cands.length) return
+	const opName = dg.current_op === 'build' ? '建设' : '征召'
+	const typeName = dg.current_type === 'navy' ? '海军' : '陆军'
+	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '中国' + opName + '候选' })) })
+	render_ask_box('美国人民同情中国：美国帮中国征召（' + (dg.step + 1) + '/' + dg.total + '）',
+		'点击地图上高亮的地区，中国' + opName + '1支' + typeName + '。', [])
+}
+
+/* 【2026-10-10】17532 战区移动：美国移除己方棋子 + 建设（美国直接操作，非挂起）。
+ * step0 移除：高亮美国陆军/海军棋子；step1/step2 建设：高亮候选地区。 */
+function update_us_theater_box() {
+	const dg = view && view.us_theater_delegate
+	if (!dg) return
+	if (dg.waiting_for) {
+		render_ask_box('战区移动：等待【' + dg.waiting_for + '】操作',
+			'美国打出《战区移动》，由【' + dg.waiting_for + '】移除己方部队并建设。', [])
+		return
+	}
+	const st = dg.steps ? dg.steps[dg.step] : null
+	if (st && st.op === 'remove') {
+		const pcs = dg.remove_pieces || []
+		highlight_pieces(pcs, 'theater')
+		render_ask_box('战区移动：移除部队（' + (dg.step + 1) + '/' + dg.total + '）',
+			'点击地图上高亮的美国陆军或海军，将其移除。', [])
+		return
+	}
+	const cands = dg.candidates || []
+	if (!cands.length) return
+	const opName = dg.current_op === 'build' ? '建设' : '征召'
+	const typeName = dg.current_type === 'navy' ? '海军' : '陆军'
+	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '美国' + opName + '候选' })) })
+	render_ask_box('战区移动：美国建设（' + (dg.step + 1) + '/' + dg.total + '）',
+		'点击地图上高亮的地区，美国' + opName + '1支' + typeName + '。', [])
+}
+
+/* 【2026-10-10】17528 广阔的资源：美国弃牌堆选 1 张重打（选项框） */
+function update_us_replay() {
+	const dg = view && view.us_replay
+	if (!dg) {
+		if (ask_state && ask_state.kind === 'us_replay') { ask_state = null; render_ask_box(null, null, null) }
+		return
+	}
+	const cards = dg.candidates || []
+	if (!cards.length) { render_ask_box('广阔的资源', '美国弃牌堆为空，无牌可重打。', []); return }
+	const opt = cards.map(c => ({
+		label: (c.name || ('卡' + c.id)) + '（重打）', cls: 'primary',
+		onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_replay', { card: c.id }) }
+	}))
+	ask_state = { kind: 'us_replay' }
+	render_ask_box('广阔的资源：重打 1 张弃牌堆卡',
+		'选择美国弃牌堆中的 1 张卡，结算其效果（仍留弃牌堆）。', opt)
+}
+
+/* 【2026-10-11】17531 现购自运政策：美国为友方英/苏/中/法征召部队（先选国、再点地图选地区、再选兵种） */
+function update_us_merchant() {
+	const dg = view && view.us_merchant
+	if (!dg) {
+		if (ask_state && ask_state.kind === 'us_merchant') { ask_state = null; render_ask_box(null, null, null) }
+		return
+	}
+	if (!dg.nation) {
+		const nat = dg.nation_candidates || []
+		const opt = nat.map(n => ({
+			label: '为【' + n + '】征召部队', cls: 'primary',
+			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_select', { nation: n }) }
+		}))
+		ask_state = { kind: 'us_merchant' }
+		render_ask_box('现购自运政策：选择友方国家',
+			'选择英/苏/中/法之一，美国在其本土或相邻地区征召1支合法部队（陆军/海军/空军，美国直接操作）。', opt)
+		return
+	}
+	if (dg.space == null) {
+		const tgs = dg.targets || []
+		if (!tgs.length) { render_ask_box('现购自运政策：' + dg.nation, '无可征召地区（需该国家本土或相邻且有空位）。', []); return }
+		highlight_targets({ spaces: tgs.map(t => ({ id: t.id, reason: dg.nation + ' 征召候选' })) })
+		render_ask_box('现购自运政策：' + dg.nation + ' 选择征召地区',
+			'点击地图上高亮的地区，' + dg.nation + ' 征召1支部队。', [])
+		return
+	}
+	/* 第三步：选兵种 */
+	const types = dg.types || []
+	const opt = types.map(t => ({
+		label: '征召' + t.zh, cls: 'primary',
+		onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_type', { type: t.type }) }
+	}))
+	ask_state = { kind: 'us_merchant' }
+	render_ask_box('现购自运政策：' + dg.nation + ' 在' + (dg.space_name || '') + ' 选择兵种',
+		'选择要征召的合法兵种。', opt)
+}
+
+/* 【2026-10-10】17535 租借法案：委托苏/英打出 1 张手牌并摸 1 张（先选国、再选手牌） */
+function update_us_lend_lease() {
+	const dg = view && view.us_lend_lease
+	if (!dg) {
+		if (ask_state && ask_state.kind === 'us_lend_lease') { ask_state = null; render_ask_box(null, null, null) }
+		return
+	}
+	if (!dg.nation) {
+		const nat = dg.nation_candidates || []
+		const opt = nat.map(n => ({
+			label: '委托【' + n + '】打出1张手牌', cls: 'primary',
+			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_lend_lease_select', { nation: n }) }
+		}))
+		ask_state = { kind: 'us_lend_lease' }
+		render_ask_box('租借法案：选择委托国家',
+			'选择苏联或英国，由其打出1张手牌并摸1张（让权操作）。', opt)
+		return
+	}
+	const cards = dg.hand || []
+	if (!cards.length) { render_ask_box('租借法案：' + dg.nation, dg.nation + ' 手牌为空，无牌可打。', []); return }
+	const opt = cards.map(c => ({
+		label: (c.name || ('卡' + c.id)) + '（打出）', cls: 'primary',
+		onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_lend_lease_play', { card: c.id }) }
+	}))
+	ask_state = { kind: 'us_lend_lease' }
+	render_ask_box('租借法案：' + dg.nation + ' 打出1张手牌',
+		'选择 ' + dg.nation + ' 的1张手牌打出，然后摸1张。', opt)
+}
+
+/* 【2026-10-11】17510 我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出（暗置）。
+ * 复用 17535 租借法案的"候选列表→ask_box→send_action"范式，候选来自 view.us_political.candidates。 */
+function update_us_political() {
+	const dg = view && view.us_political
+	if (!dg) {
+		if (ask_state && ask_state.kind === 'us_political') { ask_state = null; render_ask_box(null, null, null) }
+		return
+	}
+	const cards = dg.candidates || []
+	if (!cards.length) {
+		if (ask_state && ask_state.kind === 'us_political') { ask_state = null; render_ask_box(null, null, null) }
+		return
+	}
+	const opt = cards.map(c => ({
+		label: (c.name || ('卡' + c.id)) + '（打出）', cls: 'primary',
+		onClick: () => {
+			ask_state = null
+			render_ask_box(null, null, null)
+			send_action('resolve_us_political_play', { card: c.id })
+		},
+	}))
+	ask_state = { kind: 'us_political' }
+	render_ask_box('我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出',
+		'选择英国弃牌堆中的 1 张[响应卡]，由英国当作响应卡打出（暗置到桌面）。', opt)
 }
 
 /* 【2026-10-10】17555 大萧条的余波：美国结束中立奖励按钮。
@@ -1383,12 +1637,26 @@ function update_skill_discard_box() {
 	if (pd.one_step && playSec && playBox) {
 		playSec.style.display = ""
 		playBox.innerHTML = ""
-		const wantType = String(
-			(pd.play_filter === 'response' ? 'RESPONSE' : pd.play_filter) || '').toUpperCase()
-		const playCands = allHand.filter(c =>
-			(!wantType || String(c.type || '').toUpperCase() === wantType) &&
-			pd.drop.indexOf(c.id) < 0 &&     /* 已选作代价的不能再选为打出 */
-			c.id !== pd.submit_card)         /* 本卡（增强卡复用时）不能打自己 */
+		/*
+		 * 【2026-10-11】play_filter 可能跨多类型（英国 event_status = EVENT 或 STATUS），
+		 * 不能简单按单类型字符串比对，否则英国一步式弹窗里"要打出的牌"候选为空。
+		 * 与服务端 filter_matches_card 同源：单一类型按大写比对，复合类型枚举。
+		 */
+		const playCands = allHand.filter(c => {
+			const t = String(c.type || '').toUpperCase()
+			let okType = true
+			if (pd.play_filter === 'event_status')
+				okType = (t === 'EVENT' || t === 'STATUS')
+			else if (pd.play_filter === 'status_econ')
+				okType = (t === 'STATUS' || t === 'ECON')
+			else if (pd.play_filter === 'response')
+				okType = (t === 'RESPONSE')
+			else if (pd.play_filter)
+				okType = (t === String(pd.play_filter).toUpperCase())
+			return okType &&
+				pd.drop.indexOf(c.id) < 0 &&     /* 已选作代价的不能再选为打出 */
+				c.id !== pd.submit_card          /* 本卡（增强卡复用时）不能打自己 */
+		})
 		for (const c of playCands) {
 			const d = card_elt(c, () => {
 				/* 点击切换选中；再点一次取消 */
@@ -1408,8 +1676,12 @@ function update_skill_discard_box() {
 		if (!playCands.length) {
 			const p = document.createElement("div")
 			p.className = "empty-note"
+			const pf = pd.play_filter
 			p.textContent = "没有可打出的" +
-				(pd.play_filter === 'response' ? '响应牌' : (pd.play_filter || '牌'))
+				(pf === 'response' ? '响应牌'
+					: pf === 'event_status' ? '事件牌或状态牌'
+					: pf === 'status_econ' ? '状态卡或经济战卡'
+					: (pf || '牌'))
 			playBox.appendChild(p)
 		}
 		if (playNote) playNote.textContent = (pd.play ? 1 : 0) + "/1"
@@ -1480,20 +1752,29 @@ function check_phase_for_card(c) {
 	 * 放在最前面，确保出牌阶段也会拦掉"声明了别的阶段"的卡。
 	 */
 	const decl = declared_phase_of(c)
-	if (decl && ph !== decl)
+	if (decl && ph !== decl) {
+		/*
+		 * 【2026-10-11 重构】英国国家技能已改为「一步式 mode:'play'」，
+		 * 不再走额外打出通道，故此处不再为额外打出开 decl 早放行。
+		 * 德/意/美走额外打出时，其牌均为出牌阶段声明、且出牌阶段打出，
+		 * decl===ph 不触发本分支，放行交给下方统一的 extra_play 块。
+		 */
 		return {
 			ok: false,
 			reason: "《" + c.name + "》卡面说明只能在" +
 				(PHASE_ZH[decl] || decl) + "打出（当前是" + (PHASE_ZH[ph] || ph) + "）",
 		}
+	}
 
 	/*
-	 * 【2026-09-30】额外打出：出牌阶段名额已用，但手里还有一次
+	 * 【2026-09-30 · 2026-10-11 修订】额外打出：手里还有一次
 	 * "因《XX》的额外打出"且这张牌在允许范围内 -> 放行。
-	 * 放在 decl 判定【之后】—— 卡面声明了别的阶段时，额外打出也不能破例
-	 * （与服务端 check_phase_for_card 的顺序一致）。
+	 * 原本写死 `ph === "play"`，对【摸牌阶段】触发的英国技能无效（永远不进此分支）；
+	 * 改为"额外打出权的 phase 与当前阶段一致即放行"，覆盖任何阶段
+	 * （出牌阶段 / 摸牌阶段 …），与服务端 check_phase_for_card 同源。
 	 */
-	if (ph === "play" && view && view.my_play_done && extra_play_allows_card(c))
+	if (view && view.extra_play && view.extra_play.phase === ph &&
+		extra_play_allows_card(c))
 		return { ok: true }
 
 	/*
@@ -1952,8 +2233,32 @@ function on_click_hand_card(c, d) {
 	 * （服务端也会拦下其它动作，这里提前挡掉，免得"点了没反应"）。
 	 */
 	if (view.pending_battle || view.pending_trigger || view.pending_econ ||
-		view.pending_autobahn || view.pending_script || view.pending_armed_delegate) {
-		toast("请先回答当前的待决事项（战斗代受 / 响应卡 / 经济战选择 / 高速公路选位 / 卡牌结算选牌 / 苏联让权挂起）")
+		view.pending_autobahn || view.pending_script || view.pending_armed_delegate ||
+		view.uk_build_delegate || view.su_build_delegate ||
+		view.us_china_build ||
+		view.us_theater_delegate || view.us_replay ||
+		view.us_merchant || view.us_lend_lease || view.us_political) {
+		toast("请先完成当前的让权建设事项（点击地图上高亮的地区，由英国/苏联建设；或美国帮中国征召/战区移动）")
+		return
+	}
+	/* 初始阶段：点手牌 = 选/取消一张弃牌（最多 3 张） */
+	if (view.opening) {
+		if (!is_my_turn()) {
+			toast("初始阶段：等待【" + view.opening.current_nation + "】弃 3 张，本方暂不可操作")
+			return
+		}
+		const i = discard_pick.indexOf(c.id)
+		if (i >= 0)
+			discard_pick.splice(i, 1)
+		else if (discard_pick.length < 3)
+			discard_pick.push(c.id)
+		else
+			toast("初始阶段：只需弃 3 张，请先取消一张")
+		update_hand_panel()
+		update_phase_buttons()
+		toast(discard_pick.length
+			? "已选 " + discard_pick.length + "/3 张，点【确认弃 3 张】提交"
+			: "已取消选择")
 		return
 	}
 	/* 16703 罗马尼亚铁卫团：德国弃牌摸牌 —— 点手牌=弃置该牌并摸1张 */
@@ -2273,31 +2578,44 @@ function update_hand_panel() {
 	const isAir = view.turn_phase === "airforce"
 	const isDiscardPhase = view.turn_phase === "discard"
 
+	/*
+	 * 初始阶段：是否轮到【本方】弃牌。
+	 * view.opening 只在"处于初始阶段"时为真，但 6 国依次弃牌，
+	 * 只有当前弃牌国所属阵营的客户端才能真正操作（game.active 已切到该国阵营）。
+	 * 非本方回合应进入"等待对方弃牌"状态，手牌不可选、确认按钮不显示。
+	 */
+	const openingMine = !!(view.opening && is_my_turn())
+
 	set_text("hand_nation", n ? n + " 的手牌" : "（非本方回合，手牌不可见）")
 	set_text("hand_ap", n
-		? (view.turn_phase === "play"
-			? (view.my_play_done
-				? (view.extra_play
-					/* 注意：set_text 用 textContent，这里【不能】esc()，否则会显示转义字符 */
-					? "出牌阶段：因《" + view.extra_play.source_name + "》" +
-						extra_play_hint() + "（不用就直接推进阶段）"
-					: "出牌阶段：已行动")
-				: "出牌阶段：打出 / 弃置 / 减 1 分")
-			: (view.turn_phase === "airforce"
-				? (view.my_air_done
-					? "空军阶段：已行动"
-					: "空军阶段：打出《空军力量》 / 弃 1 张牌调度（二选一）")
-				: (view.turn_phase === "resource"
-					? (view.my_swap_count
-						? "资源再分配：本回合已用完"
-						: (pending_resource
-							? "资源再分配：已选 " + pending_resource.drop.length + "/3 张代价"
-							: "资源再分配：可弃 3 张换 1 张基本卡（每回合一次）"))
-					: (isDiscardPhase
-						? ("弃牌阶段：点手牌框住选择，再点【确认弃牌】" +
-							"（已选 " + discard_pick.length + " 张，本阶段已弃 " +
-							view.my_discard_count + " 张）")
-						: (discard_mode ? "弃牌模式" : "")))))
+		? (view.extra_play && view.extra_play.phase === view.turn_phase
+			/* 【2026-10-11】额外打出权提示覆盖【任何生效阶段】（出牌/摸牌…），
+			 * 不再写死只在 play 阶段显示 —— 英国国家技能在摸牌阶段触发时也需要提示。
+			 * 注意：set_text 用 textContent，这里【不能】esc()，否则会显示转义字符 */
+			? ("因《" + view.extra_play.source_name + "》" +
+				extra_play_hint() + "（不用就直接推进阶段）")
+			: (view.turn_phase === "play"
+				? (view.my_play_done
+					? (view.extra_play
+						? "出牌阶段：因《" + view.extra_play.source_name + "》" +
+							extra_play_hint() + "（不用就直接推进阶段）"
+						: "出牌阶段：已行动")
+					: "出牌阶段：打出 / 弃置 / 减 1 分")
+				: (view.turn_phase === "airforce"
+					? (view.my_air_done
+						? "空军阶段：已行动"
+						: "空军阶段：打出《空军力量》 / 弃 1 张牌调度（二选一）")
+					: (view.turn_phase === "resource"
+						? (view.my_swap_count
+							? "资源再分配：本回合已用完"
+							: (pending_resource
+								? "资源再分配：已选 " + pending_resource.drop.length + "/3 张代价"
+								: "资源再分配：可弃 3 张换 1 张基本卡（每回合一次）"))
+						: (isDiscardPhase
+							? ("弃牌阶段：点手牌框住选择，再点【确认弃牌】" +
+								"（已选 " + discard_pick.length + " 张，本阶段已弃 " +
+								view.my_discard_count + " 张）")
+							: (discard_mode ? "弃牌模式" : ""))))))
 		: "")
 
 	/* 牌堆/弃牌统计（侧栏，全场可见） */
@@ -2353,9 +2671,17 @@ function update_hand_panel() {
 	/* 手牌上限提示 */
 	if (note) {
 		if (handLen > HAND_LIMIT) {
-			note.textContent = "（" + handLen + "/" + HAND_LIMIT +
-				" 超出 " + (handLen - HAND_LIMIT) + " 张，弃牌阶段将弃到 " + HAND_LIMIT + "）"
-			note.className = "over"
+			if (openingMine) {
+				note.textContent = "（初始布阵：手牌 " + handLen + " 张，选 3 张弃掉留 7）"
+				note.className = ""
+			} else if (view.opening) {
+				note.textContent = "（初始布阵：等待【" + view.opening.current_nation + "】弃 3 张，本方暂不可操作）"
+				note.className = ""
+			} else {
+				note.textContent = "（" + handLen + "/" + HAND_LIMIT +
+					" 超出 " + (handLen - HAND_LIMIT) + " 张，弃牌阶段将弃到 " + HAND_LIMIT + "）"
+				note.className = "over"
+			}
 		} else {
 			note.textContent = "（" + handLen + "/" + HAND_LIMIT + "）"
 			note.className = ""
@@ -2381,6 +2707,7 @@ function update_hand_panel() {
 			(pending_skill_discard && pending_skill_discard.drop.indexOf(c.id) >= 0) ||
 			(air_move && air_move.card === c.id) ||
 			(isDiscardPhase && discard_pick.indexOf(c.id) >= 0) ||
+			(openingMine && discard_pick.indexOf(c.id) >= 0) ||
 			(pending_echo_discard && pending_echo_discard.drop.indexOf(c.id) >= 0) ||
 			(status_discard_sel && status_discard_sel.picked.indexOf(c.id) >= 0)
 		d.classList.toggle("sel", !!isCostSelected)
@@ -2406,14 +2733,14 @@ function update_hand_panel() {
 		 * 现在服务端把每张手牌的判定结果直接下发，客户端照抄即可，不再自己猜。
 		 */
 		const hr = view.hand_ready && view.hand_ready[c.id]
-		if (view.turn_phase !== "discard" &&
+		if (view.turn_phase !== "discard" && !openingMine &&
 			(hr ? !hr.ok : !check_phase_for_card(c).ok))
 			d.classList.add("disabled")
 		if (hr && !hr.ok && hr.reason)
 			d.title = hr.reason
 
-		if (isDiscardPhase) {
-			/* 弃牌阶段：被框住的牌标序号，方便核对 */
+		if (isDiscardPhase || openingMine) {
+			/* 弃牌阶段 / 初始阶段：被框住的牌标序号，方便核对 */
 			if (isCostSelected) {
 				const b = document.createElement("span")
 				b.className = "badge"
@@ -4652,7 +4979,7 @@ const STATUS_UI = {
 	'15346': { battle: 'land', attacker: '法国', fixed: true },
 	'15345': {},
 	'15347': {},
-	'15348': { count_by: { spaces: ['加拿大', '印度', '南非'], nation: '英国', type: 'army' } },
+	'15348': { count_by: { spaces: ['加拿大', '印度', '非洲南部'], nation: '英国', type: 'army' } },
 	/* 15340 国家资源动员法：自动卡（计分阶段自动结算），不可主动触发 */
 	'15340': { auto: true },
 	/* 15341/15342：打《建设陆军》卡进入选地块时可放弃建设，改在指定地区征召 */
@@ -4662,6 +4989,27 @@ const STATUS_UI = {
 	 * 服务端 view 的 forgo_build 由 trig.cost.forgo_build_army 自动推导，
 	 * 客户端渲染/点击/无合法位置兜底三处均泛型，故只需在此登记一行。 */
 	'17742': { build: true, recruit: '拉丁美洲' },
+	/* 2026-10-10 建设预算状态卡：多地区须玩家手动点选相邻空格（不自动兜底）。
+	 * 服务端 run 读 arg.space 经 status_build_valid 校验后建设/征召。 */
+	'17552': { sbuild: 'army' },
+	/* 17843 量与质兼得：弃1张[建设陆军]后建设1支陆军（弃牌+建设组合，先收弃牌再选地） */
+	'17843': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' }, sbuild: 'army' },
+	'17547': { sbuild: 'army' },
+	'17550': { sbuild: 'navy' },
+	'15248': { sbuild: 'army' },
+	'15242': { discard: 1, filter: { type: 'BASIC', name: '发起陆战' } },
+	/* 战斗状态卡：服务端已正确读 ctx.arg（含 space/from/victim），仅需客户端补选目标流程 */
+	'17544': { battle: 'land', attacker_owner: true },
+	/* 17842 喀秋莎：弃1张手牌后对战斗地区再发起1次陆战 */
+	'17842': { discard: 1, battle: 'land', attacker_owner: true },
+	/* 17846 坦克运输：弃1张[建设陆军]后以此陆军发起1次陆战 */
+	'17846': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' }, battle: 'land', attacker_owner: true },
+	/* 17848 正面攻击：弃2张手牌后对战斗地区或相邻地区发起1次陆战 */
+	'17848': { discard: 2, battle: 'land', attacker_owner: true },
+	/* 17841 近卫军：弃2张手牌，从弃牌堆打出1张[建设陆军]（纯弃牌，无后续选地/战斗） */
+	'17841': { discard: 2 },
+	/* 17539 常设联合国防委员会：弃1张[建设陆军]，在加拿大征召英国陆军（纯弃牌） */
+	'17539': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' } },
 }
 
 /*
@@ -4684,6 +5032,10 @@ let status_act_discard = null
 let status_act_ui = null
 let status_act_owner = null   /* 桌面 owner 国（15338/15339 作为战斗发起方） */
 let status_act_phase = null    /* 'space' | 'battle' */
+let status_build_pending = false   /* 状态卡"建设预算"：等待玩家点选相邻空格 */
+let status_build_cands = []          /* 合法候选空格 id 列表 */
+let status_build_type = null         /* 'army' | 'navy' */
+let status_build_discard = null      /* 进入选地前已收集的弃牌代价（如 17843 弃[建设陆军]） */
 
 function status_name(id) {
 	const e = (view.table_status || []).find(x => x.card === id)
@@ -4784,9 +5136,14 @@ function on_click_table_status(cardId) {
 			])
 		return
 	}
-	/* 需弃牌代价：先进入手牌弃置选择 */
+	/* 需弃牌代价：先进入手牌弃置选择（弃牌后可链式进入 battle / sbuild） */
 	if (ui.discard) {
 		start_status_discard(cardId, ui, ui.discard)
+		return
+	}
+	/* 建设预算：玩家手动点选相邻空格（不自动兜底） */
+	if (ui.sbuild) {
+		start_status_build(cardId, ui)
 		return
 	}
 	/* 需选战斗目标：进入地图两步流程 */
@@ -4808,6 +5165,25 @@ function on_click_table_status(cardId) {
 			} },
 			{ label: '取消', onClick: () => cancel_status_act() },
 		])
+}
+
+/* ---------- 状态卡"建设预算"：玩家手动点选相邻合法空格 ---------- */
+function start_status_build(cardId, ui, preDiscard) {
+	const owner = ((view.table_status || []).find(t => t.card === cardId) || {}).nation || ''
+	const type = ui.sbuild // 'army' | 'navy'
+	status_act_card = cardId
+	status_act_ui = ui
+	status_act_owner = owner
+	status_build_type = type
+	status_build_discard = preDiscard || null
+	status_build_pending = true
+	status_build_cands = []
+	status_act_phase = 'space'
+	send_query('status_build_spaces', { card: cardId, nation: owner, type: type })
+	render_ask_box('建设地区',
+		'请点击地图上的高亮地区，建设' + (type === 'navy' ? '海军' : '陆军') +
+		'（每格每国限 1 支，已满地区不可选）',
+		[{ label: '取消', onClick: () => cancel_status_act() }])
 }
 
 /* 15348 等带 count_by 的卡：计算并显示可执行次数 */
@@ -4837,6 +5213,14 @@ function start_status_discard(cardId, ui, need) {
  * 现在复用 echo_discard_modal（与资源再分配同款的 modal + card-grid），
  * 在弹框内直接点卡图切换选中，选满后【确认弃牌】才发送。
  */
+/* 客户端镜像 card_matches_filter：状态卡弃牌代价按 filter 限定可选卡（15242 只能选【发起陆战】） */
+function card_match_filter_client(c, req) {
+	if (!c || !req) return false
+	if (req.type && c.type && String(c.type).toUpperCase() !== String(req.type).toUpperCase()) return false
+	if (req.name && c.name !== req.name) return false
+	return true
+}
+
 function render_status_discard_box() {
 	const modal = document.getElementById("echo_discard_modal")
 	if (!modal) {
@@ -4881,7 +5265,11 @@ function render_status_discard_box() {
 	if (grid) {
 		grid.innerHTML = ""
 		const hand = (view.hands[view.my_nation] && view.hands[view.my_nation].cards) || []
+		const filt = s.ui && s.ui.filter
+		let shown = 0
 		for (const c of hand) {
+			if (filt && !card_match_filter_client(c, filt)) continue
+			shown++
 			const picked = s.picked.indexOf(c.id) >= 0
 			const d = card_elt(c, () => on_status_discard_pick(c.id))
 			d.classList.toggle("sel", picked)
@@ -4893,10 +5281,12 @@ function render_status_discard_box() {
 			}
 			grid.appendChild(d)
 		}
-		if (!hand.length) {
+		if (!shown) {
 			const p = document.createElement("div")
 			p.className = "empty-note"
-			p.textContent = "手牌为空，无法支付代价"
+			p.textContent = filt && filt.name
+				? '手牌中未找到【' + filt.name + '】作为代价'
+				: "手牌为空，无法支付代价"
 			grid.appendChild(p)
 		}
 	}
@@ -4912,6 +5302,14 @@ function render_status_discard_box() {
 function on_status_discard_pick(cardId) {
 	const s = status_discard_sel
 	if (!s) return false
+	if (s.ui && s.ui.filter) {
+		const c = ((view.hands[view.my_nation] && view.hands[view.my_nation].cards) || [])
+			.find(h => h.id === cardId)
+		if (!card_match_filter_client(c, s.ui.filter)) {
+			toast('只能选择【' + (s.ui.filter.name || '指定') + '】作为代价')
+			return false
+		}
+	}
 	const i = s.picked.indexOf(cardId)
 	if (i >= 0)
 		s.picked.splice(i, 1)
@@ -4935,6 +5333,8 @@ function finish_status_discard() {
 	render_ask_box(null)
 	if (ui.battle)
 		start_status_battle(s.cardId, ui, picked)
+	else if (ui.sbuild)
+		start_status_build(s.cardId, ui, picked)
 	else
 		send_action('activate_status', { card: s.cardId, discard: picked })
 }
@@ -5014,6 +5414,9 @@ function cancel_status_act() {
 	status_act_ui = null
 	status_act_owner = null
 	status_act_phase = null
+	status_build_pending = false
+	status_build_cands = []
+	status_build_type = null
 	battle_flow = null
 	clear_piece_highlight('initiator')
 	clear_target_highlight()
@@ -5795,6 +6198,41 @@ function on_click_space(evt) {
 		send_action('resolve_china_delegate', { space: s })
 		return
 	}
+	/* 17526 民主兵工厂：让权英国 —— 点候选地区，英国建设 */
+	if (view && view.uk_build_delegate &&
+		(view.uk_build_delegate.candidates || []).some(c => c.id === s)) {
+		clear_target_highlight()
+		send_action('resolve_uk_build_delegate', { space: s })
+		return
+	}
+	/* 17529 摩尔曼斯克运输船队：让权苏联 —— 点候选地区，苏联建设 */
+	if (view && view.su_build_delegate &&
+		(view.su_build_delegate.candidates || []).some(c => c.id === s)) {
+		clear_target_highlight()
+		send_action('resolve_su_build_delegate', { space: s })
+		return
+	}
+	/* 17537 美国人民同情中国：美国帮中国 —— 点候选地区，中国征召 */
+	if (view && view.us_china_build &&
+		(view.us_china_build.candidates || []).some(c => c.id === s)) {
+		clear_target_highlight()
+		send_action('resolve_us_china_build', { space: s })
+		return
+	}
+	/* 17532 战区移动：美国 —— 点候选地区，建设 */
+	if (view && view.us_theater_delegate &&
+		(view.us_theater_delegate.candidates || []).some(c => c.id === s)) {
+		clear_target_highlight()
+		send_action('resolve_us_theater_delegate', { space: s })
+		return
+	}
+	/* 17531 现购自运政策：点候选地区，记录征召位置（兵种待选） */
+	if (view && view.us_merchant && view.us_merchant.nation && view.us_merchant.space == null &&
+		(view.us_merchant.targets || []).some(t => t.id === s)) {
+		clear_target_highlight()
+		send_action('resolve_us_merchant_build', { space: s })
+		return
+	}
 
 	if (pending_armed && pending_armed.need === 'space') {
 		if ((pending_armed.candidates || []).indexOf(s) >= 0) {
@@ -5889,6 +6327,21 @@ function on_click_space(evt) {
 	 * 仅当 status_act_phase==='space' 时生效，此时 battle_flow 尚未建立。
 	 */
 	if (status_act_phase === 'space') {
+		/* 状态卡"建设预算"：玩家点选相邻合法空格 */
+		if (status_build_pending) {
+			if (status_build_cands.indexOf(s) < 0) { toast('请在合法高亮地区中选择'); return }
+			status_build_pending = false
+			highlight_targets(null)
+			const cid = status_act_card
+			render_ask_box(null)
+			const sArg = { card: cid, space: s }
+			if (status_build_discard && status_build_discard.length)
+				sArg.discard = status_build_discard
+			status_build_discard = null
+			send_action('activate_status', sArg)
+			toast('发动《' + status_name(cid) + '》')
+			return
+		}
 		const allow = (status_act_ui && status_act_ui.spaces)
 			? status_act_ui.spaces.map(space_id_of_name).filter(x => x != null)
 			: null
@@ -6131,6 +6584,22 @@ function on_click_piece(evt) {
 	}
 
 	/*
+	 * 【2026-10-10】17532 战区移动：step0 移除己方棋子。
+	 * 候选由服务端算好下发（view.us_theater_delegate.remove_pieces），客户端不二次过滤。
+	 */
+	if (view && view.us_theater_delegate && view.us_theater_delegate.current_op === 'remove') {
+		const rps = view.us_theater_delegate.remove_pieces || []
+		if (rps.some(c => String(c) === String(id))) {
+			clear_piece_highlight('theater')
+			send_action('resolve_us_theater_delegate', { piece: id })
+			toast('已选择移除该部队')
+		} else {
+			toast('《战区移动》只能选高亮的美国陆军或海军')
+		}
+		return
+	}
+
+	/*
 	 * 【2026-10-06】EVENT/ECHO 卡要求选【部队】时（15411 夜间运输）。
 	 * 候选由服务端算好下发，客户端不二次过滤。
 	 */
@@ -6308,6 +6777,20 @@ function on_reply(q, params) {
 			toast("本方视角相邻：" + n.join("、"))
 		else
 			toast("请先点选一个格位")
+		return
+	}
+
+	/* 状态卡"建设预算"候选地区 */
+	if (q === 'status_build_spaces') {
+		if (!params || params.ok === false) {
+			toast((params && params.reason) || '无法获取建设候选地区')
+			status_build_pending = false
+			return
+		}
+		status_build_cands = (params && params.spaces) || []
+		highlight_targets(status_build_cands)
+		if (status_build_cands.length === 0)
+			toast('相邻无合法可建设地区（需空格且未被占用）')
 		return
 	}
 
