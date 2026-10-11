@@ -671,6 +671,73 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-11 · R50：状态卡"弃置"代价必须是玩家手选 —— 死字段 `only` 与缺失的 STATUS_UI 条目
+
+**触发（一类问题）**
+- 之前把"弃置 N 张手牌"误当成自动扣牌；用户纠正：**弃置 = 玩家从手牌手选，损耗 = 抽牌堆顶随机**。所有带 `cost.discard` 的状态卡都必须让对应国家玩家手动选牌。
+- 审计全部 STATUS 卡发现"弃置"实现整体破碎，属**批量问题**。
+
+**根因（两处架构缺陷）**
+1. `only: 'BASIC'` 是**死字段**：`activate_status` 的弃牌块（rules.js ~20166）与 `render_status_discard_box`（play.js）都**不读** `only`，所以"必须弃[建设陆军]/[发起陆战]"从未被强制。
+2. 多张卡在 `STATUS_UI`（play.js ~4930）里**缺 `discard` 条目** → 客户端点状态卡走 else 分支，直接发 `activate_status` 不带 `discard` → 服务端因 `picked.length(0) < cost.discard` 直接拒绝（=根本打不出来）。
+3. `on_click_table_status` 对一张卡只走**单一分支**（discard→sbuild→battle 互斥），且 `finish_status_discard` 收完牌后**不链回 sbuild**；`start_status_build` 提交时也不带已弃牌 → 凡"弃牌+建设"组合（如 17843）的建设步被吞。
+
+**修复（统一复用 15242 的 `discard_is` 强制机制）**
+- 服务端：17539/17843/17846 的死字段 `only:'BASIC'` → `discard_is:{type:'BASIC', name:'建设陆军'}`；`activate_status` 弃牌块加 `discard_is` 校验（复用 15242 已落地的 `card_matches_filter`）。新增可复用 `card_matches_filter` / `hand_has_matching_card`。
+- 客户端：`STATUS_UI` 补/改 17841/17842/17843/17846/17848/17539，统一用 `filter:{type,name}` 过滤可选手牌（镜像服务端 `card_match_filter_client`）；`on_click_table_status` 把 `discard` 提到 `sbuild` 之前；`finish_status_discard` 增加 `ui.sbuild` 链式分支；`start_status_build` 接收预弃牌、地图提交时一并带出。
+
+**受影响卡（全修）**
+- 苏联：17841（弃2→弃牌堆打[建设陆军]）、17842（弃1+陆战）、17843（弃[建设陆军]+建设）、17846（弃[建设陆军]+陆战）、17848（弃2+陆战）。
+- 美国：17539（弃[建设陆军]）。德国 15242（前次已修）、英 15338/15339（经复核 `finish_status_discard` 已链 battle，无需改）。
+
+**教训**
+- 数据驱动项目里"声明式字段无人读取"是静默 bug 温床：**新增配置字段时必须确认有且仅有一个执行点真正读取并校验它**，否则等于没写。
+- 「一个报障 = 一类问题」：本次从 1 张（15242）扩到 7 张同类，且顺带发现 `sbuild` 组合流程缺失（R28~R50 反复验证）。
+
+### 2026-10-11 · R51：「battle 预算」之后的后续 step（build/recruit 等）被 event_finish 直接丢弃
+
+**触发**：15225《阿登闪击战》卡面 = 对<西欧>发起陆战 → 在<西欧>建设陆军（两步，第一步 battle、第二步 build）。用户实测：陆战预算打完后没有第二步（西欧没建德国陆军）。
+
+**根因（battle 预算建立即整体退出）**
+- `resolve_event_card` 的 step 循环遇到 `op:'battle'` 时，建立 `game.event_budget` 后立即 `return {ok:true, pending:true, cardResolved:true}` —— 整个 `resolve_event_card` 退出，循环里 battle 之后的 step（build 等）**根本没机会执行**。
+- `event_finish`（结算战斗预算）只做三件事：关预算 + 把卡丢入弃牌堆 + 触发国家技能，**没有任何"续跑剩余 step"的逻辑**，所以第二步被永久丢弃。
+
+**同类卡（"一类问题"扫描：`battle` 之后还跟其它 step 的卡）**
+- 15225 阿登闪击战：西欧陆战 → 西欧建陆军 ❌（**本次修复**）
+- 16301 太平洋舰队：太平洋海战 → 太平洋建海军 ❌（同类路径已修通；但 `<太平洋>` 无单一 id，`space_ids_of(['太平洋'])` 返回空，属卡片数据问题，本次未处理）
+- 其余含 `battle` 的卡（15226/15231/15235/17821~17824/17525/16806/15322/15323/12502/16302/16303/17536…）`battle` 都是末步，不受影响。
+
+**修复（复用既有 step 执行逻辑，不重写遍历）**
+1. `resolve_event_card` 加第 5 参 `startStep`（默认 0）。把代价 / needs / cond / run 逃生口 / modifiers / extraPlay 全部用 `if (startStep <= 0)` 包裹（首次打出才执行，续跑时跳过，避免重复扣费、重复激活）；`actor` 提到包裹块之外，供续跑循环使用。
+2. step 循环改为 `for (let i = startStep; i < steps.length; i++)`。
+3. `battle` step 建立预算时记断点 `resumeStep: (i + 1 < steps.length) ? (i + 1) : 0`（battle 已是末步则记 0，不续跑）。
+4. `event_finish` 关预算后、弃卡前，若 `b.resumeStep > 0` 且 `b.resumeStep < steps.length`，调用 `resolve_event_card(game, b.nation, b.card_id, { choice: b.choice }, b.resumeStep)` 续跑剩余 step，并把 desc 记入 `game.log`。
+
+**验证**：`tools/_smoke_15225.js` 11/11 通过（含 15226 对照：battle 末步 `resumeStep === 0`，不误续跑）。
+
+**已知局限**：当前仅支持「battle 之后接非 battle 的 step」；若某卡 `battle` 之后又是 `battle`，续跑会再次建立预算造成嵌套（当前无此类卡，未处理）。
+
+**附带发现（与本次无关，已在工作树修正）**：HEAD 版 `rules.js` 的 `do_battle` 存在 `rmvNation` 暂时性死区（`ReferenceError: Cannot access 'rmvNation' before initialization`），跑 `tools/_smoke_seq.js` 会直接崩溃；工作树已不再复现。注意 `test_event_cards.js` 的 EVENT 卡计数断言（期望 15 张）已随卡库增长而过期（当前 82 张），属测试桩陈旧，非回归。
+
+### 2026-10-11 · R52：为什么用户强调「复用、不要新建」——殖民帝国（15348）出牌前时机的翻车
+
+**背景**：用户要求 15348《殖民帝国》（STATUS 卡，`window:'play_start'`，代价 `lose_score:1`）的发动时机改为「出牌阶段中、实际出牌前，出牌后不能再发动」，且「加拿大/印度/非洲南部 0 支英国陆军时只能发动 0 次」。
+
+**我第一次的做法（翻车）**：在 15348 的 trigger 里加了一个**新标志 `close_on_play: true`**，并在 `status_window_ready` 的 `play_start` 分支写 `if (((tr.cost&&tr.cost.skip_play) || tr.close_on_play) && play_done) return 不可发动`。用户当场叫停：「先给我实现计划。增强和响应里应该有，出牌阶段开始时的时间点，不要新建，要复用」。
+
+**为什么用户说「复用」vs「没有复用」——核心判据**
+- 本模块「出牌阶段开始时 / 出牌前才能发动」这个**谓词早就存在**：增强（EFFECT）与响应（RESPONSE）的 `tr.kind === 'play_start'`（`rules.js` ~6692）判定 `game.play_done[nation]`——本回合已打出过牌（三选一：`play_card`/`discard_one`/`minus_score`）即拒绝。STATUS 卡里「代价含 skip_play」的那几张（15338/15345/15347/17554/…）走的也是同一个 `game.play_done[nation]` 把关。
+- 也就是说：**「出牌前才能发动」这个语义，EFFECT/RESPONSE 与 skip_play 状态卡已经用 `play_done` 实现过了**。15348 只是「代价不是 skip_play」导致它原本被排除在外。
+- 我本该做的是：**把 `play_start` 窗口的 `play_done` 把关从「仅 skip_play」泛化为「所有 play_start 状态卡统一把关」**（或等价地复用同一谓词），而不是**为 15348 单独发明一个 `close_on_play` 标志**。`close_on_play` 是「第三份会过期的副本」式的新概念——它和既有的 `play_done` 语义完全重叠，下次改时机逻辑时就要同时维护两处，必出歧义。
+
+**正确做法（用户采纳的计划）**
+1. **去掉 `close_on_play` 新标志**。
+2. `status_window_ready` 的 `play_start` 分支：把 `if ((tr.cost&&tr.cost.skip_play) && play_done)` 改为**对所有 `play_start` 状态卡统一用 `game.play_done[nation]` 把关**，谓词与 EFFECT/RESPONSE `play_start` 完全一致（零新增字段）。
+3. 「0 陆军→0 次」不是新机制：`count_by` / `repeat:'per_unit'` 配置 15348 与 17548 **早已存在**，客户端 `play.js` 也已在预览里读它；只是服务端 `run_status_effect` 没实际执行。补一个**通用** `status_unit_count()` + `game.status_repeat` 每回合计数即可，属于「补齐既有声明式字段的执行点」（见通用教训：「新增配置字段必须确认有且仅有一个执行点真正读取并校验它」），不算新建机制。
+4. 客户端 `play.js:4941` 的 `count_by.spaces` 误用 `'南非'`（地图本体名是 `非洲南部`，`space_id_of_name` 只精确匹配 → 永远 null → 预览恒显 0），与 15348 服务端配置对齐改成 `'非洲南部'`。
+
+**结论（沉淀为判据）**：跨子系统复用时，**先在同一个项目里搜「这个语义是不是已经有实现」**（如 `play_done` 作为出牌前把关、EFFECT/RESPONSE 的 `play_start`）。若已有，直接复用那个**既有的谓词/字段**，不要为某一张卡新建一个语义重叠的标志。新建标志 = 把既有逻辑复制成第二份，是 R51 端口反复复发的同款根因（矛盾的死值与自动加载层优先级）。发现 memory/文档与代码存在「第二份副本」时，以代码既有实现为准并删除副本。
+
 ### 2026-10-08 · 【实现】意大利状态牌 11 张（17739-17749）全部完成
 
 **分组与实现**
@@ -4907,3 +4974,109 @@ my_air_done:  !!(game.air_done  && game.air_done[game.current_nation]),
 > 服务端的预检/置灰判定必须**枚举候选参数取【或】**，并把**可行候选**下发给客户端过滤选项；
 > 直接用最终执行函数的严格口径 + 空参数去预检，必然恒定拒绝，表现为"卡牌置灰 / 点了没反应 / 弹框不出现"。
 > 判据：某卡在 UI 上有"二选一/三选一"弹框 -> 它的预检就必须枚举，不能单次判定。
+
+---
+
+## 【2026-10-10】状态卡「建设/征召预算」：同格静默失败、多地区玩家点选、移除邻居兜底
+
+**需求（玩家口径）**：建/征召在【同格(已满)】必须【静默失败】，绝不自动兜底选相邻空格；
+【固定单格】（如战斗地区 `sp`）可自动但有占用则静默失败；【多地区】（相邻等）必须玩家手动点选。
+
+**改动（rules.js）**：
+- 新增 `status_build_valid(game, nation, type, base, space)`：校验地形匹配(陆/海) + 与 base 相邻或同格 + `can_build_at` + `unit_slot_free`。
+- 新增 query `status_build_spaces`（遍历 `get_connections(base)` 经 `status_build_valid` 过滤）给客户端候选高亮。
+- 多地区玩家点选卡（run 读 `ctx.arg.space`）：`17552`/`17843`(征召)/`17547`/`17550`(海军)/`15248`。无 space→"请选择建设地区"；校验失败→"该地区不可建设（需相邻空格且未被占用）"。
+- 移除邻居兜底（仅保留战斗地区 `sp`，占用即 `build_piece` 返回 `r.ok=false` 静默失败）：`17538` 登陆作战、`17540` 航空母舰、`15253` 闪电战。
+
+**改动（play.js）**：`STATUS_UI` 加 `sbuild:'army'|'navy'` 五张 + 战斗卡 `17544`/`17842`/`17846`/`17848` 的 `battle:'land',attacker_owner:true`；
+`on_click_table_status` 加 `ui.sbuild` 分支 → `start_status_build`（置 `status_build_pending`、send_query、渲染选格框）；
+`on_click_space` 在 `status_act_phase==='space'` 时校验候选并 `send_action('activate_status',{card,space})`；`on_reply` 处理 `status_build_spaces` 高亮；`cancel_status_act` 重置三变量。
+战斗状态卡服务端已正确读 `ctx.arg`（含 space/from/victim），仅需客户端补选目标流程，无需改服务端。
+
+**验证**：`tools/_smoke_us_status_build.js` 20/0（5 卡 × A无space拒绝 / B同格失败不兜底 / C相邻成功+1）。
+回归 `test_basic_cards` 297/0、`test_supply` 36/0。
+
+**⚠ 关键认知（海军补给 cond2）**：`compute_supply` 海军要【同时】满足 ①邻接处于补给状态的本国部队 + ②邻接本国/友军【陆地】部队。
+open-ocean 海域（如中太平洋）即使邻接一艘已补给的本国海军，因不邻接任何陆地，海军补给 cond2 仍不满足 → `can_build_at` 返回"海域须邻接…陆地部队"。
+**测试构造海军候选时，必须在候选海域的陆地邻格先放一支本国陆军补 cond2**，否则误判为代码 bug（实为规则正确）。
+
+**踩坑（调试代码崩）**：临时在 `can_build_at` 海军分支里写了 `console.log('…', base, …)`，但 `base` 不是该函数的参数 → `ReferenceError: base is not defined` 崩溃。
+**教训**：调试打印只能引用当前函数作用域内存在的变量；`can_build_at(game,nation,space,type)` 没有 base，调试时若要打 base 信息需从 `data.spaces[space]` 反查或改用其它变量。**禁止把临时 DBG 调试代码留在提交版本里**（本例已清除两处）。
+
+---
+
+## 【2026-10-10】美国 EVENT 卡 A 组（10 张）纯声明式实现 + 事件引擎关键认知
+
+**范围**：除美国 EVENT 0/19 外，英/德/苏/意 EVENT 早已全实现。本次做 A 组 10 张（17537 延后）：
+17524 进击的巴顿 / 17525 巴西远征军 / 16300 火炬行动 / 16301 太平洋舰队 / 16302 诺曼底登陆 /
+16806 大规模部署 / 17533 珍珠港部署舰队 / 17527 瓜达尔卡纳尔岛 / 17534 揍一顿再谈判 / 17536 滇缅公路。
+全部走 `EVENT_EFFECTS` 声明式（op: build/recruit/battle/eliminate/choice + as/around/pick/useNewPiece/cond），不写自定义 JS。
+
+**关键认知（事件引擎）**：
+1. **区域名解析**：单格名（西欧/拉丁美洲/非洲北部/南大西洋/北海/东太平洋/夏威夷/新西兰/中国东部/中国西部/东南亚）用 `space_ids_of` 或 `around`（around 走 `data.id_of`）；**区域组（太平洋）必须用 `space_ids_expand`**，用 `space_ids_of('太平洋')` 会因 `space_id_of` 找不到单格而返回空。
+2. **战斗预算机制**：`battle` 步骤会调 `set_event_battle` 建 `game.event_budget` 并 `return {pending:true}` 挂起，**要等客户端点选目标才真正开打**。因此"先战后建"卡（如 16301 太平洋舰队：海战→建海军）在单次 `resolve_event_card` 调用里建步不执行；"先建后战"卡（17524/16300/16302/17534）建步已同步执行（计数有效），战斗步挂起。测试的兵种计数断言必须按此区分。
+3. **单步 vs 多步传参**：`pick_space_for(arg,i,total)` 当 `total===1` 只认 `arg.space`，**不认 `arg.spaces`**；多步卡才读 `arg.spaces[i]`。headless 测单步卡（如 17536 的两分支 choice，每支 1 步）必须传 `arg.space`，否则引擎返回 need 不执行。
+4. **cond 不满足**：引擎返回 `{ok:true, noEffect:true, desc:"条件不满足…无效果"}`（打出不生效），**不是 `ok:false`**。测试断言应查 `noEffect`。
+5. **as 代友方征召**：17536 分支1 `recruit ... as:'中国'`，step 执行时 actor 切到'中国'，`can_recruit_at('中国', sp, 'army')` 按中国判定（需中国大本营相邻有补给中国部队）。
+6. **build navy useNewPiece/around**：17533/17527=征召陆军于固定格(夏威夷/新西兰)后，`build navy around:'夏威夷'`（中心=该格，过滤出相邻海域）；17534=建海军(太平洋)后 `battle sea useNewPiece`（以新海军为发起者打相邻海）。
+7. 复用原子均已存在：`space_ids_of`/`space_ids_expand`/`faction_of_nation`/`space_id`，无需新写。
+
+**验证**：`tools/_smoke_us_event_a.js` **58/0**（每卡 配置存在+actor+needs不抛错+resolve，建设/征召按先建后战断言+1，战斗步断言预算建立，17536 两分支+cond 各断言）。
+回归 `test_basic_cards` 297/0、`test_supply` 36/0 无破坏。
+
+**踩坑（测试驱动）**：① 海战步骤放敌方单位会占用本土相邻海域，导致后续"建海军"在测试里 homeAdj 取不到空格→误判配置 bug；修正为仅当 `prev!=null`（有新建单位可发起 useNewPiece）时才在目标格放敌方。② 单步 choice 分支传 `arg.spaces` 返回 need 不执行→改 `arg.space`。③ cond 不满足断言 `ok===false` 误判→改查 `noEffect`。
+
+---
+
+## 【2026-10-10】B 组美国 EVENT 卡「让权挂起」机制（17526 民主兵工厂 / 17529 摩尔曼斯克运输船队）
+
+**方向纠正（重要）**：最初设想用声明式 `as:'英国'/'苏联'` 代执行（美国替英国/苏联建设），但用户纠正——
+**B 组应是"挂起给英国/苏联操作，而不是美国操作"**。故放弃 as 代执行，改为【多步交互 delegate 让权挂起】范式。
+
+**机制**（仿 16304 中国远征军 / 17900 八月风暴 / 17721 钢铁条约 / 17817 进攻是最好的防守）：
+- 美国打出卡 → 在 `play_card` 的 EVENT 分支**提前 return**（仿 17817）：卡占出牌名额、从手牌移除，再调 `offer_uk_build_delegate` / `offer_su_build_delegate` 设 `game.uk_build_delegate` / `game.su_build_delegate` 并 `set_pending_armed_delegate` 翻转 `active` 给被让权方阵营。
+- delegate 状态：`{ nation, steps:[{op,type,spaces?}], done, return_nation }`（17526 两步 build navy/army；17529 两步 recruit army@罗斯 / build army）。
+- `view` 暴露 `uk_build_delegate`/`su_build_delegate`（仿 `us_china_delegate`）：含 nation/step/total/current_op/current_type/candidates/waiting_for；候选由服务端按 `can_build_at`/`can_recruit_at` 实时计算（仅被让权方 faction 看到候选，另一阵营看到 waiting_for）。
+- `build_actions` **追加**放行 `resolve_uk_build_delegate` / `resolve_su_build_delegate`（仅当 `faction_of_nation(dg.nation) === side`），**不替换**白名单，避免死锁。
+- 专门 action `resolve_uk_build_delegate` / `resolve_su_build_delegate`：取当前步验证 `arg.space` 合法（17529 step0 限定 `spaces:[罗斯]`），执行 build_piece/recruit_piece，`done++`，全部完成则清除 delegate + `set_pending_armed_delegate(game,null)` 还原 active。
+- 客户端 `play.js`：`update_uk_build_box`/`update_su_build_box`（照抄 `update_us_china_box`，高亮候选 + 提示框）、`on_click_space` 拦截候选点 `send_action`、`can_act_in_turn` 排除挂起、`on_click_hand_card` toast 拦截。
+
+**关键认知**：
+1. **方向性决策铁律**：凡用户说"挂起给 X 国操作"＝让权 delegate，绝不自己用 as 代执行（memory 25723603：方向纠正先提方案再改）。
+2. **EVENT 卡也能走 delegate**：EVENT 不一定是声明式同步结算，特殊卡可在 `play_card` EVENT 分支提前 return 设 delegate（17817 同款先例）。
+3. **候选实时算**：delegate 多步，每步合法点随前步执行变化，故候选放 view 暴露里实时算（不存死值），与 `us_china_delegate` 同款。
+4. **active 翻转 + 还原**：offer 时记 `armed_delegate_return_active` 并翻转；resolve 全完成后 `set_pending_armed_delegate(game,null)` 还原（17900/16304 同款机制）。
+5. **客户端照抄**：delegate UI 与既有 `us_china_delegate` 完全一致（高亮+点选+提示框），不另造 UI（铁律：复用优先）。
+
+**验证**：`tools/_smoke_us_event_b.js` **29/0**（offer 设状态+翻转 active、resolve 逐步建/征召+单位+1、完成后清除 delegate+还原 active、17529 step0 非罗斯点被拒、同卡重复 offer 返回 false）。
+回归 `test_basic_cards` 297/0、`test_supply` 36/0、A 组 58/0 无破坏。`play.js` 语法检查通过（含 5 处 delegate UI 改动）。
+
+-------------------------------------------------------------------------------
+
+## 【2026-10-10】C 组美国 EVENT 卡（17528/17531/17535）实现踩坑
+
+实现 17528 广阔的资源（弃牌堆重打）、17531 现购自运政策（美为友方英/苏/中/法征召）、17535 租借法案（委托苏/英打出1张手牌+摸1）时踩的 4 个坑，都源于"凭记忆写死模块细节"：
+
+1. **卡牌 id 是『实例字符串』，不是数字号**
+   - 手牌/牌库/弃牌堆里的卡 id 形如 `'17501#15'`（卡号#实例序号），`Number(id)` 会得到 `NaN`。
+   - 坑：在 `resolve_us_replay` / `resolve_us_lend_lease_play` 里写 `const card = Number(arg.card)`，导致 `candidates.indexOf(NaN)` 永远 -1、委托国手牌 `indexOf(NaN)` 永远 -1，所有重打/代理打牌都被"非法"拒绝。
+   - 修：保留实例字符串原样透传；查 `EVENT_EFFECTS` 时用 `inst_card(id).id`（基础卡号，如 `17501`）。
+   - 测试取卡也要用原始实例字符串（`g.decks['美国'].find(id => inst_card(id).type==='BASIC')`），不要 `Number()`。
+
+2. **中立状态在 `game.neutral[nation]`，不是 `game.neutral_status`**
+   - `is_neutral(game,nation)` 返回 `game.neutral[nation] !== false`（缺省=仍中立）；`end_neutral(game,nation,reason)` 置 `game.neutral[nation]=false`（已参战）。
+   - 坑：测试里把中立标在 `g.neutral_status['美国']=true`，结果 `is_neutral` 根本不读这个字段，断言"美国结束中立"永远失败。
+   - 修：用 `g.neutral = g.neutral || {}`（保持 `['美国']` 为 undefined→仍中立），断言改查 `g.neutral['美国'] === false`。
+
+3. **`home_base_of` 是单参 `home_base_of(nation)`，不是 `(game, nation)`**
+   - 坑：测试里调用 `I.home_base_of(g, '英国')`（把 game 当 nation 传入），返回 null，误以为"英国没本土"。实际 `home_base_of('英国')` 正常返回 `2`（不列颠）。
+   - 实现里 `us_merchant_targets` 也一度写成 `home_base_of(game, nation)`，已改为 `home_base_of(nation)`。
+
+4. **本模块 `offer_*` 不要用 `table_has` 守卫**
+   - 坑：照 B 组记忆写了 `if (!table_has(game,'美国',17535)) return game`，而 `table_has` 检查"该卡是否当前在桌面"，直接 `offer_*` 调用（不走 play_card）时卡不在桌面→直接 no-op，挂起状态永远建不起来。
+   - 修：本模块 `offer_us_china_build`/`offer_us_theater_delegate` 都**不带** `table_has` 守卫；新加的 `offer_us_replay`/`offer_us_merchant`/`offer_us_lend_lease` 同样不带。
+   - 另：`resolve_us_lend_lease_select` 必须显式 `dg.nation = nat`，漏写则委托国始终为 null、后续 step1 永不触发（死锁）。
+
+> **数据特性（纠正 2026-10-11）**：17531「本土或相邻」用 `home_base_of(nation)`+其 `connections` 过滤 `can_recruit_at`。此前误判"英/法候选为空（数据特性）"是**错的**——只用了 `army` 过滤。真实情况：英/法大本营在 `setup(1)` 已被自己的起始陆军占住（"已有本国部队"不可再征召，属正确行为），但其**相邻海域**（英国→北海；法国→波罗的海/北海/地中海）对 `navy`/`air` 均合法。改为 `army/navy/air` 多兵种过滤后，英/法候选**不为空**。结论：候选集不必放宽到"全国合法格"，原"本土+相邻"约束配合多兵种即可。教训：判定"某国无候选"前，须把该卡支持的所有兵种都试一遍，别只试一种。
+
+**验证**：`tools/_smoke_us_event_c5.js` 8/0、`_smoke_us_event_c6.js` 11/0、`_smoke_us_event_c7.js` 13/0。回归 `test_basic_cards` 297/0、C 组其余（c1 11/0、c2 8/0、c3 12/0、c4 5/0）无破坏。
