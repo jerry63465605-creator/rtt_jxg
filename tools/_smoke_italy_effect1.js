@@ -231,7 +231,7 @@ console.log('\n=== 组 3 · watch 机制：他人触发的卡能进候选 ===')
 		g.hands = g.hands || {}
 		g.hands['意大利'] = ['17705#1']
 		g.hands['德国'] = []
-		g.armed_offer = null
+		g.armed_offers = []; g.armed_offer = null
 
 		/* ① 德国打出[潜艇行动] -> 意大利（watch）应收到窗口 */
 		offer(g, 'econ_used', { tag: '潜艇行动', targets: ['英国'], nation: '德国' })
@@ -243,7 +243,7 @@ console.log('\n=== 组 3 · watch 机制：他人触发的卡能进候选 ===')
 		const g2 = newGame()
 		g2.hands = g2.hands || {}
 		g2.hands['意大利'] = ['17705#1']
-		g2.armed_offer = null
+		g2.armed_offers = []; g2.armed_offer = null
 		offer(g2, 'econ_used', { tag: '潜艇行动', targets: ['英国'], nation: '日本' })
 		ok('非德国发起 -> 不给窗口（仅德国）', !g2.armed_offer)
 
@@ -251,7 +251,7 @@ console.log('\n=== 组 3 · watch 机制：他人触发的卡能进候选 ===')
 		const g3 = newGame()
 		g3.hands = g3.hands || {}
 		g3.hands['意大利'] = ['17705#1']
-		g3.armed_offer = null
+		g3.armed_offers = []; g3.armed_offer = null
 		offer(g3, 'econ_used', { tag: '轰炸行动', targets: ['英国'], nation: '德国' })
 		ok('非潜艇行动标签 -> 不给窗口', !g3.armed_offer)
 
@@ -259,7 +259,7 @@ console.log('\n=== 组 3 · watch 机制：他人触发的卡能进候选 ===')
 		const g4 = newGame()
 		g4.hands = g4.hands || {}
 		g4.hands['意大利'] = ['17705#1']
-		g4.armed_offer = null
+		g4.armed_offers = []; g4.armed_offer = null
 		offer(g4, 'econ_used', { tag: '潜艇行动', targets: [], nation: '德国' })
 		ok('无受击国 -> 不给窗口', !g4.armed_offer)
 
@@ -335,7 +335,7 @@ console.log('\n=== 组 3b · 17711 维希法国殖民地（建设/征召/消灭/
 			const g = newGame()
 			g.hands = g.hands || {}
 			g.hands['意大利'] = ['17711#1']
-			g.armed_offer = null
+			g.armed_offers = []; g.armed_offer = null
 			offer(g, w, { space: SP['中东'], nation: '英国', attacker: '英国' })
 			ok('窗口 ' + w + ' 能给意大利窗口', !!g.armed_offer, g.armed_offer && g.armed_offer.cards)
 		}
@@ -343,7 +343,7 @@ console.log('\n=== 组 3b · 17711 维希法国殖民地（建设/征召/消灭/
 		const g2 = newGame()
 		g2.hands = g2.hands || {}
 		g2.hands['意大利'] = ['17711#1']
-		g2.armed_offer = null
+		g2.armed_offers = []; g2.armed_offer = null
 		offer(g2, 'after_battle', { space: SP['中东'], nation: '德国', attacker: '德国' })
 		ok('轴心行动 -> 不给窗口', !g2.armed_offer)
 	}
@@ -538,7 +538,7 @@ console.log('\n=== 组 4 · 16700 一日之狮 ===')
 	if (typeof offer === 'function') {
 		const g = mkLion()
 		g.hands['意大利'] = ['16700#1']
-		g.armed_offer = null
+		g.armed_offers = []; g.armed_offer = null
 		offer(g, 'enemy_echo_played', { nation: '英国', card: '15305#1' })
 		ok('敌方打出增强卡 -> 意大利拿到窗口', !!g.armed_offer)
 		ok('窗口归属意大利', g.armed_offer && g.armed_offer.nation === '意大利')

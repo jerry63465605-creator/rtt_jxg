@@ -982,6 +982,40 @@ if (game.armed_offer && faction_of_nation(game.armed_offer.nation) === side)
 
 ---
 
+### 2026-10-12 · 【排错】national_skill_offer 与 armed_offer 并存时，武装窗口被技能窗口的排他 return 盖掉（第 4 次）
+
+**现象**：德国★卡 **15237**（steps=在`<黑海>`建海军 + 在`<中东>`征召陆军）打出后，
+建完海军**没有弹出武装窗口**（15208/15210 增强时点），而是径直执行征召陆军，
+随后才弹德国国家技能窗口。玩家"空打"后拿不到增强机会。
+
+**根因**：`build_actions` 里 `national_skill_offer` 分支（2026-09-30 加）排在
+`hasArmedOfferForSide` 分支**之前**，且是**排他 return**，只放行
+`{use_national_skill, skip_national_skill, log, play_card}`，**不含** `use_armed_offer`/`skip_armed_offer`。
+15237 是★卡、又建又征召 → 两个 armed 窗口 + 国家技能窗口**同时**挂着，
+技能分支先命中直接 return，武装动作进不了 `view.actions` → 客户端静默不发。
+（与 2026-10-07 那条**同构**：都是"一个挂起分支排他 return，把另一个挂起窗口的动作吞了"。）
+
+**为什么现在才暴露**：armed_offer 与 national_skill_offer 此前很少同时挂在同一阵营同侧；
+15237 这种"★ + 带 build/recruit 步骤"的卡把两者首次稳定地凑到同一时刻。
+
+**修复**（2026-10-12，最小改动、未新增原子）：
+把两处"可选机会窗口"分支改为**互相叠加**各自动作，而非各自排他 return——
+- `national_skill_offer` 分支：若同侧还有武装窗口（`hasArmedOfferForSide(game, side)`），
+  一并放行 `use_armed_offer`/`skip_armed_offer`；
+- `hasArmedOfferForSide` 分支：若同侧还有国家技能窗口，一并放行 `use_national_skill`/`skip_national_skill`。
+两处都保留 `play_card`（错过即失效，不会死锁）。
+
+**影响**：所有★且含建/征召的德国卡（15225/15226/15230/15232/15235/14502/14503/6600 等）
+一并恢复"建/征召后弹武装窗口 + 国家技能窗口并存"。
+
+**验证**：`tools/_smoke_15237_whitelist.js` 11 断言全过（A 双窗口并存 / B 仅武装 / C 仅技能 / D 敌方视角隔离）；
+`node --check` + `check_reuse.js`（B/C 段 `[ok]`）通过；服务器重启 8091 生效。
+
+**再次敲定（第 4 次）**：`build_actions` 里任何一个"待玩家表态"分支**都不该用排他 return 替换白名单**，
+新增/改动挂起窗口时，必须把"是否还有别的挂起窗口"一并并入白名单。
+
+---
+
 ### 2026-10-07 · 【排错】resolve_response_choice 被全局守卫误挡 → 响应卡选择"点了没反应"死锁
 
 **现象**：响应卡 effect 返回 `pending`（需玩家选目标）后，玩家提交 `resolve_response_choice`，
@@ -3874,6 +3908,38 @@ offer_armed_effects(game, 'econ_used', {
 > armed 窗口只能做**事后回滚**。
 >
 > 补救技巧：**事后回滚往往等价于事前拦截**（损耗回滚 = 没损耗），
+
+---
+
+### 2026-10-11 · R53：`resolve_event_card` 的 `run` 包装器会吞掉 `run` 内部返回的 `need` —— 导致「点完选项不部署」
+
+**触发（一张报障 = 一类问题）**
+- 用户实测：苏联《Z 计划》(17815) 点完选项后没有部署中国空军，卡凭空消失。
+- 同型参照：17514《飞虎队》（中国 actor、空军阶段、部署/夺取二选一）**能正常生效**。两张卡 `run` 结构完全相同，差异只在"缺参询问"的物理位置。
+
+**根因（包装器把 `need` 当成功吞掉）**
+- `resolve_event_card` 对 `eff.run` 的返回值是这样包裹的（rules.js ~13127）：
+  ```js
+  const r = eff.run(game, { nation, actor, card_id, arg })
+  const rd = (r && r.ok !== undefined) ? r : { ok: true, desc: (r && r.desc) || (c.name + ' 已结算') }
+  ```
+- 17815 的 `run` 在「选了选项、未选地区」时返回 `{ need:'space', candidates, pick, pickMin }` —— **没有 `ok` 字段**。于是 `r.ok === undefined` → 被包成 `{ ok:true, desc }`，**`need:'space'` 整个被丢弃**。
+- `play_card`（~21420）看到 `r.ok` 为真、`r.pending` 为 undefined → 直接弃牌结算。**中间那一步「请选择目标地区」从未出现**，所以"点完选项不部署"。
+- 17514 之所以没事：它在 `event_card_needs` 有**专属分支**（~12406），`choice` 与 `space` 的 `need` 都在 `event_card_needs` 阶段**预先**问完，`run` 只在参数齐后被调用做实际部署，根本不会走到"run 内部返回 need"这条路。
+
+**修复（照抄正常工作的同款卡，最小改动）**
+- 一行：`event_card_needs` 的 `if (faceId === '17514')` 改为 `if (faceId === '17514' || faceId === '17815')`。两张卡逻辑完全相同（`nat='中国'` 已硬编码在该分支内），于是 17815 也由 `event_card_needs` 统一询问 choice+space，`run` 仅在参数齐后部署。
+- **未动** `run`、`resolve_event_card` 包装器、客户端。
+
+**验证**：`tools/_dbg_zplan.js` 端到端——
+- [A] 选牌后 → `need:'choice'`（正确 pending）；
+- [B] 选完选项未选区 → `need:'space'`，候选 `[4,7,22]`，**手牌仍在（未结算）**（=修复生效，旧版会直接弃牌）；
+- [C] 选完选项+地区 → 在「北欧」真实部署中国空军，日志 `中国在北欧部署1支空军`，卡结算弃牌。
+
+**同类问题扫描（重要，属潜在根因 bug）**
+- `resolve_event_card` 的 `run` 包装器对「`run` 内部返回 `need`」的处理**本身是错的**（只认 `ok`，不认 `need`）。任何"在 `run` 里返回 `{need:...}`"的卡，只要其 `event_card_needs` 分支**不完整**（只问了 choice 没问 space/piece），都会踩同一个坑。
+- 已确认：17514 分支完整（安全）、17815 现已补上（安全）。**新增 run 式卡时，choice/space/piece 的 `need` 一律在 `event_card_needs` 分支里声明，`run` 只负责执行**——不要依赖 `run` 返回 `need` 来向客户端要参。
+- 更彻底的根治（未做，留作后续）：把包装器改为 `if (r && r.need) return { ok:true, need:r.need, pending:true, candidates:r.candidates, ...r }`，与 `event_card_needs` 的 need 出口同口径；但属热路径，需回归测试，本次不动。
 > 且改动面小得多 —— 优先找现成窗口 + 回滚，别急着造挂起。
 
 ---

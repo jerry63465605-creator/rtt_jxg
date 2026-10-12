@@ -280,10 +280,15 @@ function update_phase_panel() {
 		}).join("")
 	}
 
-	/* 按钮只在轮到自己、且没有待决事项时可点 */
+	/* 按钮只在轮到自己、且没有待决事项时可点（含 17510 挂起给英国期间禁用） */
 	const btn = document.getElementById("btn_next_phase")
-	if (btn)
-		btn.disabled = !can_act_in_turn()
+	if (btn) {
+		btn.disabled = !can_act_in_turn() || !!(view && view.us_political)
+		if (btn.disabled && view && view.us_political)
+			btn.title = "等待【英国】选择《我们的政治哲学》的[响应卡]，期间不可推进阶段"
+		else
+			btn.title = ""
+	}
 
 	update_phase_buttons()
 }
@@ -299,6 +304,11 @@ function update_phase_buttons() {
 	const play = document.getElementById("play_choices")
 	if (play)
 		play.classList.toggle("hide", !inPlay)
+
+	/* 弃牌阶段：打牌/弃牌 模式开关的可见性（离开弃牌阶段自动复位为弃牌模式） */
+	const inDiscard = mine && view.turn_phase === "discard"
+	if (!inDiscard && discard_playmode)
+		discard_playmode = false
 
 	/* 空军阶段："弃 1 张手牌调度空军"的入口按钮 */
 	const air = document.getElementById("btn_air_move")
@@ -321,9 +331,11 @@ function update_phase_buttons() {
 		const canSwap = inResource && view.can_resource_swap
 		res.classList.toggle("hide", !inResource)
 		res.disabled = !canSwap
-		res.textContent = view.my_swap_count
-			? "资源再分配：本回合已用"
-			: "资源再分配…（弃 3 张换 1 张基本卡）"
+		res.textContent = view.rs_disabled_reason
+			? view.rs_disabled_reason
+			: (view.my_swap_count
+				? "资源再分配：本回合已用"
+				: "资源再分配…（弃 3 张换 1 张基本卡）")
 	}
 
 	/*
@@ -342,7 +354,6 @@ function update_phase_buttons() {
 	 */
 	const confirmBtn = document.getElementById("btn_confirm_discard")
 	if (confirmBtn) {
-		const inDiscard = mine && view.turn_phase === "discard"
 		const inOpening = !!view.opening && is_my_turn()
 		const show = inDiscard || inOpening
 		confirmBtn.classList.toggle("hide", !show)
@@ -357,6 +368,14 @@ function update_phase_buttons() {
 				? "确认弃牌（" + discard_pick.length + " 张）"
 				: "确认弃牌"
 		}
+	}
+
+	/* 弃牌阶段：打牌模式切换按钮（仅在弃牌阶段、轮到本方时显示） */
+	const dpBtn = document.getElementById("btn_discard_playmode")
+	if (dpBtn) {
+		dpBtn.classList.toggle("hide", !inDiscard)
+		dpBtn.disabled = !inDiscard
+		dpBtn.textContent = discard_playmode ? "退出打牌模式" : "打牌模式"
 	}
 
 	/* 资源弹框开着时，若已不可再换（阶段变了 / 已用过）则自动关闭 */
@@ -443,8 +462,8 @@ function update_phase_buttons() {
 	update_us_replay()
 	update_us_merchant()
 	update_us_lend_lease()
-	/* 【2026-10-11】17510 我们的政治哲学：英国弃牌堆选响应卡打出 */
-	update_us_political()
+	/* 【2026-10-12】17510 我们的政治哲学：英国弃牌堆选响应卡打出（挂起给英国，卡图选择） */
+	update_us_political_box()
 	/* 【2026-10-10】17555 大萧条的余波：结束中立奖励按钮 */
 	update_us_depression_box()
 	/* 桌面状态卡渲染（含可触发高亮） */
@@ -452,10 +471,10 @@ function update_phase_buttons() {
 	/*
 	 * 【2026-09-30 德国增强】
 	 *   - update_pending_echo_box：15214 战术革新 两步选牌（弃桌状态卡 / 免费打状态卡）
-	 *   - update_deck_inspect_box：15215 卓越规划 检视牌堆顶 N 张置顶/底
+	 * 【2026-10-12】15215 卓越规划的置顶/置底已并入通用 update_peek_box
+	 *   （原 update_deck_inspect_box 与其并存会双弹框，已删除）。
 	 */
 	update_pending_echo_box()
-	update_deck_inspect_box()
 }
 
 /* 出牌阶段②：进入"弃 1 张手牌"模式（再点手牌即弃置） */
@@ -516,6 +535,25 @@ function cancel_discard_mode() {
 	if (!discard_mode)
 		return
 	discard_mode = false
+	update_hand_panel()
+}
+
+/* 弃牌阶段：打牌/弃牌 模式开关（默认 false = 弃牌模式，点手牌框选弃置） */
+let discard_playmode = false
+
+function toggle_discard_playmode() {
+	discard_playmode = !discard_playmode
+	toast(discard_playmode
+		? "打牌模式：点【可打出】的时点卡即打出（再点按钮退出）"
+		: "已退出打牌模式，回到弃牌框选")
+	update_hand_panel()
+	update_phase_buttons()
+}
+
+function cancel_discard_playmode() {
+	if (!discard_playmode)
+		return
+	discard_playmode = false
 	update_hand_panel()
 }
 
@@ -843,6 +881,7 @@ function extra_play_allows_card(c) {
 	if (ep.filter === "status") return c.type === "STATUS"
 	/* 【2026-10-01】英国国家技能：事件牌或状态牌 */
 	if (ep.filter === "event_status") return c.type === "STATUS" || c.type === "EVENT"
+	if (ep.filter === "status_response") return c.type === "STATUS" || c.type === "RESPONSE"
 	/* 【2026-10-07】意大利国家技能：状态卡或经济战卡 */
 	if (ep.filter === "status_econ") return c.type === "STATUS" || c.type === "ECON"
 	/* 【2026-10-08】日本国家技能：响应牌 */
@@ -860,6 +899,7 @@ function extra_play_hint() {
 	if (ep.filter === "drawn") return "可额外打出 1 张刚刚抽到的牌"
 	if (ep.filter === "status") return "可额外打出 1 张状态卡（国家技能，不占名额）"
 	if (ep.filter === "event_status") return "可额外打出 1 张事件牌或状态牌（国家技能，不占名额）"
+	if (ep.filter === "status_response") return "可额外打出 1 张状态卡或响应牌（国家技能，不占名额）"
 	if (ep.filter === "status_econ") return "可额外打出 1 张状态卡或经济战卡（国家技能，不占名额）"
 	if (ep.filter === "response") return "可额外打出 1 张响应牌（国家技能，不占名额）"
 	if (ep.filter === "bombing") return "可额外打出 1 张[轰炸行动]牌（不占名额）"
@@ -1229,30 +1269,84 @@ function update_us_lend_lease() {
 		'选择 ' + dg.nation + ' 的1张手牌打出，然后摸1张。', opt)
 }
 
-/* 【2026-10-11】17510 我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出（暗置）。
- * 复用 17535 租借法案的"候选列表→ask_box→send_action"范式，候选来自 view.us_political.candidates。 */
-function update_us_political() {
+/* 【2026-10-12】17510 我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出（挂起给英国）。
+ * 复用 script_modal 的"卡片网格 + 点选高亮(.sel) + 底部确认(.modal-foot)"范式，
+ * 并用 classList 切换 .hide（而非 style.display）以保留 .modal 的 flex 居中。
+ * 候选来自 view.us_political.candidates，点选 1 张 → 确认 → send_action。 */
+let us_political_sel = null
+function update_us_political_box() {
+	const modal = document.getElementById("us_political_modal")
+	if (!modal) return
 	const dg = view && view.us_political
-	if (!dg) {
-		if (ask_state && ask_state.kind === 'us_political') { ask_state = null; render_ask_box(null, null, null) }
-		return
+	/* 仅英国（有 candidates）弹框；其他阵营只收到 waiting_for，不弹框 */
+	if (!dg || !dg.candidates) { modal.classList.add("hide"); us_political_sel = null; return }
+	modal.classList.remove("hide")
+	const box = modal.querySelector(".modal-box")
+	box.innerHTML = ""
+
+	const head = document.createElement("div")
+	head.className = "modal-head"
+	const title = document.createElement("span")
+	title.className = "modal-title"
+	title.textContent = "《我们的政治哲学》"
+	head.appendChild(title)
+	const sub = document.createElement("span")
+	sub.className = "modal-sub"
+	sub.textContent = "英国从弃牌堆选 1 张[响应卡]打出"
+	head.appendChild(sub)
+	box.appendChild(head)
+
+	const sec = document.createElement("div")
+	sec.className = "modal-section"
+	const label = document.createElement("div")
+	label.className = "modal-label"
+	label.textContent = "选择 1 张[响应卡]"
+	const hint = document.createElement("span")
+	hint.className = "modal-hint"
+	hint.textContent = us_political_sel ? "已选 1 / 1，点确认" : "点选 1 张卡牌"
+	label.appendChild(hint)
+	sec.appendChild(label)
+
+	const cands = dg.candidates || []
+	const grid = document.createElement("div")
+	grid.className = "card-grid"
+	if (!cands.length) {
+		const e = document.createElement("p")
+		e.className = "empty-note"
+		e.textContent = "英国弃牌堆中没有[响应卡]"
+		grid.appendChild(e)
+	} else {
+		for (const c of cands) {
+			const el = card_elt(c, () => {
+				us_political_sel = (us_political_sel === c.id) ? null : c.id
+				update_us_political_box()
+			})
+			if (us_political_sel === c.id) el.classList.add("sel")
+			grid.appendChild(el)
+		}
 	}
-	const cards = dg.candidates || []
-	if (!cards.length) {
-		if (ask_state && ask_state.kind === 'us_political') { ask_state = null; render_ask_box(null, null, null) }
-		return
+	sec.appendChild(grid)
+	box.appendChild(sec)
+
+	const foot = document.createElement("div")
+	foot.className = "modal-foot"
+	const cancel = document.createElement("button")
+	cancel.className = "action"
+	cancel.textContent = "取消"
+	cancel.onclick = () => { us_political_sel = null; update_us_political_box() }
+	foot.appendChild(cancel)
+	const ok = document.createElement("button")
+	ok.className = "action primary"
+	ok.textContent = "确认选择"
+	ok.disabled = !us_political_sel
+	ok.onclick = () => {
+		if (!us_political_sel) return
+		const chosen = us_political_sel
+		us_political_sel = null
+		send_action("resolve_us_political_play", { card: chosen })
 	}
-	const opt = cards.map(c => ({
-		label: (c.name || ('卡' + c.id)) + '（打出）', cls: 'primary',
-		onClick: () => {
-			ask_state = null
-			render_ask_box(null, null, null)
-			send_action('resolve_us_political_play', { card: c.id })
-		},
-	}))
-	ask_state = { kind: 'us_political' }
-	render_ask_box('我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出',
-		'选择英国弃牌堆中的 1 张[响应卡]，由英国当作响应卡打出（暗置到桌面）。', opt)
+	foot.appendChild(ok)
+	box.appendChild(foot)
 }
 
 /* 【2026-10-10】17555 大萧条的余波：美国结束中立奖励按钮。
@@ -1651,6 +1745,8 @@ function update_skill_discard_box() {
 				okType = (t === 'STATUS' || t === 'ECON')
 			else if (pd.play_filter === 'response')
 				okType = (t === 'RESPONSE')
+			else if (pd.play_filter === 'status_response')
+				okType = (t === 'STATUS' || t === 'RESPONSE')
 			else if (pd.play_filter)
 				okType = (t === String(pd.play_filter).toUpperCase())
 			return okType &&
@@ -1680,6 +1776,7 @@ function update_skill_discard_box() {
 			p.textContent = "没有可打出的" +
 				(pf === 'response' ? '响应牌'
 					: pf === 'event_status' ? '事件牌或状态牌'
+					: pf === 'status_response' ? '状态卡或响应牌'
 					: pf === 'status_econ' ? '状态卡或经济战卡'
 					: (pf || '牌'))
 			playBox.appendChild(p)
@@ -2390,21 +2487,35 @@ function on_click_hand_card(c, d) {
 	}
 
 	/*
-	 * ⑤ 弃牌阶段：点手牌 = 【框住选中】（可多选），
-	 * 再用侧栏的【确认弃牌】按钮一次性提交。
+	 * ⑤ 弃牌阶段：点手牌分两种模式。
+	 *   · 打牌模式（btn_discard_playmode 切换）：
+	 *       点【可打出】的时点卡 -> 落到下方 ⑥/⑦ 打牌流程；
+	 *       不可打出的牌提示后忽略（退出打牌模式后可框选弃置）。
+	 *   · 弃牌模式（默认）：点手牌 = 【框住选中】（可多选），
+	 *       再用侧栏的【确认弃牌】按钮一次性提交。
 	 */
 	if (view.turn_phase === "discard") {
-		const i = discard_pick.indexOf(c.id)
-		if (i >= 0)
-			discard_pick.splice(i, 1)
-		else
-			discard_pick.push(c.id)
-		update_hand_panel()
-		update_phase_buttons()
-		toast(discard_pick.length
-			? "已选中 " + discard_pick.length + " 张，点【确认弃牌】提交"
-			: "已取消选择")
-		return
+		if (discard_playmode) {
+			const _hr5 = view.hand_ready && view.hand_ready[c.id]
+			if (_hr5 && _hr5.ok) {
+				/* 可打出：落到下方 ⑥ 阶段判定 / ⑦ 打牌流程，不在此 return */
+			} else {
+				toast("《" + c.name + "》本阶段不可打出，退出打牌模式后可框选弃置")
+				return
+			}
+		} else {
+			const i = discard_pick.indexOf(c.id)
+			if (i >= 0)
+				discard_pick.splice(i, 1)
+			else
+				discard_pick.push(c.id)
+			update_hand_panel()
+			update_phase_buttons()
+			toast(discard_pick.length
+				? "已选中 " + discard_pick.length + " 张，点【确认弃牌】提交"
+				: "已取消选择")
+			return
+		}
 	}
 
 	/*
@@ -2739,7 +2850,13 @@ function update_hand_panel() {
 		if (hr && !hr.ok && hr.reason)
 			d.title = hr.reason
 
-		if (isDiscardPhase || openingMine) {
+		if (discard_playmode && hr && hr.ok) {
+			/* 弃牌阶段·打牌模式：可打出的时点卡标"打" */
+			const b = document.createElement("span")
+			b.className = "badge play"
+			b.textContent = "打"
+			d.appendChild(b)
+		} else if (isDiscardPhase || openingMine) {
 			/* 弃牌阶段 / 初始阶段：被框住的牌标序号，方便核对 */
 			if (isCostSelected) {
 				const b = document.createElement("span")
@@ -3035,6 +3152,13 @@ function update_resource_box() {
 
 /* 玩家点击累积的顺序（存卡 id，先点的在前） */
 let peek_order = []
+/*
+ * 【2026-10-12 新增】15215 卓越规划专用：卡 id -> 'top' | 'bottom'。
+ * 只影响 topBottom 模式（检视自己牌堆顶后置顶/置底）；
+ * 15305 双十字系统（置对手牌堆顶）不使用，全部按 'top' 处理。
+ * 与 peek_order 分开存，点「重排」只清顺序、保留顶/底选择（重新选择的一部分）。
+ */
+let peek_where = {}
 /*
  * 【2026-09-25 新增】本地 peek 状态（query 路径用，不依赖 view.peek）。
  *   pending_peek_for_card —— 当前 pending 的卡对象，submit_peek 用它的 id
@@ -3371,15 +3495,25 @@ function update_peek_box() {
 	 * game.peek 由 query 触发写入但 view 不广播）；
 	 * 只保留 (B) 路径。
 	 */
+	/*
+	 * 【2026-10-12 统一】两种模式共用本弹框：
+	 *   (A) 15305 双十字系统（topBottom=false，本地 query 路径）：
+	 *       观看对手手牌 -> 排序置于【对手牌堆顶】（提交 order）
+	 *   (B) 15215 卓越规划（topBottom=true，view.peek 路径）：
+	 *       检视自己牌堆顶 -> 每张选【置顶/置底】+ 排序（提交 placement）
+	 * 两模式差异仅在于：是否渲染置顶/置底按钮、文案、以及提交参数。
+	 */
 	let pk = null
 	if (pending_peek_for_card && peek_cards && peek_cards.length) {
-		/* (B) 本地路径：peek_cards 已是卡对象数组（服务端 query 出口转好的） */
+		/* (A) 本地路径：peek_cards 已是卡对象数组（服务端 query 出口转好的） */
 		pk = {
 			cards: peek_cards,
 			nation: peek_target || "?",
+			card: pending_peek_for_card.id,
+			topBottom: false,
 		}
 	} else if (view.peek && view.peek.cards && view.peek.cards.length) {
-		/* (A) 旧路径：保留兼容（万一有其他卡触发 view.peek） */
+		/* (B) 服务端路径：15215 卓越规划（topBottom）等 */
 		pk = view.peek
 	} else {
 		modal.classList.add("hide")
@@ -3395,35 +3529,81 @@ function update_peek_box() {
 	 * 取消等于免费偷看。必须排完序点【确认顺序】。
 	 * 这里只保留【重排】与【确认顺序】两个操作。
 	 */
+	const isTB = !!pk.topBottom
 
-	/* 对手换了 / 换了一批牌 -> 本地顺序要重置 */
+	/* 换了一批牌 -> 本地顺序与顶/底选择要重置 */
 	if (peek_order.length > pk.cards.length)
 		peek_order = []
 
 	const ids = pk.cards.map(c => c.id)
 	peek_order = peek_order.filter(id => ids.indexOf(id) >= 0)
+	for (const k in peek_where)
+		if (ids.indexOf(k) < 0) delete peek_where[k]
 
-	/* ---- ① 被观看的手牌 ---- */
+	/* ---- 标题 / 副标题 / 步骤文案按模式切换 ---- */
+	const setTxt = (elId, txt) => {
+		const el = document.getElementById(elId)
+		if (el) el.textContent = txt
+	}
+	setTxt("peek_title", isTB ? "卓越规划" : "双十字系统")
+	setTxt("peek_subtitle", isTB
+		? "检视自己牌堆顶 " + pk.cards.length + " 张 → 每张选置顶/置底并排顺序"
+		: "观看对手手牌 → 按你点击的顺序置于其牌堆顶")
+	setTxt("peek_step1_label", isTB ? "① 检视的牌" : "① 观看的手牌")
+	setTxt("peek_step2_label", isTB
+		? "② 依次点击，决定组内顺序（先点的排最前）"
+		: "② 依次点击，决定牌堆顶的顺序")
+
+	/* ---- ① 卡牌（topBottom 模式额外渲染置顶/置底按钮） ---- */
 	const box = document.getElementById("peek_cards")
 	box.innerHTML = ""
 	for (const c of pk.cards) {
 		const idx = peek_order.indexOf(c.id)
+		const cell = document.createElement("div")
+		cell.className = "deck-cell"
 		const d = card_elt(c, () => toggle_peek_order(c.id))
 		if (idx >= 0) {
 			d.classList.add("sel")
 			const b = document.createElement("span")
 			b.className = "badge"
-			/* 先点的 -> 牌堆顶，显示为"顶1" */
-			b.textContent = "顶" + (idx + 1)
+			/* 15305 恒为牌堆顶，显示"顶N"；15215 可能是置底组，只显示序号 */
+			b.textContent = isTB ? String(idx + 1) : "顶" + (idx + 1)
 			d.appendChild(b)
 		}
-		box.appendChild(d)
+		if (isTB) {
+			/*
+			 * 重新选择：置顶/置底随时可切换（点击后整体重渲染，状态即生效）。
+			 * 卡面左下角挂「顶 / 底」角标，点击后立刻可见，避免"点了没反应"。
+			 */
+			const where = peek_where[c.id] || "top"
+			const tag = document.createElement("span")
+			tag.className = "where-badge " + (where === "bottom" ? "bot" : "top")
+			tag.textContent = where === "bottom" ? "底" : "顶"
+			d.appendChild(tag)
+		}
+		cell.appendChild(d)
+		if (isTB) {
+			const where = peek_where[c.id] || "top"
+			const btnTop = document.createElement("button")
+			btnTop.textContent = "置顶"
+			btnTop.className = "action" + (where === "top" ? " primary" : "")
+			btnTop.onclick = () => { peek_where[c.id] = "top"; update_peek_box() }
+			const btnBot = document.createElement("button")
+			btnBot.textContent = "置底"
+			btnBot.className = "action" + (where === "bottom" ? " primary" : "")
+			btnBot.onclick = () => { peek_where[c.id] = "bottom"; update_peek_box() }
+			cell.appendChild(btnTop)
+			cell.appendChild(btnBot)
+		}
+		box.appendChild(cell)
 	}
 
 	/* ---- ② 提示与按钮状态 ---- */
 	const targetNote = document.getElementById("peek_target_note")
 	if (targetNote)
-		targetNote.textContent = "（" + pk.nation + " 的 " + pk.cards.length + " 张手牌）"
+		targetNote.textContent = isTB
+			? "（" + pk.nation + " 牌堆顶 " + pk.cards.length + " 张）"
+			: "（" + pk.nation + " 的 " + pk.cards.length + " 张手牌）"
 
 	const orderNote = document.getElementById("peek_order_note")
 	if (orderNote)
@@ -3431,20 +3611,32 @@ function update_peek_box() {
 
 	const desc = document.getElementById("peek_order_desc")
 	if (desc) {
+		const names = peek_order.map(id => {
+			const c = pk.cards.find(x => x.id === id)
+			return c ? c.name : id
+		})
 		if (!peek_order.length) {
-			desc.textContent = "依次点击卡牌决定顺序：先点的排在最上面（牌堆顶）。"
+			desc.textContent = "依次点击卡牌决定顺序：先点的排在最上面。" +
+				"（已排的牌会标上序号，再点一次可取消）"
 		} else {
-			const names = peek_order.map(id => {
-				const c = pk.cards.find(x => x.id === id)
-				return c ? c.name : id
-			})
-			desc.textContent = "牌堆顶顺序（上→下）：" + names.join(" → ")
+			desc.textContent = "当前顺序：" + names.join(" → ")
+		}
+		if (isTB) {
+			/* 顶/底分组统计，方便玩家确认"哪些置顶、哪些置底" */
+			let nTop = 0, nBot = 0
+			for (const c of pk.cards) {
+				if ((peek_where[c.id] || "top") === "top") nTop++
+				else nBot++
+			}
+			desc.textContent += "　【置顶 " + nTop + " 张 / 置底 " + nBot + " 张】"
 		}
 	}
 
 	const okBtn = document.getElementById("peek_confirm")
-	if (okBtn)
+	if (okBtn) {
 		okBtn.disabled = (peek_order.length !== pk.cards.length)
+		okBtn.textContent = isTB ? "确认排列" : "确认顺序"
+	}
 }
 
 /* 点一张牌：已排则取消，未排则追加到末尾 */
@@ -3457,7 +3649,7 @@ function toggle_peek_order(id) {
 	update_peek_box()
 }
 
-/* 重排：清空已选顺序 */
+/* 重排：清空已选顺序（【保留】15215 的置顶/置底选择，只重排顺序） */
 function reset_peek_order() {
 	peek_order = []
 	update_peek_box()
@@ -3473,6 +3665,7 @@ function submit_peek() {
 	let cardCount = 0
 	let nation = "?"
 	let cardId = null
+	let isTB = false
 	if (localMode) {
 		cardCount = peek_cards.length
 		nation = peek_target || "?"
@@ -3481,32 +3674,50 @@ function submit_peek() {
 		cardCount = (view.peek.cards || []).length
 		nation = view.peek.nation
 		cardId = view.peek.card
+		isTB = !!view.peek.topBottom
 	} else {
-		toast("当前没有等待排序的手牌")
+		toast("当前没有等待排序的牌")
 		return
 	}
 	if (peek_order.length !== cardCount) {
 		toast("还需要排 " + (cardCount - peek_order.length) + " 张")
 		return
 	}
-	send_action("play_card", {
-		card: cardId,
-		order: peek_order.slice(),
-		/*
-		 * 【2026-09-25 bug 修复】把 query 阶段挑出的 cards 一起提交，
-		 * 服务端据此校验 order 一致性（避免服务端重新挑导致不一致）。
-		 * peek_cards 是卡对象数组，提取 id 字段。
-		 */
-		peek_cards: localMode
-			? peek_cards.map(c => c.id)
-			: (view.peek ? (view.peek.cards || []).map(c => c.id) : []),
-	})
+	/*
+	 * 【2026-10-12 统一】按模式提交不同参数：
+	 *   (B) topBottom（15215 卓越规划）：placement = [{id, where:'top'|'bottom', order}]
+	 *       order 用全局点击序号，服务端在各组内再按 order 升序排：
+	 *         置顶组 order 小者更靠近牌堆顶；置底组 order 小者更靠近牌堆底。
+	 *   (A) 15305 双十字系统：order + peek_cards（置对手牌堆顶）。
+	 */
+	if (isTB) {
+		const placement = peek_order.map((id, i) => ({
+			id: id,
+			where: peek_where[id] || "top",
+			order: i,
+		}))
+		send_action("play_card", { card: cardId, placement: placement })
+	} else {
+		send_action("play_card", {
+			card: cardId,
+			order: peek_order.slice(),
+			/*
+			 * 【2026-09-25 bug 修复】把 query 阶段挑出的 cards 一起提交，
+			 * 服务端据此校验 order 一致性（避免服务端重新挑导致不一致）。
+			 * peek_cards 是卡对象数组，提取 id 字段。
+			 */
+			peek_cards: localMode
+				? peek_cards.map(c => c.id)
+				: (view.peek ? (view.peek.cards || []).map(c => c.id) : []),
+		})
+	}
 	peek_order = []
+	peek_where = {}
 	peek_cards = null
 	peek_target = null
 	pending_peek_for_card = null
 	pending_event_card = null
-	toast("已按指定顺序置于 " + nation + " 牌堆顶")
+	toast(isTB ? "已按指定方式重组 " + nation + " 牌堆" : "已按指定顺序置于 " + nation + " 牌堆顶")
 }
 
 /* 取消：本地模式直接清状态；旧模式通知服务端 clear_peek */
@@ -3543,7 +3754,8 @@ function update_pending_echo_box() {
 	 * 点选即发 resolve_effect { pick: c.id }，由服务端 ECHO_EFFECTS.run 继续推进。
 	 * 与 15214 战术革新（kind 未设置）的硬编码分支互不干扰。
 	 */
-	if (pe.kind === 'su' || pe.kind === 'status') {
+	if (pe.kind === 'su') {
+		/* 【2026-10-07 苏联增强】通用多步选牌框（17812/17813）：沿用原实现，渲染与交互保持不变 */
 		modal.style.display = "block"
 		const box = modal.querySelector(".modal-box")
 		box.innerHTML = ""
@@ -3566,13 +3778,104 @@ function update_pending_echo_box() {
 			}
 			box.appendChild(grid)
 		}
-		/* 17546 铆钉女工：允许"只放已选的 1 张"（分步选择的完成按钮） */
 		if (pe.allowDone) {
 			const db = document.createElement("button")
 			db.className = "btn"
 			db.textContent = (pe.step === 'second') ? "只放这 1 张" : "完成"
 			db.onclick = () => send_action("resolve_effect", { done: true })
 			box.appendChild(db)
+		}
+		return
+	}
+	/*
+	 * 【2026-10-12 重构】kind:'status'（17546 铆钉女工）复用成熟选牌弹框结构：
+	 * .modal-head(标题) → .modal-section(.modal-label + .modal-hint 进度
+	 * + 已选第 1 张展示 + .card-grid) → .modal-foot(.action.primary 完成按钮)。
+	 * 与 echo_discard_modal / resource_modal / skill_discard_modal 等选牌 UI
+	 * 视觉一致；服务端协议（resolve_effect {pick}/{done}）不变，仅改善展示与文案。
+	 */
+	if (pe.kind === 'status') {
+		modal.style.display = "block"
+		const box = modal.querySelector(".modal-box")
+		box.innerHTML = ""
+		const isStep2 = pe.step === 'second'
+
+		const head = document.createElement("div")
+		head.className = "modal-head"
+		const title = document.createElement("span")
+		title.className = "modal-title"
+		title.textContent = pe.title || "状态效果"
+		head.appendChild(title)
+		box.appendChild(head)
+
+		const sec = document.createElement("div")
+		sec.className = "modal-section"
+		const label = document.createElement("div")
+		label.className = "modal-label"
+		label.textContent = isStep2
+			? "第 2 步：再选 1 张手牌"
+			: "第 1 步：选择第 1 张手牌（最多 2 张）"
+		const hint = document.createElement("span")
+		hint.className = "modal-hint"
+		hint.textContent = isStep2 ? "已选 1 / 2" : "第 1 / 2 张"
+		label.appendChild(hint)
+		sec.appendChild(label)
+
+		/* 已选第 1 张展示（step2 由服务端下发 pe.first） */
+		if (isStep2 && pe.first) {
+			const picked = inst_card_client(pe.first)
+			const valid = picked && picked.name && picked.name !== "?"
+			const tag = document.createElement("div")
+			tag.className = "modal-sub"
+			tag.style.margin = "4px 0 8px"
+			tag.textContent = "已选第 1 张：" + (valid ? picked.name : pe.first)
+			sec.appendChild(tag)
+			if (valid) {
+				const pc = card_elt(picked, () => {})
+				pc.classList.add("sel")
+				pc.style.cursor = "default"
+				sec.appendChild(pc)
+			}
+		}
+
+		const cands = pe.candidates || []
+		const grid = document.createElement("div")
+		grid.className = "card-grid"
+		if (!cands.length) {
+			const e = document.createElement("p")
+			e.className = "empty-note"
+			e.textContent = "没有可选择的牌"
+			grid.appendChild(e)
+		} else {
+			for (const c of cands) {
+				const el = card_elt(c, () => {
+					send_action("resolve_effect", { pick: c.id })
+				})
+				grid.appendChild(el)
+			}
+		}
+		sec.appendChild(grid)
+		box.appendChild(sec)
+
+		/*
+		 * 底部操作区：仅第 2 步需要确认/重置（第 1 步必须先选第 1 张，不显示完成按钮）。
+		 *  - 「重新选择」：清掉已选第 1 张、回到第 1 步（服务端 resolve_effect {back:true} 处理）；
+		 *  - 「只放这 1 张」：只放已选的第 1 张并结束（resolve_effect {done:true}）。
+		 */
+		if (isStep2) {
+			const foot = document.createElement("div")
+			foot.className = "modal-foot"
+			const back = document.createElement("button")
+			back.className = "action"
+			back.textContent = "重新选择"
+			back.onclick = () => send_action("resolve_effect", { back: true })
+			foot.appendChild(back)
+			const db = document.createElement("button")
+			db.className = "action primary"
+			db.textContent = "只放这 1 张"
+			db.onclick = () => send_action("resolve_effect", { done: true })
+			foot.appendChild(db)
+			box.appendChild(foot)
 		}
 		return
 	}
@@ -3707,68 +4010,6 @@ function update_su_red_pick_box() {
 		}
 		box.appendChild(grid)
 	}
-}
-
-/*
- * 【2026-09-30 德国增强·卓越规划】15215 检视牌堆顶 N 张，置顶/底
- * 复用 view.peek（topBottom 标记）；客户端维护每张牌的顶/底选择，确认后发回 placement。
- */
-function update_deck_inspect_box() {
-	const modal = document.getElementById("deck_inspect_modal")
-	if (!modal) return
-	const pk = view.peek
-	if (!pk || !pk.topBottom) { modal.style.display = "none"; return }
-	modal.style.display = "block"
-	const box = modal.querySelector(".modal-box")
-	box.innerHTML = ""
-	const h = document.createElement("h3")
-	h.textContent = "《卓越规划》检视牌堆顶 " + (pk.count || 0) + " 张"
-	box.appendChild(h)
-	const tip = document.createElement("p")
-	tip.textContent = "为每张牌选择「置顶/置底」（点击切换），确认后按选择顺序重组牌堆。"
-	box.appendChild(tip)
-	const state = (window.__deck_inspect_state = window.__deck_inspect_state || {})
-	const cards = pk.cards || []
-	const grid = document.createElement("div")
-	grid.className = "card-grid"
-	for (const c of cards) {
-		const cell = document.createElement("div")
-		cell.className = "deck-cell"
-		cell.appendChild(card_elt(c, () => {}))
-		const btnTop = document.createElement("button")
-		btnTop.textContent = "置顶"
-		const btnBot = document.createElement("button")
-		btnBot.textContent = "置底"
-		const where = state[c.id] || "top"
-		const sync = () => {
-			btnTop.className = where === "top" ? "sel" : ""
-			btnBot.className = where === "bottom" ? "sel" : ""
-		}
-		btnTop.onclick = () => { state[c.id] = "top"; sync() }
-		btnBot.onclick = () => { state[c.id] = "bottom"; sync() }
-		sync()
-		cell.appendChild(btnTop)
-		cell.appendChild(btnBot)
-		grid.appendChild(cell)
-	}
-	box.appendChild(grid)
-	const confirm = document.createElement("button")
-	confirm.textContent = "确认排列"
-	confirm.className = "btn-primary"
-	confirm.onclick = () => {
-		const topSel = [], botSel = []
-		for (const c of cards) {
-			const w = state[c.id] || "top"
-			if (w === "top") topSel.push(c.id)
-			else botSel.push(c.id)
-		}
-		const placement = []
-			.concat(topSel.map((id, i) => ({ id, where: "top", order: i })))
-			.concat(botSel.map((id, i) => ({ id, where: "bottom", order: i })))
-		send_action("play_card", { card: pk.card, placement })
-		window.__deck_inspect_state = {}
-	}
-	box.appendChild(confirm)
 }
 
 function card_elt(c, onClick) {
@@ -4854,89 +5095,101 @@ function update_table_status() {
 		return
 	}
 	host.style.display = ''
-	host.innerHTML = '<div class="ts-title">桌面状态卡</div>' +
-		list.map(c => {
-			/* 用 status_ui_of：c.card 是实例 id（#3），STATUS_UI 的 key 是基础 id */
-			const ui = status_ui_of(c.card)
-			const cls = ['ts-card']
-			let readyHint = ''
-			let note = ''
-			if (ui.build) {
-				/*
-				 * S4：仅当正在打《建设陆军》卡（进入选地块）时才高亮可放弃建设；
-				 * 否则灰显，避免"错误时点显示可打出"。
-				 *
-				 * 【2026-09-28】这里【不能】再要求 c.ready：
-				 * build_army 是事件驱动窗口，服务端 status_window_ready 恒 false
-				 * （刻意如此，保证其余时间不可点）。若还要求 ready，
-				 * 正在建设时该卡仍是灰显 -> 点了也会被 !c.ready 拦掉。
-				 * 判定只看"是否正在建设中"（building），与 on_click_table_status 同源。
-				 */
-				const building = !!(pending_card && pending_card.name === '建设陆军')
-				if (building) {
-					cls.push('ready', 'build-ready')
-					readyHint = '<div class="ts-ready">可放弃建设 → 征召 ' +
-						esc(ui.recruit || '') + '</div>'
-				} else {
-					cls.push('ts-disabled')
-					note = '<div class="ts-note">打出《建设陆军》后可放弃建设</div>'
-				}
-			} else if (ui.auto) {
-				/* 自动卡（15340 国家资源动员法）：计分阶段自动结算，不可主动触发 */
-				cls.push('ts-auto')
-				note = '<div class="ts-note">自动结算（计分阶段）：' + esc(c.desc || '') + '</div>'
-			} else if (c.ongoing && !c.trigger) {
-				/* 持续效果（光环/地图改动）卡：不在桌面状态区标为可触发，仅显示说明 */
-				cls.push('ts-ongoing')
-				note = '<div class="ts-note">持续效果：' + esc(c.desc || '') + '</div>'
-			} else if (c.ready) {
-				cls.push('ready')
-				readyHint = '<div class="ts-ready">可触发</div>'
-			} else {
-				/* 不可触发（被 15343 压制 / 已用过 / 时机不对）：灰显并说明原因 */
-				cls.push('ts-disabled')
-				note = '<div class="ts-note">' + esc(c.ready_reason || '此时机不能发动') + '</div>'
-			}
-			if (c.once_per_turn && c.used_this_turn)
-				cls.push('used')
-			/*
-			 * 【2026-09-28】这里原本写的是 escape_attr(c.card)，
-			 * 但本文件【没有】escape_attr（属性转义的正确函数名是 esc_attr）——
-			 * 于是整个 update_table_status 每次渲染都抛 ReferenceError：
-			 * innerHTML 赋值中断，DOM 停留在上一次成功渲染的旧状态，
-			 * 表现为"卡永远是彩色可点击"、进入资源再分配阶段也不会灰显。
-			 * 必须用已定义的 esc_attr()。
-			 */
-			/*
-			 * 【2026-09-28】卡图：服务端已在 table_status 里给出 img，
-			 * 按手牌同款规则拼 URL（card_image_url = "cards/<img>"）。
-			 * 有图就显示卡图（与手牌视觉一致），无图回落到纯文字。
-			 */
-			const imgUrl = c.img ? card_image_url({ img: c.img }) : null
-			const imgHtml = imgUrl
-				? '<img class="ts-img" src="' + esc_attr(imgUrl) + '" alt="' +
-					esc_attr(c.name || '') + '">'
-				: ''
-			return '<div class="' + cls.join(' ') + '" data-card="' +
-				esc_attr(c.card) + '"' +
-				(c.text ? ' title="' + esc_attr(c.name + '\n' + c.text) + '"' : '') + '>' +
-				imgHtml +
-				'<div class="ts-body">' +
-				'<div class="ts-name">' + esc(c.name) + '</div>' +
-				'<div class="ts-desc">' + esc(c.desc || '') + '</div>' +
-				readyHint + note +
-				(c.once_per_turn && c.used_this_turn
-					? '<div class="ts-used">本回合已用</div>' : '') +
-				'</div></div>'
-		}).join('')
-	/* 所有状态卡都绑定点击：可触发的触发效果，自动/持续/不可触发的点击给原因提示 */
-	Array.from(host.querySelectorAll('.ts-card')).forEach(el => {
-		const cardId = el.getAttribute('data-card')
-		if (el.__bound !== cardId) {
-			el.__bound = cardId
-			el.onclick = () => on_click_table_status(cardId)
+	host.innerHTML = '<div class="ts-title">桌面状态卡</div>'
+	for (const c of list) {
+		/*
+		 * 【2026-10-12 重构】与手牌 / 桌面响应卡同尺寸、同交互。
+		 *
+		 * 复用 build_response_card_elt（响应卡的"只展示"卡片渲染器），
+		 * 它已经提供：.card（120x180 卡图 2:3）+ 文字回落层 + title +
+		 * 【悬停放大到 #tooltip】+ 不挂"打出"点击 —— 正是状态卡需要的，
+		 * 不自己再造一套卡图渲染（铁律：复用优先）。
+		 *
+		 * 原先这里是 min-width:150/max-width:220 的"卡图 + 文字块"，
+		 * 比手牌大近一倍且没有悬停大图。
+		 */
+		const cardObj = {
+			id: c.card,
+			name: c.name,
+			img: c.img,
+			text: c.text || c.desc || '',
+			type: 'STATUS',
 		}
-	})
+		const el = build_response_card_elt(cardObj, true)
+		el.classList.add('ts-card')
+		el.setAttribute('data-card', c.card)
+
+		/* 用 status_ui_of：c.card 是实例 id（#3），STATUS_UI 的 key 是基础 id */
+		const ui = status_ui_of(c.card)
+		let badge = ''
+		let badgeCls = ''
+		if (ui.build) {
+			/*
+			 * S4：仅当正在打《建设陆军》卡（进入选地块）时才高亮可放弃建设；
+			 * 否则灰显，避免"错误时点显示可打出"。
+			 *
+			 * 【2026-09-28】这里【不能】再要求 c.ready：
+			 * build_army 是事件驱动窗口，服务端 status_window_ready 恒 false
+			 * （刻意如此，保证其余时间不可点）。若还要求 ready，
+			 * 正在建设时该卡仍是灰显 -> 点了也会被 !c.ready 拦掉。
+			 * 判定只看"是否正在建设中"（building），与 on_click_table_status 同源。
+			 */
+			const building = !!(pending_card && pending_card.name === '建设陆军')
+			if (building) {
+				el.classList.add('ready', 'build-ready')
+				badge = '可放弃建设'
+				badgeCls = 'green'
+			} else {
+				el.classList.add('ts-disabled')
+				badge = '待建设陆军'
+				badgeCls = 'gray'
+			}
+		} else if (ui.auto) {
+			/* 自动卡（15340 国家资源动员法）：计分阶段自动结算，不可主动触发 */
+			el.classList.add('ts-auto')
+			badge = '自动结算'
+			badgeCls = 'gold'
+		} else if (c.ongoing && !c.trigger) {
+			/* 持续效果（光环/地图改动）卡：不可主动触发 */
+			el.classList.add('ts-ongoing')
+			badge = '持续效果'
+			badgeCls = 'blue'
+		} else if (c.ready) {
+			el.classList.add('ready')
+			badge = '可触发'
+			badgeCls = ''
+		} else {
+			/* 不可触发（被压制 / 已用过 / 非本国回合 / 时机不对）：灰显 */
+			el.classList.add('ts-disabled')
+			if (c.once_per_turn && c.used_this_turn) {
+				badge = '本回合已用'
+				badgeCls = 'red'
+			} else {
+				badge = '不可发动'
+				badgeCls = 'gray'
+			}
+		}
+		if (badge) {
+			const b = document.createElement('div')
+			b.className = 'ts-badge ' + badgeCls
+			b.textContent = badge
+			el.appendChild(b)
+		}
+
+		/*
+		 * 详细文案放进 title：卡名 + 卡面文字 + 状态原因。
+		 * 原先这些文字直接渲染在卡下方（占大量高度），现在卡片只有 120x180，
+		 * 文字改由 title（原生提示）与悬停大图承载，信息不丢失。
+		 */
+		const why = c.ready ? '可触发' : (c.ready_reason || '')
+		el.title = c.name +
+			'\n' + (c.desc || c.text || '') +
+			(why ? '\n（' + why + '）' : '')
+
+		/* 点击 -> 触发（可触发的触发效果，其余给原因提示） */
+		el.onclick = () => on_click_table_status(c.card)
+		host.appendChild(el)
+	}
 }
 
 /* 找不到 #table_status 容器就动态创建一个，插到手牌区上方 */
@@ -4982,6 +5235,13 @@ const STATUS_UI = {
 	'15348': { count_by: { spaces: ['加拿大', '印度', '非洲南部'], nation: '英国', type: 'army' } },
 	/* 15340 国家资源动员法：自动卡（计分阶段自动结算），不可主动触发 */
 	'15340': { auto: true },
+	/*
+	 * 17749 轴心协定：自动卡，但【不是】计分阶段 ——
+	 * 敌方部队在其大本营或相邻被友方攻击时由服务端钩子自动 +1 分。
+	 * 标 auto 是为了不在桌面显示成"不可发动"（它无需点击，并非失效）；
+	 * autoDesc 用于把提示文案说准（否则会误提示"计分阶段自动生效"）。
+	 */
+	'17749': { auto: true, autoDesc: '敌方部队在其大本营或相邻地区被友方攻击时，自动 +1 分（每国每回合 1 次）' },
 	/* 15341/15342：打《建设陆军》卡进入选地块时可放弃建设，改在指定地区征召 */
 	'15341': { build: true, recruit: '澳大利亚' },
 	'15342': { build: true, recruit: '印度' },
@@ -5060,9 +5320,10 @@ function on_click_table_status(cardId) {
 	if (!c) return
 	/* 同上：cardId 是实例 id，必须经 status_ui_of 去后缀再查 */
 	const ui = status_ui_of(cardId)
-	/* 自动结算卡（15340）：不可主动触发，点击提示 */
+	/* 自动结算卡（15340 计分阶段 / 17749 战斗时）：不可主动触发，点击提示 */
 	if (ui.auto) {
-		toast('《' + c.name + '》是自动结算卡，计分阶段自动生效，无需点击')
+		toast('《' + c.name + '》是自动结算卡，' +
+			(ui.autoDesc || '满足条件时自动生效') + '，无需点击')
 		return
 	}
 	/* 持续效果（光环/地图改动）卡：无需点击 */
@@ -6145,6 +6406,7 @@ document.addEventListener("keydown", (e) => {
 		toast("已取消选择")
 	}
 	cancel_discard_mode()
+	cancel_discard_playmode()
 	cancel_resource_swap()
 	cancel_air_move()
 	/* 弃牌阶段：Esc 清空已框住的选择 */

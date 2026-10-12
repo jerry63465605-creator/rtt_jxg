@@ -61,7 +61,7 @@ function freshJp(phase) {
 	for (let k = 1; k <= 30; k++) g.decks['日本'].push('jpf' + k + '#1')
 	g.discard['日本'] = []
 	g.table_responses = []
-	g.armed_offer = null
+	g.armed_offers = []; g.armed_offer = null
 	g.armed_effects = []
 	g.extra_play = null
 	return g

@@ -787,6 +787,9 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 
 .card.as-discard .badge { background-color: #c60; }
 
+/* 弃牌阶段·打牌模式：可打出的时点卡右上角"打"角标 */
+.card .badge.play { background-color: #2e7d32; }
+
 /* 对手手牌（只显示牌背 + 张数） */
 .hand_back {
 	width: 84px;
@@ -1267,6 +1270,10 @@ body.allies .score-side.allies {
 	font-size: 15px;
 }
 
+.modal-head .modal-title {
+	font-size: 15px;
+}
+
 .modal-head .modal-sub {
 	flex: 1;
 	font-size: 11px;
@@ -1360,6 +1367,44 @@ body.allies .score-side.allies {
 	border-radius: 3px;
 }
 
+/*
+ * 【2026-10-12】peek 弹框里"一卡一格"的容器（15215 卓越规划置顶/置底用）。
+ * 原 update_deck_inspect_box 用了 .deck-cell 但 CSS 从未定义过，
+ * 按钮会无间距地竖排在卡片下方；统一进 peek_modal 后在此补上。
+ */
+.deck-cell {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+}
+
+.deck-cell button.action {
+	font-size: 11px;
+	padding: 2px 8px;
+	min-width: 44px;
+}
+
+/*
+ * 【2026-10-12】15215 卓越规划：卡片左下角的「顶 / 底」状态角标。
+ * 点击置顶/置底后立刻变化，给玩家明确反馈（否则按钮太小、看不出选中）。
+ * 与右上角排序序号徽章 .badge 分居两角，互不遮挡。
+ */
+.card .where-badge {
+	position: absolute;
+	bottom: 2px;
+	left: 2px;
+	font-size: 10px;
+	font-weight: bold;
+	padding: 1px 4px;
+	border-radius: 3px;
+	color: #000;
+	pointer-events: none;
+}
+
+.card .where-badge.top { background-color: #ffd977; }
+.card .where-badge.bot { background-color: #6bb3e0; }
+
 .modal-foot {
 	display: flex;
 	gap: 8px;
@@ -1395,11 +1440,22 @@ body.allies .score-side.allies {
 
 /* ================= 桌面状态卡（STATUS）区 ================= */
 
+/*
+ * 【2026-10-12 重构】桌面状态卡与【手牌 / 桌面响应卡】同尺寸、同交互：
+ *   · 复用 build_response_card_elt 渲染 -> .card（120x180，卡图 2:3）
+ *   · 悬停放大到 #tooltip（250x375），与手牌完全一致
+ *
+ * 原先 .ts-card 是 min-width:150 / max-width:220 的"卡图 + 文字块"，
+ * 比手牌大近一倍、且没有悬停大图。现改为纯卡图：
+ * 状态一律用【描边 + 灰度 + 底部角标】表现（角标绝对定位，不占布局高度），
+ * 卡名 / 卡面文字 / "为何不可发动" 放到 title 与悬停大图里，信息不丢失。
+ */
+
 #table_status {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
-	align-items: stretch;
+	align-items: flex-start;
 	padding: 6px 8px;
 	margin: 4px 0;
 	background-color: #1e2630;
@@ -1415,117 +1471,77 @@ body.allies .score-side.allies {
 	margin-bottom: 2px;
 }
 
+/* 尺寸由 .card 提供（120x180），这里只补定位与状态表现 */
 #table_status .ts-card {
-	min-width: 150px;
-	max-width: 220px;
-	padding: 5px 8px;
-	border-radius: 6px;
-	background-color: #2b3642;
-	border: 1px solid #445666;
-	color: #e6edf3;
-	cursor: default;
-	transition: box-shadow .1s, border-color .1s, transform .1s;
+	position: relative;
+	flex: 0 0 auto;
 }
 
-/* 【2026-09-28】状态区显示卡图：图在上、文字在下（与手牌视觉一致） */
-#table_status .ts-card {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 4px;
-}
-
-#table_status .ts-img {
-	display: block;
-	width: 100%;
-	height: auto;
-	border-radius: 4px;
-	background-color: #1b2330;
-}
-
-#table_status .ts-body {
-	flex: 1 1 auto;
-	min-width: 0;
-}
-
-/* 可触发（含建设类：正在建设陆军时） */
+/* 可触发：金色描边（与地图目标高亮同色，视觉语言统一） */
 #table_status .ts-card.ready {
 	cursor: pointer;
-	border-color: #5a8ab0;
+	outline: 3px solid #ffb800;
+	outline-offset: 2px;
 }
 
 #table_status .ts-card.ready:hover {
-	box-shadow: 0 0 8px #5a8ab055;
-	transform: translateY(-2px);
+	transform: translateY(-4px);
+	box-shadow: 0 0 12px #ffb80088;
 }
 
-/* S4：正在打《建设陆军》卡，可点击放弃建设 */
+/* S4：正在打《建设陆军》卡，可点击放弃建设 -> 改为征召 */
 #table_status .ts-card.build-ready {
-	border-color: #3fa34d;
-	box-shadow: 0 0 8px #3fa34d66;
-	background-color: #243524;
+	cursor: pointer;
+	outline: 3px solid #3fa34d;
+	outline-offset: 2px;
 }
 
 #table_status .ts-card.build-ready:hover {
+	transform: translateY(-4px);
 	box-shadow: 0 0 12px #3fa34d99;
 }
 
-/* 非建设阶段：灰显提示 */
+/* 不可触发（被 15343 压制 / 已用过 / 非本国回合 / 时机不对）：灰显 */
 #table_status .ts-card.ts-disabled {
-	opacity: .55;
-	filter: grayscale(.3);
+	filter: grayscale(.7) brightness(.75);
+	cursor: default;
 }
 
-#table_status .ts-name {
-	font-size: 13px;
-	font-weight: bold;
-	color: #fff;
-	margin-bottom: 2px;
-}
-
-#table_status .ts-desc {
-	font-size: 11px;
-	color: #b9c4cf;
-	line-height: 1.4;
-}
-
-#table_status .ts-ready {
-	margin-top: 4px;
-	font-size: 11px;
-	font-weight: bold;
-	color: #6bd47a;
-}
-
-#table_status .ts-note {
-	margin-top: 4px;
-	font-size: 10px;
-	color: #8a97a4;
-}
-
-#table_status .ts-used {
-	margin-top: 4px;
-	font-size: 10px;
-	color: #d99;
-}
-
-/* 自动卡（15340 国家资源动员法）：计分阶段自动结算，不可主动触发 */
+/* 自动结算卡（15340）：计分阶段自动生效，不可主动触发 */
 #table_status .ts-card.ts-auto {
-	border-color: #b8893a;
-	background-color: #2e2a20;
+	outline: 2px solid #b8893a;
+	outline-offset: 2px;
 	cursor: default;
 }
 
-#table_status .ts-card.ts-auto .ts-note {
-	color: #e0b070;
-}
-
-/* 持续效果（光环/地图改动）卡：中性显示，不可主动触发 */
+/* 持续效果（光环 / 地图改动）卡：中性显示，不可主动触发 */
 #table_status .ts-card.ts-ongoing {
-	border-color: #4a6b8a;
-	background-color: #1f2a33;
+	outline: 2px solid #4a6b8a;
+	outline-offset: 2px;
 	cursor: default;
 }
 
-#table_status .ts-card.ts-ongoing .ts-note {
-	color: #9cc4e0;
+/*
+ * 状态角标：绝对定位贴在卡面底部（不占布局高度），
+ * 取代原先卡下方的文字块（ts-name / ts-desc / ts-ready / ts-note / ts-used）。
+ */
+#table_status .ts-card .ts-badge {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	font-size: 10px;
+	font-weight: bold;
+	text-align: center;
+	padding: 2px 0;
+	color: #000;
+	background-color: #ffb800;
+	border-radius: 0 0 7px 7px;
+	pointer-events: none;
 }
+
+#table_status .ts-card .ts-badge.green { background-color: #3fa34d; color: #fff; }
+#table_status .ts-card .ts-badge.gold  { background-color: #b8893a; color: #fff; }
+#table_status .ts-card .ts-badge.blue  { background-color: #4a6b8a; color: #fff; }
+#table_status .ts-card .ts-badge.red   { background-color: #993333; color: #fff; }
+#table_status .ts-card .ts-badge.gray  { background-color: #555; color: #eee; }

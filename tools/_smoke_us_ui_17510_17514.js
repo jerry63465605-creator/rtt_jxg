@@ -56,10 +56,11 @@ console.log('\n[17510 我们的政治哲学] view.us_political 出口')
 	ok(vUS && vUS.us_political && vUS.us_political.step === 'play', '美国视角 us_political.step=play')
 	ok(vUS && vUS.us_political && vUS.us_political.candidates.length === 2, '美国视角候选 2 张')
 	ok(vUS && vUS.us_political && vUS.us_political.waiting_for === null, '美国视角 waiting_for=null')
+	ok(vUS && vUS.my_nation === '英国', '同盟视角 my_nation 切到英国（手牌面板显示英国手牌）')
 
-	// 轴心视角：只看到 waiting_for:美国（不含候选）
+	// 轴心视角：只看到 waiting_for:英国（不含候选）
 	const vAX = rules.view(g, 'Axis')
-	ok(vAX && vAX.us_political && vAX.us_political.waiting_for === '美国', '轴心视角 waiting_for=美国')
+	ok(vAX && vAX.us_political && vAX.us_political.waiting_for === '英国', '轴心视角 waiting_for=英国')
 	ok(vAX && vAX.us_political && !vAX.us_political.candidates, '轴心视角不泄露英国弃牌堆候选')
 }
 
