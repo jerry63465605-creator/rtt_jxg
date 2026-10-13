@@ -265,9 +265,13 @@ function update_phase_panel() {
 	 * 挂起等待时把"在等谁"写在阶段面板上：
 	 * 决策方有各自的询问框，另一方（waiting_for）只能靠这行知道时点。
 	 */
+	// 等待某一方（如让权经济战、战斗挂起）—— 顶部阶段栏提示
 	const waitTxt = view.waiting_for ? view.waiting_for.text : ""
-	set_text("phase_note", waitTxt
-		? waitTxt + (view.phase_note ? " · " + view.phase_note : "")
+	// 17805 红色管弦乐队：决策方（德国）顶端也提示其需选择（非决策方靠 waiting_for 提示）
+	const redTxt = (view.pending_red && view.pending_red.prompt) ? view.pending_red.prompt : ""
+	const headTxt = waitTxt || redTxt
+	set_text("phase_note", headTxt
+		? headTxt + (view.phase_note ? " · " + view.phase_note : "")
 		: (view.phase_note || ""))
 
 	/* 阶段进度条 */
@@ -3922,8 +3926,17 @@ function update_pending_red_box() {
 	const modal = document.getElementById('red_orchestra_modal')
 	if (!modal) return
 	const pr = view && view.pending_red
-	if (!pr) { modal.style.display = 'none'; return }
-	modal.style.display = 'block'
+	if (!pr) { modal.style.display = 'none'; render_ask_box(null, null, null); return }
+	const hasOptions = Array.isArray(pr.options) && pr.options.length > 0
+	if (!hasOptions) {
+		/* 非决策方（等待态）：走非阻断面板，不弹全屏遮罩（与其它让权卡一致） */
+		modal.style.display = 'none'
+		render_ask_box('红色管弦乐队：等待【' + (pr.waiting_for || '德国') + '】选择',
+			'德国需选择：本回合内该状态卡无效 / 损耗 2 张牌。', [])
+		return
+	}
+	/* flex 保留 .modal 居中 */
+	modal.style.display = 'flex'
 	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 	const h = document.createElement('h3')
@@ -3958,7 +3971,8 @@ function update_su_red_ask_box() {
 	if (!modal) return
 	const a = view && view.su_red_ask
 	if (!a) { modal.style.display = 'none'; return }
-	modal.style.display = 'block'
+	/* flex 保留 .modal 居中 */
+	modal.style.display = 'flex'
 	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 	const h = document.createElement('h3')
@@ -3990,7 +4004,8 @@ function update_su_red_pick_box() {
 	if (!modal) return
 	const p = view && view.su_red_pick
 	if (!p) { modal.style.display = 'none'; return }
-	modal.style.display = 'block'
+	/* 用 flex 而非 block，保留 .modal 的居中（align/justify center），否则会落到左上角 */
+	modal.style.display = 'flex'
 	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 	const h = document.createElement('h3')

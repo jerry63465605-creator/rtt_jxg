@@ -2309,11 +2309,15 @@ function pick_unit_candidates(game, spec) {
 function maybe_offer_national_skill(game, nation, trigger) {
 	const cfg = NATIONAL_SKILL[nation]
 	if (!cfg || cfg.trigger !== trigger) {
-		game.national_skill_offer = null
+		// 仅清【本国】窗口：15237 给德国开了窗口后轮转到英国，
+		// 英国阶段入口的 maybe_offer(英国, 非 star_resolved) 不得误清德国的窗口
+		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
+			game.national_skill_offer = null
 		return game
 	}
 	if (!national_skill_usable(game, nation)) {
-		game.national_skill_offer = null
+		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
+			game.national_skill_offer = null
 		return game
 	}
 	game.national_skill_offer = {
@@ -2341,7 +2345,9 @@ function maybe_offer_national_skill(game, nation, trigger) {
 function after_card_resolved(game, nation, card_id) {
 	/* 德国：带★的卡打出并效果结算后给窗口；其余情况清掉旧 offer */
 	if (!card_id || !is_starred_card(card_id)) {
-		game.national_skill_offer = null
+		// 仅清【本国】窗口：15210 战斗里英国响应卡结算不得误清德国的窗口
+		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
+			game.national_skill_offer = null
 		return game
 	}
 	return maybe_offer_national_skill(game, nation, 'star_resolved')
@@ -5122,6 +5128,23 @@ function offer_su_red(game, trigger) {
 	if (!has_card_in_hand(game, '苏联', '17805')) { game.su_red_ask = null; return }
 	if (!german_status_on_table(game).length) { game.su_red_ask = null; return }
 	game.su_red_ask = { trigger: trigger, card_name: '红色管弦乐队' }
+}
+
+/* 17805 红色管弦乐队：把 active 翻给等待方（德国），并记录原 active 以便还原。
+ * 与 set_pending_econ / set_pending_armed_delegate / set_pending_battle 同款范式：
+ * 让权挂起期间等待方成为"当前行动方"，原行动方被冻结，清挂起时自动还原。 */
+function set_pending_red(game, pr) {
+	game.pending_red = pr
+	if (pr) {
+		const role = faction_role_of_nation(pr.waiting_for)
+		if (game.active !== role) {
+			game.red_return_active = game.active
+			game.active = role
+		}
+	} else if (pr === null && game.red_return_active) {
+		game.active = game.red_return_active
+		game.red_return_active = null
+	}
 }
 
 function status_active(game, card_id, owner_nation) {
@@ -10255,6 +10278,32 @@ function clear_armed_offer(game) {
 	}
 }
 
+/* 【2026-10-13 修复】按【阵营】分域清武装窗口。
+ * 原 clear_armed_offer 全局清空所有阵营窗口，导致 15237(德国·AXIS) 开出 15208 窗口后，
+ * 15210 战斗里英国(ALLIES)响应会把德国的窗口一并清掉——德国回来既打不了 15208、
+ * 15237 也走不完、国家技能不触发。改为只清与 side 同阵营的窗口，别国阵营保留。
+ * 委托状态 pending_armed_delegate 同阵营才还原 active。 */
+function clear_armed_offer_for_side(game, side) {
+	if (!game) return
+	if (game.armed_offers) {
+		game.armed_offers = game.armed_offers.filter(w => {
+			if (!w.nation) return false /* 无归属保守清掉 */
+			return faction_of_nation(w.nation) !== side
+		})
+		sync_armed_offer(game)
+	}
+	if (game.pending_armed_delegate) {
+		const pd = game.pending_armed_delegate
+		if (!pd.nation || faction_of_nation(pd.nation) === side) {
+			game.pending_armed_delegate = null
+			if (game.armed_delegate_return_active) {
+				game.active = game.armed_delegate_return_active
+				game.armed_delegate_return_active = null
+			}
+		}
+	}
+}
+
 /* 【2026-10-07】17900 八月风暴的"友方攻击 -> 让权苏联"挂起。
  * 把 active 翻到被让权方（苏联）的一方，并记录原 active 以便还原。 */
 function set_pending_armed_delegate(game, pd) {
@@ -14783,6 +14832,11 @@ function seize_air(game, nation, space, air_piece) {
 	/* 【总体战】夺取制空权只移除空军 -> 不触发损耗（空军移除不掉牌） */
 	delete game.location[enemies[0]]
 	refresh(game)
+	/* 轴心协定(17749)：敌方空军被"消灭"也计分（卡面"被攻击或消灭"；
+	   与 do_battle 攻击路径一致，复用同一钩子；该函数内部有 table_has 守卫，
+	   仅当轴心桌面有已激活的 17749 时才计分，无阶段限制） */
+	try { status_on_axis_pact(game, nation, space, [enemies[0]]) }
+	catch (e) { game.log.push('status_on_axis_pact 错误：' + e.message) }
 	return { ok: true, removed: enemies[0], space: space, initiator: initiator }
 }
 
@@ -17833,6 +17887,8 @@ exports.view = function (state, current) {
 			target_name: pr.target_name,
 			target: pr.target,
 			waiting_for: pr.waiting_for,
+			/* 决策方（德国）顶端阶段栏提示文案（非决策方靠 waiting_for 提示） */
+			prompt: '请对《' + (pr.card_name || '红色管弦乐队') + '》选择：本回合内无效 / 损耗 2 张牌',
 			options: [
 				{ id: 0, label: '本回合内无效', enabled: true },
 				{ id: 1, label: '损耗 2 张牌', enabled: true },
@@ -18506,6 +18562,8 @@ exports.view = function (state, current) {
 		 * waiting_for（"等待【德国】选择…"）。
 		 */
 		pending_econ: pendingEcon,
+		su_red_ask: suRedAsk,
+		su_red_pick: suRedPick,
 		pending_red: pendingRed,
 
 		/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态 */
@@ -18760,6 +18818,15 @@ exports.view = function (state, current) {
 					text: '等待【' + waitE + '】对《' +
 						(game.pending_econ.card_name || '经济战卡') +
 						'》做出选择（损耗 3 张牌 / 移除海军）',
+				}
+			/* 17805 红色管弦乐队：德国二选一期间，非决策方顶部显示等待提示 */
+			const pr = game.pending_red
+			if (pr && pr.waiting_for && faction_of_nation(pr.waiting_for) !== side)
+				return {
+					kind: 'red',
+					nation: pr.waiting_for,
+					text: '等待【' + pr.waiting_for + '】对《' +
+						(pr.card_name || '红色管弦乐队') + '》做出选择',
 				}
 			return null
 		})(),
@@ -19292,6 +19359,15 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 			resolve_response_choice: 1, log: 1,
 		}
 
+	/* 17805 红色管弦乐队：德国二选一挂起（set_pending_red 已把 active 翻给等待方）。
+	 * 与 pending_econ / pending_armed_delegate / pending_battle 同款：挂起期间
+	 * 等待方阵营可提交 resolve_red，其余阵营冻结。 */
+	if (game.pending_red) {
+		if (faction_of_nation(game.pending_red.waiting_for) !== side)
+			return { log: 1 }
+		return { resolve_red: 1, log: 1 }
+	}
+
 	if (!is_my_turn)
 		return null
 
@@ -19426,11 +19502,6 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		acts.su_17817_proceed = 1
 	}
 
-	/* 17805 红色管弦乐队：等待德国玩家在其本国回合内二选一 */
-	if (game.pending_red && faction_of_nation(game.pending_red.waiting_for) === side) {
-		acts.resolve_red = 1
-	}
-
 	/* 17805 红色管弦乐队：苏联询问是否使用 / 选择目标德国状态卡（仅苏联阵营可见） */
 	if (game.su_red_ask && faction_of_nation('苏联') === side) {
 		acts.su_red_use = 1
@@ -19512,20 +19583,37 @@ exports.action = function (state, current, action, arg) {
 	 * 玩家一旦去做别的事（推进阶段、再打别的牌…）就视为放弃。
 	 * 放在最前面，保证在自己的两个 action 之外一律清掉。
 	 */
-	if (action !== 'use_national_skill' && action !== 'skip_national_skill')
-		clear_national_skill_offer(game)
+	if (action !== 'use_national_skill' && action !== 'skip_national_skill') {
+		/*
+		 * 【2026-10-13 修复：场景 B 顺序 bug 根因】
+		 * 旧判断用 game.current_nation 当"当前行动国"代理，但它是【回合当前国】，
+		 * 在 15237 内部续跑（resume）期间仍是德国——此时英国响应(pass_response)进来，
+		 * current_nation 仍是'德国' → offer.nation('德国')===current_nation('德国') 误判为真，
+		 * 把德国国家技能窗口清掉（场景 A 因为响应已提前结清而不触发）。
+		 * 正确做法：用 side（真正执行该动作的一方阵营）比对——
+		 * 只有"与窗口同阵营"的动作才视为放弃本国窗口；别国阵营的动作（英国响应）不误清。
+		 * national_skill_offer.nation 是国家名，故转成阵营再与 side 比对。
+		 */
+		if (game.national_skill_offer && faction_of_nation(game.national_skill_offer.nation) === side)
+			clear_national_skill_offer(game)
+	}
 	/*
 	 * 【2026-10-01】手牌机会窗口同样"错过即失效"：
 	 * 玩家一旦去做别的事就清掉（与国家技能同款口径）。
 	 */
 	if (action !== 'use_armed_offer' && action !== 'skip_armed_offer') {
-		clear_armed_offer(game)
+		/* 仅清【本国阵营】武装窗口：15237(德国·AXIS) 开出 15208 窗口后，15210 战斗里
+		 * 英国(ALLIES)响应不得误清德国窗口（原 clear_armed_offer 全局清空导致选择框消失、
+		 * 15237 走不完、国家技能不触发）。别国阵营的军用窗口保留。
+		 * 响应卡触发时 current 是响应方阵营，故 side 正是"正在行动"的一方，据此分域安全。 */
+		clear_armed_offer_for_side(game, side)
 		/*
-		 * 【2026-10-12】armed 窗口因玩家去做别的事而被清掉 = 放弃增强窗口，
+		 * 【2026-10-13 修正】armed 窗口因【同阵营】玩家去做别的事而被清掉 = 放弃增强窗口，
 		 * 同时作废事件卡未完成的后续步骤（game.pending_event_armed）。
-		 * 卡已在 play_card 暂停时移出手牌，此处直接入弃牌堆收尾。
+		 * 仅当该事件卡归属【同阵营】时才作废：别国阵营的事件卡（如德国的 15237）在对方阵营
+		 * 各自行动时不应被误作废。卡已在 play_card 暂停时移出手牌，此处直接入弃牌堆收尾。
 		 */
-		if (game.pending_event_armed) {
+		if (game.pending_event_armed && faction_of_nation(game.pending_event_armed.nation) === side) {
 			const pa = game.pending_event_armed
 			game.pending_event_armed = null
 			game.discard[pa.nation] = game.discard[pa.nation] || []
@@ -19721,11 +19809,18 @@ exports.action = function (state, current, action, arg) {
 	 * 让权由 set_pending_econ 负责（把 game.active 翻到待答复方），
 	 * 因此界面顶栏会切到那一方，不会"挂着看不出来"（R22 的教训）。
 	 */
-	if (game.pending_econ && action !== 'resolve_econ' && action !== 'resolve_red' &&
+	if (game.pending_econ && action !== 'resolve_econ' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('经济战结算中：正在等待【' +
 			econ_waiting_nation(game) + '】选择（损耗 3 张牌 / 移除地中海的 1 支海军），' +
 			'在此期间不能进行其它操作')
+		return game
+	}
+	/* 17805 红色管弦乐队挂起：等待德国抉择期间，除 resolve_red 外一切动作冻结
+	 * （含原行动方，与经济战/战斗代受/友方让权一致）。让权由 set_pending_red 负责。 */
+	if (game.pending_red && action !== 'resolve_red' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push('《红色管弦乐队》等待德国选择中，当前只能提交德国抉择')
 		return game
 	}
 
@@ -21542,7 +21637,7 @@ exports.action = function (state, current, action, arg) {
 			game.log.push('《' + pr.card_name + '》无效的选择项')
 			return game
 		}
-		game.pending_red = null
+		set_pending_red(game, null)
 		refresh(game)
 		return game
 	}
@@ -21590,12 +21685,12 @@ exports.action = function (state, current, action, arg) {
 			return game
 		}
 		const nm = (inst_card(inst_card_id(pick)) || { name: '?' }).name
-		game.pending_red = {
+		set_pending_red(game, {
 			target: String(pick),
 			target_name: nm,
 			waiting_for: '德国',
 			card_name: '红色管弦乐队',
-		}
+		})
 		game.su_red_pick = null
 		game.log.push('【苏联】《红色管弦乐队》指定德国状态卡《' + nm + '》，等待德国选择')
 		refresh(game)

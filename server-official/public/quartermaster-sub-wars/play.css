@@ -1247,6 +1247,27 @@ body.allies .score-side.allies {
 
 .modal.hide { display: none; }
 
+/* 17805 红色管弦乐队三连弹框（询问 / 选卡 / 德国二选一等待）—— 白底黑字 */
+#su_red_pick_modal .modal-box,
+#red_orchestra_ask_modal .modal-box,
+#red_orchestra_modal .modal-box {
+	background-color: #ffffff;
+	color: #111111;
+	border-color: #333333;
+}
+#su_red_pick_modal .modal-box h3,
+#red_orchestra_ask_modal .modal-box h3,
+#red_orchestra_modal .modal-box h3 {
+	color: #111111;
+	margin: 0 0 8px;
+}
+#su_red_pick_modal .card .card-name { color: #111111; }
+#red_orchestra_modal .modal-foot button {
+	background-color: #ffffff;
+	color: #111111;
+	border-color: #333333;
+}
+
 .modal-box {
 	display: flex;
 	flex-direction: column;

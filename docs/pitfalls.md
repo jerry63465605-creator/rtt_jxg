@@ -671,6 +671,83 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-13 · R53：17805 红色管弦乐队 苏联看不到「是否使用 / 选德国状态卡」弹框
+
+**现象**
+- 苏联手牌有 17805、德国桌面有状态卡时，苏联出牌阶段开始应被询问是否使用、使用后应选 1 张德国状态卡发动压制；实际苏联端两个弹框都不出现，仿佛「无法打出 / 无法选择德国状态卡」。
+
+**根因（view 已计算字段漏加入返回对象）**
+- `offer_su_red`（rules.js:5121）派发、`su_red_use` / `su_red_decline` / `su_red_pick` / `resolve_red` 动作、`build_actions` 白名单（rules.js:19472）、客户端 `update_su_red_ask_box` / `update_su_red_pick_box`（play.js，模态框 `red_orchestra_ask_modal` / `su_red_pick_modal` 均存在）整条链路都正确。
+- 但 `view` 函数内算了 `suRedAsk`（rules.js:17881）、`suRedPick`（rules.js:17889）两个变量后，**返回对象（原 rules.js:18546）只写了 `pending_red: pendingRed`，漏了 `su_red_ask` / `su_red_pick`** ——「算了但没暴露」。
+- 后果：`view.su_red_ask` / `view.su_red_pick` 恒为 `undefined`，客户端两个更新函数读到空直接隐藏 → 苏联两端都看不到。而 `pending_red`（德国二选一框）正常，因为它被返回了，这也解释了「德国那一步能跑、前面两步不行」。
+
+**修复（仅 1 处，2 行）**
+- `view` 返回对象补两行：
+  ```js
+  su_red_ask: suRedAsk,
+  su_red_pick: suRedPick,
+  pending_red: pendingRed,
+  ```
+- 不动派发 / 动作 / 客户端 / 模态框；触发时机（`offer_su_red` 在苏联/德国/英国出牌阶段开始触发，rules.js:15589）保持现状、不再调整。
+
+**验证（`tools/_dbg_17805.js`，19/0）**
+- 苏联可见 `su_red_ask`、德国不可见；`su_red_use` 后苏联可见 `su_red_pick` 且候选含德国状态卡 `15338#1`；`su_red_pick` 后德国可见二选一、苏联仅见等待提示；`resolve_red(0)` 后压制记录写入、`status_active(15338#1)` 当回合返回 `false`（压制生效）。
+- `node --check rules.js` 通过；`node tools/check_reuse.js` 的 B/C 段（本次 diff）干净（A 段 16 个 WARN 全是 SKILL.md 原子索引漂移，预存、非本次引入）。
+
+**归类提示**
+- 与 R51（挂起窗口清理误判阵营）、R52（钩子漏挂路径）不同类，本类是「**view 已计算字段漏加入返回对象**」——
+  典型症状：服务端算出了变量、客户端逻辑也对，但 `view.something` 读不到（`undefined`）。
+  排查口诀：**view 里 `const x = (...)()` 之后，务必确认返回对象的 `x: x` 那一行存在**；改 view 加字段时最容易只写变量忘写返回。
+
+### 2026-10-13 · R52：15407 秋水火箭战斗机 消灭敌机，轴心协定(17749) 未立刻加分
+
+**现象（用户原话）**
+- 场景：日本有陆军，东海有日本海军+空军，中国东部有中国陆军+空军。15407 使用后，轴心协定没有立刻加分。
+- 卡面（17749 轴心协定）：敌方部队因友方效果在其大本营或相邻地区被【攻击或消灭】时，轴心 +1 分（一回合一次）。
+
+**根因（卡面触发条件仅 hook 了部分代码路径）**
+- 加分逻辑 `status_on_axis_pact(game, attacker, space, enemies)` 只在 `do_battle`（攻击路径，rules.js:14085）末尾被调用——即只 hook 了"被攻击"这一个分支。
+- 15407 的 `run` 走 `seize_air`（夺取制空权/消灭敌机，rules.js:14816 `delete game.location[enemies[0]]`），`seize_air` 内部**完全没有调用 `status_on_axis_pact`**，所以"被消灭"分支漏接。
+- 同类隐患：任何走 `seize_air` 消灭敌方空军的卡，以及将来若新增的"消灭"路径（eliminate_piece / remove_piece / ECON 15314 移除海军等）都漏接。但 `status_on_axis_pact` 内部只读 `game.piece_nation[enemies[0]]`（在 `delete location` 后仍然保留），只认"空军被攻击/消灭"语义，故只需在 `seize_air` 一处补挂即可覆盖所有空军消灭场景。
+
+**修复**
+- 在 `seize_air` 的 `delete game.location[enemies[0]]; refresh(game)` 之后补挂：
+  `try { status_on_axis_pact(game, nation, space, [enemies[0]]) } catch (e) { game.log.push('status_on_axis_pact 错误：' + e.message) }`
+- 复用既有 `status_on_axis_pact`，不造轮子；该函数有 `table_has(game,'意大利','17749')` + `status_active` 守卫，仅当轴心桌面有已激活的 17749 时才计分；`status_used` 按 `freq_key` 一回合一次去重；无阶段限制（弃牌阶段也能加分）。
+- 传入 `[enemies[0]]`（仅被移除的那 1 支），与"被消灭"语义一致；attacker=nation（已做 `faction_of_nation(attacker)==='axis'` 守卫，非轴心不误加）。
+
+**验证（`tools/_dbg_15407_axis_pact.js`，6/6）**
+- 主测试（17749 在场）：15407 run 后 → 中国东部中国空军被消灭、轴心协定 delta=+1（符合"被消灭"语义）。
+- 对照组（17749 不在场）：同样打 15407 → delta=0，不误加分。
+- `node --check rules.js` 通过；`tools/_smoke_jp_effect.js` 128/4（4 个失败在 section 6 的 15411 夜间运输 pickUnit 候选，与本次改动无关，已用 `git stash` 确认改动前同样 128/4，属预先存在）。
+
+**归类提示**
+- 这不是 R51 类（挂起窗口清理 / 顺序依赖），而是**「卡面触发条件只 hook 了部分代码路径」**——卡面列了多个触发点（被攻击 **或** 消灭），实现时只挂了其中一个。
+- 通用教训「规则没写≠可以 / 卡面列出的每个触发点都要落地」的本类体现。下次遇到"卡面说 A 或 B 触发，但只有 A 生效"，优先查该卡/效果的结算钩子是否漏挂了 B 路径。
+
+### 2026-10-13 · R51：15237 分步增强「先打 15208 后打 15210」→ 国家技能被英国响应误清
+
+**现象（用户原话）**
+- 先打 15210（战斗）后可再打 15208 + 发动德国国家技能；
+- 但先打 15208、后打 15210（战斗），执行后**无法继续 + 国家技能没了**。
+
+**根因（两处叠加）**
+1. 15237 是德国★卡，分步：step0=黑海建海军（pauseArmed，开 15208/15210 增强窗口）→ step1=中东征召。15210 是「发起海战」，跑 `do_battle` 会触发英国响应入队（`request_responses('piece_removed')`）。
+2. action 入口（rules.js ~19547）清国家技能窗口时，旧判断用 `game.current_nation` 当"当前行动国"代理：
+   `if (game.national_skill_offer && game.national_skill_offer.nation === game.current_nation) clear_national_skill_offer(game)`
+   `current_nation` 是**回合当前国**，在 15237 内部续跑（`resume_event_after_armed`）期间仍是「德国」——此时英国 `pass_response` 进来，`current_nation` 仍是 '德国' → `offer.nation('德国') === current_nation('德国')` 误判为真，**把德国国家技能窗口清掉**。
+   先打 15210 时英国响应在 15208 之前就被玩家清掉，国家技能窗口出现时响应队列已空，故不触发；先打 15208 时响应与 15237 续跑重叠，必爆。
+
+**修复**
+- 改用 `side`（真正执行该动作的一方阵营）比对：
+  `if (game.national_skill_offer && faction_of_nation(game.national_skill_offer.nation) === side) clear_national_skill_offer(game)`
+  只有"与窗口同阵营"的动作才视为放弃本国窗口；别国阵营动作（如英国响应）不再误清。
+- 配套：之前的 `clear_armed_offer` 全局清空已改为 `clear_armed_offer_for_side(game, side)`（按阵营分域），别国阵营军用窗口保留（见 R50.1）。
+
+**验证（`tools/_dbg_order_bug.js`，30/30）**
+- 场景 A（先 15210→解决英响应→15208）/ 场景 B（先 15208→15210，英响应与续跑重叠→解决英响应）两条路径，`15237` 分步完成后德国国家技能窗口均存活，且 `use_national_skill` 可发动。
+- 复现要点：英国真实响应卡放 `game.table_responses`（暗置），其 `owner_side` 必须是**小写** `'allies'`（守卫 `head.owner_side !== side` 中 `side` 是小写阵营常量）；`ALLIES_ROLE='Allies'`（大写，RTT role 名）与 `ALLIES='allies'`（小写，阵营常量）不是一回事，测试里大小写写错会误判"只有持有方能决定"。
+
 ### 2026-10-11 · R50：状态卡"弃置"代价必须是玩家手选 —— 死字段 `only` 与缺失的 STATUS_UI 条目
 
 **触发（一类问题）**
