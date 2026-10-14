@@ -269,7 +269,10 @@ function update_phase_panel() {
 	const waitTxt = view.waiting_for ? view.waiting_for.text : ""
 	// 17805 红色管弦乐队：决策方（德国）顶端也提示其需选择（非决策方靠 waiting_for 提示）
 	const redTxt = (view.pending_red && view.pending_red.prompt) ? view.pending_red.prompt : ""
-	const headTxt = waitTxt || redTxt
+	// 17805 红色管弦乐队：非苏联方（被挂起的德国）等待苏联决定是否使用/选卡
+	const suRedWaitTxt = (view.su_red_wait && view.su_red_wait.text) ? view.su_red_wait.text : ""
+	/* 17805 红色管弦乐队：苏联未决期间，等待苏联行动最优先显示（避免被其它 waiting_for 盖掉） */
+	const headTxt = suRedWaitTxt || waitTxt || redTxt
 	set_text("phase_note", headTxt
 		? headTxt + (view.phase_note ? " · " + view.phase_note : "")
 		: (view.phase_note || ""))
@@ -465,11 +468,13 @@ function update_phase_buttons() {
 	/* 【2026-10-10】17528/17531/17535 美国事件卡挂起项 */
 	update_us_replay()
 	update_us_merchant()
-	update_us_lend_lease()
+	update_delegate_box()
 	/* 【2026-10-12】17510 我们的政治哲学：英国弃牌堆选响应卡打出（挂起给英国，卡图选择） */
 	update_us_political_box()
 	/* 【2026-10-10】17555 大萧条的余波：结束中立奖励按钮 */
 	update_us_depression_box()
+	/* 【2026-10-15】17555 大萧条的余波 ①：打出事件/状态卡后强制自选弃 1 张手牌 */
+	update_us_depression_discard_box()
 	/* 桌面状态卡渲染（含可触发高亮） */
 	update_table_status()
 	/*
@@ -593,7 +598,7 @@ function can_act_in_turn() {
 	return is_my_turn() && !view.opening && !view.pending_battle &&
 		!view.pending_trigger && !view.pending_econ && !view.pending_autobahn &&
 		!view.pending_script && !view.pending_armed_delegate &&
-		!view.italy_chain && !view.italy_german_draw &&
+		!(view.delegate && (view.delegate.mode === 'order' || view.delegate.mode === 'german_draw')) &&
 		!(view.italy_borrow && view.italy_borrow.pending) &&
 		/* 17553 让权日本期间：双方都不能顺手做回合内操作 */
 		!view.us_japan_delegate &&
@@ -604,7 +609,7 @@ function can_act_in_turn() {
 		/* 17532 战区移动期间：美国只能回答该事项 */
 		!view.us_theater_delegate &&
 		/* 17528/17531/17535 美国事件卡挂起期间：只能回答对应事项 */
-		!view.us_replay && !view.us_merchant && !view.us_lend_lease &&
+		!view.us_replay && !view.us_merchant && !(view.delegate && view.delegate.mode === 'single') &&
 		/* 17510 我们的政治哲学：美国选英国弃牌堆响应卡期间 */
 		!view.us_political
 	}
@@ -965,7 +970,7 @@ function update_balloon_box() {
 /* 【2026-10-08】17721 钢铁条约：意大利打出响应卡后，德国可打出 1 张状态卡。
  * 此处渲染提示框 + "放弃"按钮（放弃则控制权立即归还意大利）。 */
 function update_it_delegate_box() {
-	const d = view && view.it_delegate
+	const d = (view && view.delegate && view.delegate.mode === 'chain') ? (view.it_delegate || view.delegate) : null
 	if (!d) {
 		/* 窗口消失：若当前 ask 是 it_delegate，关闭它 */
 		if (ask_state && ask_state.kind === 'it_delegate') {
@@ -991,7 +996,7 @@ function update_it_delegate_box() {
 /* 【2026-10-08】17729 卡佩里尼：轴心依次链提示框。
  * 当前待处置国抽到一张牌，玩家选：打出(基本卡)/置牌堆顶/留弃牌堆。 */
 function update_italy_chain_box() {
-	const ch = view && view.italy_chain
+	const ch = (view && view.delegate && view.delegate.mode === 'order') ? (view.italy_chain || view.delegate) : null
 	if (!ch || !ch.pickedCard) {
 		if (ask_state && ask_state.kind === 'italy_chain') {
 			ask_state = null
@@ -1042,7 +1047,7 @@ function update_italy_chain_box() {
 /* 【2026-10-08】16703 罗马尼亚铁卫团：德国弃牌摸牌提示框。
  * 点一张德国手牌 = 弃置并摸1张；或放弃。 */
 function update_italy_german_draw_box() {
-	const d = view && view.italy_german_draw
+	const d = (view && view.delegate && view.delegate.mode === 'german_draw') ? (view.italy_german_draw || view.delegate) : null
 	if (!d) {
 		if (ask_state && ask_state.kind === 'italy_german_draw') {
 			ask_state = null
@@ -1061,6 +1066,16 @@ function update_italy_german_draw_box() {
 	ask_state = { kind: 'italy_german_draw' }
 	render_ask_box('罗马尼亚铁卫团：德国弃1张手牌摸1张',
 		'点击下方一张【德国手牌】将其弃置并摸1张；或放弃。当前手牌 ' + (d.handCount || 0) + ' 张。', opt)
+}
+
+/* 翻转类委托统一刷新入口：依 view.delegate.mode 分派到各渲染函数。
+ * 17721/16703/17729/17535 的控制状态已统一到 view.delegate（服务端 game.delegate），
+ * 此处各自按自身 mode 判空后渲染，互不影响。 */
+function update_delegate_box() {
+	update_it_delegate_box()
+	update_italy_chain_box()
+	update_italy_german_draw_box()
+	update_us_lend_lease()
 }
 
 /* 【2026-10-10】17553 抗日义勇军：让权日本弃牌提示框。
@@ -1244,34 +1259,126 @@ function update_us_merchant() {
 		'选择要征召的合法兵种。', opt)
 }
 
-/* 【2026-10-10】17535 租借法案：委托苏/英打出 1 张手牌并摸 1 张（先选国、再选手牌） */
+/* 【2026-10-13】17535 租借法案：委托苏/英打出 1 张手牌并摸 1 张。
+ * 改用居中选牌 modal（复用 su_purge_modal / us_political_modal 的 .modal + .card-grid + card_elt 范式）：
+ *   · step=nation（仅美国可见）：展示「委托苏联 / 委托英国」两个按钮；
+ *   · step=play（仅被委托国可见）：card-grid 渲染其手牌（真实卡图），点击即打出；
+ *   · 其余阵营（waiting_for）不弹框，仅等待。
+ * 服务端 view.us_lend_lease.hand 已附带 type/img 供 card_elt 显示卡面。 */
 function update_us_lend_lease() {
-	const dg = view && view.us_lend_lease
-	if (!dg) {
-		if (ask_state && ask_state.kind === 'us_lend_lease') { ask_state = null; render_ask_box(null, null, null) }
+	const modal = document.getElementById('lend_lease_modal')
+	if (!modal) return
+	const dg = (view && view.delegate && view.delegate.mode === 'single') ? (view.us_lend_lease || view.delegate) : null
+	/* 【2026-10-14】lend_lease_active 由 view 统一驱动：委托处于"打牌"阶段时记为被委托国，
+	   使下方事件/状态卡的"选目标/选代价"后续提交经 lend_play_action 路由到
+	   resolve_us_lend_lease_play（带 nation=被委托国）。其余情况清空。 */
+	lend_lease_active = (dg && !dg.done && dg.step === 'play' && dg.nation) ? dg.nation : null
+	/* 无挂起 / 已结束 / 仅等待方（无 step）一律隐藏。
+	 * 注意：只能清 .modal-box 的内容，绝不能 modal.innerHTML='' —— 那会把
+	 * .modal-box 容器本身删掉，下次有 step 时 querySelector('.modal-box')
+	 * 返回 null，box.innerHTML 抛 TypeError 并中断整条 update 渲染管线
+	 * （表现为"报错卡一下、刷新才正常、手牌不刷新像没打出"）。 */
+	if (!dg || !dg.step) {
+		modal.classList.add('hide')
+		const b = modal.querySelector('.modal-box')
+		if (b) b.innerHTML = ''
 		return
 	}
-	if (!dg.nation) {
-		const nat = dg.nation_candidates || []
-		const opt = nat.map(n => ({
-			label: '委托【' + n + '】打出1张手牌', cls: 'primary',
-			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_lend_lease_select', { nation: n }) }
-		}))
-		ask_state = { kind: 'us_lend_lease' }
-		render_ask_box('租借法案：选择委托国家',
-			'选择苏联或英国，由其打出1张手牌并摸1张（让权操作）。', opt)
+	modal.classList.remove('hide')
+	const box = modal.querySelector('.modal-box')
+	box.innerHTML = ''
+
+	const head = document.createElement('div')
+	head.className = 'modal-head'
+	const title = document.createElement('span')
+	title.className = 'modal-title'
+	title.textContent = '《租借法案》'
+	const sub = document.createElement('span')
+	sub.className = 'modal-sub'
+	sub.textContent = dg.step === 'play'
+		? '委托【' + dg.nation + '】打出 1 张手牌并摸 1 张'
+		: '选择委托国家（苏联或英国），由其打出 1 张手牌并摸 1 张'
+	head.append(title, sub)
+	box.appendChild(head)
+
+	if (dg.step !== 'play') {
+		/* ① 选国：两国按钮 */
+		const sec = document.createElement('div')
+		sec.className = 'modal-section'
+		const label = document.createElement('div')
+		label.className = 'modal-label'
+		label.textContent = '① 选择委托国家'
+		sec.appendChild(label)
+		const grid = document.createElement('div')
+		grid.className = 'card-grid'
+		const empty = document.createElement('p')
+		empty.className = 'empty-note'
+		empty.textContent = '选择苏联或英国，由其打出 1 张手牌并摸 1 张（让权操作）。'
+		grid.appendChild(empty)
+		sec.appendChild(grid)
+		box.appendChild(sec)
+
+		const foot = document.createElement('div')
+		foot.className = 'modal-foot'
+		for (const n of (dg.nation_candidates || [])) {
+			const b = document.createElement('button')
+			b.className = 'action primary'
+			b.textContent = '委托【' + n + '】'
+			b.onclick = () => { modal.classList.add('hide'); send_action('resolve_us_lend_lease_select', { nation: n }) }
+			foot.appendChild(b)
+		}
+		box.appendChild(foot)
 		return
 	}
+
+	/* ② 打牌：被委托国手牌，点击即打出 */
+	const sec = document.createElement('div')
+	sec.className = 'modal-section'
+	const label = document.createElement('div')
+	label.className = 'modal-label'
+	label.textContent = '② 选择 ' + dg.nation + ' 的 1 张手牌打出'
+	sec.appendChild(label)
+
+	const grid = document.createElement('div')
+	grid.className = 'card-grid'
 	const cards = dg.hand || []
-	if (!cards.length) { render_ask_box('租借法案：' + dg.nation, dg.nation + ' 手牌为空，无牌可打。', []); return }
-	const opt = cards.map(c => ({
-		label: (c.name || ('卡' + c.id)) + '（打出）', cls: 'primary',
-		onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_lend_lease_play', { card: c.id }) }
-	}))
-	ask_state = { kind: 'us_lend_lease' }
-	render_ask_box('租借法案：' + dg.nation + ' 打出1张手牌',
-		'选择 ' + dg.nation + ' 的1张手牌打出，然后摸1张。', opt)
-}
+	if (!cards.length) {
+		const empty = document.createElement('p')
+		empty.className = 'empty-note'
+		empty.textContent = dg.nation + ' 手牌为空，无牌可打。'
+		grid.appendChild(empty)
+	} else {
+		for (const c of cards) {
+			let el
+			if (c.type === 'BASIC') {
+				/* 基本卡（建设/发起战斗）：进入既有"选目标"流程，
+				   最终提交经 submit_basic_card 路由到 resolve_us_lend_lease_play */
+				el = card_elt(c, () => {
+					modal.classList.add('hide')
+					lend_lease_active = dg.nation
+					start_basic_card(c)
+				})
+			} else if (c.type === 'EVENT' || c.type === 'ECHO') {
+				/* 事件/回声卡：走"查目标→高亮→点选"流程；最终提交经 lend_play_action
+				   路由到 resolve_us_lend_lease_play（带 nation=被委托国） */
+				el = card_elt(c, () => {
+					modal.classList.add('hide')
+					lend_lease_active = dg.nation
+					query_event_targets(c.id)
+				})
+			} else {
+				/* 增强/其它（无目标选择）：直接打出（带 card 即可） */
+				el = card_elt(c, () => {
+					modal.classList.add('hide')
+					send_action('resolve_us_lend_lease_play', { card: c.id })
+				})
+			}
+			grid.appendChild(el)
+		}
+	}
+	sec.appendChild(grid)
+	box.appendChild(sec)
+	}
 
 /* 【2026-10-12】17510 我们的政治哲学：英国从弃牌堆选 1 张[响应卡]打出（挂起给英国）。
  * 复用 script_modal 的"卡片网格 + 点选高亮(.sel) + 底部确认(.modal-foot)"范式，
@@ -1356,7 +1463,7 @@ function update_us_political_box() {
 /* 【2026-10-10】17555 大萧条的余波：美国结束中立奖励按钮。
  * 与 17850 大清洗（su_purge_play 按钮）同款：点按钮弃此牌换计分标记。 */
 function update_us_depression_box() {
-	const on = view && view.acts && view.acts.us_depression_use
+	const on = view && view.actions && view.actions.us_depression_use
 	if (!on) {
 		if (ask_state && ask_state.kind === 'us_depression') {
 			ask_state = null
@@ -1375,6 +1482,41 @@ function update_us_depression_box() {
 	ask_state = { kind: 'us_depression' }
 	render_ask_box('大萧条的余波：美国结束中立奖励',
 		'美国已结束中立。可弃置此牌，使 <美国> 增加 1 个计分标记。', opt)
+}
+
+/* 【2026-10-15】17555 大萧条的余波 ①：美国打出事件/状态卡后强制自选弃 1 张手牌。
+ * 与 ②（结束中立+1 标记弹窗）同款 ask_box，但本框需玩家先点手牌选 1 张再确认。 */
+function update_us_depression_discard_box() {
+	const on = view && view.us_depression_discard
+	if (!on) {
+		if (pending_depression_discard) {
+			pending_depression_discard = null
+			update_hand_panel()
+		}
+		if (ask_state && ask_state.kind === 'us_depression_discard') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		return
+	}
+	if (!pending_depression_discard) pending_depression_discard = { drop: [] }
+	const drop = pending_depression_discard.drop
+	const opt = [{
+		label: drop.length === 1 ? '确认弃置（1 张）' : '请选择 1 张手牌',
+		cls: 'primary',
+		onClick: () => {
+			if (drop.length !== 1) {
+				toast('请先点选 1 张手牌弃置')
+				return
+			}
+			const card = drop[0]
+			pending_depression_discard = null
+			send_action('us_depression_discard', { card })
+		},
+	}]
+	ask_state = { kind: 'us_depression_discard' }
+	render_ask_box('大萧条的余波：强制弃置 1 张手牌',
+		'美国打出[事件/状态]卡，须自选弃置 1 张手牌（点手牌选择，再点下方确认）。', opt)
 }
 
 /* 【2026-10-08】17732 德国军事顾问：借用德国状态卡。
@@ -1506,18 +1648,34 @@ function update_armed_offer_box() {
 	}
 
 	/* 非多步：常规"打出 / 不打出"选择框 */
+	/* 弃牌选牌中（armed 代价），保持 echo modal，不再重绘 armed offer */
+	if (pending_echo_discard && pending_echo_discard.armed) return
 	ask_state = { kind: 'armed_offer' }
-	const opts = ao.cards.map(c => ({
-		label: '打出《' + c.name + '》' + (c.cost ? '（损耗 ' + c.cost + '）' : ''),
-		cls: 'primary',
-		onClick: () => {
-			armed_resolving_card = c.card   /* 记住正在结算的卡，供多步第一步回传 */
-			ask_state = null
-			render_ask_box(null, null, null)
-			send_action('use_armed_offer', { card: c.card })
-			toast('打出《' + c.name + '》')
-		},
-	}))
+	const opts = ao.cards.map(c => {
+		const att = (c.cost && c.cost.attrition) || 0
+		const dis = (c.cost && c.cost.discard) || 0
+		const costLabel = att ? '（损耗 ' + att + '）' : (dis ? '（弃 ' + dis + ' 张）' : '')
+		return {
+			label: '打出《' + c.name + '》' + costLabel,
+			cls: 'primary',
+			onClick: () => {
+				armed_resolving_card = c.card   /* 记住正在结算的卡，供多步第一步回传 */
+				if (dis) {
+					/* 弃牌代价：复用 echo_discard_modal 选牌（与 ECHO 卡代价同款） */
+					pending_echo_discard = { card: { id: c.card }, need_targets: null, drop: [], limit: dis, filter: null, armed: true, armed_card: c.card }
+					render_ask_box(null, null, null)
+					ask_state = null
+					update_echo_discard_box()
+					toast('请选择 ' + dis + ' 张手牌弃置')
+				} else {
+					ask_state = null
+					render_ask_box(null, null, null)
+					send_action('use_armed_offer', { card: c.card })
+					toast('打出《' + c.name + '》')
+				}
+			},
+		}
+	})
 	opts.push({
 		label: '不打出',
 		onClick: () => {
@@ -2085,7 +2243,8 @@ function query_event_targets(card_id) {
 	pending_event_targets = null
 	pending_event_choice = null
 	pending_event_spaces = null /* 新一轮选择，清空累积 */
-	send_query("event_targets", { card: card_id })
+	/* 【2026-10-14】委托打牌时带上 nation=被委托国，服务端据此计算该国的事件目标 */
+	send_query("event_targets", { card: card_id, nation: lend_lease_active || undefined })
 	console.log("[QUERY] send_query returned")
 	return null
 }
@@ -2161,7 +2320,7 @@ function submit_event_piece(pieceId) {
 	if (pending_echo_cards && pending_echo_cards.length)
 		arg.cards = pending_echo_cards.slice()
 	const nm = card.name
-	send_action("play_card", arg)
+	lend_play_action(arg)
 	toast("《" + nm + "》：对该部队生效")
 	clear_piece_highlight("event_piece")
 	cancel_event_card()
@@ -2249,7 +2408,7 @@ function confirm_event_done() {
 		arg.choice = pending_event_choice
 	if (pending_echo_cards && pending_echo_cards.length)
 		arg.cards = pending_echo_cards.slice()
-	send_action("play_card", arg)
+	lend_play_action(arg)
 	toast("打出《" + pending_event_card.name + "》到 " +
 		pending_event_picks.map(p => ((view.spaces[p] || {}).name || "?")).join("、"))
 	cancel_event_card()
@@ -2297,7 +2456,7 @@ function show_event_choice(tg) {
 				pending_event_choice = opt.index
 				box.classList.add("hide")
 				/* 选完 choice 后，可能还要选地区 -> 再查一次 */
-				send_query("event_targets", { card: card.id, choice: opt.index })
+				send_query("event_targets", { card: card.id, choice: opt.index, nation: lend_lease_active || undefined })
 				/* 这次查询的 result 会带 need='space' 或 need=null */
 			}
 		}
@@ -2338,7 +2497,7 @@ function on_click_hand_card(c, d) {
 		view.uk_build_delegate || view.su_build_delegate ||
 		view.us_china_build ||
 		view.us_theater_delegate || view.us_replay ||
-		view.us_merchant || view.us_lend_lease || view.us_political) {
+		view.us_merchant || (view.delegate && view.delegate.mode === 'single') || view.us_political) {
 		toast("请先完成当前的让权建设事项（点击地图上高亮的地区，由英国/苏联建设；或美国帮中国征召/战区移动）")
 		return
 	}
@@ -2438,6 +2597,22 @@ function on_click_hand_card(c, d) {
 		else
 			toast("代价只需 " + pd.need + " 张，请先取消一张")
 		update_skill_discard_box()
+		update_hand_panel()
+		return
+	}
+
+	/* 17555 大萧条的余波 ①：点手牌 = 选 / 取消一张弃牌（最多 1 张） */
+	if (pending_depression_discard) {
+		const i = pending_depression_discard.drop.indexOf(c.id)
+		if (i >= 0)
+			pending_depression_discard.drop.splice(i, 1)
+		else if (pending_depression_discard.drop.length < 1)
+			pending_depression_discard.drop.push(c.id)
+		else {
+			toast("只需弃 1 张，请先取消一张")
+			return
+		}
+		update_us_depression_discard_box()
 		update_hand_panel()
 		return
 	}
@@ -2574,7 +2749,7 @@ function on_click_hand_card(c, d) {
 					onClick: () => {
 						render_ask_box(null)
 						ask_state = null
-						send_action("play_card", { card: c.id, target: n })
+						lend_play_action({ card: c.id, target: n })
 						toast("《" + c.name + "》—— 目标：" + n)
 					},
 				})))
@@ -2582,12 +2757,12 @@ function on_click_hand_card(c, d) {
 		}
 		if (tg && tg.length === 1) {
 			/* 单目标自动带参打出，无需弹窗 */
-			send_action("play_card", { card: c.id, target: tg[0] })
+			lend_play_action({ card: c.id, target: tg[0] })
 			toast("打出《" + c.name + "》—— 目标：" + tg[0])
 			return
 		}
 		/* 无 targets：直接打出（如 15314 链式卡） */
-		send_action("play_card", { card: c.id })
+		lend_play_action({ card: c.id })
 		toast("打出《" + c.name + "》")
 		return
 	}
@@ -2824,7 +2999,8 @@ function update_hand_panel() {
 			(isDiscardPhase && discard_pick.indexOf(c.id) >= 0) ||
 			(openingMine && discard_pick.indexOf(c.id) >= 0) ||
 			(pending_echo_discard && pending_echo_discard.drop.indexOf(c.id) >= 0) ||
-			(status_discard_sel && status_discard_sel.picked.indexOf(c.id) >= 0)
+			(status_discard_sel && status_discard_sel.picked.indexOf(c.id) >= 0) ||
+			(pending_depression_discard && pending_depression_discard.drop.indexOf(c.id) >= 0)
 		d.classList.toggle("sel", !!isCostSelected)
 
 		/*
@@ -2877,6 +3053,11 @@ function update_hand_panel() {
 			const b = document.createElement("span")
 			b.className = "badge"
 			b.textContent = "弃置 " + (status_discard_sel.picked.indexOf(c.id) + 1)
+			d.appendChild(b)
+		} else if (pending_depression_discard && pending_depression_discard.drop.indexOf(c.id) >= 0) {
+			const b = document.createElement("span")
+			b.className = "badge"
+			b.textContent = "弃"
 			d.appendChild(b)
 		} else if (view.extra_play && extra_play_allows_card(c)) {
 			/*
@@ -2937,6 +3118,8 @@ let pending_resource = null    /* { basics:[...], take: id|null, drop: [ids] } *
 /* 【2026-10-01】国家技能"弃牌代价"的临时选择状态（英国国家技能用）
  * { drop: [ids], need: N, source_name } —— 只存在于客户端，负责收集 drop */
 let pending_skill_discard = null
+/* 17555 大萧条的余波 ①：客户端收集"强制自选弃 1 张手牌"的临时状态（仅存在于客户端） */
+let pending_depression_discard = null
 
 /* ============================================================
  * 空军阶段②：弃 1 张手牌，调度 1 支空军
@@ -3327,6 +3510,22 @@ function confirm_echo_discard() {
 		confirm_guard_discard()
 		return
 	}
+	/* 【2026-10-14】增强卡 armed 弃牌代价（15311 马奇诺防线）：确认 = use_armed_offer{drop} */
+	if (pending_echo_discard && pending_echo_discard.armed) {
+		if (pending_echo_discard.drop.length !== pending_echo_discard.limit) {
+			toast('还需选 ' + (pending_echo_discard.limit - pending_echo_discard.drop.length) + ' 张')
+			return
+		}
+		const drop = pending_echo_discard.drop.slice()
+		const card = pending_echo_discard.armed_card
+		pending_echo_discard = null
+		const m = document.getElementById('echo_discard_modal')
+		if (m) m.classList.add('hide')
+		update_hand_panel()
+		send_action('use_armed_offer', { card: card, drop: drop })
+		toast('打出增强卡')
+		return
+	}
 	if (!pending_echo_discard)
 		return
 	if (pending_echo_discard.drop.length !== pending_echo_discard.limit) {
@@ -3372,7 +3571,7 @@ function confirm_echo_discard() {
 	/* 无需选地区：直接打出，并把玩家选的弃牌一起提交 */
 	const arg = { card: pending_event_card.id, cards: pending_echo_cards.slice() }
 	const nm = pending_event_card.name
-	send_action("play_card", arg)
+	lend_play_action(arg)
 	toast("打出《" + nm + "》")
 	cancel_event_card()
 	update_echo_discard_box()
@@ -3926,17 +4125,34 @@ function update_pending_red_box() {
 	const modal = document.getElementById('red_orchestra_modal')
 	if (!modal) return
 	const pr = view && view.pending_red
-	if (!pr) { modal.style.display = 'none'; render_ask_box(null, null, null); return }
+	if (!pr) {
+		modal.style.display = 'none'
+		/*
+		 * 【2026-10-13 修复】原来无条件 render_ask_box(null) 会把本帧前面已渲染的
+		 * 其它 #ask_box 弹框（pending_trigger / national_skill 等）一并清空，
+		 * 表现为「是否发动」「国家技能」永远弹不出来。
+		 * 改为只清理本框占用的 #ask_box（kind === 'red'），与全工程其它 update_*_box 一致。
+		 */
+		if (ask_state && ask_state.kind === 'red') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		return
+	}
 	const hasOptions = Array.isArray(pr.options) && pr.options.length > 0
 	if (!hasOptions) {
 		/* 非决策方（等待态）：走非阻断面板，不弹全屏遮罩（与其它让权卡一致） */
 		modal.style.display = 'none'
+		/* 占用 #ask_box 并登记 kind，供 !pr 分支按 kind 守卫清理 */
+		ask_state = { kind: 'red' }
 		render_ask_box('红色管弦乐队：等待【' + (pr.waiting_for || '德国') + '】选择',
 			'德国需选择：本回合内该状态卡无效 / 损耗 2 张牌。', [])
 		return
 	}
-	/* flex 保留 .modal 居中 */
+	/* flex 保留 .modal 居中；决策态独占 #ask_box 并清空（modal 是阻断遮罩） */
 	modal.style.display = 'flex'
+	ask_state = { kind: 'red' }
+	render_ask_box(null, null, null)
 	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 	const h = document.createElement('h3')
@@ -4065,6 +4281,7 @@ let ask_state = null   /* { kind, ctx } */
 
 /* 【2026-10-07】armed 增强卡多步交互：pending 期间记录正在结算的卡与待收集信息 */
 let pending_armed = null     /* { card, need, candidates, pick, pickMin } */
+let pending_status = null    /* 状态卡多步选位：{ card_id, need, candidates, pick, pickMin } */
 let armed_resolving_card = null
 
 function render_ask_box(title, text, options) {
@@ -4072,7 +4289,12 @@ function render_ask_box(title, text, options) {
 	if (!box)
 		return
 	box.innerHTML = ""
-	if (!options || !options.length) {
+	/*
+	 * 【2026-10-15 修复】清空模式 = 标题为空（调用方传 null 显式收起面板）。
+	 * 有标题 + 空 options 是【信息框】（如高速公路预算提示、无可征召地区提示），
+	 * 必须照常显示——原逻辑把"无按钮"也当成收起，导致高速公路预算面板永远不可见。
+	 */
+	if (!title) {
 		box.classList.add("hide")
 		return
 	}
@@ -4200,6 +4422,7 @@ function toggle_ask_remove() {
 let pending_card = null      /* 正在等待选目标的卡 */
 let pending_mode = null      /* 《空军力量》的 mode */
 let pending_targets = null   /* { spaces: [...], pieces: [...] } */
+let lend_lease_active = null /* 租借法案委托中：当前被委托国（如 '英国'）；非空时基本卡选目标提交改走 resolve_us_lend_lease_play */
 
 function start_basic_card(c) {
 	/* 再点同一张 -> 取消 */
@@ -4330,6 +4553,7 @@ function cancel_basic_card() {
 	pending_mode = null
 	pending_targets = null
 	battle_flow = null
+	lend_lease_active = null
 	clear_piece_highlight("initiator")
 	clear_target_highlight()
 	if (ask_state && ask_state.kind !== "remove")
@@ -4339,6 +4563,31 @@ function cancel_basic_card() {
 		box.classList.add("hide")
 	/* 退出选地块/地图选择后刷新桌面状态卡（15341/15342 提示复位） */
 	update_table_status()
+}
+
+/* 基本卡"选目标"最终提交：
+ *   · 租借法案委托模式（lend_lease_active 非空）-> 改提交 resolve_us_lend_lease_play 并带 nation；
+ *   · 否则正常 play_card。
+ * 三处共用：on_space_click_for_card / finish_battle_card / on_pick_airforce_piece。
+ * 各调用点各自负责 cancel_basic_card 清理。 */
+function submit_basic_card(arg) {
+	if (lend_lease_active) {
+		arg.nation = lend_lease_active
+		send_action('resolve_us_lend_lease_play', arg)
+	} else {
+		send_action('play_card', arg)
+	}
+}
+
+/* 【2026-10-14】委托打牌时，事件/增强/状态卡的"选目标 / 选代价 / 多选"等后续提交
+ * 一律改走 resolve_us_lend_lease_play（带 nation=被委托国），让服务端按被委托国结算。
+ * 非委托场景 lend_lease_active 为空，退回正常的 play_card。 */
+function lend_play_action(arg) {
+	if (lend_lease_active) {
+		send_action('resolve_us_lend_lease_play', Object.assign({}, arg, { nation: lend_lease_active }))
+	} else {
+		send_action('play_card', arg)
+	}
 }
 
 /* 地图上点击地区时（link / 放置 之外的默认模式）被调用 */
@@ -4370,7 +4619,7 @@ function on_space_click_for_card(space_id) {
 	const arg = { card: pending_card.id, space: space_id }
 	if (pending_mode)
 		arg.mode = pending_mode
-	send_action("play_card", arg)
+	submit_basic_card(arg)
 	toast("已打出《" + pending_card.name + "》到 " + (view.spaces[space_id] || {}).name +
 		(isEmpty ? "（空打：无守军）" : ""))
 	cancel_basic_card()
@@ -4879,46 +5128,69 @@ function update_pending_econ_box() {
 }
 
 /* ============================================================
- * 高速公路（15228，德国卡组）选位 UI
+ * 高速公路（15228，德国卡组）/ 西伯利亚大铁路（17827，苏联卡组）选位 UI
  *
- * 服务端 play_card 命中后收回全部德军陆军、写入 view.pending_autobahn
+ * 服务端 play_card 命中后收回全部本国陆军、写入 view.pending_autobahn
  * （{ remaining, total, actor }）。客户端在这里：
- *   · 查询 autobahn_targets 拿到"当前德国可合法建设陆军"的地区并高亮；
+ *   · 查询 autobahn_targets 拿到"当前可合法建设陆军"的地区并高亮；
  *   · 玩家点地图（on_click_space 顶部拦截）发 resolve_autobahn；
  *   · 与服务端 ECON 同理，期间锁住手牌等其他操作。
+ *
+ * 【2026-10-15 重构·改用独立持久面板】
+ * 与巴巴罗萨《战斗预算》#event_budget_box 同款，不再占用 #ask_box。
+ *
+ * 为什么必须挪出 ask_box（玩家确认的 bug「贵在行动不能中途发动」）：
+ *   本函数【每帧】都被 render 调用；旧实现无条件 render_ask_box(...) 重写 ask_box，
+ *   于是玩家点桌面状态卡（如 15247 贵在行动）弹出的「发动状态卡」确认框，
+ *   会在下一帧被本面板直接覆盖 —— 玩家根本点不到「确认发动」，
+ *   表象就是"中途点了没反应 / 发动不了"。
+ *   挪到独立面板后 ask_box 空出来给确认框，两者互不干扰。
+ *
+ * 候选地区高亮仍由 query autobahn_targets 的 on_reply 负责（不在此处贴）。
  * ============================================================ */
+let autobahn_query_remaining = null   /* 上次查询时的剩余次数，仅用于节流，避免每帧打 RPC */
+
 function update_pending_autobahn_box() {
 	const pa = view && view.pending_autobahn
+	const box = document.getElementById('autobahn_box')
+	if (!box) return
 	if (!pa) {
+		box.classList.add('hide')
+		box.innerHTML = ''
 		/*
-		 * 【2026-10-07 修复】原来这里【无条件】clear_target_highlight()，
-		 * 而本函数在每帧 render 中都会跑到（pending_autobahn 常态为 null），
-		 * 于是会把【别人刚贴上的高亮】一起抹掉 —— 典型受害者是
-		 * update_event_budget_box（它在本次 render 里更早执行，
-		 * 高亮刚贴上就被这里清掉），表现为"15205 给出预算后地图没有高亮"。
-		 *
-		 * 正确写法：只清理【本框自己贴的】—— 即 ask_state 确实是 autobahn 时。
-		 * 高亮是全局资源，谁贴的谁负责清，不能"顺手全清"。
+		 * 【2026-10-07 修复（沿用）】只清理【本面板自己贴过的】高亮，
+		 * 不能"顺手全清" —— 否则会把 update_event_budget_box 刚贴上
+		 * 的高亮一起抹掉（表现为"15205 给出预算后地图没有高亮"）。
+		 * 高亮是全局资源，谁贴的谁负责清。
 		 */
-		if (ask_state && ask_state.kind === 'autobahn') {
-			ask_state = null
-			render_ask_box(null, null, null)
+		if (autobahn_query_remaining !== null) {
+			autobahn_query_remaining = null
 			clear_target_highlight()
 		}
+		if (ask_state && ask_state.kind === 'autobahn') ask_state = null
 		return
 	}
 
 	/* 只在"剩余次数"变化时重新查询，避免每次刷新都打一次 RPC */
-	if (!ask_state || ask_state.kind !== 'autobahn' ||
-		ask_state.remaining !== pa.remaining) {
-		ask_state = { kind: 'autobahn', remaining: pa.remaining }
+	if (autobahn_query_remaining !== pa.remaining) {
+		autobahn_query_remaining = pa.remaining
 		send_query('autobahn_targets', {})
 	}
 
-	const title = (pa.actor === '苏联') ? '西伯利亚大铁路' : '高速公路'
-	const text = '《' + title + '》—— 请点击地图上高亮的地区建设 1 支' + pa.actor + '陆军' +
-		'（剩余 ' + pa.remaining + ' / ' + pa.total + ' 次）'
-	render_ask_box(title + ' · 选择建设位置', text, [])
+	const nm = (pa.actor === '苏联') ? '西伯利亚大铁路' : '高速公路'
+	box.classList.remove('hide')
+	box.innerHTML = ''
+
+	const title = document.createElement('div')
+	title.className = 'eb-title'
+	title.textContent = '《' + nm + '》建设预算：剩 ' + pa.remaining + ' / ' + pa.total + ' 次'
+	box.appendChild(title)
+
+	const hint = document.createElement('div')
+	hint.className = 'eb-hint'
+	hint.textContent = '点地图上高亮的地区建设 1 支' + (pa.actor || '德国') +
+		'陆军。收回的部队必须全部重建（本预算无「结束」）。'
+	box.appendChild(hint)
 }
 
 /* ============================================================
@@ -5275,6 +5547,14 @@ const STATUS_UI = {
 	'15242': { discard: 1, filter: { type: 'BASIC', name: '发起陆战' } },
 	/* 战斗状态卡：服务端已正确读 ctx.arg（含 space/from/victim），仅需客户端补选目标流程 */
 	'17544': { battle: 'land', attacker_owner: true },
+	/*
+	 * 【2026-10-15】15247 贵在行动：对【建设地点的相邻地区】发起陆战。
+	 * 与同形卡 17544 同款走 battle 流程（选地区 -> 选发起单位 -> 选目标）。
+	 * spaces_from_window：候选 = 触发窗口地区（建设地点）的相邻地区，
+	 *   由服务端 query status_battle_spaces 动态计算 —— 不能写死地区名，
+	 *   且候选【含空地】以支持空打（空打用以触发闪电战等后续窗口）。
+	 */
+	'15247': { battle: 'land', attacker_owner: true, spaces_from_window: true },
 	/* 17842 喀秋莎：弃1张手牌后对战斗地区再发起1次陆战 */
 	'17842': { discard: 1, battle: 'land', attacker_owner: true },
 	/* 17846 坦克运输：弃1张[建设陆军]后以此陆军发起1次陆战 */
@@ -5311,6 +5591,8 @@ let status_build_pending = false   /* 状态卡"建设预算"：等待玩家点�
 let status_build_cands = []          /* 合法候选空格 id 列表 */
 let status_build_type = null         /* 'army' | 'navy' */
 let status_build_discard = null      /* 进入选地前已收集的弃牌代价（如 17843 弃[建设陆军]） */
+/* 【2026-10-15】状态卡战斗选地（15247 贵在行动）：服务端给的候选地区（含空地，可空打） */
+let status_battle_cands = []
 
 function status_name(id) {
 	const e = (view.table_status || []).find(x => x.card === id)
@@ -5636,6 +5918,24 @@ function start_status_battle(cardId, ui, discard) {
 		return
 	}
 	status_act_phase = 'space'
+	/*
+	 * 【2026-10-15】候选由服务端按"触发窗口地区"【动态】计算（15247 贵在行动）。
+	 * 与 sbuild（start_status_build）同款：先发 query，on_reply 里高亮；
+	 * 提示框立刻渲染，避免出现"点了没反应"的空窗感。
+	 */
+	if (ui.spaces_from_window) {
+		status_battle_cands = []
+		send_query('status_battle_spaces', {
+			card: cardId, nation: status_act_owner, kind: ui.battle || 'land',
+		})
+		render_ask_box(
+			'选择战斗地区',
+			'请点击地图上的高亮地区（建设地点的相邻地区）发起《' + name + '》的陆战。' +
+			'若无守军则为空打：不移除任何单位、仅消耗，可用于触发闪电战等后续效果。',
+			[{ label: '取消', onClick: () => cancel_status_act() }])
+		toast('点击地图上高亮的相邻地区以发起《' + name + '》的陆战')
+		return
+	}
 	const spaces = (ui.spaces || []).map(space_id_of_name).filter(x => x != null)
 	if (spaces.length)
 		highlight_targets({
@@ -5693,6 +5993,7 @@ function cancel_status_act() {
 	status_build_pending = false
 	status_build_cands = []
 	status_build_type = null
+	status_battle_cands = []
 	battle_flow = null
 	clear_piece_highlight('initiator')
 	clear_target_highlight()
@@ -5815,82 +6116,201 @@ function update_event_budget_box() {
 }
 
 /*
- * 【2026-10-06】17817 进攻是最好的防守 + 17850 大清洗 联动面板。
- * 苏联打出 17817 后：先结束中立并（若有大清洗）给出一次性出牌机会，
- * 玩家处理完大清洗（或主动继续）后，才由 su_17817_proceed / su_purge_play
- * 建立对德战斗预算。本面板据此展示提示与按钮。
+ * 【2026-10-13 重构为屏幕中央卡片网格范式】17817 进攻是最好的防守 + 17850 大清洗 联动面板。
+ *
+ * 背景：苏联打出 17817 后：先结束中立并（若有大清洗）给出一次性出牌机会，
+ * 玩家处理完大清洗（或主动继续）后，才由 su_17817_proceed / su_purge_play 建立对德战斗预算。
+ *
+ * 渲染改为复用 #us_political_modal 的「屏幕中央卡片网格 + 点选高亮(.sel) + 底部确认」范式
+ * （#su_purge_modal，与 #us_political_modal 同结构）：玩家在屏幕中间看到状态卡真实牌面并点选，
+ * 而非旧版侧边小按钮列名字。
+ *
+ * 显示条件 = view.su_17817_pending 或 view.actions.su_purge_play 任一为真（已修复 view.acts→view.actions）。
+ * 路径区分：
+ *   · 走 17817：view.actions.su_17817_proceed 真 → 底部给「继续进攻（建立对德战斗预算）」(放弃大清洗)；
+ *   · 被攻击 / 压力参战（无 17817 待结算）：view.actions.su_purge_skip 真 → 底部给「跳过（不发动大清洗）」。
+ *   · 无论哪条路径，选 1 张[状态卡]后底部「确认打出」按钮置可点，send_action('su_purge_play', {card})。
  */
+let su_purge_sel = null
 function update_su_17817_box() {
-	const box = document.getElementById('su_17817_box')
-	if (!box) return
-	if (!view || !view.su_17817_pending) { box.classList.add('hide'); box.innerHTML = ''; return }
-	box.classList.remove('hide')
+	const modal = document.getElementById('su_purge_modal')
+	if (!modal) return
+	const show = view && (view.su_17817_pending || (view.actions && view.actions.su_purge_play))
+	if (!show) { modal.classList.add('hide'); const _b = modal.querySelector('.modal-box'); if (_b) _b.innerHTML = ''; su_purge_sel = null; return }
+	modal.classList.remove('hide')
+	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 
-	const title = document.createElement('div')
-	title.className = 'eb-title'
-	title.textContent = '《进攻是最好的防守》已打出：苏联已结束中立'
-	box.appendChild(title)
+	const head = document.createElement('div')
+	head.className = 'modal-head'
+	const title = document.createElement('span')
+	title.className = 'modal-title'
+	title.textContent = view.su_17817_pending
+		? '《进攻是最好的防守》已打出：苏联已结束中立'
+		: '苏联结束中立：大清洗机会'
+	const sub = document.createElement('span')
+	sub.className = 'modal-sub'
+	sub.textContent = '大清洗：弃置《大清洗》，打出 1 张[状态卡]'
+	head.append(title, sub)
+	box.appendChild(head)
 
-	if (view.acts && view.acts.su_purge_play) {
-		const hint = document.createElement('div')
-		hint.className = 'eb-hint'
-		hint.textContent = '大清洗机会：弃置《大清洗》，打出 1 张[状态卡]'
-		box.appendChild(hint)
+	const sec = document.createElement('div')
+	sec.className = 'modal-section'
+	const label = document.createElement('div')
+	label.className = 'modal-label'
+	label.textContent = '选择 1 张[状态卡]'
+	const hint = document.createElement('span')
+	hint.className = 'modal-hint'
+	hint.textContent = su_purge_sel ? '已选 1 / 1，点确认打出' : '点选 1 张状态卡'
+	label.appendChild(hint)
+	sec.appendChild(label)
 
-		const hand = (view.hands[view.my_nation] && view.hands[view.my_nation].cards) || []
-		const statusCards = hand.filter(c => String(c.type || '').toUpperCase() === 'STATUS')
-		const cardsWrap = document.createElement('div')
-		cardsWrap.className = 'eb-cards'
-		if (statusCards.length) {
-			for (const c of statusCards) {
-				const b = document.createElement('button')
-				b.className = 'card-btn'
-				b.textContent = c.name || c.id
-				b.onclick = () => send_action('su_purge_play', { card: c.id })
-				cardsWrap.appendChild(b)
-			}
-		} else {
-			const none = document.createElement('div')
-			none.className = 'eb-hint'
-			none.textContent = '（手牌中无可用状态卡）'
-			cardsWrap.appendChild(none)
+	const hand = (view.hands[view.my_nation] && view.hands[view.my_nation].cards) || []
+	const statusCards = hand.filter(c => String(c.type || '').toUpperCase() === 'STATUS')
+	const grid = document.createElement('div')
+	grid.className = 'card-grid'
+	if (!statusCards.length) {
+		const empty = document.createElement('p')
+		empty.className = 'empty-note'
+		empty.textContent = '手牌中无可用状态卡'
+		grid.appendChild(empty)
+	} else {
+		for (const c of statusCards) {
+			const el = card_elt(c, () => {
+				su_purge_sel = (su_purge_sel === c.id) ? null : c.id
+				update_su_17817_box()
+			})
+			if (su_purge_sel === c.id) el.classList.add('sel')
+			grid.appendChild(el)
 		}
-		box.appendChild(cardsWrap)
 	}
+	sec.appendChild(grid)
+	box.appendChild(sec)
 
-	if (view.acts && view.acts.su_17817_proceed) {
-		const btn = document.createElement('button')
-		btn.className = 'action primary'
-		btn.textContent = '继续进攻（建立对德战斗预算）'
-		btn.onclick = () => send_action('su_17817_proceed', {})
-		box.appendChild(btn)
+	const foot = document.createElement('div')
+	foot.className = 'modal-foot'
+	/* 放弃出口：17817 路径用 proceed；被攻击/压力路径用 skip（互斥，build_actions 已保证） */
+	if (view.actions && view.actions.su_17817_proceed) {
+		const proceed = document.createElement('button')
+		proceed.className = 'action'
+		proceed.textContent = '继续进攻（建立对德战斗预算）'
+		proceed.onclick = () => { su_purge_sel = null; send_action('su_17817_proceed', {}) }
+		foot.appendChild(proceed)
+	} else if (view.actions && view.actions.su_purge_skip) {
+		const skip = document.createElement('button')
+		skip.className = 'action'
+		skip.textContent = '跳过（弃置《大清洗》）'
+		skip.onclick = () => { su_purge_sel = null; send_action('su_purge_skip', {}) }
+		foot.appendChild(skip)
 	}
+	const ok = document.createElement('button')
+	ok.className = 'action primary'
+	const chosen = statusCards.find(c => c.id === su_purge_sel)
+	ok.textContent = su_purge_sel && chosen ? ('打出《' + (chosen.name || chosen.id) + '》') : '确认打出'
+	ok.disabled = !su_purge_sel
+	ok.onclick = () => {
+		if (!su_purge_sel) return
+		const card = su_purge_sel
+		su_purge_sel = null
+		send_action('su_purge_play', { card })
+	}
+	foot.appendChild(ok)
+	box.appendChild(foot)
 }
 
 /*
  * 响应卡挂起：持有方在询问框里决定"发动 / 不发动"。
  * 只有 view.pending_trigger 非 null 的一方会看到（服务端已按阵营过滤）。
  */
+let resp_ui = null, resp_ui_sig = null
+function move_resp_order(i, d) {
+	const j = i + d
+	if (j < 0 || j >= resp_ui.order.length) return
+	const t = resp_ui.order[i]; resp_ui.order[i] = resp_ui.order[j]; resp_ui.order[j] = t
+}
+function send_resp_reorder() {
+	send_action('response_reorder', { order: resp_ui.order.slice(), skip: Object.keys(resp_ui.skip || {}) })
+}
 function update_pending_trigger_box() {
 	const pt = view.pending_trigger
 	if (!pt) {
+		resp_ui = null
+		resp_ui_sig = null
+		if (ask_state && (ask_state.kind === 'response' || ask_state.kind === 'response_order')) {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		return
+	}
+	/* 正在为该响应卡选目标：交给响应选择框，不显示发动/排序框 */
+	if (view.response_choice) {
 		if (ask_state && ask_state.kind === 'response') {
 			ask_state = null
 			render_ask_box(null, null, null)
 		}
 		return
 	}
-	const names = pt.candidates.map(c => '《' + c.name + '》').join('、')
-	const where = pt.space ? ('（于 ' + (data.name_of(pt.space) || pt.space) + '）') : ''
-	const kind = pt.pre ? '——可令对方该行动无效' : ''
-	const title = '响应卡等待决定'
-	const text = '是否发动 ' + names + '？' + where + kind
-	ask_state = { kind: 'response', pt: pt }
-	render_ask_box(title, text, [
-		{ label: '发动响应', cls: 'primary', onClick: () => send_action('trigger_response', {}) },
-		{ label: '不发动', cls: '', onClick: () => send_action('pass_response', {}) },
-	])
+	const multi = (pt.candidates || []).length > 1 && !pt.ordered
+	if (!multi) {
+		/* 单卡 / 已确认：沿用既有 发动/不发动 流程 */
+		const names = pt.candidates.map(c => '《' + c.name + '》').join('、')
+		const where = pt.space ? ('（于 ' + (data.name_of(pt.space) || pt.space) + '）') : ''
+		const kind = pt.pre ? '——可令对方该行动无效' : ''
+		const title = '响应卡等待决定'
+		const text = '是否发动 ' + names + '？' + where + kind
+		ask_state = { kind: 'response', pt: pt }
+		render_ask_box(title, text, [
+			{ label: '发动响应', cls: 'primary', onClick: () => send_action('trigger_response', {}) },
+			{ label: '不发动', cls: '', onClick: () => send_action('pass_response', {}) },
+		])
+		return
+	}
+	/* 多卡未确认：排序 / 跳过（一次选择） */
+	const sig = JSON.stringify(pt.candidates) + '|' + JSON.stringify(pt.order) + '|' + JSON.stringify(pt.skip)
+	if (!resp_ui || resp_ui_sig !== sig) {
+		resp_ui = { order: (pt.order || pt.candidates.map(c => c.card_id)).slice(), skip: Object.assign({}, pt.skip || {}) }
+		resp_ui_sig = sig
+	}
+	ask_state = { kind: 'response_order' }
+	const box = document.getElementById('ask_box')
+	if (!box) return
+	box.innerHTML = ''
+	box.classList.remove('hide')
+	const h = document.createElement('div'); h.className = 'ask_head'
+	h.textContent = '响应卡结算顺序（请排序后确认）'; box.appendChild(h)
+	const tip = document.createElement('div'); tip.className = 'ask_text'
+	tip.textContent = '多张响应卡同时触发，决定先后结算顺序；可跳过不发动的卡。'; box.appendChild(tip)
+	const list = document.createElement('div'); list.style.margin = '6px 0'; box.appendChild(list)
+	const byId = {}; for (const c of pt.candidates) byId[c.card_id] = c
+	resp_ui.order.forEach((id, i) => {
+		const c = byId[id]; if (!c) return
+		const row = document.createElement('div')
+		row.style.cssText = 'display:flex;align-items:center;gap:6px;margin:3px 0'
+		const name = document.createElement('span'); name.style.flex = '1'
+		name.textContent = (i + 1) + '. ' + c.name + ((resp_ui.skip && resp_ui.skip[id]) ? '（跳过）' : '')
+		row.appendChild(name)
+		const up = document.createElement('button'); up.className = 'action'; up.textContent = '↑'
+		up.onclick = () => { move_resp_order(i, -1); send_resp_reorder() }
+		row.appendChild(up)
+		const down = document.createElement('button'); down.className = 'action'; down.textContent = '↓'
+		down.onclick = () => { move_resp_order(i, 1); send_resp_reorder() }
+		row.appendChild(down)
+		const sk = document.createElement('button'); sk.className = 'action'
+		sk.textContent = (resp_ui.skip && resp_ui.skip[id]) ? '恢复' : '跳过'
+		sk.onclick = () => { if (resp_ui.skip[id]) delete resp_ui.skip[id]; else resp_ui.skip[id] = true; send_resp_reorder() }
+		row.appendChild(sk)
+		list.appendChild(row)
+	})
+	const btnRow = document.createElement('div'); btnRow.style.cssText = 'margin-top:8px;display:flex;gap:8px'
+	const okB = document.createElement('button'); okB.className = 'action primary'
+	okB.textContent = '确认顺序并结算'
+	okB.onclick = () => send_action('response_confirm', {})
+	btnRow.appendChild(okB)
+	const skipAll = document.createElement('button'); skipAll.className = 'action'
+	skipAll.textContent = '全部跳过'
+	skipAll.onclick = () => send_action('pass_response', {})
+	btnRow.appendChild(skipAll)
+	box.appendChild(btnRow)
 }
 
 /*
@@ -5924,6 +6344,7 @@ function finish_battle_card() {
 		status_act_discard = null
 		status_act_ui = null
 		status_act_phase = null
+		status_battle_cands = []
 		send_action("activate_status", base)
 		toast("已触发《" + nm + "》于 " +
 			((view.spaces[base.space] || {}).name || "?"))
@@ -5942,7 +6363,7 @@ function finish_battle_card() {
 	ask_state = null
 	battle_flow = null
 	clear_piece_highlight("initiator")
-	send_action("play_card", base)
+	submit_basic_card(base)
 	toast("已打出《" + pending_card.name + "》到 " +
 		((view.spaces[base.space] || {}).name || "?") +
 		(bf.isEmpty ? "（空打：该地区无可攻击敌军）" : ""))
@@ -6463,7 +6884,7 @@ function on_click_space(evt) {
 	 * 候选由服务端算好下发（view.armed_offer.pending.candidates），客户端不二次过滤。
 	 */
 	/* 17729 卡佩里尼：打出基本卡选目标位置 */
-	if (view && view.italy_chain && view.italy_chain.sub) {
+	if (view && view.delegate && view.delegate.mode === 'order' && view.delegate.sub) {
 		send_action('resolve_italy_play', { space: s })
 		return
 	}
@@ -6522,6 +6943,82 @@ function on_click_space(evt) {
 			toast('不能选这里 —— 请点高亮地区')
 		}
 		return
+	}
+
+	/*
+	 * 【2026-10-15】状态卡"建设预算"选地（17547/17550/15248/17843…）必须
+	 * 【优先于】高速公路：这是玩家【显式点击状态卡】发起的选地；
+	 * 而高速公路的选位是【隐式】的（期间点在地图上任何地方都被当作重建）。
+	 * 旧顺序 pending_autobahn 在前面，会把状态卡的选地点击整个吞掉，
+	 * 表现为"高速公路期间点 15248 合成燃料没反应" ——
+	 * 与 15247 确认框被覆盖属同一类"点击优先级争抢"。
+	 * （原本此分支写在下方 status_act_phase==='space' 里，故被 autobahn 抢先；
+	 *   现整体上移到这里，下面不再保留重复实现。）
+	 */
+	if (status_act_phase === 'space') {
+		/* 状态卡"建设预算"：玩家点选相邻合法空格（17547/17550/15248/17843…） */
+		if (status_build_pending) {
+			if (status_build_cands.indexOf(s) < 0) { toast('请在合法高亮地区中选择'); return }
+			status_build_pending = false
+			highlight_targets(null)
+			const cid = status_act_card
+			render_ask_box(null)
+			const sArg = { card: cid, space: s }
+			if (status_build_discard && status_build_discard.length)
+				sArg.discard = status_build_discard
+			status_build_discard = null
+			send_action('activate_status', sArg)
+			toast('发动《' + status_name(cid) + '》')
+			return
+		}
+		/*
+		 * 状态卡"战斗选地"（15247 贵在行动 / 17544 等）-> 进入选发起单位流程。
+		 * 候选若是服务端动态下发的（spaces_from_window），先本地校验给明确提示，
+		 * 而不是等服务端返回"只能对允许的战斗地区发起"。
+		 */
+		/*
+		 * 仅当【当前这张卡】确实用服务端动态候选时才按候选校验；
+		 * 否则（17544/15338 等静态 spaces 或无 spaces）不能用上一张卡的
+		 * 残留候选去拦 —— 那会误伤后续其它状态卡（踩坑通用教训：状态要复位）。
+		 */
+		if (status_act_ui && status_act_ui.spaces_from_window &&
+			status_battle_cands.length && status_battle_cands.indexOf(s) < 0) {
+			toast('请在合法高亮地区中选择（须是建设地点的相邻陆地）')
+			return
+		}
+		const allow = (status_act_ui && status_act_ui.spaces)
+			? status_act_ui.spaces.map(space_id_of_name).filter(x => x != null)
+			: null
+		if (allow && allow.indexOf(s) < 0) {
+			toast('该地区不在《' + status_name(status_act_card) + '》可攻击范围内')
+			return
+		}
+		status_start_battle_space(s)
+		return
+	}
+
+	/*
+	 * 战斗卡 / 状态卡战斗：点地区 = 选目标地区（须先选好发起单位）。
+	 *
+	 * 【2026-10-15】必须排在 pending_autobahn【之前】—— 与上方
+	 * status_act_phase==='space' 上移是同一个病：
+	 * 状态卡战斗（15247 贵在行动）在高速公路期间发动时，玩家选完发起单位后
+	 * battle_flow.step='target'，此时点目标地区若被 pending_autobahn 抢先，
+	 * 就会被当成"高速公路选位"发成 resolve_autobahn —— 战斗【永远提交不出去】，
+	 * 状态卡原地不动（现象：全流程能显示，但实际没发动、状态仍待发动）。
+	 *
+	 * 判据同前：battle_flow 是玩家【显式】发起的战斗流程，
+	 * 优先于高速公路的【隐式】选位（期间点地图任何地方都算重建）。
+	 */
+	if (battle_flow) {
+		if (!battle_flow.from) {
+			toast("请先在地图上点击一支本国陆军/海军作为发起单位（空军不能发起战斗）")
+			return
+		}
+		if (battle_flow.step === "target") {
+			on_pick_battle_target(s, null)
+			return
+		}
 	}
 
 	/* 高速公路（15228）：选建设位置 -> 发 resolve_autobahn */
@@ -6600,51 +7097,6 @@ function on_click_space(evt) {
 	}
 
 	/*
-	 * 状态卡战斗：选目标地区（15338/15339）。
-	 * 仅当 status_act_phase==='space' 时生效，此时 battle_flow 尚未建立。
-	 */
-	if (status_act_phase === 'space') {
-		/* 状态卡"建设预算"：玩家点选相邻合法空格 */
-		if (status_build_pending) {
-			if (status_build_cands.indexOf(s) < 0) { toast('请在合法高亮地区中选择'); return }
-			status_build_pending = false
-			highlight_targets(null)
-			const cid = status_act_card
-			render_ask_box(null)
-			const sArg = { card: cid, space: s }
-			if (status_build_discard && status_build_discard.length)
-				sArg.discard = status_build_discard
-			status_build_discard = null
-			send_action('activate_status', sArg)
-			toast('发动《' + status_name(cid) + '》')
-			return
-		}
-		const allow = (status_act_ui && status_act_ui.spaces)
-			? status_act_ui.spaces.map(space_id_of_name).filter(x => x != null)
-			: null
-		if (allow && allow.indexOf(s) < 0) {
-			toast('该地区不在《' + status_name(status_act_card) + '》可攻击范围内')
-			return
-		}
-		status_start_battle_space(s)
-		return
-	}
-
-	/*
-	 * 战斗卡：点地区 = 选目标地区（须先在地图上选好发起单位）。
-	 * 若该地区有可攻击敌军，则要求点具体算子（空军不可攻击）。
-	 */
-	if (battle_flow) {
-		if (!battle_flow.from) {
-			toast("请先在地图上点击一支本国陆军/海军作为发起单位（空军不能发起战斗）")
-			return
-		}
-		if (battle_flow.step === "target") {
-			on_pick_battle_target(s, null)
-			return
-		}
-	}
-
 	/* 基本卡选目标优先于其他一切 */
 	if (pending_card && on_space_click_for_card(s))
 		return
@@ -6687,6 +7139,8 @@ function on_click_space(evt) {
 					card: pending_event_card.id,
 					spaces: pending_event_spaces.slice(),
 					...(pending_event_choice != null ? { choice: pending_event_choice } : {}),
+					/* 【2026-10-14】委托打牌带 nation=被委托国 */
+					nation: lend_lease_active || undefined,
 				})
 				toast("已选 " + ((view.spaces[s] || {}).name || "?") +
 					"（第 " + (pending_event_targets.step + 1) + "/" + total + " 步）")
@@ -6718,7 +7172,7 @@ function on_click_space(evt) {
 			 */
 			if (pending_echo_cards && pending_echo_cards.length)
 				arg.cards = pending_echo_cards.slice()
-			send_action("play_card", arg)
+			lend_play_action(arg)
 			toast("打出《" + pending_event_card.name + "》到 " +
 				((view.spaces[s] || {}).name || "?"))
 			cancel_event_card()
@@ -6950,7 +7404,7 @@ function on_click_piece(evt) {
 				arg.mode = pending_mode
 			/* 《空军力量》等：指定使用哪支己方算子 */
 			arg.piece = id
-			send_action("play_card", arg)
+			submit_basic_card(arg)
 			toast("《" + pending_card.name + "》目标：" + sp.name + "（" + sp.space_name + "）")
 			cancel_basic_card()
 			return
@@ -7065,9 +7519,24 @@ function on_reply(q, params) {
 			return
 		}
 		status_build_cands = (params && params.spaces) || []
-		highlight_targets(status_build_cands)
+		highlight_targets({ spaces: status_build_cands.map(id => ({ id: id })) })
 		if (status_build_cands.length === 0)
 			toast('相邻无合法可建设地区（需空格且未被占用）')
+		return
+	}
+
+	/* 【2026-10-15】状态卡战斗候选地区（15247 贵在行动：建设地点的相邻地区，含空地） */
+	if (q === 'status_battle_spaces') {
+		if (!params || params.ok === false) {
+			toast((params && params.reason) || '无法获取可攻击地区')
+			return
+		}
+		status_battle_cands = (params && params.spaces) || []
+		highlight_targets({
+			spaces: status_battle_cands.map(id => ({ id: id, reason: '可发起陆战（空地为"空打"）' })),
+		})
+		if (status_battle_cands.length === 0)
+			toast('建设地点的相邻地区没有可发起陆战的陆地')
 		return
 	}
 
@@ -7216,7 +7685,7 @@ function on_reply(q, params) {
 		const tg = params
 		if (!tg) {
 			/* 无配置 -> 直接打出 */
-			send_action("play_card", { card: pending_event_card.id })
+			lend_play_action({ card: pending_event_card.id })
 			pending_event_card = null
 			return
 		}
@@ -7228,7 +7697,7 @@ function on_reply(q, params) {
 		 */
 		if (tg.need === "script") {
 			const nm = pending_event_card.name
-			send_action("play_card", { card: pending_event_card.id })
+			lend_play_action({ card: pending_event_card.id })
 			toast("打出《" + nm + "》")
 			pending_event_card = null
 			return
@@ -7305,7 +7774,7 @@ function on_reply(q, params) {
 			}
 			if (pending_event_choice != null)
 				arg.choice = pending_event_choice
-			send_action("play_card", arg)
+			lend_play_action(arg)
 			toast("打出《" + pending_event_card.name + "》")
 			pending_event_card = null
 			return
@@ -7365,7 +7834,7 @@ function on_reply(q, params) {
 			return
 		}
 		/* 兜底 */
-		send_action("play_card", { card: pending_event_card.id })
+		lend_play_action({ card: pending_event_card.id })
 		pending_event_card = null
 		return
 	}

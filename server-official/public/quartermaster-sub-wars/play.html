@@ -89,10 +89,18 @@
 		<div id="resource_box" class="hide"></div>
 		<!-- 通用询问面板 -->
 		<div id="ask_box" class="hide"></div>
-		<!-- 战斗预算(event_budget)面板：独立于 ask_box，避免与代受/抵消框争抢 -->
-		<div id="event_budget_box" class="hide"></div>
-		<!-- 17817 进攻是最好的防守 + 17850 大清洗 联动面板（先大清洗，再建战斗预算） -->
-		<div id="su_17817_box" class="hide"></div>
+		<!--
+			右上角「预算 HUD」：战斗预算(event_budget) 与 高速公路/西伯利亚大铁路
+			建设预算 共用同一个容器、纵向排列 —— 位置与布局完全一致，
+			且两者同时出现时也不会互相遮挡。
+
+			二者都独立于 #ask_box：否则会每帧覆盖桌面状态卡
+			（如 15247 贵在行动）弹出的「发动状态卡」确认框。
+		-->
+		<div id="budget_hud">
+			<div id="event_budget_box" class="hide"></div>
+			<div id="autobahn_box" class="hide"></div>
+		</div>
 	</div>
 
 	<div id="turn_info">
@@ -302,6 +310,26 @@
 	内容由 update_us_political_box 动态生成（card-grid 渲染候选响应卡，真实卡图，点击即打出）。
 -->
 <div id="us_political_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-10-13 重构】17817 进攻是最好的防守 + 17850 大清洗：
+	复用 us_political_modal 的「屏幕中央卡片网格 + 点选高亮(.sel) + 底部确认」范式，
+	让玩家在屏幕中间看到状态卡牌面并选择（替代原侧边小按钮列名字）。
+	内容由 update_su_17817_box 动态生成（card-grid 渲染手牌[状态卡]，真实卡图，点击即选中）。
+-->
+<div id="su_purge_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+
+<!--
+	【2026-10-13】17535 租借法案：委托苏/英打出 1 张手牌并摸 1 张。
+	内容由 update_us_lend_lease 动态生成：step=nation 展示两国按钮；
+	step=play 用 card-grid 渲染被委托国手牌（真实卡图，点击即打出），
+	复用 .modal 居中 + .card-grid + card_elt 范式（同 su_purge_modal / us_political_modal）。
+-->
+<div id="lend_lease_modal" class="modal hide">
 	<div class="modal-box"></div>
 </div>
 

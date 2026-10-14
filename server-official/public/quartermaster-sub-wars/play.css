@@ -914,14 +914,29 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	color: #333;
 }
 
-/* ================= 战斗预算(event_budget)面板 ================= */
-/* 独立于 #ask_box（避免与代受/抵消框争抢），固定在右上角作为战斗进度 HUD。 */
-#event_budget_box {
+/* ================= 右上角预算 HUD（战斗预算 / 高速公路建设预算） ================= */
+/*
+ * 固定右上角的【共享容器】：战斗预算与建设预算作为其子元素【纵向排列】，
+ * 于是两者位置 / 布局完全一致，且同时出现时也不会互相遮挡。
+ * 二者都独立于 #ask_box（避免与代受/抵消/状态卡确认框争抢）。
+ */
+#budget_hud {
 	position: fixed;
 	top: 10px;
 	right: 10px;
 	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 	max-width: 320px;
+	/* 容器本身不拦截点击（隐藏的子面板不占位），只有面板本体可交互 */
+	pointer-events: none;
+}
+#budget_hud > * { pointer-events: auto; }
+
+/* 面板本体：共用同一套 .eb-* 视觉样式（复用优先，不重写第二份） */
+#event_budget_box,
+#autobahn_box {
 	max-height: 60vh;
 	overflow-y: auto;
 	display: flex;
@@ -934,18 +949,22 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
 	font-size: 11px;
 }
-#event_budget_box.hide { display: none; }
-#event_budget_box .eb-title {
+#event_budget_box.hide,
+#autobahn_box.hide { display: none; }
+#event_budget_box .eb-title,
+#autobahn_box .eb-title {
 	font-size: 12px;
 	font-weight: bold;
 	color: #8a5a00;
 }
-#event_budget_box .eb-hint {
+#event_budget_box .eb-hint,
+#autobahn_box .eb-hint {
 	font-size: 10px;
 	color: #555;
 	line-height: 1.35;
 }
-#event_budget_box .eb-log {
+#event_budget_box .eb-log,
+#autobahn_box .eb-log {
 	font-size: 10px;
 	color: #333;
 	border-top: 1px dashed #d8b25a;
@@ -954,7 +973,8 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	max-height: 28vh;
 	overflow-y: auto;
 }
-#event_budget_box button.action {
+#event_budget_box button.action,
+#autobahn_box button.action {
 	font-size: 11px;
 	padding: 3px 6px;
 	text-align: center;

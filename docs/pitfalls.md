@@ -671,6 +671,71 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-15 · R56：15430《奇袭》海战后 15430/15426 滞留 response_queue → 英国 15335 无挂起 + 奇袭窗口重弹
+
+**现象**
+- 发动《驱逐舰运输》在印度建陆军后，客户端的"是否发动奇袭"窗口重新弹出；且英国响应卡 15335 始终没被挂起结算（"没有挂起给到英国"）。
+
+**根因（实例 id 与面 id 比较键错配）**
+- `rules.js` 第 12192-12193 行（15430 海战 step 'sea' 末尾的队列清理过滤器）比较候选的 `c.card_id`（实例 id，如 `'15430#1'`），而字面量是面 id `'15430'`/`'15426'`。
+- `'15430#1' !== '15430'` 恒成立 → 过滤**从未生效**，15430 海战结算后一直残留在 `response_queue` 队头。
+- 后果：① `trigger_response` 守卫 `head.owner_side !== side`（~line 20780）使英国 `trigger_response('Allies')` 被拒，15335 永远排不到队头；② 轴心国再 `trigger_response` 重跑 15430 → 重新弹出奇袭发动选项。
+
+**修复（rules.js，2 行）**
+- 过滤器比较键由 `c.card_id` 改为 `c.card_face`（候选结构 `card_face` 才是面 id，见 `request_responses` ~12795）；`some` 与 `filter` 两处同改。
+
+**验证**
+- `tools/test_15430_queue_filter.js`（固化回归测试，9/0）：bug 版本下 5 项 FAIL、修复后全 PASS。
+- `tools/_smoke_15430.js`（官方冒烟，24/0）不受影响。
+- 注意：修复后英国结算完 15335，`deferred_response_choice`（15430 运输续打，`extra.tx` 携带 15426 子步）被 `promote_deferred_response` 提升为 pending——这是**合法的第二步建设延续（带 tx）**，不是发动选项重弹；发动选项重弹的特征是 `extra.step==='transport'` 且**无 tx**（见 `optCont` ~12165 vs `buildCont` ~12127）。
+
+**同类排查**
+- 同文件仅此一处"实例 id 当面 id"比对的误用（另两处 ~20675 / ~20827 是实例对实例，正确）。
+
+### 2026-10-14 · R55：15431 全面侵华「无法选择攻击地点」回归（merge_new_responses 破坏 defer + 独立队列）
+
+**现象**
+- 2026-10-12 已修复的 15431「无法选择攻击地点」死锁再次出现：第①步建设陆军触发其它响应后，第②步「对相邻地区选陆战目标」的 `pending_response_choice` 不出现 / 选址流程被打断。
+
+**根因（多卡排序 feature 引入的 merge_new_responses 与 defer 设计互斥）**
+- 15431 是"两步 + 递延"响应卡：第①步建设陆军派发 `'build'` 响应（独立队列项），用 `defer` 把第②步存进 `game.deferred_response_choice`，等队列清空后由 `promote_deferred_response` 提升回来（先建设响应、最后陆战，不能插队）。
+- 本次"多卡响应排序/栈结算" feature 新增 `merge_new_responses`：每张卡结算后把"结算中新触发的响应"从独立队列项**抽走、塞进当前队列项的 candidates**。
+- 对 15431：建设触发的 build 响应被抽进当前项，随后 `trigger_response` 收尾 `response_queue.shift()` 把整个头项（含被塞进来的 build 响应）出队 → **build 响应被整项丢弃**，并破坏"先建设后陆战"的递延链，第②步选址无法提升。
+
+**修复（保留 feature，修掉回归，rules.js）**
+1. `request_responses`：结算中（`game._resp_settling` 为真）触发的新响应，改插到**队头之后（index 1）**实现栈/深度优先；普通时机仍追加队尾（FIFO）。
+2. `trigger_response` / `resolve_response_choice`：跑 effect 前后置 `game._resp_settling` 标志。
+3. `response_confirm`：确认时把多卡队列项**拆成独立队列项**（按 order 排在队头），使结算中新响应能插到"当前卡的项"之后、同批后续卡之前，且不再因整项出队丢卡。
+4. 删除 `merge_new_responses`（正是它破坏 defer）。
+
+**验证（`tools/_smoke_15431_queue.js`，14/0）**
+- 真实 action 处理器驱动：15431 进入 defer；**建设触发的响应卡未被丢弃（仍在队列）**；队列清空后第②步提升为 `pending_response_choice`（kind=space，可选址）；resolve 后陆战正常发生；多卡确认正确拆分为独立项。
+
+**归类提示**
+- 属「**多响应卡链式结算时，新触发响应被并入当前项 → 整项出队丢弃 / 破坏 defer**」。通用教训：响应卡结算中新触发的响应应作为**独立队列项**插到队头之后（深度优先），**绝不并入当前项的 candidates**——否则依赖独立队列 + `defer` 的卡（15431 类"先建设后陆战"）会丢卡、链断裂。
+
+### 2026-10-13 · R54：update_pending_red_box 无条件清空 #ask_box，吃掉「是否发动 / 国家技能」等弹框
+
+**现象**
+- 意大利出牌阶段开始，17732《德国军事顾问》第一步「是否发动」弹框始终不出现；日本国家技能弹出也不可见。两者都是 `render_ask_box` 走 `#ask_box` 的弹框，表现为"客户端 UI 显示问题"的共性症状。
+
+**根因（update 循环里某个框无条件清空 #ask_box）**
+- `update_pending_red_box`（play.js:3929，修复后约 3929-3942）的 `if (!pr)` 分支**无条件**调用 `render_ask_box(null, null, null)`，把整个 `#ask_box` 清空。
+- 该函数在 update 循环中位于 `update_pending_trigger_box`(423) 与 `update_national_skill_box`(435) **之后**（439 行），于是每帧把这两个框刚渲染的内容清掉 —— 它们永远活不过本帧。
+- 全工程其它 `update_*_box`（econ 4825 / autobahn 4903 / armed_offer 1430 / balloon 934 / italy_chain 996 / italy_german_draw 1046 / it_delegate / italy_borrow 1385 / su_red 系列走独立 modal 不碰 #ask_box）的 `!x` 分支都带 `if (ask_state && ask_state.kind === 'X')` 守卫，唯独 `update_pending_red_box` 漏了，属回归。
+
+**修复（play.js，3 处）**
+1. `!pr` 分支改为仅当 `ask_state && ask_state.kind === 'red'` 才 `render_ask_box(null, null, null)` 清空；
+2. 红管弦「等待态」（无 options）渲染 `render_ask_box(...)` 前加 `ask_state = { kind: 'red' }`，让守卫认识本框；
+3. 红管弦「决策态」（`modal.style.display = 'flex'`）加 `ask_state = { kind: 'red' }` 并 `render_ask_box(null, null, null)` 清空（modal 是阻断遮罩，本框独占 #ask_box）。
+
+**验证**
+- play.js 是静态文件，浏览器硬刷新（禁用缓存 / Ctrl+Shift+R）即可生效，无需重启 node。
+- 意大利出牌阶段开始 17732 弹「是否发动」、日本打★卡后弹国家技能弹框均恢复；read_lints 0 错误。
+
+**归类提示**
+- 属「**一个 update 函数误清空 #ask_box 吃掉同帧其它框**」。通用教训：所有 `update_*_box` 清空 `#ask_box` 必须按 `ask_state.kind` 守卫，**不能无条件 `render_ask_box(null)`**。新增/修改任何走 `#ask_box` 的弹框时，先确认其 `!x` 分支带 kind 守卫。
+
 ### 2026-10-13 · R53：17805 红色管弦乐队 苏联看不到「是否使用 / 选德国状态卡」弹框
 
 **现象**
@@ -5223,3 +5288,208 @@ open-ocean 海域（如中太平洋）即使邻接一艘已补给的本国海军
 > **数据特性（纠正 2026-10-11）**：17531「本土或相邻」用 `home_base_of(nation)`+其 `connections` 过滤 `can_recruit_at`。此前误判"英/法候选为空（数据特性）"是**错的**——只用了 `army` 过滤。真实情况：英/法大本营在 `setup(1)` 已被自己的起始陆军占住（"已有本国部队"不可再征召，属正确行为），但其**相邻海域**（英国→北海；法国→波罗的海/北海/地中海）对 `navy`/`air` 均合法。改为 `army/navy/air` 多兵种过滤后，英/法候选**不为空**。结论：候选集不必放宽到"全国合法格"，原"本土+相邻"约束配合多兵种即可。教训：判定"某国无候选"前，须把该卡支持的所有兵种都试一遍，别只试一种。
 
 **验证**：`tools/_smoke_us_event_c5.js` 8/0、`_smoke_us_event_c6.js` 11/0、`_smoke_us_event_c7.js` 13/0。回归 `test_basic_cards` 297/0、C 组其余（c1 11/0、c2 8/0、c3 12/0、c4 5/0）无破坏。
+
+---
+
+## 【2026-10-15】17547《人工港》/17550《先进造船厂》：触发不即时显示 + 候选可建设地不高亮
+
+**现象**：建完海军后，17547/17550 状态卡① 触发时机没显示"可触发"高亮（要刷新页面才对）；② 点击发动后，候选可建设地（海军相邻的空格）在地图上没有任何高亮，点了也没反应。
+
+**根因（两套独立问题）**：
+1. **服务端 view 求值顺序**：`view()` 返回对象里 `table_status`（计算 `ready`）**先**求值，而把 `after_build_navy` 窗口武装进 `game.status_instant` 的 `arm_status_instant` 写在 `build_actions`（`actions:` 字段），**后**求值。于是本次 view 算 `ready` 时用的是武装前的旧 `status_instant`→`ready=false`；只有下一次 view（刷新）才拿到已武装状态→`ready=true`。（经典"渲染时机≠状态时机"。）
+2. **客户端高亮参数形状错 + 一套冗余机制**：17547/17550 在 `status_ui_of` 里被归类为 `sbuild`（play.js 5476-5477），点击走既有 `start_status_build` → `send_query('status_build_spaces')` → `on_reply` 高亮。**既有 sbuild 机制本身是对的**（服务端 `status_build_spaces` 用 `inst.space` 作 base、`get_connections(base)` 取相邻、`status_build_valid` 过滤，已是"仅海军相邻"的候选）。但 `on_reply`（play.js 7406）写的是 `highlight_targets(status_build_cands)`，**把数组直接传进去**，而 `highlight_targets` 期望 `{spaces:[{id}]}`（`if(!t.spaces) return` 提前 return）→ 根本不高亮。
+   - 此前另加了 `activate_status`+`pending_status`(need:'space') 第二套选位机制（rules.js `activate_status` 的 `if(r.need)` 块、`view.pending_status` 字段、play.js `update_table_status`/`on_click_space` 的 pending_status 分支），与既有 sbuild 路径**并存冲突、且永不被点击路径触达**（sbuild 分支在 `on_click_table_status` 里先于"其余"分支），属重复造轮子（违反复用铁律）。
+
+**修法**：
+1. 把 `arm_status_instant`（after_build_navy/after_build_army）从 `build_actions` 移到 `view()` 顶部（`ensure_supply_override` 之后、返回对象之前），使 `table_status.ready` 在首次响应即正确；`game.last_built=null` 一并前置。
+2. play.js 7406 改为 `highlight_targets({ spaces: status_build_cands.map(id => ({ id: id })) })`，复用既有 sbuild 高亮路径。
+3. **清理冗余**：删除 `activate_status` 的 `if(r.need)` 块、`view.pending_status` 字段、play.js 中 pending_status 的 `update_table_status`/`on_click_space` 分支。17547/17550 的选位完全由既有 sbuild 机制承担（点图回传 `activate_status{card,space}`，`run` 用 `arg.space` 直接建陆军返回 `{ok:true}`）。
+
+**验证**：`node --check` 双文件无错；`tools/check_reuse.js` 的 B/C 类（绕过原子/重复原子）无告警（A 类 19 个 WARN 为前置索引漂移，与本次无关）；服务端模拟：建海军当次 view `table_status.ready=true`（修复前为 false）；`status_build_spaces` 查询返回 `spaces:[30]`（南大西洋相邻陆地 拉丁美洲），配合高亮修复即可点亮；`view.pending_status` 字段已不存在。服务器 8091 已重启（HTTP=200）。
+
+
+---
+
+## 【2026-10-15】高速公路预算面板不可见 + 贵在行动(15247) 不能中途发动
+
+**现象**：① 打出《高速公路》后，客户端看不到"剩余 X / Y 次"的预算面板；② 贵在行动（after_build_army 窗口）只能在高速公路【结算完毕】后才能发动，中途点了没反应。
+
+**根因（两套独立问题）**：
+
+1. **预算面板被"无按钮=隐藏"逻辑吃掉了**（客户端）
+   - `play.js render_ask_box` 原本是：`if (!options || !options.length) { box.classList.add("hide"); return }`——把"没有按钮"当成"收起面板"。
+   - 但 `update_pending_autobahn_box` 传的正是**空数组 `[]`**（它是"请点地图高亮地区建设"的提示框，本来就没有按钮），于是预算面板**永远 `hide`**。
+   - 同一逻辑还把 1245「现购自运政策：无可征召地区」这类**信息框**一起藏住。
+   - 修：判定改为**仅当标题为空（显式清空模式）才隐藏**；有标题则照常渲染"标题+正文、无按钮"的信息框。
+
+2. **中途发动的战斗被 autobahn 守卫卡死**（服务端）
+   - 守卫放行 `activate_status` 的修正已让"点击能进来"，这一步没问题。
+   - 真残留问题：15247 的 `run` 调 `do_battle` 会创建 `pending_battle`（防守方"是否用空军代受"表决），而此刻 `pending_autobahn` 仍在活跃，守卫**只放行 `resolve_autobahn`/`activate_status`，拦截一切战斗结算动作** → 玩家卡死，表象就是"不能中途发动"。
+   - 修：采用**挂起范式**（skill `rtt-pending-suspend`），而不是把战斗动作塞进白名单——战斗有 `defend`/`counter`、KV-2 等多个 stage，枚举不完，漏登记 = 客户端静默不发（通用教训 18）。
+     - 新增 `suspend_autobahn(game)`：`pending_autobahn` 完整存入 `pending_autobahn_suspended` 后**置空本体**；
+     - 新增 `maybe_resume_autobahn(game)`：中断挂起解除后原样恢复，剩余次数不丢；
+     - 接入点三处：① `activate_status` 效果执行后（`if (game.pending_battle) suspend_autobahn(game)`）；② `action()` 入口（状态正确性安全网）；③ **`view()` 计算前（关键）**——若只靠 action 入口恢复，战斗结算那一帧 view 仍是挂起态（`pending_autobahn=null`），客户端既无面板也无地图高亮，玩家不知道点哪，等价卡死。
+
+**验证**：新增 `tools/_smoke_autobahn_battle.js` 全过（挂起 → 防守方表决不再被拦 → view 恢复且 remaining=1 保留 → 挂起槽清空无泄漏）。回归 `_smoke_autobahn_15247`（相邻无敌方场景，不建战斗故不挂起）ALL PASS、`_smoke_status` 22/0、`check_reuse` 的 B/C 类无告警。
+
+**踩坑（测试侧）**：摆棋子时同格的陆军与空军若用**相同 id**（如 `'test_苏联_7'`）会互相覆盖，结果只剩空军 → `enemies`（过滤掉 air）为空 → 判定成"空打"直接同步结算、`pending_battle` 恒为 undefined，伪装成"这张卡没有挂起逻辑"。**棋子 id 必须含兵种**保证唯一。另：防守方要能"用空军代受"必须处于补给状态，否则 `do_battle` 同步结算完、不产生挂起。
+
+**注意**：`play.js` 是客户端文件，**改它不需要重启服务器**，但需浏览器刷新；`rules.js` 改动必须重启（本次已重启，HTTP=200）。
+
+
+**【同题续·2026-10-15 补充】预算面板必须独立于 #ask_box（否则确认框被每帧覆盖）**
+
+上一节修复后仍有两个残留现象：预算面板虽能显示，但 15247 贵在行动**中途仍发动不了**。真因是客户端：
+
+- `update_pending_autobahn_box` 由 render **每帧**调用，旧实现**无条件** `render_ask_box(...)` 重写 `#ask_box`。
+- 15247 在 `STATUS_UI` 里**没有条目**，走的是 `on_click_table_status` 末尾的通用「发动状态卡」确认框——**它也画在 `#ask_box`**。
+- 于是玩家点卡后确认框刚出现，**下一帧即被高速公路面板整个覆盖**，玩家永远点不到「确认发动」→ 表象"中途点了没反应/发动不了"。
+
+**修法（一举两得）**：把高速公路预算从 `ask_box` 挪到**独立持久面板 `#autobahn_box`**，与巴巴罗萨《战斗预算》`#event_budget_box` 同款（共用 `.eb-title`/`.eb-hint`/`.eb-log` 样式，不写第二份 CSS；位置改左上以避让右上角战斗预算）。这样：① 预算面板常驻可见；② `ask_box` 空出来给状态卡确认框。
+
+**要点**：
+- 查询节流改用**专属变量** `autobahn_query_remaining`，不再复用 `ask_state`——否则别的框一改 `ask_state.kind` 就会每帧重打 RPC。
+- 面板消失时仍只清**自己贴过**的高亮（`autobahn_query_remaining !== null` 为凭），沿用"谁贴谁清"。
+- 无「结束」按钮：服务端只有 `resolve_autobahn`，不存在 `autobahn_finish`——收回的部队必须全部重建。
+
+**同类隐患（未修，待办）**：`on_click_space` 顶部**优先**处理 `pending_autobahn`，而 15248 合成燃料在 `STATUS_UI` 是 `sbuild:'army'`（需玩家点地图选建设地）。故 autobahn 期间点 15248 进入选地后，**地图点击仍会被 autobahn 分支吞掉**。修法：在 `on_click_space` 里把 `status_build_pending` 分支提到 `pending_autobahn` **之前**（状态卡选地是玩家显式点击发起的，应优先于 autobahn 的隐式选位）。
+
+**注意**：本轮只改 `play.js`/`play.css`/`play.html`（均为客户端文件），**不需要重启服务器**，浏览器刷新即可；只有改 `rules.js` 才必须重启。
+
+
+**【续·已修】15248 合成燃料的同类争抢 + 预算面板统一进 HUD 容器**
+
+1. **`on_click_space` 优先级**：原顺序里 `pending_autobahn` 在 `status_act_phase==='space'` 之前，
+   于是高速公路期间点 15248（`STATUS_UI` 为 `sbuild:'army'`）进入选地后，**地图点击被 autobahn 分支整个吞掉**。
+   - 修：把 `status_act_phase === 'space' && status_build_pending` 分支**整体上移到 `pending_autobahn` 之前**，
+     并删除下方 `status_act_phase` 里的重复实现（不留两套）。
+   - 判据：状态卡选地是玩家**显式点击状态卡**发起的，**优先于**高速公路的**隐式**选位（期间点地图任何地方都算重建）。
+
+2. **两个预算面板统一进共享 HUD 容器 `#budget_hud`**（右上角 fixed、flex column、gap 6px）：
+   - 战斗预算与建设预算**位置 / 布局完全一致**（不再各写一份 fixed 定位，也不再靠"左上/右上"错位避让）；
+   - 同时出现时**纵向排列、互不遮挡**（DOM 顺序：战斗预算在上，建设预算在下）；
+   - 容器 `pointer-events:none`、`> * { pointer-events:auto }` —— 隐藏面板不占位、不挡地图点击。
+   - 注意：祖先若有 `transform`（client.js 会给 `main` 加 `scale`），`position:fixed` 的包含块会是该祖先；
+     因两个面板同处一个容器，受影响方式一致，故相对关系不变。
+
+
+---
+
+## 【2026-10-15】15247《贵在行动》重做：攻击地点/发起单位/目标全部交给玩家选，并支持空打
+
+**现象**：15247 原本由服务端替玩家选目标与发起单位（`nbrs.find(...)` + `de_adj_army_in_supply(...)` 各取第一个），玩家完全没有选择权。
+
+**根因**：违反 `rtt-atomic-operations` 语义陷阱 6 —— "只答有没有，不能拿来打哪一个"，与 15205《JU-87》旧错同款。且 run **完全不读 `ctx.arg`**，客户端收集了也没用；`STATUS_UI` 里**没有 15247 条目**，点击走通用确认框，没有任何选地点 UI。
+
+**修法（照抄同形卡 17544《美国海军陆战队》—— 同为 after_build_xxx 窗口 + 损耗1 + 对相邻地区发起陆战）**：
+
+1. **服务端** run 委托通用战斗原子 `status_launch_battle(game, nation, sp, ctx.arg, 'land', allowed)`，
+   候选 `allowed = get_connections(game, sp, faction_of_nation(nation))`（连通性唯一枢纽），
+   并顺手去掉 `'axis'` / `'德国'` 硬编码（改用 `ctx.nation`）。
+2. **客户端** `STATUS_UI` 加 `'15247': { battle:'land', attacker_owner:true, spaces_from_window:true }`，
+   复用既有"选地区 -> 选发起单位(`battle_initiators`) -> 选目标算子"流程。
+3. **动态候选高亮**：新增 query `status_battle_spaces`（与既有 `status_build_spaces` 同形：
+   base 取 `game.status_instant[card].space` = 建设地点），`start_status_battle` 里 `spaces_from_window`
+   分支发查询、`on_reply` 高亮。**候选与 run 的 allowed 同用 `get_connections(base, fac)`，两侧同源不漂移**。
+
+**空打怎么接进来的（关键发现：客户端早已支持）**：
+- `on_pick_battle_target` 在"该地区无可攻击敌军"时设 `bf.isEmpty = true` 并直接 `finish_battle_card()`；
+- `finish_battle_card` 的 `origin==='status'` 分支里 `if (bf.victim) base.victim = ...` —— **空打时 victim 为 null，提交参数天然不带 victim**。
+- 故服务端只需按 `hasEnemy` 分支：无敌方时 `do_battle(game, nation, target, 0, 'land', { from })`
+  （`target_piece = 0` 即走空打分支：不移除任何单位、仅消耗）。
+- 实测：空打同样会走 `arm_after_battle_status` 武装 `after_land`，**闪电战(15253)/15245 照常可发动** —— 这正是空打的主要用途。
+
+**踩坑（客户端状态复位）**：新增的 `status_battle_cands` 若不在提交/取消时复位，
+后续用**别的**状态卡（17544/15338 等静态 `spaces`）会被**上一张卡的残留候选误拦**。
+修：守卫收紧为 `status_act_ui && status_act_ui.spaces_from_window && ...`（只在该卡确实用动态候选时才校验），
+并在 `cancel_status_act` / `finish_battle_card` 里复位。
+
+**`on_click_space` 顺序**：把**整个** `status_act_phase === 'space'`（建设选地 + 战斗选地）统一上移到
+`pending_autobahn` **之前**，并删除下方重复实现。否则高速公路期间点地图选战斗目标会被 `pending_autobahn` 吞掉。
+（已确认 `on_click_piece` 无 `pending_autobahn` 拦截，故"选发起单位/选目标算子"不受影响。）
+
+**测试侧教训（行为变更）**：旧测试裸调 `activate_status({ card:'15247' })` 会失败
+（新实现要求玩家选：`请选择要攻击的相邻地区`）。这是**预期行为变更**，需把测试补成
+`{ card, space, from, victim }`（有敌方）或 `{ card, space, from }`（空打）。
+另：`!r.ok` 时 `activate_status` **不记** `status_used`，所以被拒的尝试不会白白消耗"一回合一次"。
+
+**验证**：`_smoke_15247_pick`（候选含空地 / 未选被拒 / 非相邻被拒 / 空打成立 / 空打触发闪电战）ALL PASS；
+`_smoke_15247_chain`、`_smoke_autobahn_battle`、`_smoke_autobahn_15247`（均已按新流程更新）ALL PASS；
+`_smoke_status` 22/0；`check_reuse` 的 B/C 无告警；`test_basic_cards` 294/297（3 项为既有失败，数量未变）。
+服务器已重启（HTTP=200）。
+
+
+**【续·2026-10-15 补一个漏搬的分支】状态卡战斗在高速公路期间"全流程能显示，但实际没发动"**
+
+**现象**：高速公路进行中，点 15247 贵在行动 → 选地区、选发起单位都正常显示，
+但点完目标后**什么都没发生**，状态卡仍停留在"可/待发动"，高速公路预算次数也没变。
+
+**根因**：`on_click_space` 里我上一轮只把 `status_act_phase === 'space'`（第 1 步：选地区）
+上移到了 `pending_autobahn` 之前，**漏了第 3 步**：
+选完发起单位后 `battle_flow.step === 'target'`，此时点目标地区走的 `if (battle_flow)` 分支
+**仍排在 `pending_autobahn` 之后** —— 被抢先当成"高速公路选位"发成 `resolve_autobahn`，
+于是战斗的提交(`finish_battle_card` -> `activate_status`)**永远执行不到**。
+
+正确顺序（现状）：`status_act_phase==='space'` → `battle_flow` → `pending_autobahn` → event_budget → air_move → pending_card。
+（选发起单位是点【算子】，走 `on_click_piece`，该处理器本就无 `pending_autobahn` 拦截，故第 2 步不受影响。）
+
+**教训（重要）**：这类"隐式 vs 显式"的优先级问题，**不能只搬第一步**。
+一个多步流程的**所有**相关分支必须【整体】前置；否则流程能走到一半、卡在最后一击，
+表现为"界面看着都对，但就是没效果"——比完全点不动更难排查。
+判据：`pending_autobahn` 是【隐式】选位（期间点地图任何地方都算重建），必须排在【最后】；
+`battle_flow` / `status_build_pending` / `status_act_phase` 都是玩家【显式】发起的流程，一律优先。
+
+**验证**：`node --check play.js` 通过；`_smoke_15247_pick` / `_smoke_15247_chain` /
+`_smoke_autobahn_battle` / `_smoke_autobahn_15247` / `_smoke_status` 全 PASS。
+本轮只改 `play.js`，`rules.js` 未动 → **不需要重启服务器**，浏览器刷新即可。
+
+
+---
+
+## 【2026-10-15】"结算完毕能触发、结算中不能" —— build_actions 白名单死锁（第 4 次复发）
+
+**现象**：15247 贵在行动在高速公路**结算完毕后**能正常发动，**结算进行中**点完整套流程却毫无效果、状态卡原地不动。
+
+**根因（两处守卫只改了一处）**：
+`build_actions` 里 `pending_autobahn` 是一个**排他式提前 return**：
+```js
+if (game.pending_autobahn) {
+    game.block_reason = 'pending_autobahn: ...'
+    if (faction_of_nation(game.pending_autobahn.actor) === side)
+        return { resolve_autobahn: 1, log: 1 }     // ← 没有 activate_status
+    return { log: 1 }
+}
+```
+它在到达下方【通用状态卡注册块】**之前**就返回，于是结算中途被武装的
+`after_build_army` / `after_build_navy` 状态卡（15247 贵在行动 / 15248 合成燃料）
+拿不到 `activate_status` → 客户端 `send_action` 因 `view.actions` 无此 key **静默 return false**。
+结算完毕后 `pending_autobahn` 为 null，不走这个分支，通用注册块正常登记 → 于是"结算完反而能发动"。
+
+> **关键认知**：放行一个动作要改**两处**，缺一不可——
+> · `exports.action` 的守卫 决定 **服务端接不接受**；
+> · `build_actions` 的白名单 决定 **客户端发不发得出来**（不在册 = 静默不发，通用教训 18）。
+> 上一轮只改了前者，就出现了"服务端明明放行、客户端却从没发出请求"的假死。
+
+**修法（追加而非替换 + 消除重复实现）**：
+1. 抽出共用 helper `register_status_actions(game, side, acts)`（把状态卡"发送权"**追加**进传入的 acts，
+   内含 R29 双 key、17732 借用、"替换建设"无条件给权等全部细节）；
+2. autobahn 分支改为 `return register_status_actions(game, side, { resolve_autobahn: 1, log: 1 })`；
+3. 下方通用注册块也改为调用同一个 helper —— 不再有两份实现（复用优先）。
+   放的是"发送权"不是"执行权"，真正的权威校验仍在 `activate_status` 分支内。
+
+**诊断方法（最省事的一招）**：直接打印 `view.actions` —— 它是"客户端能否发出该动作"的**唯一依据**：
+```js
+const v = rules.view(g, 'Axis'); console.log(JSON.stringify(v.actions))
+```
+修复前结算中为 `{"resolve_autobahn":1,"log":1}`；修复后为
+`{"resolve_autobahn":1,"log":1,"activate_status:15247":1,"activate_status":1}`。
+
+**测试踩坑**：`rules.setup(seed)` 开局处于**初始弃牌阶段**（`game.opening` 非空），
+`build_actions` 会先命中 `opening` 分支 return，测不到 `pending_autobahn` 分支。
+写白名单类测试必须**先清 `game.opening`**（设为 null），否则会得到
+`{"log":1,"opening_discard":1}` 这种完全不相干的结果而误判。
+
+**验证**：新增 `tools/_smoke_autobahn_whitelist.js` 直接断言结算中/结算后的 `view.actions`，ALL PASS；
+`_smoke_15247_pick` / `_smoke_15247_chain` / `_smoke_autobahn_battle` / `_smoke_autobahn_15247` /
+`_smoke_status` 全 PASS；`check_reuse` B/C 无告警；`test_basic_cards` 294/297（3 项为既有失败）。
+服务器已重启（HTTP=200）。
