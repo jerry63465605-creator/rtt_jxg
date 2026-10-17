@@ -859,7 +859,7 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 
 /* ================= 询问面板 / 资源再分配面板 ================= */
 
-#ask_box, #resource_box {
+#ask_box, #resource_box, #national_skill_box {
 	display: flex;
 	flex-direction: column;
 	gap: 3px;
@@ -887,7 +887,22 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
 }
 
-#ask_box.hide, #resource_box.hide,
+/* 国家技能专用面板：同款样式，位置比 #ask_box 靠上一点
+ * （避免与借用框/其它询问框争抢同一个 #ask_box 被覆盖） */
+#national_skill_box {
+	position: fixed;
+	left: 50%;
+	bottom: 150px;
+	transform: translateX(-50%);
+	z-index: 601;
+	margin: 0;
+	max-width: 92vw;
+	max-height: 80vh;
+	overflow-y: auto;
+	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+#ask_box.hide, #resource_box.hide, #national_skill_box.hide,
 #play_choices.hide, #btn_resource.hide { display: none; }
 
 /*
@@ -897,19 +912,19 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
  */
 #deck_list.hide { display: none; }
 
-#ask_box button, #resource_box button {
+#ask_box button, #resource_box button, #national_skill_box button {
 	font-size: 11px;
 	padding: 3px 5px;
 	text-align: left;
 }
 
-#ask_box .ask_head, #resource_box .ask_head {
+#ask_box .ask_head, #resource_box .ask_head, #national_skill_box .ask_head {
 	font-size: 11px;
 	font-weight: bold;
 	color: #840;
 }
 
-#ask_box .ask_text, #resource_box .ask_text {
+#ask_box .ask_text, #resource_box .ask_text, #national_skill_box .ask_text {
 	font-size: 10px;
 	color: #333;
 }

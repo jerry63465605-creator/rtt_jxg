@@ -671,6 +671,116 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-17 · R60：配给(15333)与自由法国(15346)同点触发——「配给优先」修复（状态窗口清空豁免对称化）
+
+- 现象：同一场英军攻意战斗同时武装 15346《自由法国》(after_ally_battle) 并触发 15333《配给》响应窗口；旧逻辑「先结算配给」会误杀 15346 窗口（status_instant 被任何非 activate_status 动作清空），反之「先发动 15346」又让 ask_box 与地图选目标穿插争夺。
+- 根因：`rules.js` action 入口对 `status_instant` 的清空豁免只放了 `activate_status`+`debug_`，漏掉同事件级联的【响应结算】与【增强结算】动作；且 2026-10-16 修复曾让 view 对「已武装状态卡」在响应窗口内放开 ready，导致与响应 ask_box 争夺。
+- 修复：① action 入口清空豁免对称扩展（与 L20500 增强窗口 `clear_armed_offer_for_side` 同款）：`trigger/pass/resolve/response_reorder/response_confirm` 与 `use/skip_armed_offer` 不再清空 `status_instant`；② view.table_status ready 计算：响应窗口(`response_queue` 非空)期间所有状态卡（含已武装 15346）一律置灰；③ 拦截器保留 `activate_status` 白名单（引擎层任意顺序仍可发动，客户端负责「配给优先」UX）。
+- 验证：`realboard_test.js --scenario 15346` 两段（窗口内置灰 → 配给 `pass_response` 结算后转绿且可发动）PASS；`15346-noresp` 回归 PASS；`_smoke_status` 22/0、`_smoke_fr_respond` 17/0、`armed_handoff`/`armed_multiwindow`/`15237_whitelist` 无回归。
+- 顺带坑：harness 调 `R.action(g, role, ...)` 第二参是**角色**(Allies/Axis)非国家名（传『英国』会让 side=AXIS 使响应动作被拒，误以为豁免没生效）；`status_window_ready` 在 `rules.js:5622` 引用未定义 `hand_has_matching_card` 是预存 bug（影响带 `tr.requires` 的德国状态卡 15242/17732，与本修复无关）。
+
+### 2026-10-16 · R59：15311《马奇诺防线》打出后法军仍不还原——armed 窗口把 `ctx.piece` 截断了
+
+**现象**
+- R58 修完白名单死锁后，法国能打出 15311，但打出后《西欧》的法国陆军【不还原】。用户报"使用马奇诺防线后…法国陆军未恢复"（即便英国也用 15337 弃牌仍不还原，因为 15337 才是真正兜底还原的，若其未触发则无人还原）。
+- 根因与 R50/R58 同一张卡、不同层：R50/R58 是"打不出/放弃不了"，R59 是"打出了但不结算"。
+
+**根因（armed 窗口只存了 ctx 子集，丢了 `piece`）**
+- 15311 的 `armed.run`（`rules.js:8537`）第一件事是 `restore_piece(game, ctx)`；
+  `restore_piece`（`rules.js:13050`）第一步 `const pid = ctx.piece; if (pid == null) return` —— **没有 `piece` 就直接 return，静默什么都不做**。
+- 但 `offer_armed_effects`（`rules.js:10594`、`:10605`）在把窗口写进 `game.armed_offers` 时，只存了
+  `ctx` 的**子集** `{ tag, targets, nation, space, card }`，**漏掉了 `piece` / `piece_nation` / `piece_type` / `was_supplied`**。
+- `use_armed_offer`（`rules.js:22291`）拿这个被截断的 `off.ctx` 去跑 `ar.run`，于是 `restore_piece` 拿不到 `piece` → 法军永远回不来。
+- 对照：响应卡路径（`request_responses` 存的是**完整** `ctx`，`head.ctx` 含 `piece`）是对的；**只有 armed 这条路 ctx 被截断**。
+
+**修法（存完整 ctx，浅拷贝避免与调用方互相改写）**
+- `offer_armed_effects` 两处 `ctx` 存储（`_existing` 分支与新窗口分支）由子集改为 `ctx: Object.assign({}, ctx)`。
+- 对其它 armed 卡零副作用：原先 `ctx.nation` 本来就是事件发起国（子集里就是 `nation: ctx.nation`），现在只是【额外】带回 `piece` 等字段，`run` 取到的字段只增不减。
+
+**同类排查（通用教训 20：一类问题）**
+- 凡 armed 增强卡的 `run` 依赖 `ctx.piece / piece_nation / piece_type / was_supplied` 的（还原/保护/损耗类，典型如 15311 马奇诺、15330/15332/15334 的 armed 化版本、15337 若将来改 armed），都必须确保 `offer_armed_effects` 透传完整 `ctx`。本修法一次性根除整类隐患。
+- 响应卡(RESPONSE)路径不受影响（本来就存全量 ctx）。
+
+**验证**
+- `tools/_smoke_fr_respond.js` 由 14/14 扩到 17/17：新增 ⑤ 隔离用例——桌上不放 15337、仅法国(英方手牌)打出 15311，断言"仅 15311 即把法国陆军还原到西欧"通过（修复前该用例必败，因 `restore_piece` 拿不到 `piece`）。①~④ 全过（15311 跨阵营 + 顺序陷阱）。
+- 回归：`_smoke_armed_handoff` 14/0、`_smoke_armed_multiwindow` 20/0、`_smoke_armed_whitelist` ALL PASS、`_smoke_autobahn_resp_fix` / `_smoke_15247_chain` / `_smoke_15237_whitelist` 全过；`check_reuse` B/C 无告警；`node --check` 通过。
+- ⚠ 无关预存失败：`_smoke_italy_response.js` 跑到 17732 段抛 `ReferenceError: hand_has_matching_card is not defined`（`status_window_ready` `rules.js:5578`）—— 状态卡借用机制缺函数，与本次改动无关，未动。
+
+### 2026-10-16 · R58：15311《马奇诺防线》武装窗口在挂起(pending_autobahn / pending_battle)期间被挡死——无法打出也无法放弃
+
+**现象**
+- 德国高速公路(15228)结算中途用 15247《贵在行动》打西欧法军，触发 15311 武装窗口（actor=法国，watch:true，跨阵营）与英国响应(15337)。英国响应结算后 `maybe_resume_autobahn` 恢复高速公路，此时 15311 窗口仍在；法国(Allies)侧既点不出 15311、也放弃不了。战斗结算(pending_battle)期间同样卡死。
+- 与 R50「15311 响应法军被移除打不出」表象一致，但 R50 修的是 response_queue 白名单；本例是【另一道挂起】漏登 armed 动作。
+
+**根因（白名单死锁：排他式提前 return，漏放行 armed）**
+- 15311 的 armed 窗口是【触发型、跨阵营】（法国持有、事件由德国触发、`watch:true`）。当它出现时若同时有：
+  · `game.pending_autobahn`（高速公路恢复后，R57 的 maybe_resume_autobahn 把挂起恢复）→ `build_actions` 的 `if (game.pending_autobahn)` 分支（~19926）只给持有方 `resolve_autobahn/activate_status`、非持有方只 `{log:1}`，不放行 `use_armed_offer`/`skip_armed_offer`；
+  · `game.pending_battle`（代受/counter 期间）→ `build_actions` 的 `pendingBattle` 分支（~19881）只放行 `resolve_battle`，同理不放行 armed。
+- 全局拦截器 `pending_battle`（~20474）与 `pending_autobahn`（~20562）也对这两个动作直接 `return game`。
+- 于是法国侧落到 `{log:1}`，`view.actions` 里没有 `use_armed_offer`/`skip_armed_offer` → 客户端 `send_action` 因 key 缺失静默 return（memory 91738748：不在册=静默不发）。这正是 R50 已修的 response_queue 白名单死锁（~20511 已放行 armed）的同一类，只是漏了 `pending_autobahn` / `pending_battle` 两道。
+
+**修复（rules.js，4 处追加 armed 放行，门控 `hasArmedOfferForSide`）**
+1. `build_actions` 的 `pendingBattle` 分支（~19881）：在 `resolve_battle` 外追加 `use_armed_offer`/`skip_armed_offer`（`if (hasArmedOfferForSide(game, side))` 门控）。
+2. `build_actions` 的 `pending_autobahn` 分支（~19926）：actor 侧 `return register_status_actions(...)` 改为 `Object.assign(acts, register_status_actions(...))` 并追加 armed；非 actor 侧 `return { log: 1 }` 改为在 `acts` 上追加 armed。
+3. 全局拦截器 `pending_battle`（~20474）：放行条件加 `action !== 'use_armed_offer' && action !== 'skip_armed_offer'`。
+4. 全局拦截器 `pending_autobahn`（~20562）：放行条件加同样两个动作（与 20511 response_queue 同款、不门控）。
+- 武装窗口合法性由 `use_armed_offer`/`skip_armed_offer` 自身校验（窗口存在+阵营匹配），加进白名单不会与挂起冲突（同 19979 national_skill、20511 response_queue 口径）。
+
+**涉及函数**
+- `hasArmedOfferForSide(game, side)`（~10440）：读 `game.armed_offers[].nation` 按阵营匹配。
+- `build_actions`（~19838）：两道排他分支改为追加而非替换。
+- 全局拦截器（~20474 `pending_battle` / ~20562 `pending_autobahn`）。
+- R57 的 `suspend_autobahn`/`maybe_resume_autobahn` 不在本次改动（恢复时机正确，问题在"恢复后法国被挡"）。
+
+**验证**
+- `tools/_smoke_armed_whitelist.js`（12/12）：①触发 15311 窗口 ②pending_autobahn 恢复后 Allies 侧暴露 use/skip 且全局拦截器放行结算（窗口被消费）③pending_battle 同理 ④无挂起 sanity。
+- 回归：`_smoke_fr_respond.js`（14/14，R50 顺序陷阱不受影响）；`node --check rules.js` 通过；`check_reuse.js` B/C 零告警（A 类 19 个索引漂移是工作树未提交导致的 SKILL.md 行号失准，预存误报，与本次无关）。
+- 必须重启服务器生效：`cd server-official; $env:RTT_PORT='8091'; node server.js`（已重启，PID 27448，探活 8091=200）。
+
+**同类排查**
+- 与 R50（15311 response_queue 白名单）、R57（高速公路+15247 响应）、R28/R29（resolve_response_choice 被守卫误挡）同属"挂起期间动作被吞"。
+- 铁律：任何新增挂起分支（排他式提前 return）都必须放行 `use_armed_offer`/`skip_armed_offer`（及 `play_card`，若适用），否则跨阵营 armed 窗口（如 15311 马奇诺、15330/15332/15334 同类 protect 卡）在该挂起期间会卡死。
+
+### 2026-10-16 · R57：高速公路(15228)结算中途用 15247《贵在行动》打「只有陆军」的敌区 → 英国响应窗口(15336)点击"发动/不发动"无反应
+
+**现象**
+- 直接发起陆战、挂起给英国时，英国点"发动/不发动"正常结算。
+- 但在高速公路（15228 EVENT，`game.pending_autobahn`）逐步选位结算中途，用桌面状态卡 15247《贵在行动》（after_build_army 窗口）发起战斗，若目标**只有陆军、无空军**（同步完成、不挂 `pending_battle`），挂起给英国后点"发动/不发动"**毫无反应**，玩家卡死。
+
+**根因（双层死锁：高速公路挂起判定漏了 `response_queue`）**
+- 15247 中途发动走 `activate_status` 处理器：`run_status_effect`（~21882）内部 `do_battle` 对"只有陆军、无空军"的目标**同步完成**战斗，末尾 `request_responses('battle')`（~15306）把响应卡（如 15336 法兰西爱国者，英国持有）入队 `response_queue` 并把 `active` handoff 给持有方。**关键：此时 `game.pending_battle` 为假**——只有代受/counter/KV-2 这些分支才会挂 `pending_battle`。
+- 原挂起判定（~21897，修复前）只 `if (game.pending_battle) suspend_autobahn(game)`，于是 `response_queue` 非空但 `pending_battle` 为假 → `suspend_autobahn` 不被调用，`game.pending_autobahn` 仍为真。
+- 于是两层都把 `trigger_response` / `pass_response` 挡掉：
+  ① `build_actions` 的 `if (game.pending_autobahn)` 分支（~19926）只返回 `{resolve_autobahn:1, log:1}`（或仅 `{log:1}`），`view.actions` 里没有 `trigger_response`/`pass_response` → 客户端 `send_action` 因 key 缺失静默 return（通用教训 18 / memory 91738748：不在册=静默不发）。
+  ② 即便绕过，全局拦截器（~20562）`if (game.pending_autobahn && action!=='resolve_autobahn' && action!=='activate_status')` 也直接 `return game` 吞掉响应动作。
+- 表象正是"挂起给英国后点了没反应"。
+
+**修复（rules.js，1 处条件扩展 + 清诊断打印）**
+- `activate_status` 处理器中，`suspend_autobahn` 的触发条件从「只看 `pending_battle`」扩展为「战斗引入了【任何】嵌套挂起」：
+  ```js
+  if (game.pending_battle || (game.response_queue || []).length || game.pending_econ)
+      suspend_autobahn(game)
+  ```
+- 原理：`suspend_autobahn`（~2677）把 `game.pending_autobahn` 整体搬到 `game.pending_autobahn_suspended` 并置空本体，使上面两道守卫失效、响应动作得以放行；`maybe_resume_autobahn`（双调用点：action 入口 ~20552 保状态正确、view 计算前 ~18398 让客户端立刻看到重建面板与高亮）在 `response_queue` 清空后把高速公路原样恢复，**剩余次数不丢**。
+- 为什么选"挂起"而非"把响应动作塞进白名单"：战斗有代受/counter/KV-2 多个 stage，枚举不完、漏一个就静默不发；挂起更彻底安全（同 `rtt-pending-suspend` 范式，与 pending_econ / pending_armed_delegate 同款）。
+- 顺带清掉排查期在 `build_actions` 入口加的临时 `[BA]`/`[BA2]` 诊断打印（已确认无残留）。
+
+**涉及函数**
+- `suspend_autobahn(game)`（~2677）：存盘并清空 `pending_autobahn`，让战斗挂起正常走完。
+- `maybe_resume_autobahn(game)`（~2693）：所有嵌套挂起（pending_battle / pending_econ / pending_trigger / response_queue）清空后恢复；双调用点 20552、18398。
+- `activate_status` 处理器（~21882–21898）：`run_status_effect` 后判定是否需挂起高速公路。
+- `do_battle` 同步战斗分支（~15306 `request_responses('battle')`）：对无空军目标同步入队响应、handoff，不挂 `pending_battle`。
+- 全局拦截器（~20562）与 `build_actions` 的 `pending_autobahn` 分支（~19926）：双层守卫，pending_autobahn 为真时只放行 resolve_autobahn / activate_status。
+- 客户端 `can_act_in_turn`（play.js ~597）同含 `!view.pending_autobahn` 校验（回合内操作口径，本次不改动，但挂起后同样放行）。
+
+**验证**
+- 手动复现：高速公路结算中途，桌面放置 15247，重建武装的 after_build_army 窗口发动 15247 打只有陆军的敌区 → 战斗同步完成、英国 15336 入队 → 挂起给英国 → 点"发动/不发动"正常结算 → 战斗结算完毕高速公路自动恢复剩余次数。
+- 回归：直接发起陆战（无高速公路）的英国响应窗口不受影响；既有 15247 空打、battle 结算、whitelist 冒烟测试仍通过。
+- 必须重启服务器（改 rules.js 必重启）：`cd server-official; $env:RTT_PORT='8091'; node server.js`，探活 `http://localhost:8091/` = 200（已重启，PID 47356 确认 node.exe 监听 8091）。
+
+**同类排查**
+- 与 R50（15311 法国响应双层死锁）、R28/R29（resolve_response_choice 被守卫误挡）同一类"挂起期间动作被吞"。本例区别：根因在 `suspend` 触发条件不全（漏判「同步战斗但带了 response_queue」分支），而非白名单漏登。
+
 ### 2026-10-15 · R56：15430《奇袭》海战后 15430/15426 滞留 response_queue → 英国 15335 无挂起 + 奇袭窗口重弹
 
 **现象**
@@ -4755,6 +4865,21 @@ on_update 主循环不会被触发，必须主动调一次）。
 query 阶段才能挑），所以信任客户端传的 peek_cards 是安全的。
 
 ---
+
+### R46. 国家技能"额外打出"先打免费牌仍占出牌数（2026-10-16）
+
+- 现象：发动国家技能后，手牌响应卡显示"免费打出"标识，但先打出这张免费牌仍被记 `play_done`（占出牌数）。
+- 根因：`check_phase_for_card` 出牌阶段分支只在 `play_done` **已置位**时才把一次打出标成 `extra`（`return {ok:true, extra:true}`）；
+  而客户端 `extra_play_allows_card`（play.js）只看 `view.extra_play` 是否存在，与 `play_done` 无关 → 标识照常显示。
+  于是"先打免费牌（play_done 未置位）"被当成普通打出，`play_card` 各分支的 `mark_play_done` 照常调用，占了名额。
+  典型触发：国家技能由带★卡结算后授予（`after_card_resolved` 中 grant），若该★卡是 EFFECT 类型则本身不占名额、
+  `play_done` 未置位，紧接着的免费牌被误判为普通牌。
+- 修复（rules.js）：
+  1. `check_phase_for_card` 出牌分支：把 `extra_play_allows` 判定**提到 `play_done` 守卫之前**，只要允许就返回 `extra:true`，与 `play_done` 是否已置位无关。
+  2. `play_card` 各卡型分支的 `mark_play_done` 全部加 `!extra` 守卫（BASIC / STATUS / ECON / EVENT 通用 + 8 个 EVENT 特例 + `resolve_event_card` 内部收尾处新增可选 `extra` 形参透传），确保免费牌绝不占名额。
+- 验证：`node --check rules.js` 通过；`node tools/check_reuse.js` 本次改动 B/C 干净（19 个 WARN 均为预存的 skill 索引漂移，非本次引入）；
+  新增 `tools/_smoke_extra_play_quota.js` 三组用例（普通占名额 / 先占后免 / 先免后占）全 PASS；服务器 8091 重启新代码生效（HTTP=200）。
+- 避免：凡涉及"额外打出 / 免费"通道，服务端判定（`check_phase_for_card`）与客户端判定（play.js）必须**同源**；`extra` 一旦为真，所有 `mark_play_done` 路径都要豁免。
 
 ## 四、检查清单（改代码前过一遍）
 

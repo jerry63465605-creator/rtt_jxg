@@ -366,6 +366,7 @@ data.spaces = [
    29,
    31,
    32,
+   34,
    46
   ],
   "limited_connections": {
@@ -376,6 +377,7 @@ data.spaces = [
     29,
     31,
     32,
+    34,
     46
    ]
   }
@@ -724,6 +726,7 @@ data.spaces = [
   "x": 1397,
   "y": 1073,
   "connections": [
+   15,
    16,
    29,
    32,
@@ -733,6 +736,7 @@ data.spaces = [
   ],
   "limited_connections": {
    "allies": [
+    15,
     16,
     29,
     32,

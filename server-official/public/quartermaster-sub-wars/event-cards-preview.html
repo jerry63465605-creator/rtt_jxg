@@ -136,31 +136,11 @@ function descOfStep(st, ctx) {
 }
 
 /*
- * 【2026-09-30】命令式特殊卡说明表（仅用于预览展示，不参与游戏逻辑）。
- *
- * 这几张卡是【命令式/过程式】实现：效果不在 EVENT_EFFECTS[id].steps 的
- * 声明式结构里，而是拆成独立 action 状态机（高速公路走 pending_autobahn，
- * 其余走 pending_script）。预览页的通用 card_effect_of() 读不到它们的分步
- * 配置，故在此列出人类可读说明，避免显示空白或误导性的"（尚未实现）"。
+ * 【2026-10-17】命令式实现说明表【已迁到 rules.js 的 _internal.CMD_IMPL】。
+ * 预览页运行时从 ctx.I.CMD_IMPL 读取（见下方 render()），不再在手写 HTML 里
+ * 维护副本，从根上避免"命令式卡已实现、预览页却误显示尚未实现"的脱节。
+ * 新增命令式卡只需在 rules.js 的实现处登记一行，刷新本页即同步。
  */
-const SPECIAL_CARDS = {
-	'15228': {
-		kind: '状态机卡（高速公路 / autobahn）',
-		desc: '打出即占名额并收回全部德国陆军；随后由玩家逐一在「处于补给中的德国可建陆军地区」选择建设位置，每次走真实 build_piece，共重建 N 次（N = 收回的陆军数）。由独立 action resolve_autobahn 驱动。'
-	},
-	'15229': {
-		kind: '脚本卡（生产构思 / play_status_from_deck）',
-		desc: '检视牌堆，选择 1 张[状态卡]打出（放桌面并生效），然后洗混牌堆。由 pending_script 阶段机 + resolve_script 驱动。'
-	},
-	'15239': {
-		kind: '脚本卡（战略规划 / draw_pick_discard）',
-		desc: '检视牌堆选 2 张抽入手牌 → 弃 1 张手牌 → 洗混牌堆，并可额外打出 1 张「以此法抽到的牌」。候选为空则跳过该阶段。由 pending_script + resolve_script 驱动。'
-	},
-	'14503': {
-		kind: '脚本卡（提尔比茨号 / uk_facedown_discard）',
-		desc: '让权给【英国】：从英国桌面暗置的响应卡中选 1 张暗弃（牌堆内容对对方保密）。由 pending_script + resolve_script 驱动。'
-	},
-}
 
 /* 命令式特殊卡：用说明表渲染，而非尝试读 card_effect_of 的 steps */
 function specialHtml(c, info, ctx) {
@@ -363,11 +343,13 @@ function render(ctx, nation, type) {
 			metaCell = statusHtml(c, ctx)  /* 2026-09-26：状态卡独立配置表 */
 		} else {
 			/*
-			 * 命令式特殊卡（高速公路 / 生产构思 / 战略规划 / 提尔比茨号）：
-			 * 效果不在 EVENT_EFFECTS[id].steps 声明式里，而在 autobahn / pending_script
-			 * 状态机里，card_effect_of 读不到分步配置，先走 SPECIAL_CARDS 说明表。
+			 * 命令式特殊卡（高速公路 / us_replay / delegate / script 等）：
+			 * 效果不在 EVENT_EFFECTS[id].steps 声明式里，而在独立 action/状态机里，
+			 * card_effect_of 读不到。改读 rules.js 下发的 _internal.CMD_IMPL，
+			 * 命中即走说明表渲染（绿色“已接入（命令式）”）——与实现同源、自动同步。
 			 */
-			const spInfo = SPECIAL_CARDS[String(c.id)]
+			const cmdTbl = ctx.I.CMD_IMPL || {}
+			const spInfo = cmdTbl[String(c.id)]
 			if (spInfo) {
 				metaCell = specialHtml(c, spInfo, ctx)
 			} else {
