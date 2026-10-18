@@ -5831,25 +5831,6 @@ function has_card_in_hand(game, nation, card_id) {
 	return ((game.hands || {})[nation] || []).some(c => String(inst_card_id(c)) === String(card_id))
 }
 
-/* 17805 红色管弦乐队：在 苏联/德国/英国 出牌阶段开始时挂起苏联询问是否使用。
- * 自定义派发（不走通用 armed 扫描，armed.when='su_red' 仅作"不可主动打出"标记）。 */
-function offer_su_red(game, trigger) {
-	/* 仅 苏联/德国/英国 出牌阶段开始可触发 */
-	if (trigger !== '苏联' && trigger !== '德国' && trigger !== '英国') return
-	/* 已挂起德国选择 / 苏联正在选卡 -> 不重复触发 */
-	if (game.pending_red || game.su_red_pick) return
-	if (!has_card_in_hand(game, '苏联', '17805')) { game.su_red_ask = null; return }
-	if (!german_status_on_table(game).length) { game.su_red_ask = null; return }
-	game.su_red_ask = { trigger: trigger, card_name: '红色管弦乐队' }
-	/* 17805 让权：把 active 翻给苏联阵营（Allies），大厅/顶栏显示"轮到 Allies 行动"；
-	 * 原行动方（德国等）记到 su_red_origin_active，清挂起时还原 */
-	const suRole = faction_role_of_nation('苏联')
-	if (game.active !== suRole) {
-		game.su_red_origin_active = game.active
-		game.active = suRole
-	}
-}
-
 /* 17805 红色管弦乐队：把 active 翻给等待方（德国），并记录原 active 以便还原。
  * 与 set_pending_econ / set_pending_armed_delegate / set_pending_battle 同款范式：
  * 让权挂起期间等待方成为"当前行动方"，原行动方被冻结，清挂起时自动还原。 */
@@ -5862,10 +5843,7 @@ function set_pending_red(game, pr) {
 			game.active = role
 		}
 	} else if (pr === null) {
-		if (game.su_red_origin_active != null) {
-			game.active = game.su_red_origin_active
-			game.su_red_origin_active = null
-		} else if (game.red_return_active) {
+		if (game.red_return_active) {
 			game.active = game.red_return_active
 			game.red_return_active = null
 		}
@@ -10559,19 +10537,44 @@ const ECHO_EFFECTS = {
 	 * ============================================================ */
 
 	/* ---- 17805 红色管弦乐队 ----
-	 * 触发：苏联/德国/英国 出牌阶段开始时（offer_su_red 自定义派发，不走通用 armed 扫描）。
-	 * 流程（三挂起）：
-	 *   ① 挂起苏联询问是否使用（su_red_ask）；
-	 *   ② 若使用，苏联选 1 张德国桌面[状态卡]（su_red_pick，发动后 17805 移出手牌）；
-	 *   ③ 挂起德国二选一（pending_red）：本回合内无效 / 损耗 2 张牌。
-	 * 无代价（卡面未写代价）；发动即一次性使用（卡移出苏联手牌）。
-	 * armed.when='su_red' 仅作"不可主动打出"标记，run 由自定义 action 调用。
+	 * 触发：苏/德/英 各自回合开始（resource 阶段进入 = 该国回合开始；nation_turn_start 窗口，
+	 *       见 phase_resource 派发点），仍只这三国触发。
+	 * 机制（走通用 armed 窗口，复用 update_armed_offer_box 的 need:'status' 选牌 UI）：
+	 *   ① 苏联的 armed 窗口弹出"打出/不打出"（通用 UI）；
+	 *   ② 苏联打出后，run 先返回 need:'status' 让苏联选 1 张德国桌面[状态卡]（通用选牌 UI）；
+	 *   ③ 选定后挂起德国二选一（pending_red，delegate）：本回合内无效 / 损耗 2 张牌，
+	 *      由德国经通用 ask_box 回答（resolve_red）。
+	 * 无代价；发动即一次性使用（use_armed_offer 结算后卡移出苏联手牌）。
+	 * watch:true 使德/英回合开始时也能让苏联的卡弹窗（跨国触发，绕过 actorNation 同国限制）。
 	 */
 	'17805': {
 		name: '红色管弦乐队', actor: '苏联',
 		armed: {
-			when: 'su_red', actor: '苏联',
-			desc: '苏联/德国/英国出牌阶段开始时：询问苏联是否使用。若使用，苏联选1张德国[状态卡]，德国选择本回合内无效或损耗2张牌',
+			when: 'nation_turn_start', actor: '苏联', watch: true,
+			desc: '苏/德/英回合开始时：选择 1 张德国[状态卡]，德国选择本回合内无效或损耗2张牌',
+			ready(game) {
+				/* 德国桌面有状态卡才给窗口（没把握不弹，避免"弹了点了没用"） */
+				return german_status_on_table(game).length > 0
+			},
+			run(game, ctx, arg) {
+				arg = arg || {}
+				/* ② 苏联尚未选卡 -> 返回 need:'status' 让通用 UI 选德国状态卡 */
+				if (arg.status == null) {
+					const cands = german_status_on_table(game)
+					if (!cands.length) return { ok: true, skip: true, desc: '德国桌面没有[状态卡]' }
+					return { need: 'status', candidates: cands.map(id => obj_of(id)) }
+				}
+				/* ③ 苏联已选卡 -> 校验并挂起德国二选一（delegate） */
+				const pick = String(arg.status)
+				if (german_status_on_table(game).indexOf(pick) < 0)
+					return { ok: true, skip: true, desc: '所选不是德国桌面状态卡' }
+				const nm = (inst_card(inst_card_id(pick)) || { name: '?' }).name
+				set_pending_red(game, {
+					target: pick, target_name: nm,
+					waiting_for: '德国', card_name: '红色管弦乐队',
+				})
+				return { ok: true, desc: '指定德国状态卡《' + nm + '》，等待德国选择' }
+			},
 		},
 	},
 
@@ -17777,12 +17780,6 @@ function phase_play(game, nation) {
 	 */
 	offer_armed_effects(game, 'play_start', { nation: nation })
 
-	/*
-	 * 【2026-10-07】17805 红色管弦乐队：苏联/德国/英国 出牌阶段开始时挂起苏联询问是否使用。
-	 * 自定义派发（offer_su_red），不走通用 armed 扫描。
-	 */
-	if (nation === '苏联' || nation === '德国' || nation === '英国') offer_su_red(game, nation)
-
 	game.phase_note = nation + ' 出牌阶段：打出 1 张手牌 / 弃 1 张手牌 / 减 1 分（三选一）'
 	return { play_done: false, note: game.phase_note }
 }
@@ -18254,6 +18251,10 @@ function phase_resource(game, nation) {
 	game.resource_swaps = game.resource_swaps || {}
 	game.resource_swaps[nation] = 0
 	game.phase_note = nation + ' 资源再分配阶段（可弃 3 张牌换 1 张基本卡，每回合一次）'
+	/* 【2026-10-19】17805 红色管弦乐队：苏/德/英 各自回合开始（resource 阶段进入 = 该国回合开始）
+	 * 触发苏联的 armed 窗口（when:'nation_turn_start'）。仍只这三国触发。 */
+	if (nation === '苏联' || nation === '德国' || nation === '英国')
+		offer_armed_effects(game, 'nation_turn_start', { nation })
 }
 
 function phase_supply(game, nation) {
@@ -20223,32 +20224,6 @@ exports.view = function (state, current) {
 		}
 	})()
 
-	/* 17805 红色管弦乐队：苏联询问是否使用（仅苏联阵营可见） */
-	const suRedAsk = (() => {
-		const a = game.su_red_ask
-		if (!a) return null
-		if (faction_of_nation('苏联') !== side) return null
-		return { card_name: a.card_name, trigger: a.trigger }
-	})()
-
-	/* 17805 红色管弦乐队：苏联选卡（仅苏联阵营可见，候选为德国桌面状态卡） */
-	const suRedPick = (() => {
-		const p = game.su_red_pick
-		if (!p) return null
-		if (faction_of_nation('苏联') !== side) return null
-		return {
-			card_name: p.card_name,
-			candidates: german_status_on_table(game).map(id => obj_of(id)),
-		}
-	})()
-
-	/* 17805 红色管弦乐队：非苏联阵营（被挂起的德国等）在苏联决定前显示的等待提示 */
-	const suRedWait = (() => {
-		if (!(game.su_red_ask || game.su_red_pick)) return null
-		if (faction_of_nation('苏联') === side) return null
-		return { text: '等待苏联行动' }
-	})()
-
 	const pendingBattle = (() => {
 		const pb = game.pending_battle
 		if (!pb) return null
@@ -20946,8 +20921,6 @@ exports.view = function (state, current) {
 		 * waiting_for（"等待【德国】选择…"）。
 		 */
 		pending_econ: pendingEcon,
-		su_red_ask: suRedAsk,
-		su_red_pick: suRedPick,
 		pending_red: pendingRed,
 
 		/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态 */
@@ -21476,9 +21449,6 @@ exports.view = function (state, current) {
 		 * 战斗挂起时，需要【防守方】（非当前行动方）提交 resolve_battle，
 		 * 若 actions 为 null，防守方连这个动作都发不出去。
 		 */
-		/* 17805 红色管弦乐队：非苏联方（被挂起的德国等）等待苏联决定的提示（顶层下发，前端读 view.su_red_wait） */
-		su_red_wait: suRedWait,
-
 		actions: build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger),
 
 		/*
@@ -21997,29 +21967,10 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	}
 
 	/*
-	 * 【2026-10-14】17805 红色管弦乐队：苏联决策窗口不受 is_my_turn 限制——
-	 * 德国/英国出牌阶段开始时挂起 su_red_ask，苏联虽非 active 也必须能决定（use/decline），
-	 * 否则德国将被下方冻结块永久锁死。同 armed_offer / national_skill 的"本方内部决策"模式。
-	 */
-	if (game.su_red_ask && faction_of_nation('苏联') === side) {
-		return { su_red_use: 1, su_red_decline: 1, log: 1 }
-	}
-	if (game.su_red_pick && faction_of_nation('苏联') === side) {
-		return { su_red_pick: 1, log: 1 }
-	}
-
 	if (!is_my_turn)
 		return null
 
-	/*
-	 * 【2026-10-14】17805 红色管弦乐队：苏联"是否使用"/"选择目标"询问期间，
-	 * 非苏联阵营（被挂起的德国等）冻结——德国出牌阶段必须等苏联先决定 17805 才能行动。
-	 * 与上方 pending_red 互斥（pending_red 德国二选一阶段 su_red_ask/su_red_pick 已清空），
-	 * 此处不再额外加 !game.pending_red 保护（pending_red 已先行 return）。
-	 */
-	if ((game.su_red_ask || game.su_red_pick) && faction_of_nation('苏联') !== side) {
-		return { log: 1 }
-	}
+
 
 	/*
 	 * 【2026-09-26】状态卡触发：本方桌面上每张可触发状态卡，
@@ -24853,64 +24804,6 @@ function play_status_card_impl(game, nation, card_id) {
 		return game
 	}
 
-	/* 17805 红色管弦乐队：苏联在出牌阶段开始时决定是否使用 */
-	if (action === 'su_red_use' || action === 'su_red_decline') {
-		const ask = game.su_red_ask
-		if (!ask) { game.log.push('当前没有待苏联确认的《红色管弦乐队》'); return game }
-		if (faction_of_nation('苏联') !== side) {
-			game.log.push('只有苏联阵营可以确认《红色管弦乐队》')
-			return game
-		}
-		if (action === 'su_red_decline') {
-			game.log.push('【苏联】放弃使用《红色管弦乐队》')
-			game.su_red_ask = null
-			if (game.su_red_origin_active != null) {
-				game.active = game.su_red_origin_active
-				game.su_red_origin_active = null
-			}
-			refresh(game)
-			return game
-		}
-		/* su_red_use：把 17805 移出手牌（一次性使用），转交苏联选卡 */
-		const hand = (game.hands['苏联'] || [])
-		const idx = hand.findIndex(c => String(inst_card_id(c)) === '17805')
-		if (idx < 0) { game.log.push('苏联手牌中找不到《红色管弦乐队》'); return game }
-		const played = hand.splice(idx, 1)[0]
-		;(game.discard['苏联'] = game.discard['苏联'] || []).push(played)
-		game.su_red_ask = null
-		game.su_red_pick = { card_name: '红色管弦乐队' }
-		game.log.push('【苏联】使用《红色管弦乐队》：请选择 1 张德国桌面[状态卡]')
-		refresh(game)
-		return game
-	}
-
-	/* 17805 红色管弦乐队：苏联选完目标德国状态卡后，挂起德国二选一 */
-	if (action === 'su_red_pick') {
-		const pk = game.su_red_pick
-		if (!pk) { game.log.push('当前没有待苏联选择的《红色管弦乐队》目标'); return game }
-		if (faction_of_nation('苏联') !== side) {
-			game.log.push('只有苏联阵营可以选择目标状态卡')
-			return game
-		}
-		const pick = arg && arg.status
-		if (pick == null) { game.log.push('请选择 1 张德国桌面[状态卡]'); return game }
-		const cands = german_status_on_table(game)
-		if (cands.indexOf(String(pick)) < 0) {
-			game.log.push('所选卡不是德国桌面上的[状态卡]')
-			return game
-		}
-		const nm = (inst_card(inst_card_id(pick)) || { name: '?' }).name
-		set_pending_red(game, {
-			target: String(pick),
-			target_name: nm,
-			waiting_for: '德国',
-			card_name: '红色管弦乐队',
-		})
-		game.su_red_pick = null
-		game.log.push('【苏联】《红色管弦乐队》指定德国状态卡《' + nm + '》，等待德国选择')
-		refresh(game)
-		return game
-	}
 
 	if (action === 'resolve_script') {
 		if (!game.pending_script) {
@@ -26834,7 +26727,6 @@ if (typeof module !== 'undefined') {
 		find_battle_target,
 		event_battle_targets,
 		offer_armed_effects,
-		offer_su_red,
 		has_card_in_hand,
 		/* 【2026-10-06】保护卡挂起（15410 武士道） */
 		guard_card_candidates,

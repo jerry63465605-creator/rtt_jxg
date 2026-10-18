@@ -287,11 +287,11 @@ function update_phase_panel() {
 	 */
 	// 等待某一方（如让权经济战、战斗挂起）—— 顶部阶段栏提示
 	const waitTxt = view.waiting_for ? view.waiting_for.text : ""
-	// 17805 红色管弦乐队：决策方（德国）顶端也提示其需选择（非决策方靠 waiting_for 提示）
+	// 17805 红色管弦乐队：决策方（德国）顶端提示其需选择
 	const redTxt = (view.pending_red && view.pending_red.prompt) ? view.pending_red.prompt : ""
-	// 17805 红色管弦乐队：非苏联方（被挂起的德国）等待苏联决定是否使用/选卡
-	const suRedWaitTxt = (view.su_red_wait && view.su_red_wait.text) ? view.su_red_wait.text : ""
-	/* 17805 红色管弦乐队：苏联未决期间，等待苏联行动最优先显示（避免被其它 waiting_for 盖掉） */
+	// 17805 红色管弦乐队：非决策方（等待德国选择）顶端提示
+	const suRedWaitTxt = (view.pending_red && !view.pending_red.prompt)
+		? "等待【" + (view.pending_red.waiting_for || "德国") + "】选择《红色管弦乐队》" : ""
 	const headTxt = suRedWaitTxt || waitTxt || redTxt
 	set_text("phase_note", headTxt
 		? headTxt + (view.phase_note ? " · " + view.phase_note : "")
@@ -462,11 +462,8 @@ function update_phase_buttons() {
 	update_national_skill_box()
 	/* 【2026-10-01】"打出XX后…"型增强卡：手牌机会窗口（优先级低于上面各框） */
 	update_armed_offer_box()
-	/* 【2026-10-07】17805 红色管弦乐队：德国二选一弹框 */
-	update_pending_red_box()
-	/* 【2026-10-07】17805 红色管弦乐队：苏联"是否使用"询问框 + 选卡框 */
-	update_su_red_ask_box()
-	update_su_red_pick_box()
+	/* 【2026-10-19 重构】17805 红色管弦乐队：德国二选一（通用 ask_box；苏联选卡/是否使用走 armed_offer 通用 UI） */
+	update_su_red_delegate_box()
 	/* 【2026-10-06】《气球炸弹》结算后的可选窗口（回手 / 弃牌） */
 	update_balloon_box()
 	/* 【2026-10-08】17721 钢铁条约：德国可打出 1 张状态卡的委托提示框 */
@@ -4496,21 +4493,18 @@ function update_pending_echo_box() {
 }
 
 /*
- * 【2026-10-07 苏联增强】17805 红色管弦乐队：等待德国玩家二选一的弹框。
- * 仅等待方（德国阵营）看得到两个按钮；另一方看到"等待选择"提示。
+ * 【2026-10-19 重构】17805 红色管弦乐队：德国二选一（delegate），复用通用 render_ask_box。
+ * 苏联"是否使用"= armed_offer 的打出/不打出窗口（update_armed_offer_box 通用 UI）；
+ * 苏联"选德国状态卡"= armed_offer 的 need:'status' 选牌 UI（update_armed_offer_box 通用 UI）。
+ * 仅德国二选一在此渲染：决策方（德国）看到两个按钮，其它方看到等待提示。
  * 内容来自 view.pending_red（服务端按阵营区分是否带 options）。
  */
-function update_pending_red_box() {
-	const modal = document.getElementById('red_orchestra_modal')
-	if (!modal) return
+function update_su_red_delegate_box() {
 	const pr = view && view.pending_red
 	if (!pr) {
-		modal.style.display = 'none'
 		/*
-		 * 【2026-10-13 修复】原来无条件 render_ask_box(null) 会把本帧前面已渲染的
-		 * 其它 #ask_box 弹框（pending_trigger / national_skill 等）一并清空，
-		 * 表现为「是否发动」「国家技能」永远弹不出来。
-		 * 改为只清理本框占用的 #ask_box（kind === 'red'），与全工程其它 update_*_box 一致。
+		 * 只清理本框占用的 #ask_box（kind === 'red'），避免误清空其它框
+		 * （pending_trigger / national_skill 等），与全工程其它 update_*_box 一致。
 		 */
 		if (ask_state && ask_state.kind === 'red') {
 			ask_state = null
@@ -4518,108 +4512,29 @@ function update_pending_red_box() {
 		}
 		return
 	}
-	const hasOptions = Array.isArray(pr.options) && pr.options.length > 0
-	if (!hasOptions) {
-		/* 非决策方（等待态）：走非阻断面板，不弹全屏遮罩（与其它让权卡一致） */
-		modal.style.display = 'none'
-		/* 占用 #ask_box 并登记 kind，供 !pr 分支按 kind 守卫清理 */
-		ask_state = { kind: 'red' }
-		render_ask_box('红色管弦乐队：等待【' + (pr.waiting_for || '德国') + '】选择',
-			'德国需选择：本回合内该状态卡无效 / 损耗 2 张牌。', [])
-		return
-	}
-	/* flex 保留 .modal 居中；决策态独占 #ask_box 并清空（modal 是阻断遮罩） */
-	modal.style.display = 'flex'
+	/* 其它更高优先级框占用 #ask_box 时让位（与 update_armed_offer_box 等一致） */
+	if (ask_state && ask_state.kind !== 'red') return
 	ask_state = { kind: 'red' }
-	render_ask_box(null, null, null)
-	const box = modal.querySelector('.modal-box')
-	box.innerHTML = ''
-	const h = document.createElement('h3')
-	h.textContent = '《' + (pr.card_name || '红色管弦乐队') + '》'
-	box.appendChild(h)
-	const info = document.createElement('p')
-	info.textContent = '德国状态卡《' + (pr.target_name || '?') + '》：请选择'
-	box.appendChild(info)
-	if (pr.options && pr.options.length) {
-		const foot = document.createElement('div')
-		foot.className = 'modal-foot'
-		for (const o of pr.options) {
-			const b = document.createElement('button')
-			b.textContent = o.label
-			b.onclick = () => send_action('resolve_red', { choice: o.id })
-			foot.appendChild(b)
-		}
-		box.appendChild(foot)
-	} else {
-		const w = document.createElement('p')
-		w.textContent = '等待【' + (pr.waiting_for || '?') + '】做出选择…'
-		box.appendChild(w)
-	}
-}
-
-/*
- * 【2026-10-07 苏联增强】17805 红色管弦乐队：苏联在苏/德/英出牌阶段开始时的"是否使用"询问框。
- * 内容来自 view.su_red_ask（仅苏联阵营可见）。
- */
-function update_su_red_ask_box() {
-	const modal = document.getElementById('red_orchestra_ask_modal')
-	if (!modal) return
-	const a = view && view.su_red_ask
-	if (!a) { modal.style.display = 'none'; return }
-	/* flex 保留 .modal 居中 */
-	modal.style.display = 'flex'
-	const box = modal.querySelector('.modal-box')
-	box.innerHTML = ''
-	const h = document.createElement('h3')
-	h.textContent = '《' + (a.card_name || '红色管弦乐队') + '》'
-	box.appendChild(h)
-	const p = document.createElement('p')
-	p.textContent = '苏联/德国/英国 出牌阶段开始时：是否对德国使用《红色管弦乐队》？'
-	box.appendChild(p)
-	const foot = document.createElement('div')
-	foot.className = 'modal-foot'
-	const useBtn = document.createElement('button')
-	useBtn.textContent = '使用'
-	useBtn.className = 'primary'
-	useBtn.onclick = () => send_action('su_red_use', {})
-	const noBtn = document.createElement('button')
-	noBtn.textContent = '不使用'
-	noBtn.onclick = () => send_action('su_red_decline', {})
-	foot.appendChild(useBtn)
-	foot.appendChild(noBtn)
-	box.appendChild(foot)
-}
-
-/*
- * 【2026-10-07 苏联增强】17805 红色管弦乐队：苏联选择 1 张德国桌面[状态卡]。
- * 内容来自 view.su_red_pick.candidates（仅苏联阵营可见）。
- */
-function update_su_red_pick_box() {
-	const modal = document.getElementById('su_red_pick_modal')
-	if (!modal) return
-	const p = view && view.su_red_pick
-	if (!p) { modal.style.display = 'none'; return }
-	/* 用 flex 而非 block，保留 .modal 的居中（align/justify center），否则会落到左上角 */
-	modal.style.display = 'flex'
-	const box = modal.querySelector('.modal-box')
-	box.innerHTML = ''
-	const h = document.createElement('h3')
-	h.textContent = '《' + (p.card_name || '红色管弦乐队') + '》：选择 1 张德国[状态卡]'
-	box.appendChild(h)
-	const cands = p.candidates || []
-	const grid = document.createElement('div')
-	grid.className = 'card-grid'
-	if (!cands.length) {
-		const e = document.createElement('p')
-		e.textContent = '德国桌面没有[状态卡]'
-		box.appendChild(e)
-	} else {
-		for (const c of cands) {
-			const el = card_elt(c, () => send_action('su_red_pick', { status: c.id }))
-			grid.appendChild(el)
-		}
-		box.appendChild(grid)
-	}
+	const isDecider = Array.isArray(pr.options) && pr.options.length > 0
+	const opts = isDecider
+		? pr.options.map(o => ({
+				label: o.label,
+				onClick: () => {
+					ask_state = null
+					render_ask_box(null, null, null)
+					send_action('resolve_red', { choice: o.id })
+				},
+		  }))
+		: []
+	render_ask_box(
+		isDecider
+			? '《' + (pr.card_name || '红色管弦乐队') + '》：' + (pr.target_name || '?')
+			: '红色管弦乐队：等待【' + (pr.waiting_for || '德国') + '】选择',
+		isDecider
+			? '请选择：本回合内无效 / 损耗 2 张牌。'
+			: '德国需选择：本回合内该状态卡无效 / 损耗 2 张牌。',
+		opts
+	)
 }
 
 function card_elt(c, onClick) {
