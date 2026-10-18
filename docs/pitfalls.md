@@ -671,6 +671,48 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-18 · R62：17855《间谍机构》点完卡死、不弹选牌弃牌 UI —— 复用屏幕中央卡图网格 #lend_lease_modal（不新增 UI）
+
+**典型事故**：苏联在德/日/意摸牌阶段结束的挂起窗口点"打出"17855 后，界面卡死、不弹出"看目标国手牌、选 1 张弃置"的卡片网格。
+
+**根因**：客户端 `update_armed_offer_box` 的 `need='card'`（及 `need='status'`）分支靠 `document.getElementById('armed_status_modal')` 弹卡片网格；但 `play.html` 里【没有】这个 id 的元素 → `statusModal` 为 null → 渲染分支被整体跳过 → 表现"点完卡死、无选牌 UI"。
+
+**修复（复用屏幕中央卡图网格，不新增元素）**：把 `getElementById('armed_status_modal')` 改为复用已有的 `#lend_lease_modal`（17535《租借法案》的"屏幕中央卡片网格 + 真实卡图 + 点选"范式——`step=play` 正是"揭示被委托国手牌、点选 1 张"，与 17855 `need='card'`（揭示某国手牌、苏联选 1 张弃置）语义完全同构）。`update_armed_offer_box` 里对该 modal 的显隐统一改用 `.hide` 类（与 `update_us_lend_lease` 一致），不再用 inline `style.display`。两点注意：
+1. 注意渲染顺序（关键坑）：`update_us_lend_lease` 在 ~1104 行（位于 `update_delegate_box` 内）调用，**晚于** `update_armed_offer_box` 的 ~464 行——原本它会在 17855 把 `lend_lease_modal` 显示出来后，又 `.hide` 掉并清空 `.modal-box`，导致每帧被覆盖、UI 不显示。修复：在 `update_us_lend_lease` 入口加守卫——只要 `view.armed_offer.pending` 为真就提前 `return`，把该 modal 全权交给 17855 管理（17535 不活跃时它本就直接隐藏，无副作用）；
+2. 仅当 `ao.pending` 时才接管该 modal，否则不碰它，避免罕见同屏误关 17535 自己的弹框。
+不改 rules.js、不重启服务器，刷新对局页即生效。副作用：顺带修好潜在未触发的 armed `need='status'` 弹框。
+
+**排查弯路教训**：先验证服务端。`tools/_smoke_17855.js` T5/T6 全覆盖（20/20 通过），`view.armed_offer.pending` 正确下发（rules.js ~20751）。问题 100% 在客户端引用了不存在的元素——最初错误地"新增了一个元素"，已改为复用 `#lend_lease_modal`（屏幕中央卡图网格）。
+
+**检查清单加固**：新增/改动任何走某 `#xxx_modal` 的交互时，先 `grep` 确认该 id 元素【已在 play.html 存在】；能复用已有同结构 modal 就复用，避免凭空新增（通用教训 11：客户端/服务端元素同源）。
+
+### 2026-10-18 · R61：15245《俯冲式轰炸机》(after_land) 无法触发 15253《闪电战》——嵌套战斗重新武装的窗口被"清掉战前窗口"过滤器误删
+
+**典型事故**：玩家在桌面同时放 15245 与 15253，15245 触发（after_land，陆战成功后）发起嵌套陆战，但 15253 始终不会被武装——玩家点 15245 后 15253 仍不可点击。
+
+**根因（两层）**：
+1. `arm_status_instant(window, nation, space)`（rules.js ~6274）在循环里对已存在于 `game.status_instant` 的窗口（15253 战前已被武装）直接 `continue` 跳过，既不更新 `space` 也不打标记。
+2. `activate_status` 发动成功后的过滤器（rules.js ~24073）：
+   ```js
+   game.status_instant = game.status_instant.filter(e =>
+       (e.rearmed || !beforeKeys.has(e.card_id + ':' + e.window)) && e.card_id !== cardId)
+   ```
+   设计意图是"清掉战前窗口、保留嵌套动作新武装的窗口"。但 15253 在战前已武装（在 `beforeKeys` 中），而 `arm_status_instant` 又跳过了它 → 15253 没有 `rearmed` 标记 → 过滤器把它当"战前窗口"一并清除 → 15245 看似"触发了"实则 15253 被误删。
+
+**注意（排查弯路）**：`init_nation_deck`（~822）在重置牌堆时会顺带 `game.table[nation] = []`，曾怀疑它清空了桌面。但若 `game.hands[nation]` 已初始化（真实对局开局发牌后即如此），其守卫 `if (game.hands[nation]) return` 会**提前返回、不执行清空**——所以那是测试未初始化 `hands` 造成的伪影，非真实 bug，故未改 `init_nation_deck`。**教训：复现前务必用 `create_empty_game_state` 后补齐各国家 `hands/discard/removed/decks`，否则会追错方向。**
+
+**修复（两处，针对整类）**：
+- `arm_status_instant`：已存在的窗口不再跳过，改为更新 `space` 为最新战斗地区并打 `rearmed:true`：
+  ```js
+  const exist = game.status_instant.find(e => e.card_id === cid)
+  if (exist) { exist.space = space; exist.rearmed = true; continue }
+  ```
+- `activate_status` 过滤器：保留带 `rearmed` 的窗口（嵌套新武装），但移除正在触发的本卡自身（`e.card_id !== cardId`，即使它在嵌套战斗里又被武装）。
+
+**同类排查（通用教训 20：一类问题）**：
+- 凡状态卡 `run` 内嵌套发起战斗/建设、进而武装同阵营其它状态卡的（15245→15253、15247→15245、15253→15247 这条"X 后立刻"互相触发的链），都受同一个 `beforeKeys` 过滤器影响；本次修复一次性覆盖整条链，不必逐张改。
+- 回归用例固化在 `tools/_smoke_15245.js` 用例 ⑤（15245 嵌套陆战再武装 15253：15253 仍武装且 space 更新为战斗地区、15245 自身被消耗）。
+
 ### 2026-10-17 · R60：配给(15333)与自由法国(15346)同点触发——「配给优先」修复（状态窗口清空豁免对称化）
 
 - 现象：同一场英军攻意战斗同时武装 15346《自由法国》(after_ally_battle) 并触发 15333《配给》响应窗口；旧逻辑「先结算配给」会误杀 15346 窗口（status_instant 被任何非 activate_status 动作清空），反之「先发动 15346」又让 ask_box 与地图选目标穿插争夺。

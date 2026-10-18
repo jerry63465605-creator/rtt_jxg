@@ -1458,6 +1458,10 @@ function update_us_merchant() {
 function update_us_lend_lease() {
 	const modal = document.getElementById('lend_lease_modal')
 	if (!modal) return
+	/* 【2026-10-19】17855《间谍机构》复用本 modal 显示某国手牌网格时礼让：
+	 * 只要 armed_offer 处于 pending（need='card'/'status' 选牌步），本函数就不碰它，
+	 * 交 update_armed_offer_box（~464，早于本函数 ~1104）全权管理，避免被 hide/清空。 */
+	if (view && view.armed_offer && view.armed_offer.pending) return
 	const dg = (view && view.delegate && view.delegate.mode === 'single') ? (view.us_lend_lease || view.delegate) : null
 	/* 【2026-10-14】lend_lease_active 由 view 统一驱动：委托处于"打牌"阶段时记为被委托国，
 	   使下方事件/状态卡的"选目标/选代价"后续提交经 lend_play_action 路由到
@@ -1759,8 +1763,13 @@ function update_italy_borrow_box() {
 
 function update_armed_offer_box() {
 	const ao = view && view.armed_offer
-	const statusModal = document.getElementById('armed_status_modal')
-	if (statusModal) statusModal.style.display = 'none'
+	const statusModal = document.getElementById('lend_lease_modal')
+	/* 复用 #lend_lease_modal（17535 租借法案的"屏幕中央卡片网格、真实卡图、点选"范式）：
+	 * 与 17855 need='card'（揭示某国手牌、苏联选 1 张弃置）同构。
+	 * 该 modal 由 update_us_lend_lease 在渲染周期早期（~1104，早于本函数 ~464）管理，
+	 * 故 17855 每帧最后写入不会被覆盖；且仅在 ao.pending 时接管，避免罕见同屏误关 17535 弹框。
+	 * 显隐统一用 .hide 类（与 update_us_lend_lease 一致），勿用 inline style.display。 */
+	if (statusModal && ao && ao.pending) statusModal.classList.add('hide')
 	if (!ao || !ao.cards || !ao.cards.length) {
 		/* 窗口消失：清掉多步选择态与高亮 */
 		if (pending_armed) {
@@ -1798,7 +1807,7 @@ function update_armed_offer_box() {
 		const isPiece = ao.pending.need === 'piece'
 		const isSpace = ao.pending.need === 'space'
 		if (ao.pending.need === 'status') {
-			if (statusModal) statusModal.style.display = 'block'
+			if (statusModal) statusModal.classList.remove('hide')
 			const box = statusModal.querySelector('.modal-box')
 			box.innerHTML = ''
 			const h = document.createElement('h3')
@@ -1857,6 +1866,41 @@ function update_armed_offer_box() {
 					},
 				}]))
 				return
+				}
+				/* 【2026-10-18】17855《间谍机构》：need='card' = 揭示目标国手牌、苏联选 1 张弃置。
+				 * 复用 #lend_lease_modal（17535 的"屏幕中央真实卡图网格"）渲染候选，与 need='status' 同款。 */
+				if (ao.pending.need === 'card') {
+					const reveal = ao.pending.revealNation || ''
+					if (statusModal) statusModal.classList.remove('hide')
+					const box = statusModal ? statusModal.querySelector('.modal-box') : null
+					if (box) {
+						box.innerHTML = ''
+						const h = document.createElement('h3')
+						h.textContent = '选择并弃置 1 张（' + (reveal ? reveal + ' 的手牌' : '手牌') + '）'
+						box.appendChild(h)
+						const cands = ao.pending.candidates || []
+						const grid = document.createElement('div')
+						grid.className = 'card-grid'
+						if (!cands.length) {
+							const e = document.createElement('p')
+							e.textContent = '没有可选择的牌'
+							box.appendChild(e)
+						} else {
+							for (const c of cands) {
+								const el = card_elt(c, () => {
+									if (statusModal) statusModal.classList.add('hide')
+									clear_target_highlight()
+									clear_piece_highlight('armed')
+									ask_state = null
+									render_ask_box(null, null, null)
+									send_action('use_armed_offer', { card: pending_armed.card, pick: c.id })
+								})
+								grid.appendChild(el)
+							}
+							box.appendChild(grid)
+						}
+					}
+					return
 				}
 				if (isPiece) {
 					highlight_pieces(ao.pending.candidates, 'armed')
@@ -6088,6 +6132,8 @@ const STATUS_UI = {
 	'17846': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' }, battle: 'land', attacker_owner: true },
 	/* 17848 正面攻击：弃2张手牌后对战斗地区或相邻地区发起1次陆战 */
 	'17848': { discard: 2, battle: 'land', attacker_owner: true },
+	/* 15245 闪电战前奏类：候选含战斗地区本身（空打用），故 spaces_from_window + include_base */
+	'15245': { battle: 'land', attacker_owner: true, spaces_from_window: true, include_base: true },
 	/* 17841 近卫军：弃2张手牌，从弃牌堆打出1张[建设陆军]（弃牌后选地建设陆军） */
 	'17841': { discard: 2, sbuild: 'army' },
 	/* 17849 中国人民解放军：出牌阶段选<中国>/<蒙古>之一征召中国陆军（地图选地） */
@@ -6518,6 +6564,7 @@ function start_status_battle(cardId, ui, discard) {
 		status_battle_cands = []
 		send_query('status_battle_spaces', {
 			card: cardId, nation: status_act_owner, kind: ui.battle || 'land',
+			include_base: !!ui.include_base,
 		})
 		render_ask_box(
 			'选择战斗地区',
