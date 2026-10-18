@@ -545,11 +545,81 @@ const CARDS = [
  {
   "id": 15349,
   "deck": "CORE",
-  "name": "奇袭塔兰托",
-  "type": "ECON",
+  "name": "萨宾行动",
+  "type": "EVENT",
   "ops": 1,
-  "text": "[轰炸行动]选择3支<地中海>的意大利海军,将其移除",
-  "img": "sheet153_r5_c4.png",
+  "text": "对<中东>发起1次陆战。若<中东>相邻地区没有德国部队:在<中东>征召陆军。",
+  "img": "crop_15349.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15350,
+  "deck": "CORE",
+  "name": "奇袭塔兰托",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "计分阶段开始时,若<地中海>相邻地区有英国飞机,弃置2张手牌:在<地中海>消灭1支敌方国家海军。",
+  "img": "crop_15350.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15351,
+  "deck": "CORE",
+  "name": "敦刻尔克大撤退",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "<西欧>的英国或法国陆军被移除时,弃置2张手牌:在<北海>征召海军,或法国在<不列颠>征召陆军。",
+  "img": "crop_15351.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15352,
+  "deck": "CORE",
+  "name": "布莱切利园",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "敌方国家打出[增强卡]时,弃置1张手牌:使其无效。",
+  "img": "crop_15352.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15353,
+  "deck": "CORE",
+  "name": "保持冷静·继续前进",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "敌方国家发动[状态卡]效果时,弃置1张手牌:使其在本回合中无效。",
+  "img": "crop_15353.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15354,
+  "deck": "CORE",
+  "name": "加拿大进入动员",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "计分阶段开始时,弃置2张手牌:在<加拿大>征召陆军,在<北大西洋>征召海军。",
+  "img": "crop_15354.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15355,
+  "deck": "CORE",
+  "name": "特种空勤团突袭机场",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "出牌阶段开始时,弃置2张手牌:消灭1支相邻英国空军的敌方国家空军。",
+  "img": "crop_15355.png",
+  "nation": "英国"
+ },
+ {
+  "id": 15356,
+  "deck": "CORE",
+  "name": "地中海基地",
+  "type": "STATUS",
+  "ops": null,
+  "text": "<地中海>的英国海军总是处于补给状态。跳过出牌阶段行动,弃置2张手牌:在<地中海>建设海军。",
+  "img": "crop_15356.png",
   "nation": "英国"
  },
  {
@@ -575,10 +645,10 @@ const CARDS = [
  {
   "id": 12503,
   "deck": "SUPP",
-  "name": "通丁系统",
+  "name": "道丁系统",
   "type": "RESPONSE",
   "ops": null,
-  "text": "法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战",
+  "text": "敌方国家在<北海>建设海军后:消灭该海军。",
   "img": "sheet125_r0_c3.png",
   "nation": "英国"
  },
@@ -588,7 +658,7 @@ const CARDS = [
   "name": "抵抗万岁",
   "type": "RESPONSE",
   "ops": null,
-  "text": "法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战",
+  "text": "敌方国家在<西欧>建设陆军后:消灭该陆军。",
   "img": "sheet125_r0_c4.png",
   "nation": "英国"
  },
@@ -1943,6 +2013,16 @@ const CARDS = [
   "nation": "日本"
  },
  {
+  "id": 15448,
+  "deck": "CORE",
+  "name": "泰国",
+  "type": "RESPONSE",
+  "ops": 1,
+  "text": "出牌阶段开始时：在<东南亚>征召1支陆军。",
+  "img": "crop_15448.png",
+  "nation": "日本"
+ },
+ {
   "id": 7900,
   "deck": "SUPP",
   "name": "竭泽而渔",
@@ -2753,6 +2833,56 @@ const CARDS = [
   "nation": "苏联"
  },
  {
+  "id": 17851,
+  "deck": "CORE",
+  "name": "天王星行动",
+  "type": "EVENT",
+  "ops": 1,
+  "text": "<乌克兰>相邻地区每有1支苏联陆军,执行1次:对<乌克兰>发起1次陆战 或 在<乌克兰>建设陆军。",
+  "img": "crop_17851.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 17852,
+  "deck": "CORE",
+  "name": "罗科索夫斯基 朱可夫 科涅夫",
+  "type": "EVENT",
+  "ops": 1,
+  "text": "打出2张[状态卡]。",
+  "img": "crop_17852.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 17853,
+  "deck": "CORE",
+  "name": "一步也不许后退!",
+  "type": "RESPONSE",
+  "ops": 1,
+  "text": "苏联陆军被攻击时,弃置4张手牌:使其在本回合中不会被移除。",
+  "img": "crop_17853.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 17854,
+  "deck": "CORE",
+  "name": "共青城",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "建设陆军后:建设地区增加1个计分标记。",
+  "img": "crop_17854.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 17855,
+  "deck": "CORE",
+  "name": "间谍机构",
+  "type": "EFFECT",
+  "ops": 1,
+  "text": "任一国家摸牌阶段结束后:观看该国家的手牌,从中选择并弃置1张,该国家摸1张牌。",
+  "img": "crop_17855.png",
+  "nation": "苏联"
+ },
+ {
   "id": 17900,
   "deck": "SUPP",
   "name": "八月风暴",
@@ -3280,6 +3410,26 @@ const CARDS = [
   "ops": null,
   "text": "一回合一次，敌方国家部队因友方效果在其大本营或相邻地区被攻击或消灭时：获得1分。",
   "img": "sheet177_r4_c9.png",
+  "nation": "意大利"
+ },
+ {
+  "id": 17750,
+  "deck": "CORE",
+  "name": "意大利殖民地民兵",
+  "type": "EVENT",
+  "ops": 1,
+  "text": "意大利增加1支陆军后备。建设1支陆军。",
+  "img": "crop_17750.png",
+  "nation": "意大利"
+ },
+ {
+  "id": 17751,
+  "deck": "CORE",
+  "name": "俄罗斯解放军",
+  "type": "STATUS",
+  "ops": null,
+  "text": "苏联的计分阶段:若<乌克兰>未被苏联控制,其失去1分。",
+  "img": "crop_17751.png",
   "nation": "意大利"
  },
  {

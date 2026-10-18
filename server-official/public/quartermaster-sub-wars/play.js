@@ -448,6 +448,10 @@ function update_phase_buttons() {
 	update_pending_econ_box()
 	/* 战斗预算(event_budget)面板：独立于 ask_box，展示剩余机会/目标/结束按钮 */
 	update_event_budget_box()
+	/* 【2026-10-18】17851 天王星行动：重复选择菜单 */
+	update_uranus_box()
+	/* 【2026-10-18】17852 罗科索夫斯基：选牌打出状态卡 */
+	update_status_play_box()
 	/* 17817 进攻是最好的防守 + 17850 大清洗 联动面板 */
 	update_su_17817_box()
 	/* 高速公路（15228）：玩家在地图逐一选择建设位置 */
@@ -618,7 +622,7 @@ function is_my_turn() {
  */
 function can_act_in_turn() {
 	return is_my_turn() && !view.opening && !view.pending_battle &&
-		!view.pending_trigger && !view.pending_econ && !view.pending_autobahn &&
+		!view.pending_trigger && !view.pending_econ && !view.pending_uranus && !view.pending_status_play && !view.pending_autobahn &&
 		!view.pending_script && !view.pending_armed_delegate &&
 		!(view.delegate && (view.delegate.mode === 'order' || view.delegate.mode === 'german_draw')) &&
 		!(view.italy_borrow && view.italy_borrow.pending) &&
@@ -2763,7 +2767,7 @@ function on_click_hand_card(c, d) {
 	 * （服务端也会拦下其它动作，这里提前挡掉，免得"点了没反应"）。
 	 */
 	if (view.pending_battle || view.pending_trigger || view.pending_econ ||
-		view.pending_autobahn || view.pending_script || view.pending_armed_delegate ||
+		view.pending_uranus || view.pending_status_play || view.pending_autobahn || view.pending_script || view.pending_armed_delegate ||
 		view.uk_build_delegate || view.su_build_delegate ||
 		view.us_china_build ||
 		view.us_theater_delegate || view.us_replay ||
@@ -3191,6 +3195,8 @@ function update_hand_panel() {
 	/* 【2026-09-29】各国牌库面板：服务端已在 view.deck_counts / discard_counts
 	 * 里给出【全部六国】数据（以前只显示本国），这里展开显示。 */
 	update_deck_panel()
+	/* 【2026-10-18】各国后备面板：服务端已在 view.reserve_info 给出各国陆/海/空剩余可建容量与总数 */
+	update_reserve_panel()
 
 	const box = document.getElementById("hand_cards")
 	const note = document.getElementById("hand_limit_note")
@@ -3294,11 +3300,29 @@ function update_hand_panel() {
 		 * 现在服务端把每张手牌的判定结果直接下发，客户端照抄即可，不再自己猜。
 		 */
 		const hr = view.hand_ready && view.hand_ready[c.id]
-		if (view.turn_phase !== "discard" && !openingMine &&
-			(hr ? !hr.ok : !check_phase_for_card(c).ok))
+		/*
+		 * 【2026-10-18 修复】armed 增强卡（事件触发型：15351/15352/15353/15355/17854/17855…）
+		 * 只能在 view.armed_offer 窗口内打出，平时不可主动打出（check_phase_for_card 判为 load）。
+		 * 此前这类卡在窗口内仍被 .disabled 置灰，与"此刻实际可打出"不一致。
+		 * 现以服务端下发的 armed_offer 为准：窗口内的手牌卡【不置灰并加"可打出"高亮】，
+		 * 使手牌高亮与实际是否允许打出严格一致（不影响其它卡牌类型/旧批次增强卡）。
+		 */
+		const armedCards = (view.armed_offer && view.armed_offer.cards) || []
+		const inArmedOffer = armedCards.some(x => x.card === c.id)
+		if (inArmedOffer) {
+			d.classList.remove("disabled")
+		} else if (view.turn_phase !== "discard" && !openingMine &&
+			(hr ? !hr.ok : !check_phase_for_card(c).ok)) {
 			d.classList.add("disabled")
+		}
 		if (hr && !hr.ok && hr.reason)
 			d.title = hr.reason
+		if (inArmedOffer) {
+			const b = document.createElement("span")
+			b.className = "badge play"
+			b.textContent = "可打出"
+			d.appendChild(b)
+		}
 
 		if (discard_playmode && hr && hr.ok) {
 			/* 弃牌阶段·打牌模式：可打出的时点卡标"打" */
@@ -3890,6 +3914,26 @@ function start_guard_discard(g) {
 	update_hand_panel()
 }
 
+/*
+ * 【2026-10-18】苏联 17853《一步也不许后退!》发动：复用 echo_discard_modal
+ * （与保护卡 15410 武士道弃牌代价同款 modal + card-grid），选 4 张手牌作代价，
+ * 提交目标改为 resolve_battle{step_back:true, drop} 而非 {guard, drop}。
+ */
+function start_step_back_discard(pb) {
+	pending_guard_sel = {
+		card_id: pb.su_card,
+		name: '一步也不许后退!',
+		cost: 4,
+		cost_filter: null,
+		drop: [],
+		submit_target: 'step_back',
+	}
+	ask_state = null
+	render_ask_box(null, null, null)
+	update_echo_discard_box()
+	update_hand_panel()
+}
+
 function render_guard_discard_box() {
 	const modal = document.getElementById("echo_discard_modal")
 	if (!modal) return
@@ -3953,7 +3997,12 @@ function confirm_guard_discard() {
 	const drop = gs.drop.slice()
 	const cardId = gs.card_id
 	pending_guard_sel = null
-	send_action("resolve_battle", { guard: cardId, drop: drop })
+	/* 【2026-10-18】17853《一步也不许后退!》复用本弹框选 4 张手牌，提交目标改为 step_back */
+	if (gs.submit_target === 'step_back') {
+		send_action("resolve_battle", { step_back: true, drop: drop })
+	} else {
+		send_action("resolve_battle", { guard: cardId, drop: drop })
+	}
 	update_echo_discard_box()
 	update_hand_panel()
 }
@@ -4715,6 +4764,59 @@ function update_deck_panel() {
 		listEl.innerHTML = rows.join("")
 }
 
+/* 【2026-10-18】各国后备面板：仅展示各国"陆/海/空 后备"（= 该兵种剩余可建容量，
+ * 实时取自 上限−已部署），不展示"剩余可建"合计字段。
+ * 数据来自 view.reserve_info（服务端实时计算），随每次 view 刷新实时更新，绝不硬编码。
+ * 复用 各国牌库 面板的 .deck-row 形态与样式。 */
+let reserve_panel_open = false
+
+function toggle_reserve_panel() {
+	reserve_panel_open = !reserve_panel_open
+	update_reserve_panel()
+}
+
+function update_reserve_panel() {
+	const listEl = document.getElementById("reserve_list")
+	const btn = document.getElementById("reserve_toggle")
+	if (!listEl) return
+
+	const me = view && view.my_nation
+	const res = (view && view.reserve_info) || {}
+	if (btn)
+		btn.textContent = "各国后备"
+
+	if (!reserve_panel_open) {
+		listEl.classList.add("hide")
+		return
+	}
+	listEl.classList.remove("hide")
+
+	/* 按服务端 reserve_info 实际给出的国家渲染（含中国/法国等），缺数据时回退到出战顺序，
+	 * 不在此处硬编码任何国家名单。 */
+	const order = Object.keys(res).length ? Object.keys(res) :
+		((view && view.order_of_nations) || [])
+	const rows = []
+	for (const nat of order) {
+		/* 真实数据缺省保护：任一字段缺失都以 0 兜底，绝不显示硬编码数值 */
+		const r = res[nat] || { remaining: { army: 0, navy: 0, air: 0 } }
+		const rem = r.remaining || { army: 0, navy: 0, air: 0 }
+		const isAxis = AXIS_NATIONS.indexOf(nat) >= 0
+		rows.push(
+			'<div class="deck-row' + (nat === me ? ' is-me' : '') + '">' +
+			'<span class="dk-side" style="background:' +
+			(isAxis ? '#8a2d2d' : '#1e3a5f') + '"></span>' +
+			'<span class="dk-nation">' + esc(nat) + '</span>' +
+			'<span class="dk-reserve">陆：' + rem.army +
+				'，海：' + rem.navy +
+				'，空：' + rem.air + '</span>' +
+			'</div>')
+	}
+	if (!rows.length)
+		listEl.textContent = "（暂无数据）"
+	else
+		listEl.innerHTML = rows.join("")
+}
+
 /* 开关：友方出牌回合开始时是否询问（默认关闭 = 跳过） */
 function toggle_ask_remove() {
 	send_action("toggle_ask_remove", { value: !view.ask_remove })
@@ -5208,7 +5310,8 @@ function update_pending_battle_box() {
 	if (!pb) {
 		if (ask_state && (ask_state.kind === "defend" || ask_state.kind === "retreat" ||
 			ask_state.kind === "counter" || ask_state.kind === "guard" ||
-			ask_state.kind === "kv2" || ask_state.kind === "kv2_ask")) {
+			ask_state.kind === "kv2" || ask_state.kind === "kv2_ask" ||
+			ask_state.kind === "su_step_back")) {
 			ask_state = null
 			render_ask_box(null)
 		}
@@ -5315,6 +5418,35 @@ function update_pending_battle_box() {
 				label: "使该陆军在本次战斗中不被移除",
 				cls: "primary",
 				onClick: () => send_action("resolve_battle", { kv2: "protect" }),
+			}]
+		)
+		return
+	}
+
+	/*
+	 * ---------- 阶段零 SU_STEP_BACK：苏联持有方决定是否发动（2026-10-18，苏联 17853）----------
+	 *
+	 * 与 KV-2（17837）同款：拿到 pb 的是【苏联（持有方）】。
+	 * 发动 -> 复用 echo_discard_modal 选 4 张手牌作为代价（与保护卡弃牌代价同款 UI）。
+	 * 不发动 -> 卡留桌面、战斗照常结算。
+	 */
+	if (pb.stage === "su_step_back") {
+		ask_state = { kind: "su_step_back", space: pb.space }
+		const byId = view.pieces_by_id || {}
+		const vInfo = byId[pb.victim]
+		render_ask_box(
+			"【苏联】《一步也不许后退!》—— 是否发动？",
+			"受攻击地区：" + ((view.spaces[pb.space] || {}).name || "?") +
+				"　受创部队：" +
+				(vInfo ? (vInfo.type_zh + "@" + vInfo.space_name) : "部队") +
+				"　（发动需弃置 4 张手牌，使该陆军本回合不被移除）",
+			[{
+				label: "发动（弃置 4 张手牌保护）",
+				cls: "primary",
+				onClick: () => start_step_back_discard(pb),
+			}, {
+				label: "不发动（卡留于桌面）",
+				onClick: () => send_action("resolve_battle", { step_back: false }),
 			}]
 		)
 		return
@@ -5772,7 +5904,12 @@ function update_table_status() {
 		const ui = status_ui_of(c.card)
 		let badge = ''
 		let badgeCls = ''
-		if (ui.build) {
+		if (c.attrition_log != null) {
+			/* 喷气式战斗机(15251)：只读查看德国损耗记录 */
+			el.classList.add('ready', 'log-ready')
+			badge = '查看损耗记录'
+			badgeCls = 'blue'
+		} else if (ui.build) {
 			/*
 			 * S4：仅当正在打《建设陆军》卡（进入选地块）时才高亮可放弃建设；
 			 * 否则灰显，避免"错误时点显示可打出"。
@@ -5839,6 +5976,34 @@ function update_table_status() {
 		el.onclick = () => on_click_table_status(c.card)
 		host.appendChild(el)
 	}
+}
+
+/*
+ * 【2026-10-18】喷气式战斗机(15251) 只读损耗记录弹框。
+ * 数据全部来自 view.table_status[].attrition_log（已随 view 下发），
+ * 仅展示、不发送任何 action、不触发任何技能/效果/状态变更。
+ */
+function showAttrLogBox(cards) {
+	const modal = document.getElementById('attr_log_modal')
+	if (!modal) return
+	modal.onclick = (e) => { if (e.target === modal) close_attr_log() }
+	modal.classList.remove('hide')
+	const grid = modal.querySelector('#attr_log_grid')
+	const hint = modal.querySelector('#attr_log_hint')
+	if (grid) grid.innerHTML = ''
+	if (!cards || !cards.length) {
+		if (hint) hint.textContent = '《喷气式战斗机》打出后，德国此后损耗的卡牌将记录于此。'
+		return
+	}
+	if (hint) hint.textContent = '共 ' + cards.length + ' 张（自《喷气式战斗机》打出后德国损耗的卡牌）：'
+	for (const c of cards) {
+		const o = { id: c.id, name: c.name, img: c.img, text: c.text, type: 'UNKNOWN' }
+		if (grid) grid.appendChild(build_response_card_elt(o, true))
+	}
+}
+function close_attr_log() {
+	const modal = document.getElementById('attr_log_modal')
+	if (modal) modal.classList.add('hide')
 }
 
 /* 找不到 #table_status 容器就动态创建一个，插到手牌区上方 */
@@ -6000,6 +6165,9 @@ function status_ready_space(id) {
 function on_click_table_status(cardId) {
 	const c = (view.table_status || []).find(x => x.card === cardId)
 	if (!c) return
+	/* 【2026-10-18】喷气式战斗机(15251)：点击仅只读查看德国损耗记录，
+	 * 绝不触发其 react/技能/增强/事件响应，也不产生任何游戏状态变更。 */
+	if (c.attrition_log) { showAttrLogBox(c.attrition_log); return }
 	/* 同上：cardId 是实例 id，必须经 status_ui_of 去后缀再查 */
 	const ui = status_ui_of(cardId)
 	/* 自动结算卡（15340 计分阶段 / 17749 战斗时）：不可主动触发，点击提示 */
@@ -6538,6 +6706,63 @@ function update_event_budget_box() {
 	}
 }
 
+/* ============================================================
+ * 【2026-10-18】17851 天王星行动：重复选择菜单（发起陆战 / 建设陆军 / 结束）
+ * 复用 #event_budget_box 同款样式；战斗分支交给通用 event_budget 面板。
+ * ============================================================ */
+function update_uranus_box() {
+	const pu = view && view.pending_uranus
+	const box = document.getElementById('uranus_box')
+	if (!box) return
+	if (!pu) {
+		box.classList.add('hide')
+		box.innerHTML = ''
+		/* 仅在无战斗预算时才清高亮，避免抹掉战斗分支的目标高亮 */
+		if (!(view && view.event_budget)) clear_target_highlight()
+		return
+	}
+	box.classList.remove('hide')
+	box.innerHTML = ''
+	const sn = pu.space_name || '乌克兰'
+
+	const title = document.createElement('div')
+	title.className = 'eb-title'
+	title.textContent = '《天王星行动》：剩 ' + pu.remaining + ' / ' + (pu.total || pu.remaining) + ' 次'
+	box.appendChild(title)
+
+	const hint = document.createElement('div')
+	hint.className = 'eb-hint'
+	hint.textContent = '每次：对<' + sn + '>发起陆战，或在<' + sn + '>建设陆军；或结束放弃剩余。'
+	box.appendChild(hint)
+
+	const row = document.createElement('div')
+	row.className = 'eb-actions'
+
+	const bB = document.createElement('button')
+	bB.className = 'action primary'
+	bB.textContent = '对<' + sn + '>发起陆战'
+	bB.onclick = () => send_action('uranus_choice', { choice: 'battle' })
+	row.appendChild(bB)
+
+	const bU = document.createElement('button')
+	bU.className = 'action'
+	bU.textContent = '在<' + sn + '>建设陆军'
+	bU.onclick = () => send_action('uranus_choice', { choice: 'build' })
+	row.appendChild(bU)
+
+	const bE = document.createElement('button')
+	bE.className = 'action'
+	bE.textContent = '结束'
+	bE.onclick = () => send_action('uranus_choice', { choice: 'end' })
+	row.appendChild(bE)
+
+	box.appendChild(row)
+
+	/* 高亮乌克兰（与战斗分支共用 .target） */
+	const sp = pu.space
+	if (sp) highlight_targets({ spaces: [{ id: sp }] })
+}
+
 /*
  * 【2026-10-13 重构为屏幕中央卡片网格范式】17817 进攻是最好的防守 + 17850 大清洗 联动面板。
  *
@@ -6638,6 +6863,95 @@ function update_su_17817_box() {
 		send_action('su_purge_play', { card })
 	}
 	foot.appendChild(ok)
+	box.appendChild(foot)
+}
+
+/* ============================================================
+ * 【2026-10-18】17852 罗科索夫斯基 朱可夫 科涅夫：从手牌选 1~N 张[状态卡]一次性打出。
+ * 复用 #su_purge_modal 同款「屏幕中央卡片网格 + 点选高亮(.sel) + 底部确认」范式，
+ * 区别：多选（status_play_sel 数组，toggle），footer 显示「已选 k / N」。
+ * 候选来自 view.hands[my_nation].cards 按 type==='STATUS' 过滤（与 update_su_17817_box 同源）。
+ * ============================================================ */
+let status_play_sel = []
+function update_status_play_box() {
+	const sp = view && view.pending_status_play
+	const modal = document.getElementById('status_play_modal')
+	if (!modal) return
+	if (!sp) {
+		modal.classList.add('hide')
+		const _b = modal.querySelector('.modal-box'); if (_b) _b.innerHTML = ''
+		status_play_sel = []
+		return
+	}
+	modal.classList.remove('hide')
+	const box = modal.querySelector('.modal-box')
+	box.innerHTML = ''
+
+	const head = document.createElement('div')
+	head.className = 'modal-head'
+	const title = document.createElement('span')
+	title.className = 'modal-title'
+	title.textContent = '《罗科索夫斯基 朱可夫 科涅夫》：打出状态卡'
+	const sub = document.createElement('span')
+	sub.className = 'modal-sub'
+	sub.textContent = '可打出最多 ' + sp.total + ' 张[状态卡]，已选 ' + status_play_sel.length + ' / ' + sp.remaining
+	head.append(title, sub)
+	box.appendChild(head)
+
+	const sec = document.createElement('div')
+	sec.className = 'modal-section'
+	const label = document.createElement('div')
+	label.className = 'modal-label'
+	label.textContent = '选择[状态卡]'
+	const hint = document.createElement('span')
+	hint.className = 'modal-hint'
+	hint.textContent = status_play_sel.length ? ('已选 ' + status_play_sel.length + ' / ' + sp.remaining) : '点选手牌中的状态卡（可多选）'
+	label.appendChild(hint)
+	sec.appendChild(label)
+
+	const hand = (view.hands[view.my_nation] && view.hands[view.my_nation].cards) || []
+	const statusCards = hand.filter(c => String(c.type || '').toUpperCase() === 'STATUS')
+	const grid = document.createElement('div')
+	grid.className = 'card-grid'
+	if (!statusCards.length) {
+		const empty = document.createElement('p')
+		empty.className = 'empty-note'
+		empty.textContent = '手牌中无可用状态卡（可点「结束」放弃）'
+		grid.appendChild(empty)
+	} else {
+		for (const c of statusCards) {
+			const el = card_elt(c, () => {
+				const i = status_play_sel.indexOf(c.id)
+				if (i >= 0) status_play_sel.splice(i, 1)
+				else if (status_play_sel.length < sp.remaining) status_play_sel.push(c.id)
+				update_status_play_box()
+			})
+			if (status_play_sel.indexOf(c.id) >= 0) el.classList.add('sel')
+			grid.appendChild(el)
+		}
+	}
+	sec.appendChild(grid)
+	box.appendChild(sec)
+
+	const foot = document.createElement('div')
+	foot.className = 'modal-foot'
+	const ok = document.createElement('button')
+	ok.className = 'action primary'
+	const selNames = statusCards.filter(c => status_play_sel.indexOf(c.id) >= 0).map(c => c.name || c.id)
+	ok.textContent = status_play_sel.length ? ('打出 ' + status_play_sel.length + ' 张状态卡' + (selNames.length ? '（《' + selNames.join('》《') + '》）' : '')) : '确认打出'
+	ok.disabled = status_play_sel.length < 1 || status_play_sel.length > sp.remaining
+	ok.onclick = () => {
+		if (!status_play_sel.length) return
+		const cards = status_play_sel.slice()
+		status_play_sel = []
+		send_action('su_status_play', { cards })
+	}
+	foot.appendChild(ok)
+	const end = document.createElement('button')
+	end.className = 'action'
+	end.textContent = '结束（放弃剩余）'
+	end.onclick = () => { status_play_sel = []; send_action('su_status_skip', {}) }
+	foot.appendChild(end)
 	box.appendChild(foot)
 }
 
@@ -8410,3 +8724,24 @@ function bind_deck_toggle_when_ready(tries) {
 	setTimeout(function () { bind_deck_toggle_when_ready((tries || 0) + 1) }, 200)
 }
 bind_deck_toggle_when_ready(0)
+
+/* 【2026-10-18】各国后备按钮绑定（与 deck_toggle 同套 when_ready 重试） */
+let reserve_toggle_bound = false
+function bind_reserve_toggle() {
+	if (reserve_toggle_bound) return true
+	const btn = document.getElementById("reserve_toggle")
+	if (!btn) return false
+	btn.addEventListener("click", (ev) => {
+		ev.stopPropagation()
+		toggle_reserve_panel()
+	})
+	reserve_toggle_bound = true
+	update_reserve_panel()
+	return true
+}
+function bind_reserve_toggle_when_ready(tries) {
+	if (bind_reserve_toggle()) return
+	if ((tries || 0) > 40) return
+	setTimeout(function () { bind_reserve_toggle_when_ready((tries || 0) + 1) }, 200)
+}
+bind_reserve_toggle_when_ready(0)

@@ -307,7 +307,9 @@ console.log('--- 17829 毛泽东 ---')
 	g = playEvent(g, 'Allies', '17829#1')
 	I.set_skip_turn_guard(false)
 	ok(g.hands['中国'].indexOf('17829#1') < 0, '17829 离手')
-	ok((g.army_reserve && g.army_reserve['中国'] || 0) >= 1, '中国+1陆军后备')
+	/* 【2026-10-18】后备 = 陆军上限 +1，走 game.china_army_bonus（unit_cap_ok 读取），
+	 * 原 game.army_reserve['中国'] 是无人消费的占位字段，已弃用。 */
+	ok(I.army_bonus_of(g, '中国') >= 1, '中国+1陆军后备（上限）')
 	const m = (g.markers[SP('中国东北')] || []).length + (g.markers[SP('中国西部')] || []).length + (g.markers[SP('中国东部')] || []).length
 	ok(m >= 1, '中国之一有计分标记')
 	ok(pieceOn(g, '日本', 'army', '中国东北').length === 0, '中国内敌方陆军被消灭')

@@ -102,6 +102,7 @@
 		<div id="budget_hud">
 			<div id="event_budget_box" class="hide"></div>
 			<div id="autobahn_box" class="hide"></div>
+			<div id="uranus_box" class="hide"></div>
 		</div>
 	</div>
 
@@ -145,6 +146,9 @@
 	<div id="deck_panel">
 		<button id="deck_toggle" type="button">各国牌库</button>
 		<div id="deck_list" class="hide"></div>
+		<!-- 【2026-10-18】各国后备按钮：展示各阵营陆军"后备"加成 -->
+		<button id="reserve_toggle" type="button">各国后备</button>
+		<div id="reserve_list" class="hide"></div>
 	</div>
 
 	<div id="log"></div>
@@ -291,6 +295,29 @@
 </div>
 
 <!--
+	【2026-10-18】喷气式战斗机(15251)：点击该状态卡只读展示德国此后损耗的卡牌记录。
+	数据来自 view.table_status[].attrition_log，仅展示、不触发任何技能/效果/状态变更。
+-->
+<div id="attr_log_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span class="modal-title">德国损耗记录（喷气式战斗机）</span>
+			<button class="modal-close" onclick="close_attr_log()">×</button>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				<span class="modal-name">德国此后损耗的卡牌</span>
+				<span id="attr_log_hint" class="modal-hint"></span>
+			</div>
+			<div id="attr_log_grid" class="card-grid"></div>
+		</div>
+		<div class="modal-foot">
+			<button class="action primary" onclick="close_attr_log()">关闭</button>
+		</div>
+	</div>
+</div>
+
+<!--
 	【2026-09-30 德国增强·战术革新】15214 两步选牌弹框。
 	第 1 步弃置德国场上 1 张状态卡，第 2 步免费打出 1 张状态卡（不占出牌名额）。
 	内容由 update_pending_echo_box 动态生成。
@@ -341,6 +368,14 @@
 	内容由 update_su_17817_box 动态生成（card-grid 渲染手牌[状态卡]，真实卡图，点击即选中）。
 -->
 <div id="su_purge_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+<!--
+	【2026-10-18】17852 罗科索夫斯基 朱可夫 科涅夫：从手牌选 1~N 张[状态卡]一次性打出。
+	复用 #su_purge_modal / #us_political_modal 的「屏幕中央卡片网格 + 点选高亮(.sel) + 底部确认」范式，
+	区别：多选（status_play_sel 数组）。内容由 update_status_play_box 动态生成。
+-->
+<div id="status_play_modal" class="modal hide">
 	<div class="modal-box"></div>
 </div>
 
