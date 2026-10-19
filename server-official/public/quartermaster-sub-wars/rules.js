@@ -13697,75 +13697,33 @@ const RESPONSE_EFFECT_IMPL = {
 		return { ok: true, desc: '（驱逐舰运输：未执行）' }
 	},
 	'15430': (game, side, ctx, choice, extra) => {
-		/* 日本发起海战后：先发起 1 次海战，海战后决定是否发动《驱逐舰运输》，
-		 * 最后发起 1 次陆战。三步分步结算：
-		 *   ① 选海域发起海战
-		 *   ② 海战发动后，立即询问是否发动《驱逐舰运输》(内嵌 15426 的多步效果)
-		 *   ③ 选陆地发起陆战
-		 * 跨步进度用 extra.step 携带；15426 的子步骤用 extra.tx 包裹，
-		 * 始终以【奇袭 card_id 15430】的身份接管 pending_response_choice。
-		 * 【2026-10-15 修正】15426 建陆军会触发【他国响应】(如英国在印度建陆军后响应)。
-		 * 若本次子步新挂起了响应，须用 defer 机制把奇袭续打存进
-		 * game.deferred_response_choice，等该响应结算完（队列清空）后再由
-		 * promote_deferred_response 自动恢复——否则 trigger_response 会覆盖
-		 * pending_response_choice，导致驱逐舰运输窗口卡死。
-		 * （沿用 15431 全面侵华的 defer 范式；resolve_response_choice 已加 defer 分支。）*/
-		const TX = RESPONSE_EFFECT_IMPL['15426']
-		/* 运行一次 15426 子步，并侦测"本次调用期间新挂起的响应"（任意阵营）。
-		 * 返回 { r, newResp }，newResp=true 表示需 defer 奇袭续打。 */
-		const runTX = (txCtx, txChoice, txExtra) => {
-			const sig0 = (game.response_queue || []).map(x =>
-				x.owner_side + ':' + (x.candidates || []).map(c => c.card_id).sort().join(','))
-			const r = TX(game, side, txCtx, txChoice, txExtra)
-			const sig1 = (game.response_queue || []).map(x =>
-				x.owner_side + ':' + (x.candidates || []).map(c => c.card_id).sort().join(','))
-			const newResp = sig1.some(k => sig0.indexOf(k) < 0)
-			return { r, newResp }
-		}
-		/* 构造"奇袭续打"挂起对象（恢复时整体交回 pending_response_choice）。 */
-		const buildCont = (kind, candidates, prompt, txCtx, txExtra, seaId) => ({
-			card_id: '15430', card_face: '15430', name: '奇袭', owner_side: side,
-			kind, candidates, prompt, ctx,
-			extra: { step: 'transport', seaId, tx: { ctx: txCtx, extra: txExtra } },
-		})
-		const landCont = (seaId, descPrefix) => {
+		/* 日本发起海战后：① 选海域发起海战；② 选陆地发起陆战。两步分步结算。
+		 * 海战发动后，陆战步以续打（defer）suspended，让【海战后的响应】
+		 * （如 15426《驱逐舰运输》，作为独立响应卡在响应时点自动触发）先结算；
+		 * 队列清空后由 promote_deferred_response 自动恢复（栈模型下即压回栈帧），
+		 * 玩家再选陆战地区。
+		 * 【2026-10-19 简化】删除原 transport 步及内嵌 15426 的 runTX/buildCont/
+		 * landCont/optCont、手写 defer 分支、newResp 签名对比、清队列拷贝 hack ——
+		 * 海战后的响应本就由触发层（request_responses）调度，15430 不再内嵌 15426。 */
+		const emitLand2 = (seaId, descPrefix, defer) => {
 			const land = pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: Number(seaId), includeBase: false,
 				nation: '日本',
 				prompt: '选择要发起陆战的地区（奇袭海战的相邻陆地）',
 			})
-			return {
-				kind: land.kind || 'space',
-				candidates: land.candidates || [],
-				prompt: (descPrefix || '海战已结算') + '；' + (land.desc || '继续选择陆战地区'),
-				extra: { step: 'land', seaId },
-			}
-		}
-		/* 发射陆战选择步骤：defer=true 时存 deferred 并返回 defer，否则普通 pending。 */
-		const emitLand = (seaId, descPrefix, defer) => {
-			const lc = landCont(seaId, descPrefix)
+			if (!land.candidates || !land.candidates.length)
+				return { ok: true, desc: '（海战相邻无陆地，跳过陆战）' }
+			const prompt = (descPrefix || '海战已结算') + '；' + (land.desc || '继续选择陆战地区')
 			if (defer) {
 				game.deferred_response_choice = {
 					card_id: '15430', card_face: '15430', name: '奇袭', owner_side: side,
-					kind: lc.kind, candidates: lc.candidates, prompt: lc.prompt,
-					ctx, extra: lc.extra,
+					kind: land.kind || 'space', candidates: land.candidates,
+					prompt, ctx, extra: { step: 'land', seaId },
 				}
-				return { defer: true, kind: lc.kind, candidates: lc.candidates, prompt: lc.prompt, extra: lc.extra }
+				return { defer: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
 			}
-			return { pending: true, kind: lc.kind, candidates: lc.candidates, prompt: lc.prompt, extra: lc.extra }
+			return { pending: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
 		}
-		/* 海战/驱逐舰运输选项（发动/不发动）的续打对象 */
-		const optCont = (seaId) => ({
-			card_id: '15430', card_face: '15430', name: '奇袭', owner_side: side,
-			kind: 'option',
-			candidates: [
-				{ id: 1, name: '发动《驱逐舰运输》' },
-				{ id: 0, name: '不发动，直接进行陆战' },
-			],
-			prompt: '海战已结算；是否发动《驱逐舰运输》？',
-			ctx,
-			extra: { step: 'transport', seaId },
-		})
 		if (choice === undefined) {
 			/* ① 选海域发起海战（仅保留"日本真能发起海战"的海域） */
 			const sea = pick_space_then(game, ctx, undefined, {
@@ -13783,70 +13741,16 @@ const RESPONSE_EFFECT_IMPL = {
 			return sea
 		}
 		if (extra && extra.step === 'sea') {
-			/* ② 已选海战地区：开海战，再抛出《驱逐舰运输》是否发动的决策 */
+			/* ② 已选海战地区：开海战 */
 			const seaId = Number(choice)
 			const sr = do_sea_battle_at(game, seaId, '日本')
-			/*
-			 * 海战会自动挂起 15426《驱逐舰运输》(以及把 15430 自己再触发一次)，
-			 * 这里改由奇袭分步内嵌处理，故把队列里这份拷贝清掉，避免重复弹出。
-			 */
-			game.response_queue = (game.response_queue || []).map(x => {
-				if ((x.candidates || []).some(c => c.card_face === '15426' || c.card_face === '15430')) {
-					const kept = (x.candidates || []).filter(c => c.card_face !== '15426' && c.card_face !== '15430')
-					return kept.length ? Object.assign({}, x, { candidates: kept }) : null
-				}
-				return x
-			}).filter(Boolean)
-			/* 海战未真正发动（无相邻补给日本海军）：跳过驱逐舰运输，直接陆战 */
+			/* 海战未真正发动（无相邻补给日本海军）：直接陆战（无海战后响应要等） */
 			if (!sr.ok)
-				return emitLand(seaId, sr.desc || '海战未发动', false)
-			/*
-			 * 海战可能触发他国响应，这些响应仍挂在 response_queue，由归属方按正常
-			 * 响应流程结算；"是否发动驱逐舰运输"作为 pending_response_choice 独立存在，
-			 * 不与之抢占。沿用旧版行为：返回普通 pending 选项即可，避免客户端对
-			 * defer 续打窗口处理不一致而卡死（2026-10-15 回归修复）。
-			 * 真正的"建陆军触发他国响应卡死"由 transport 子步的 runTX/newResp 分支处理。
-			 */
-			return { pending: true, kind: 'option', candidates: optCont(seaId).candidates,
-				prompt: (sr.desc || '海战已结算') + '；是否发动《驱逐舰运输》？',
-				extra: { step: 'transport', seaId } }
+				return emitLand2(seaId, sr.desc || '海战未发动', false)
+			/* 海战发动：陆战步 suspended（defer），让海战后响应（如 15426）先结算 */
+			return emitLand2(seaId, (sr.desc || '海战已结算'), true)
 		}
-		if (extra && extra.step === 'transport') {
-			/* ③ 《驱逐舰运输》决策 / 子步骤：内嵌调用 15426 的效果实现 */
-			if (extra.tx) {
-				/* 处于 15426 子步骤：用记住的 tx（ctx + 15426 的 step extra）继续，
-				 * choice 可能是陆地 id 或选项 0/1（0=完成），一律交给 15426。 */
-				const { r, newResp } = runTX(extra.tx.ctx, choice, extra.tx.extra)
-				if (r && r.pending) {
-					const c = buildCont(r.kind || 'space', r.candidates || [], r.prompt || '《驱逐舰运输》',
-						extra.tx.ctx, r.extra || null, extra.seaId)
-					if (newResp) {
-						game.deferred_response_choice = c
-						return { defer: true, kind: c.kind, candidates: c.candidates, prompt: c.prompt, extra: c.extra }
-					}
-					return { pending: true, kind: c.kind, candidates: c.candidates, prompt: c.prompt, extra: c.extra }
-				}
-				/* 15426 本步完成：进入陆战步骤（若本次建陆军触发了响应则 defer 陆战） */
-				return emitLand(extra.seaId, (r && r.desc) ? r.desc : '《驱逐舰运输》已结算', newResp)
-			}
-			/* 运输级决策：choice 0 / 未选 = 不发动，直接进入陆战 */
-			if (!choice || Number(choice) === 0)
-				return emitLand(extra.seaId, '（未发动《驱逐舰运输》）', false)
-			/* 初次发动：以海战地为基准，跑 15426 第 1 步 */
-			const txCtx = { nation: '日本', space: extra.seaId, kind: 'sea' }
-			const { r, newResp } = runTX(txCtx, undefined, null)
-			if (r && r.pending) {
-				const c = buildCont(r.kind || 'space', r.candidates || [], r.prompt || '《驱逐舰运输》',
-					txCtx, r.extra || null, extra.seaId)
-				if (newResp) {
-					game.deferred_response_choice = c
-					return { defer: true, kind: c.kind, candidates: c.candidates, prompt: c.prompt, extra: c.extra }
-				}
-				return { pending: true, kind: c.kind, candidates: c.candidates, prompt: c.prompt, extra: c.extra }
-			}
-			return emitLand(extra.seaId, (r && r.desc) ? r.desc : '《驱逐舰运输》已结算', newResp)
-		}
-		/* ④ 已选陆战地区：开陆战（extra.step === 'land'） */
+		/* ③ 已选陆战地区：开陆战（extra.step === 'land'） */
 		const lr = do_land_battle_at(game, Number(choice), '日本')
 		return { ok: lr.ok, desc: lr.desc }
 	},

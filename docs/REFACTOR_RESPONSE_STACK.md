@@ -156,7 +156,7 @@ frame = {
 4. `promote_deferred_response` 改为"把 deferred 帧重新压栈顶"。
 5. `view` 增加 `response_stack` 字段（客户端可读栈）。
 6. 保留 `response_queue` 作为"触发组批量入栈"的兼容壳，过渡期内两者并存。
-7. **卡逻辑清理（与引擎层同步）**：15430 删除 `step='transport'` 内嵌 15426 的三步机制（`runTX`/`buildCont`/`landCont`/`optCont`、手写 `{defer}`、`newResp` 签名对比、`L13793` 清队列拷贝），简化为【海战 → 陆战】两步（详见 3.9）；15426 仍作为独立响应卡由海战后响应时点自动调度。本清理同时消除 15430 对手写 `defer` 的依赖。
+7. **卡逻辑清理（与引擎层同步）**：15430 删除 `step='transport'` 内嵌 15426 的三步机制（`runTX`/`buildCont`/`landCont`/`optCont`、手写 `{defer}` 分支、`newResp` 签名对比、`L13793` 清队列拷贝），简化为【海战 → 陆战】两步（详见 3.9）；15426 仍作为独立响应卡由海战后响应时点自动调度。15430 仍保留一个 `{defer}` 用于协调"海战后响应先结算、陆战步 suspended 待恢复"，但不再内嵌 15426 子步骤（详见 3.9 重构后）。
 
 **验证**：`tools/_smoke_15430.js`（奇袭发起海战→敌方响应→归还陆战步）、`_smoke_15431_queue.js`、`_smoke_fr_respond.js`（15311 马奇诺跨阵营）、`armed_whitelist` 冒烟，全绿。
 
