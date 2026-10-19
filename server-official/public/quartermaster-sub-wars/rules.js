@@ -14481,6 +14481,26 @@ function response_reconcile_active(game) {
  * 但界面顶栏仍会显示"对方行动"，玩家看不出该自己选 —— 故一并让权，
  * 与 request_responses 的让权口径一致（结算后由本函数交还）。
  */
+/*
+ * 【2026-10-19 响应栈重构·第一期】统一栈辅助。
+ * 续打上下文（原分散在 game.pending_response_choice / game.deferred_response_choice 两个全局）
+ * 逐步收编为「栈帧」，消除嵌套响应覆盖续打上下文（归还我方时数据清除）的脆弱性。
+ * 本期先用双写兼容：trigger_response 写入时同时维护栈帧与旧全局；后续期删除旧全局。
+ */
+function push_response_frame(game, frame) {
+	game.response_stack = game.response_stack || []
+	game.response_stack.push(frame)
+	return frame
+}
+function pop_response_frame(game) {
+	game.response_stack = game.response_stack || []
+	return game.response_stack.pop()
+}
+function top_response_frame(game) {
+	const s = game.response_stack || []
+	return s.length ? s[s.length - 1] : null
+}
+
 function promote_deferred_response(game) {
 	const d = game.deferred_response_choice
 	if (!d) return false
