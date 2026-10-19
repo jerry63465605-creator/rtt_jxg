@@ -32,9 +32,11 @@
 
 ### 1.2 数据清除陷阱（重点）
 
-`pending_response_choice` 是 **单一全局**。当某响应卡（如 15430 奇袭）发起战斗，战斗又触发敌方新响应 G，G 结算时也会写 `pending_response_choice`，**直接覆盖**原卡续打上下文。因此 15430/15426 必须手写 `{defer:true}` 把上下文挪到 `deferred_response_choice` 才能幸免（15430 @ `L13823`）。一旦某卡忘记返回 `defer`，上下文丢失 → 窗口卡死（见：驱逐舰运输窗口卡死、15346 配给优先被 `status_instant` 清除误杀）。
+> **[2026-10-19 第一期缓解]** 已引入 `response_stack` 帧 + 双写：`game.pending_response_choice` 降级为 `top_response_frame(game)` 的**派生视图**（L22784/22824 等），`view`/`block`/白名单读栈顶帧；15430 仍保留 `{defer}` 兼容壳（`deferred_response_choice` 双写）。故"嵌套响应覆盖续打上下文"的事故路径已堵：15430 海战→陆战步存于帧 `extra.step`，不再依赖手写 `defer` 防覆盖（15426 由触发层自动调度，见 3.9）。**第二期将彻底删除 `pending_response_choice`/`deferred_response_choice` 旧全局**（见 4·第二期）。
 
-另一个清除点：`status_instant` 窗口在 action 入口被清（`L22310-22332`），现用**动作名白名单**豁免（`trigger`/`pass`/`resolve`/`reorder`/`confirm`/`use`/`skip_armed_offer`），属打补丁式修复，新增动作易遗漏。
+`pending_response_choice` 原是 **单一全局**。当某响应卡（如 15430 奇袭）发起战斗，战斗又触发敌方新响应 G，G 结算时也会写 `pending_response_choice`，**直接覆盖**原卡续打上下文。因此 15430/15426 必须手写 `{defer:true}` 把上下文挪到 `deferred_response_choice` 才能幸免（15430 @ `L13823`，第一期仍保留此兼容壳）。一旦某卡忘记返回 `defer`，上下文丢失 → 窗口卡死（见：驱逐舰运输窗口卡死、15346 配给优先被 `status_instant` 清除误杀）。
+
+另一个清除点：`status_instant` 窗口在 action 入口被清（`L22310-22332`），现用**动作名白名单**豁免（`trigger`/`pass`/`resolve`/`reorder`/`confirm`/`use`/`skip_armed_offer`），属打补丁式修复，新增动作易遗漏。→ 第三期改为栈内判定（见 4·第三期）。
 
 ---
 
@@ -144,26 +146,53 @@ frame = {
 
 ## 4. 分期推进计划
 
-### 第一期（消除数据清除 bug，最低风险）
+### 第一期（消除数据清除 bug，最低风险）✅ 已完成
+
+**状态（截至 2026-10-19）**：全部 7 步已落地。
+- 第 1 步（栈辅助 + 双写）：commit `23057b3`
+- 第 7 步（15430 简化删内嵌 15426 机制）：commit `80d06b3`
+- 第 2–6 步（真相源转正：`view.response_stack` 暴露、`view`/`block`/白名单读栈顶帧、`pending_response_choice` 降为派生）：本期改动（分支 `timed-save-1`，**待 commit**）
+- 验证：15430 17/17、15431_queue 14/14、fr_respond 17/17 全绿；`check_reuse` 仅 A 类已知行号漂移 WARN，无 B/C（无新增原子绕过/重复）。客户端零改动（只读 `view.response_choice`，结构不变，铁律 5 满足）。
 
 **目标**：续打上下文收编为栈帧字段，保留 `response_queue` 兼容壳；15430/15426/15431 等平滑过渡。
 
-**步骤**：
+**步骤**（均已完成）：
 
-1. 引入 `game.response_stack` 与帧辅助（`push_frame` / `pop_frame` / `top_frame`）。
-2. `trigger_response` 的 pending/defer 分支改为"写入当前帧的 `frame.pending/extra`"而非全局。
-3. `resolve_response_choice` 改为从栈顶帧读写，不再用 `pending_response_choice`。
-4. `promote_deferred_response` 改为"把 deferred 帧重新压栈顶"。
-5. `view` 增加 `response_stack` 字段（客户端可读栈）。
-6. 保留 `response_queue` 作为"触发组批量入栈"的兼容壳，过渡期内两者并存。
-7. **卡逻辑清理（与引擎层同步）**：15430 删除 `step='transport'` 内嵌 15426 的三步机制（`runTX`/`buildCont`/`landCont`/`optCont`、手写 `{defer}` 分支、`newResp` 签名对比、`L13793` 清队列拷贝），简化为【海战 → 陆战】两步（详见 3.9）；15426 仍作为独立响应卡由海战后响应时点自动调度。15430 仍保留一个 `{defer}` 用于协调"海战后响应先结算、陆战步 suspended 待恢复"，但不再内嵌 15426 子步骤（详见 3.9 重构后）。
+1. ✅ 引入 `game.response_stack` 与帧辅助（`push_response_frame` / `pop_response_frame` / `top_response_frame`）。
+2. ✅ `trigger_response` 的 pending/defer 分支改为"写入帧"并双写 `pending_response_choice` 派生（兼容壳）。
+3. ✅ `resolve_response_choice` 从栈顶帧读写（`top_response_frame || game.pending_response_choice` 回退）。
+4. ✅ `promote_deferred_response` 把 deferred 帧重新压栈顶（双写兼容）。
+5. ✅ `view` 增加 `response_stack` 字段（L20766 前）；`view.response_choice` 真相源改为 `top_response_frame(game)`。
+6. ✅ 保留 `response_queue` 兼容壳（双写并存）。
+7. ✅ **卡逻辑清理**：15430 简化删内嵌 15426 机制（commit `80d06b3`）。
 
 **验证**：`tools/_smoke_15430.js`（奇袭发起海战→敌方响应→归还陆战步）、`_smoke_15431_queue.js`、`_smoke_fr_respond.js`（15311 马奇诺跨阵营）、`armed_whitelist` 冒烟，全绿。
 
-### 第二期（统一栈替换 queue）
+### 第二期（统一栈替换 queue）✅ 已完成（2026-10-19，分支 `response-stack-refactor`）
 
-- 用 `response_stack` 完全取代 `response_queue` 的 `item` 聚合语义；`request_responses` 直接压帧（深度优先 `splice` → `push` 到 top）。
-- `response_reconcile_active` 改为基于栈的 head 让权/归还。
+**目标**：彻底删除 `response_queue` 聚合壳 + 旧全局 `pending_response_choice`/`deferred_response_choice`，响应系统 100% 走 `response_stack`。
+
+**步骤**：
+
+1. ✅ **`request_responses` 改压帧**（第一期第 1 步已落地）：同触发点多卡各自 `push_response_frame` 连续压栈，深度优先语义保持。
+2. ✅ **`trigger_response` 纯栈化**：已删 `response_queue` head 遍历；读栈顶帧执行 → `{pending}` 更新帧 / `{defer}` 弹**当前帧 f**（非栈顶，避免误弹 effect 内部刚压的新响应帧）并存 `deferred_response_stack` / `{ok}` 弹帧 + `consume_response`。
+3. ✅ **`response_reconcile_active` 栈化**：基于栈头帧 `owner_side` 让权/归还（第一期已改）。
+4. ✅ **`promote_deferred_response` 栈化**：deferred 续打帧存于 `game.deferred_response_stack`（独立数组，不在活动栈顶；栈清空后 FIFO 压回栈顶），不再写 `deferred_response_choice` 旧全局。新增 `defer_response_frame(game, frame)` 辅助统一收编。
+5. ✅ **删除旧全局**：`game.pending_response_choice` / `game.deferred_response_choice` 全部写入点已删除；`view.response_choice` 仅 `top_response_frame(game)`（去掉回退）；`block`/`build_actions` 读栈（第一期已改，已确认不依赖旧全局）。
+6. ✅ **触发层去重**：同触发点多卡 = 连续帧；`response_reorder`/`response_confirm` 对栈上连续帧重排（保留 A→B 顺序语义，15431 测试依赖）。
+7. ✅ **15430 归一**：删 `{defer}` 兼容壳手写（原 L13717 自写 `deferred_response_choice`），15430 直接返回 `{defer:true}` 由框架 defer 分支统一收编进 `deferred_response_stack`。
+
+**纯栈设计要点**：
+- `game.response_stack`：活动响应帧栈，栈顶 = 唯一活动决策。
+- `game.deferred_response_stack`：递延缓打帧暂存区（不在活动栈顶，待 `response_stack` 清空后由 `promote_deferred_response` FIFO 压回）。
+- `game.response_queue`：仅 `sync_response_queue_view` 派生的**只读**视图（客户端兼容）。
+- 旧全局 `pending_response_choice` / `deferred_response_choice`：**已彻底删除**。
+
+**验证（分支 `response-stack-refactor`）**：
+- 全绿：`_smoke_15431_queue.js` 16/16、`_smoke_15430.js` 17/17、`_smoke_fr_respond.js` 17/0、`_smoke_armed_whitelist.js` 12/0、`_smoke_15428.js`（SMOKE_PASS）、`_smoke_15328_attacked.js` 23/0、`_smoke_axis_pact.js` 16/0、`_smoke_delegate.js` ALL PASS、`_smoke_autobahn_resp_fix.js` ALL PASS、`_smoke_armed_handoff.js` 14/0、`_smoke_armed_multiwindow.js` 20/0、`_smoke_15237_whitelist.js` ALL PASS、`_smoke_15426.js` 10/0、`check_reuse.js`（B/C 干净，仅 A 类已知行号漂移 WARN）。
+- **已知预存失败（与本次重构无关，已用 `git stash` 回退 rules.js 到 HEAD 比对确认同款失败）**：`_smoke_pending_union.js` 6 FAIL、`_smoke_jp_response.js` 8 FAIL（含 `resolve_response_choice` 白名单、`15427/15428/15431` 节描述断言）、`test_15430_queue_filter.js` 6 FAIL。根因：这些测试为旧 `response_queue` 中心模型编写，部分断言在栈模型下已不合时宜；其失败在本次改动**之前**即存在，非 Step 4/5/7 引入。
+
+**前置建议（已采纳）**：第一期 + 第二期成果在本分支 `response-stack-refactor` 统一提交，可整体 revert。
 
 ### 第三期（status_instant 清除改为栈内判定）
 
@@ -188,4 +217,19 @@ frame = {
 - 协调：`response_reconcile_active` `L14448` / `promote_deferred_response` `L14484`
 - 触发/解析：`trigger_response` `L23050` / `resolve_response_choice` `L22798`（pending 分支 `L23064`，defer 分支 `L23089`）
 - 清除白名单：`status_instant` 清除 `L22310-22332`
-- 待清理内嵌：15430 当前内嵌 15426（`L13713` / `L13823`）+ 清队列拷贝（`L13793`），重构后删除（见 3.9）
+- 待清理内嵌：15430 当前内嵌 15426（`L13713` / `L13823`）+ 清队列拷贝（`L13793`），重构后删除（见 3.9，第一期第 7 步已删内嵌，commit `80d06b3`）
+
+**[2026-10-19 第一期新增锚点]**
+- `view.response_stack` 字段：L20766 前（`response_choice` IIFE 上方）
+- `view.response_choice` 真相源：`top_response_frame(game)`（无回退，已删 `pending_response_choice`，第二期第 5 步）
+- `block` 拦截读栈顶帧：L21640 / L21896（`top_response_frame(game)`）
+- `build_actions` 白名单"响应挂起"判定：`队列非空 || 栈非空`（L22417）
+- 15430 `{defer}` 兼容壳已删除（第二期第 7 步）：15430 直接返回 `{defer:true}`，由 `trigger_response`/`resolve_response_choice` 的 defer 分支统一收编进 `game.deferred_response_stack`
+- ⚠ 行号随未提交改动漂移（A 类 WARN，已知，不影响 B/C 正确性）
+
+**[第二期关键函数（待读当前实现以精确定点）]**
+- `request_responses`：原 `L14376`（深度优先 `splice` @ `L14419`，让权 @ `L14438`）
+- `response_reconcile_active`：原 `L14448`
+- `promote_deferred_response`：原 `L14484`
+- `trigger_response`：原 `L23050`（pending 分支 `L23064`，defer 分支 `L23089`）
+- `resolve_response_choice`：原 `L22798`

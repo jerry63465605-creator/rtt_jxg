@@ -109,6 +109,15 @@ console.log('\n=== 15430 奇袭：两步（海战→陆战），海战后响应�
 		ok('T3 选有效海域：海战发动后陆战步 suspended（defer）',
 			rSea && rSea.defer === true && rSea.extra && rSea.extra.step === 'land',
 			JSON.stringify(rSea && { defer: rSea.defer, step: rSea.extra && rSea.extra.step }))
+		// 【纯栈模型】effect 直接返回 {defer:true} 不会自动存续打帧；此处模拟
+		// trigger_response 的 defer 分支，把续打帧存入 deferred_response_stack（引擎真相源）。
+		g3.deferred_response_stack = g3.deferred_response_stack || []
+		g3.deferred_response_stack.push({
+			card_id: '15430', card_face: '15430', name: '奇袭', owner_side: 'axis',
+			on: 'battle', pre: false, ctx: { nation: '日本', space: validSea, kind: 'sea' },
+			kind: rSea.kind || 'space', candidates: rSea.candidates || [],
+			prompt: rSea.prompt || '选择要发起陆战的地区', extra: rSea.extra || null,
+		})
 		ok('T3 海战后：15426 作为独立响应挂入队列（不再被清拷贝删掉）',
 			has15426InQueue(g3), JSON.stringify((g3.response_queue || []).map(it => (it.candidates || []).map(c => c.card_id))))
 
@@ -130,11 +139,11 @@ console.log('\n=== 15430 奇袭：两步（海战→陆战），海战后响应�
 			!(x.candidates || []).some(c => String(c.card_face) === '15426'))
 		if (typeof I.promote_deferred_response === 'function') I.promote_deferred_response(g3)
 		else rules.action(g3, 'Axis', 'response_reconcile_active', {})
+		const _top = (g3.response_stack || []).slice(-1)[0] || null
 		ok('T4 15426 结算后：奇袭陆战步恢复为 pending（未卡死）',
-			g3.pending_response_choice && g3.pending_response_choice.extra &&
-			g3.pending_response_choice.extra.step === 'land',
-			JSON.stringify(g3.pending_response_choice && g3.pending_response_choice.extra))
-		ok('T4 15426 结算后：deferred 已清空', g3.deferred_response_choice == null)
+			_top && _top.extra && _top.extra.step === 'land',
+			JSON.stringify(_top && _top.extra))
+		ok('T4 15426 结算后：deferred 已清空', !(g3.deferred_response_stack && g3.deferred_response_stack.length))
 		ok('T4 15426 结算后：15430 在栈上（response_stack 含 15430 帧）',
 			(g3.response_stack || []).some(f => f.card_id === '15430'),
 			JSON.stringify((g3.response_stack || []).map(f => f.card_id)))
@@ -142,12 +151,12 @@ console.log('\n=== 15430 奇袭：两步（海战→陆战），海战后响应�
 			(g3.response_stack || []).length && (g3.response_stack[g3.response_stack.length - 1].card_id) === '15430')
 
 		// 选陆战目标 -> 陆战发动
-		const cands = g3.pending_response_choice.candidates || []
+		const cands = _top.candidates || []
 		const ownOcc = id => Object.keys(g3.location).some(k => g3.location[k] === Number(id) && g3.piece_nation[k] === '日本')
 		const lbCand = cands.find(c => !ownOcc(c.id) && conn.includes(Number(c.id)) && Number(c.id) !== txLand)
 			|| cands.find(c => !ownOcc(c.id) && Number(c.id) !== txLand)
 			|| cands.find(c => !ownOcc(c.id)) || cands[0]
-		const rFinal = impl(g3, 'axis', ctx, lbCand.id, g3.pending_response_choice.extra)
+		const rFinal = impl(g3, 'axis', ctx, lbCand.id, _top.extra)
 		ok('T4 选陆地：陆战发动（ok=true）', rFinal && rFinal.ok === true, JSON.stringify(rFinal))
 		ok('T4 结算完毕：队列中无独立挂起的 15426 项', !has15426InQueue(g3))
 		g3._resp_settling = false

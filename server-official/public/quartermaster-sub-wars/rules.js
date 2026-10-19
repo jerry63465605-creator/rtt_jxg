@@ -13477,10 +13477,9 @@ const RESPONSE_EFFECT_IMPL = {
 		 * 【链式响应·玩家口径】第①步建设会派发 'build' 响应（若有）。
 		 * 这些响应要【先】结算，最后才回来做第②步陆战 —— 不能插队。
 		 * 做法：建设后若响应队列变长，返回 { defer:true }，
-		 * 由 trigger_response 补上卡信息后存入 game.deferred_response_choice，
-		 * 本卡照常消耗、队列照常推进；待队列清空，
-		 * response_reconcile_active 自动把它提升回 pending_response_choice，
-		 * 玩家再选陆战目标（详见 promote_deferred_response）。
+		 * 由 trigger_response 的 defer 分支收编进 game.deferred_response_stack
+		 * （纯栈：不再写 deferred_response_choice 旧全局）；待 response_stack 清空，
+		 * promote_deferred_response 自动把它压回栈顶成为活动帧，玩家再选陆战目标。
 		 *
 		 * 【复用】第②步直接吃现成的 pick_space_then_battle
 		 * （15419/15422/15423/15430/15438 同款骨架），不自己拼候选。
@@ -13715,11 +13714,11 @@ const RESPONSE_EFFECT_IMPL = {
 				return { ok: true, desc: '（海战相邻无陆地，跳过陆战）' }
 			const prompt = (descPrefix || '海战已结算') + '；' + (land.desc || '继续选择陆战地区')
 			if (defer) {
-				game.deferred_response_choice = {
-					card_id: '15430', card_face: '15430', name: '奇袭', owner_side: side,
-					kind: land.kind || 'space', candidates: land.candidates,
-					prompt, ctx, extra: { step: 'land', seaId },
-				}
+				/*
+				 * 【栈重构·第二期】不再手写 deferred_response_choice 兼容壳；
+				 * 直接返回 {defer:true}，由 trigger/resolve 的 defer 分支统一收编进
+				 * game.deferred_response_stack（纯栈）。
+				 */
 				return { defer: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
 			}
 			return { pending: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
@@ -14277,6 +14276,51 @@ function consume_response(game, card_id, owner_side) {
  *
  * 返回匹配的卡（数组）或 null。调用方据此决定是否挂起原动作。
  */
+/*
+ * 【栈重构·第二期】response_queue 的派生只读视图：从 response_stack 的帧
+ * 聚合同 group_id 帧为兼容 item（candidates/order/skip/ordered/resume/intercept_*）。
+ * 引擎层（request_responses/trigger/reorder/confirm/promote/resolve）只写栈帧，
+ * 不再写 queue；consumer 端读 game.response_queue（由 sync_response_queue_view 同步）零改动。
+ */
+function sync_response_queue_view(game) {
+	game.response_queue = response_queue_view(game)
+}
+function response_queue_view(game) {
+	const st = game.response_stack || []
+	const groups = {}
+	let order = 0
+	for (const f of st) {
+		const g = f.group_id || ('_' + st.indexOf(f))
+		if (!groups[g]) {
+			groups[g] = {
+				frames: [], on: f.on, pre: f.pre, ctx: f.ctx, owner_side: f.owner_side,
+				ordered: !!f.ordered, resume: f.resume, play_role: f.play_role,
+				intercept_card: f.intercept_card, intercept_nation: f.intercept_nation,
+				intercept_by_nation: f.intercept_by_nation, _ord: order++,
+			}
+		}
+		groups[g].frames.push(f)
+	}
+	const items = []
+	const sorted = Object.keys(groups).sort((a, b) => groups[a]._ord - groups[b]._ord)
+	for (const g of sorted) {
+		const grp = groups[g]
+		const ordered = grp.frames.slice().sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+		items.push({
+			on: grp.on, pre: grp.pre, owner_side: grp.owner_side,
+			candidates: ordered.map(f => ({
+				card_id: f.card_id, card_face: f.card_face,
+				owner_side: f.owner_side, name: f.name,
+			})),
+			ctx: grp.ctx, order: ordered.map(f => f.card_id), skip: {},
+			ordered: grp.ordered, resume: grp.resume, play_role: grp.play_role,
+			intercept_card: grp.intercept_card, intercept_nation: grp.intercept_nation,
+			intercept_by_nation: grp.intercept_by_nation,
+		})
+	}
+	return items
+}
+
 function request_responses(game, on, ctx, pre) {
 	const cands = fire_trigger(game, on, ctx)
 	if (!cands.length) return null
@@ -14295,52 +14339,41 @@ function request_responses(game, on, ctx, pre) {
 		kept.forEach(x => matched.push(x))
 	}
 	const owner_side = matched[0].owner_side
-	game.response_queue = game.response_queue || []
-	const candIds = matched.map(t => t.card_id)
-	const item = {
-		on,
-		pre: !!pre,
-		owner_side,
-		candidates: matched.map(t => ({
+	/*
+	 * 【栈重构·第二期】删 response_queue 聚合层：每张命中卡压成独立栈帧，
+	 * 同触发组 = 连续帧（group_id 相同，group_idx = 组内顺序）。
+	 * 深度优先：settling 期间新帧 push 到栈顶（=当前处理帧之后），天然满足。
+	 * game.response_queue 改为栈的派生只读视图（sync_response_queue_view）。
+	 */
+	const group_id = 'rg_' + ((game._resp_gid = (game._resp_gid || 0) + 1))
+	matched.forEach((t, idx) => {
+		push_response_frame(game, {
 			card_id: t.card_id,
 			card_face: String(t.card_face),
-			owner_side: t.owner_side,
 			name: t.name,
-		})),
-		ctx,
-		/* 【2026-10-14】多卡触发时允许玩家一次性排序/跳过（一次选择）；
-		 * 单卡直接 ordered=true，沿用既有"发动/不发动"流程。 */
-		order: candIds.slice(),
-		skip: {},
-		ordered: matched.length <= 1,
-	}
-	/*
-	 * 【2026-10-14 修正】结算响应卡过程中（game._resp_settling 为真）触发的新响应，
-	 * 不并入当前队列项（会破坏 15431 等"先建设后陆战"的 defer 设计），
-	 * 而是插到【队头之后】（index 1），实现"栈/深度优先"：间接触发的卡
-	 * 先于同批的后续卡结算。普通时机（非结算中）仍追加队尾（FIFO）。
-	 */
-	if (game._resp_settling && game.response_queue.length) {
-		game.response_queue.splice(1, 0, item)
-	} else {
-		game.response_queue.push(item)
-	}
-
+			owner_side: t.owner_side,
+			on,
+			pre: !!pre,
+			ctx: ctx || {},
+			kind: 'space',
+			candidates: [],
+			prompt: '',
+			extra: null,
+			group_id,
+			group_idx: idx,
+			ordered: matched.length <= 1,
+		})
+	})
 	/*
 	 * 【2026-09-25 跨阵营响应：锁住当前方 + 让权给持有方】
-	 * 响应卡持有方可能是【对方阵营】（如你持有《国士警卫队》15331，敌方在自己
-	 * 回合于不列颠建陆军触发它）。此时要：
-	 *   1) 锁住当前操作者（全局拦截阻止其继续其它操作）；
-	 *   2) 把操作权临时让给持有方——记住原先的操作权（response_return_active），
-	 *      待响应结算后交还；并把 game.active 翻到持有方阵营的角色，
-	 *      客户端据此把界面切到"对方行动"、向持有方弹出响应框。
-	 * 若持有方正是当前操作者（同阵营或自己触发，如 15336 友方陆战触发），
-	 * 则无需让权，当前操作者就地决定即可。
+	 * 响应卡持有方可能是【对方阵营】。此时要锁住当前操作者并把操作权让给持有方，
+	 * 待响应结算后交还（response_reconcile_active 处理）。若持有方是当前操作者则就地决定。
 	 */
 	const curSide = (game.active === ALLIES_ROLE) ? ALLIES : AXIS
 	if (owner_side !== curSide) {
 		handoff_to(game, owner_side, 'response')
 	}
+	sync_response_queue_view(game)
 	return matched
 }
 
@@ -14350,16 +14383,26 @@ function request_responses(game, on, ctx, pre) {
  *   · 队列空了     -> 交还原先让权的一方（response_return_active），无则不动
  */
 function response_reconcile_active(game) {
-	const q = game.response_queue || []
-	if (q.length) {
-		handoff_to(game, q[0].owner_side, 'response')
+	/*
+	 * 【栈重构·第二期】栈顶帧优先作为真相源；response_queue 仅作聚合兼容层。
+	 * 栈非空（pending/defer 续打帧在栈上）时按栈顶帧持有方让权；
+	 * 栈空才回落到队列 / 提升延期响应。
+	 */
+	const top = top_response_frame(game)
+	if (top) {
+		handoff_to(game, top.owner_side, 'response')
 	} else {
-		/*
-		 * 队列空了：先交还操作权，再提升"延期的响应步骤"
-		 * （顺序不能反 —— promote 内部会重新让权给该步骤的持有方）。
-		 */
-		reconcile_handoff(game, 'response')
-		promote_deferred_response(game)
+		const q = game.response_queue || []
+		if (q.length) {
+			handoff_to(game, q[0].owner_side, 'response')
+		} else {
+			/*
+			 * 队列空了：先交还操作权，再提升"延期的响应步骤"
+			 * （顺序不能反 —— promote 内部会重新让权给该步骤的持有方）。
+			 */
+			reconcile_handoff(game, 'response')
+			promote_deferred_response(game)
+		}
 	}
 	/* 【2026-10-16】响应队列清空后，落账 17749 轴心协定的真实击杀信用 */
 	maybe_settle_axis_pact(game)
@@ -14405,17 +14448,25 @@ function top_response_frame(game) {
 	return s.length ? s[s.length - 1] : null
 }
 
+/* 【栈重构·第二期】递延续打帧暂存独立数组（不在活动栈顶，待 response_stack
+ * 清空后再由 promote_deferred_response 压回成为活动帧）。彻底取代旧全局
+ * game.deferred_response_choice。 */
+function defer_response_frame(game, frame) {
+	game.deferred_response_stack = game.deferred_response_stack || []
+	game.deferred_response_stack.push(frame)
+	return frame
+}
+
 function promote_deferred_response(game) {
-	const d = game.deferred_response_choice
-	if (!d) return false
-	game.deferred_response_choice = null
+	const ds = game.deferred_response_stack || []
+	if (!ds.length) return false
+	const d = ds.shift()
+	game.deferred_response_stack = ds
 	const curSide = (game.active === ALLIES_ROLE) ? ALLIES : AXIS
 	if (d.owner_side !== curSide) {
 		handoff_to(game, d.owner_side, 'response')
 	}
-	/* 【栈重构·第一期】deferred 续打压栈帧，pending_response_choice 派生为栈顶 */
 	push_response_frame(game, d)
-	game.pending_response_choice = top_response_frame(game)
 	game.log.push('【响应】回到《' + d.name + '》：' + d.prompt)
 	return true
 }
@@ -20763,8 +20814,21 @@ exports.view = function (state, current) {
 		 * 只给该响应卡的持有方；candidates 已归一化成
 		 * [{ id, name }]（客户端 highlight_event_targets 直接吃这个格式）。
 		 */
+		/*
+		 * 【2026-10-19 响应栈重构·第一期】暴露完整响应栈，客户端可读到当前挂起顺序
+		 * 与"谁在等决策"，实现可预测性（文档 3.7）。栈顶 = 唯一活动决策。
+		 */
+		response_stack: (game.response_stack || []).map(f => ({
+			card_id: f.card_id,
+			name: f.name,
+			owner_side: f.owner_side,
+			step: (f.extra && f.extra.step) || null,
+			kind: f.kind,
+			prompt: f.prompt,
+		})),
 		response_choice: (() => {
-			const pc = game.pending_response_choice
+			/* 真相源 = 栈顶帧（纯栈模型下 pending_response_choice 已删除） */
+			const pc = top_response_frame(game)
 			if (!pc) return null
 			if (pc.owner_side !== side) return null
 			return {
@@ -21637,9 +21701,11 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		 * 客户端 send_action 因 view.actions 无此 key 静默 return false ——
 		 * 表现为"高亮地点点不动"。故此处优先放行 resolve_response_choice。
 		 */
-		if (game.pending_response_choice && game.pending_response_choice.owner_side === side) {
-			game.block_reason = 'pending_response_choice: 响应卡《' +
-				(game.pending_response_choice.name || game.pending_response_choice.card_id) +
+		/* 【栈重构·第二期】响应挂起判定读栈顶帧（纯栈：pending_response_choice 已删除） */
+		const _tf = top_response_frame(game)
+		if (_tf && _tf.owner_side === side) {
+			game.block_reason = 'response_stack: 响应卡《' +
+				(_tf.name || _tf.card_id) +
 				'》等待选择目标（点击高亮地区提交）'
 			return { resolve_response_choice: 1, log: 1 }
 		}
@@ -21893,8 +21959,9 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	 * 【2026-10-04】响应卡效果需要玩家选择目标时的提交窗口。
 	 * ⚠ 必须登记白名单：不在册 = 客户端 send_action 静默不发（点了没反应）。
 	 */
-	if (game.pending_response_choice &&
-		game.pending_response_choice.owner_side === side)
+	/* 【栈重构·第一期】读栈顶帧（真相源=栈） */
+	const _tf2 = top_response_frame(game)
+	if (_tf2 && _tf2.owner_side === side)
 		return {
 			resolve_response_choice: 1, log: 1,
 		}
@@ -22414,7 +22481,9 @@ function play_status_card_impl(game, nation, card_id) {
 	 * 否则会卡死（白名单死锁：不在册=静默不发）。armed 窗口的合法性由 use_armed_offer /
 	 * skip_armed_offer 自身校验（窗口存在、阵营匹配），与响应解析互不冲突。
 	 */
-	if (game.response_queue && game.response_queue.length &&
+	/* 【栈重构·第一期】响应挂起判定：队列非空 或 栈非空（栈化后语义一致） */
+	if ((game.response_queue && game.response_queue.length ||
+		game.response_stack && game.response_stack.length) &&
 		action !== 'trigger_response' && action !== 'pass_response' &&
 		action !== 'resolve_response_choice' &&
 		action !== 'response_reorder' && action !== 'response_confirm' &&
@@ -22722,8 +22791,8 @@ function play_status_card_impl(game, nation, card_id) {
 	 * 然后才消耗该响应卡、弹出队列。
 	 */
 	if (action === 'resolve_response_choice') {
-		/* 【栈重构·第一期】优先从栈顶帧读取续打；旧全局作为回退兼容 */
-		const pc = top_response_frame(game) || game.pending_response_choice
+		/* 【栈重构·第二期】从栈顶帧读取续打（纯栈：pending_response_choice 已删除） */
+		const pc = top_response_frame(game)
 		if (!pc) {
 			game.log.push('当前没有等待选择的响应卡')
 			return game
@@ -22768,7 +22837,7 @@ function play_status_card_impl(game, nation, card_id) {
 				 * 只有再次返回 pending 的卡才会走到这里，故安全。
 				 */
 				if (r && r.pending) {
-					/* 【栈重构·第一期】续打：弹出当前帧、压入新帧，pending_response_choice 重新派生为栈顶 */
+					/* 【栈重构·第二期】续打：弹出当前帧、压入新帧（纯栈，不再写 pending_response_choice） */
 					pop_response_frame(game)
 					push_response_frame(game, {
 						card_id: pc.card_id,
@@ -22781,9 +22850,8 @@ function play_status_card_impl(game, nation, card_id) {
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
 					})
-					game.pending_response_choice = top_response_frame(game)
 					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
-						game.pending_response_choice.prompt)
+						(top_response_frame(game) || {}).prompt)
 					return game
 				}
 				/*
@@ -22795,9 +22863,13 @@ function play_status_card_impl(game, nation, card_id) {
 				 * defer 时不消耗本卡、不推进队列（本卡仍在结算中）。
 				 */
 				if (r && r.defer) {
-					/* 【栈重构·第一期】defer：弹出当前帧，续打存 deferred（兼容旧全局），pending_response_choice 重新派生为下方帧 */
+					/*
+					 * 【栈重构·第二期】defer：弹出当前帧，续打存 game.deferred_response_stack
+					 * （纯栈：不再写 deferred_response_choice 旧全局）。栈清空后由
+					 * promote_deferred_response 压回成为活动帧。
+					 */
 					pop_response_frame(game)
-					game.deferred_response_choice = {
+					const df = {
 						card_id: pc.card_id,
 						card_face: pc.card_face,
 						name: pc.name,
@@ -22808,9 +22880,8 @@ function play_status_card_impl(game, nation, card_id) {
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
 					}
-					game.pending_response_choice = top_response_frame(game)
-					game.log.push('【响应】《' + pc.name + '》稍后继续：' +
-						game.deferred_response_choice.prompt)
+					defer_response_frame(game, df)
+					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
 					return game
 				}
 			} catch (e) {
@@ -22819,9 +22890,8 @@ function play_status_card_impl(game, nation, card_id) {
 				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
 			}
 		}
-		/* 【栈重构·第一期】正常结算完成：弹出当前帧，pending_response_choice 重新派生为下方帧（或空） */
+		/* 【栈重构·第二期】正常结算完成：弹出当前帧（纯栈，不再写 pending_response_choice） */
 		pop_response_frame(game)
-		game.pending_response_choice = top_response_frame(game)
 		consume_response(game, pc.card_id, pc.owner_side)
 		/*
 		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
@@ -22860,70 +22930,55 @@ function play_status_card_impl(game, nation, card_id) {
 	 * 仅响应卡持有方阵营可操作；需 head 尚未确认（ordered=false）。
 	 */
 	if (action === 'response_reorder' || action === 'response_confirm') {
-		const q = game.response_queue || []
-		if (!q.length) {
+		const top = top_response_frame(game)
+		if (!top) {
 			game.log.push('当前没有等待响应的卡牌')
 			return game
 		}
-		const head = q[0]
-		if (head.owner_side !== side) {
+		/* 同触发组的所有帧 */
+		const stack = game.response_stack
+		const groupFrames = stack.filter(f => f.group_id === top.group_id)
+			.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+		if (groupFrames[0].owner_side !== side) {
 			game.log.push('只有响应卡的持有方才能排序/确认响应')
 			return game
 		}
 		if (action === 'response_reorder') {
-			if (head.ordered) {
+			if (groupFrames.every(f => f.ordered)) {
 				game.log.push('响应顺序已确认，无法再调整')
 				return game
 			}
-			const valid = head.candidates.map(c => c.card_id)
+			const valid = groupFrames.map(f => f.card_id)
 			const o = (arg && arg.order) || []
-			head.order = o.filter(id => valid.indexOf(id) >= 0)
-			for (const c of head.candidates)
-				if (head.order.indexOf(c.card_id) < 0) head.order.push(c.card_id)
-			head.skip = {}
-			const sk = (arg && arg.skip) || []
-			for (const id of sk)
-				if (valid.indexOf(id) >= 0) head.skip[id] = true
+			const newOrder = o.filter(id => valid.indexOf(id) >= 0)
+			for (const f of groupFrames)
+				if (newOrder.indexOf(f.card_id) < 0) newOrder.push(f.card_id)
+			/* 按新顺序重排组内帧的 group_idx（纯栈模型下每卡已是独立帧） */
+			newOrder.forEach((id, i) => {
+				const fr = groupFrames.find(x => x.card_id === id)
+				if (fr) fr.group_idx = i
+			})
 			game.log.push('已更新响应结算顺序')
+			sync_response_queue_view(game)
 			return game
 		}
 		/* response_confirm */
-		if (head.ordered) {
+		if (groupFrames.every(f => f.ordered)) {
 			game.log.push('响应顺序已确认')
 			return game
 		}
 		/*
-		 * 【2026-10-14 修正】确认时把多卡队列项【拆成单独的队列项】，按 order 顺序排在队头。
-		 * 这样结算中触发的新响应可以插入到"当前卡的项"之后、但仍在同批后续卡的项之前，
-		 * 实现深度优先；同时保留 15431 等依赖独立队列 + defer 的设计（不被整体出队丢弃）。
+		 * 【栈重构·第二期】确认即把整组帧标记 ordered=true（无需再拆成独立队列项，
+		 * 每卡已是独立栈帧）。skip 的卡标记 ordered=false，trigger 遍历时跳过（留桌面）。
 		 */
-		const order = (head.order && head.order.length)
-			? head.order : head.candidates.map(c => c.card_id)
-		const items = []
-		for (const id of order) {
-			if (head.skip && head.skip[id]) continue
-			const c = head.candidates.find(x => x.card_id === id)
-			if (!c) continue
-			items.push({
-				on: head.on, pre: head.pre, owner_side: head.owner_side,
-				candidates: [c], ctx: head.ctx,
-				order: [c.card_id], skip: {}, ordered: true,
-				intercept_card: head.intercept_card,
-				intercept_nation: head.intercept_nation,
-				intercept_by_nation: head.intercept_by_nation,
-				resume: head.resume, play_role: head.play_role,
-			})
-		}
-		if (!items.length) {
-			/* 全部跳过：直接丢弃队头并恢复操作权 */
-			game.response_queue.shift()
-			response_reconcile_active(game)
-			return game
-		}
+		const valid = groupFrames.map(f => f.card_id)
+		const sk = (arg && arg.skip) || []
+		groupFrames.forEach(f => {
+			f.ordered = !(sk.indexOf(f.card_id) >= 0 && valid.indexOf(f.card_id) >= 0)
+		})
 		game.log.push('已确认响应结算顺序：' +
-			items.map(it => it.candidates[0].name).join(' → '))
-		game.response_queue.shift()
-		game.response_queue = items.concat(game.response_queue)
+			groupFrames.filter(f => f.ordered).map(f => f.name).join(' → '))
+		sync_response_queue_view(game)
 		return game
 	}
 
@@ -22932,38 +22987,43 @@ function play_status_card_impl(game, nation, card_id) {
 	 * 仅响应卡持有方阵营（head.owner_side）可操作；其余动作在全局拦截处被挡下。
 	 */
 	if (action === 'trigger_response' || action === 'pass_response') {
-		const q = game.response_queue || []
-		if (!q.length) {
+		const top = top_response_frame(game)
+		if (!top) {
 			game.log.push('当前没有等待响应的卡牌')
 			return game
 		}
-		const head = q[0]
-		if (head.owner_side !== side) {
+		if (top.owner_side !== side) {
 			game.log.push('只有响应卡的持有方才能决定【' +
-				(head.owner_side === 'axis' ? '轴心国' : '同盟国') + '】的响应')
+				(top.owner_side === 'axis' ? '轴心国' : '同盟国') + '】的响应')
 			return game
 		}
-		if (!head.ordered) {
+		/*
+		 * 【栈重构·第二期】读栈顶帧所属 group 的所有帧，按 group_idx 排序，一次发动整组
+		 * （保留原"一次 trigger 结算整组"交互）。pending 帧标记 f.pending 后留栈、等 resolve。
+		 */
+		const stack = game.response_stack
+		const groupFrames = stack.filter(f => f.group_id === top.group_id)
+			.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+		if (!groupFrames.every(f => f.ordered)) {
 			game.log.push('请先在响应框中确认结算顺序')
 			return game
 		}
+		const head = groupFrames[0]
 		if (action === 'pass_response') {
-			game.log.push('【' + (head.owner_side === 'axis' ? '轴心国' : '同盟国') +
-				'】放弃发动响应（《' + head.candidates.map(x => x.name).join('》《') + '》留于桌面）')
+			game.log.push('【' + (top.owner_side === 'axis' ? '轴心国' : '同盟国') +
+				'】放弃发动响应（《' + groupFrames.map(f => f.name).join('》《') + '》留于桌面）')
 			/* 拦截类 play_card 需要重放被挂起的出牌动作 */
-			const resume = head.resume
-			game.response_queue.shift()
+			const resume = top.resume
+			const resume_role = top.play_role
+			/* 弹掉整组帧 */
+			game.response_stack = stack.filter(f => f.group_id !== top.group_id)
+			sync_response_queue_view(game)
 			response_reconcile_active(game)
 			if (resume) {
 				game.__skip_play_intercept = true
 				/* 用【原打出方】的 role 重放，保证回合归属校验通过 */
-				const r = exports.action(game, head.play_role || current, resume.action, resume.arg)
+				const r = exports.action(game, resume_role || current, resume.action, resume.arg)
 				game.__skip_play_intercept = null
-				/*
-				 * 【2026-09-28】重放的是被挂起的【出牌动作】，它可能自己改变阶段
-				 * （如打出卡后阶段推进）。若此时仍有"待推进"标记且已不在出牌阶段，
-				 * 说明阶段已经动过了，清掉标记避免二次推进。
-				 */
 				if (game.pending_advance_phase && game.turn_phase !== 'play')
 					game.pending_advance_phase = false
 				return r || game
@@ -22972,90 +23032,63 @@ function play_status_card_impl(game, nation, card_id) {
 			return maybe_advance_after_skip_play(game)
 		}
 		/*
-		 * trigger_response：逐张执行 effect，并消耗该卡。
-		 *
-		 * 【2026-10-04】effect 可返回 pending（需要玩家选择目标/部队/牌）：
-		 *   { pending: true, kind:'space'|'piece'|'card'|'option',
-		 *     candidates:[...], prompt:'...' }
-		 * 此时【挂起】：保留该响应卡在队列头，写 game.pending_response_choice，
-		 * 等玩家通过 resolve_response_choice 提交选择后再结算。
-		 * 客户端复用事件卡的 highlight_event_targets 高亮流程（不另造一套）。
+		 * trigger_response：遍历同组帧逐张执行 effect，并消耗该卡。
+		 * effect 返回 pending 时【挂起】本帧（f.pending=true）等 resolve；
+		 * 返回 defer 时弹帧 + 续打存延期（保留旧全局兼容壳，第三期纯栈化）；
+		 * 返回 ok 时弹帧 + 消耗卡。
 		 */
 		let intercepted = false
-		const orderIds = (head.order && head.order.length)
-			? head.order : head.candidates.map(c => c.card_id)
-		const seq = orderIds.filter(id =>
-			!((head.skip || {})[id]) && head.candidates.some(c => c.card_id === id))
-		for (const cid of seq) {
-			const c = head.candidates.find(x => x.card_id === cid)
-			if (!c) continue
+		for (const f of groupFrames) {
+			/* 已挂起的帧：等 resolve，不重复执行 effect */
+			if (f.pending) continue
+			const c = { card_id: f.card_id, card_face: f.card_face, name: f.name, owner_side: f.owner_side }
 			const impl = RESPONSE_EFFECT_IMPL[c.card_face]
 			if (impl) {
 				try {
 					game._resp_settling = true
-					const r = impl(game, c.owner_side, head.ctx)
+					const r = impl(game, c.owner_side, f.ctx)
 					game._resp_settling = false
 					if (r && r.pending) {
-						/* 【栈重构·第一期】续打存入栈帧；pending_response_choice 仅作栈顶派生视图 */
-						const frame = {
-							card_id: c.card_id,
-							card_face: c.card_face,
-							name: c.name,
-							owner_side: c.owner_side,
-							kind: r.kind || 'space',
-							candidates: r.candidates || [],
-							prompt: r.prompt || ('请选择《' + c.name + '》的目标'),
-							ctx: head.ctx || {},
-							/*
-							 * 【2026-10-05】extra：挂起期间要记住的自定义数据。
-							 * 例如 7903 菊水特攻要先征召海军、再用【这支】海军开战，
-							 * 必须把新海军 id 带过"挂起 -> 提交"这一步。
-							 */
-							extra: r.extra || null,
-						}
-						push_response_frame(game, frame)
-						game.pending_response_choice = top_response_frame(game)
-						game.log.push('【响应】《' + c.name + '》需要选择：' + frame.prompt)
+						/* 帧留栈（已是栈顶 group 成员），更新字段并标记 pending，挂起等 resolve */
+						f.pending = true
+						f.kind = r.kind || 'space'
+						f.candidates = r.candidates || []
+						f.prompt = r.prompt || ('请选择《' + c.name + '》的目标')
+						f.extra = r.extra || null
+						game.log.push('【响应】《' + c.name + '》需要选择：' + f.prompt)
+						sync_response_queue_view(game)
 						return game
 					}
-					/*
-					 * 【2026-10-12】defer：本步已完成，但本卡还有【后续步骤】
-					 * （15431 全面侵华：建设陆军后，还要对相邻地区发起陆战）。
-					 *
-					 * 与 pending 的区别：
-					 *   pending -> 不消耗卡、不推进队列，立刻挂起等选择（会插队）；
-					 *   defer   -> 卡照常消耗、队列照常推进，把后续步骤存起来，
-					 *              等队列【清空】后再自动提升回来。
-					 *
-					 * 用途：建设触发了别的响应时，按玩家口径"先执行其它动作，
-					 * 最后回来继续陆战" —— 若此刻挂起就会插到其它响应前面。
-					 *
-					 * 这里【不 return】：继续走下面正常的消耗 / 推进流程。
-					 */
 					if (r && r.defer) {
-						game.deferred_response_choice = {
+						/*
+						 * 【栈重构·第二期】弹当前帧 f（非栈顶，否则会误弹 effect 内部刚压的新响应帧），
+						 * 续打存 game.deferred_response_stack（纯栈：不再写 deferred_response_choice 旧全局）。
+						 * 栈清空后由 promote_deferred_response 压回成为活动帧。
+						 */
+						const df = {
 							card_id: c.card_id,
 							card_face: c.card_face,
 							name: c.name,
 							owner_side: c.owner_side,
+							on: f.on, pre: f.pre,
+							ctx: f.ctx || {},
 							kind: r.kind || 'space',
 							candidates: r.candidates || [],
 							prompt: r.prompt || ('请选择《' + c.name + '》的目标'),
-							ctx: head.ctx || {},
 							extra: r.extra || null,
 						}
-						game.log.push('【响应】《' + c.name + '》稍后继续：' +
-							game.deferred_response_choice.prompt)
+						game.response_stack = game.response_stack.filter(x => x !== f)
+						defer_response_frame(game, df)
+						sync_response_queue_view(game)
+						game.log.push('【响应】《' + c.name + '》稍后继续：' + df.prompt)
+						continue
 					}
 					game.log.push('【响应】《' + c.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
 					if (r && r.cancel) intercepted = true
 					/*
-					 * 【2026-10-16】★响应卡国家技能：在【真正触发生效】时（而非暗置时）触发。
-					 * play_card 的 RESPONSE 分支只暗置、不调 after_card_resolved，故"暗置"不触发；
+					 * 【2026-10-16】★响应卡国家技能：在【真正触发生效】时触发。
 					 * 此处补 star_resolved —— 一张★响应卡被结算即满足 NATIONAL_SKILL.trigger。
-					 * 仅★卡生效（after_card_resolved 内部 is_starred_card 判定）；被拦截(cancel)的卡不触发。
-					 * 17732 德国军事顾问因此在其 play_start 触发结算时弹出意大利国家技能窗口，
-					 * 而暗置在桌面时不弹（符合玩家口径）。
+					 * 被拦截(cancel)的卡不触发。
 					 */
 					if (!intercepted) {
 						const _nc = inst_card(c.card_face)
@@ -23067,12 +23100,14 @@ function play_status_card_impl(game, nation, card_id) {
 					game.log.push('【响应】《' + c.name + '》结算出错：' + e.message)
 				}
 			}
+			/* ok：弹当前帧（f）本身 + 消耗卡；
+			 * 注意：effect 内部可能压了新帧（如 15431 建设触发 build 响应），
+			 * 必须弹 f 而非栈顶，否则会误弹内部触发的帧。 */
+			game.response_stack = game.response_stack.filter(x => x !== f)
 			consume_response(game, c.card_id, c.owner_side)
 		}
 		/*
 		 * 15329 反潜战术拦截生效（cancel）：被拦截的牌【进弃牌堆、效果无效】。
-		 * 该牌已在"打出"时占出牌名额（见 play_card 拦截分支的 mark_play_done），
-		 * 这里只负责把它从手牌移到弃牌堆；ECON 效果从未执行，故"无效"。
 		 */
 		if (intercepted && head.intercept_card) {
 			const dn = head.intercept_nation || (head.ctx && head.ctx.nation)
@@ -23083,9 +23118,7 @@ function play_status_card_impl(game, nation, card_id) {
 				game.discard[dn].push(head.intercept_card)
 			game.log.push('《' + (head.ctx && head.ctx.card_obj ? head.ctx.card_obj.name : '经济战卡') +
 				'》被《15329 反潜战术》拦截，进弃牌堆（效果无效）')
-			/* 占出牌名额：被拦截的牌视为"已打出"但被无效，仍消耗本方出牌阶段名额 */
 			mark_play_done(game, dn)
-			/* 【2026-10-18】拦截捕获：记录被拦截牌的唯一标识（15329/17736 的 RESPONSE_PRE_CANCEL 路径） */
 			if (head.candidates && head.candidates[0]) {
 				record_intercept(game, head.candidates[0].card_id, head.intercept_card, {
 					victim_nation: dn,
@@ -23093,18 +23126,12 @@ function play_status_card_impl(game, nation, card_id) {
 				})
 			}
 		}
-		game.response_queue.shift()
+		/* 弹掉整组帧（pending 帧已在循环内 return，不至此） */
+		game.response_stack = stack.filter(f => f.group_id !== top.group_id)
+		sync_response_queue_view(game)
 		response_reconcile_active(game)
 		/*
-		 * 【2026-10-01 玩家口径】经济战【被 15329 拦截后】，
-		 * 手牌里的"打出[经济战]后…"型增强卡（G7e 鱼雷等）【照常】要给机会窗口：
-		 * 卡面是"打出…后"，被拦截的牌【确实打出过】（只是效果无效），
-		 * 所以触发成立 —— 且玩家明确要求"在英国拦截后弹出 ask，照常可以选择打出"。
-		 *
-		 * 这里是唯一能覆盖"拦截成功"这条路径的钩子点：
-		 * 拦截分支不重放 play_card，ECON 分支与 econ_used 钩子都不会跑到。
-		 *
-		 * tag / target 从被拦截的卡与 resume.arg 还原（ctx 里没直接存）。
+		 * 【2026-10-01 玩家口径】经济战被 15329 拦截后，"打出[经济战]后…"增强卡照常给窗口。
 		 */
 		if (intercepted && head.intercept_card) {
 			const iCfg = econ_config_of(head.intercept_card)
@@ -23118,11 +23145,6 @@ function play_status_card_impl(game, nation, card_id) {
 				space: null,
 			})
 		}
-		/*
-		 * 【2026-09-28】状态卡"跳过出牌阶段"发动后，若当时有响应卡待答复，
-		 * 推进被延后（game.pending_advance_phase）。现在队列已清空，补推进。
-		 * （不在这里推进的话，玩家答完响应后还停在出牌阶段，体验割裂。）
-		 */
 		return maybe_advance_after_skip_play(game)
 	}
 
@@ -24811,24 +24833,28 @@ function play_status_card_impl(game, nation, card_id) {
 			})
 			const intercept = preC.filter(x => RESPONSE_PRE_CANCEL.has(String(x.card_face)))
 			if (intercept.length) {
-				game.response_queue = game.response_queue || []
-				game.response_queue.push({
-					on: 'play_card', pre: true, owner_side: intercept[0].owner_side,
-					/* 重放时需用【原打出方】的 role，否则回合归属校验会拦下重放 */
-					play_role: current,
-					candidates: intercept.map(x => ({
-						card_id: x.card_id, card_face: String(x.card_face),
-						owner_side: x.owner_side, name: x.name,
-					})),
-					ctx: { nation, card: card_id, card_obj: c },
-					/* 被拦截的牌（仍留手牌）：发动拦截时送进弃牌堆 */
-					intercept_card: card_id, intercept_nation: nation,
-					/* 【2026-10-18】快照拦截方持有国：consume_response 会在结算时把响应卡移出
-					 * table_responses，故在挂起此刻就记下来，避免 cancel 分支滞后查找失败。 */
-					intercept_by_nation: response_holder_nation(game, intercept[0].card_id),
-					/* 完整 arg（含 target）随重放带回，确保 15313 等需参数的经济战能正常结算 */
-					resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
+				/*
+				 * 【栈重构·第二期】拦截响应压栈帧（带 resume/intercept 字段），
+				 * 同触发组 = 连续帧；owner 让权。consumers 读派生 game.response_queue。
+				 */
+				const _gidA = 'rg_' + ((game._resp_gid = (game._resp_gid || 0) + 1))
+				intercept.forEach((x, idx) => {
+					push_response_frame(game, {
+						card_id: x.card_id, card_face: String(x.card_face), name: x.name,
+						owner_side: x.owner_side, on: 'play_card', pre: true,
+						ctx: { nation, card: card_id, card_obj: c },
+						kind: 'space', candidates: [], prompt: '', extra: null,
+						group_id: _gidA, group_idx: idx, ordered: intercept.length <= 1,
+						resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
+						play_role: current,
+						intercept_card: card_id, intercept_nation: nation,
+						intercept_by_nation: response_holder_nation(game, x.card_id),
+					})
 				})
+				const _ownerA = intercept[0].owner_side
+				const _curA = (game.active === ALLIES_ROLE) ? ALLIES : AXIS
+				if (_ownerA !== _curA) handoff_to(game, _ownerA, 'response')
+				sync_response_queue_view(game)
 				return game
 			}
 		}
@@ -25231,18 +25257,26 @@ function play_status_card_impl(game, nation, card_id) {
 						{ nation: nation, card: card_id, card_obj: c, target: t, tag: cfg.tag })
 					const intercept = preC.filter(x => RESPONSE_PRE_CANCEL.has(String(x.card_face)))
 					if (intercept.length) {
-						game.response_queue = game.response_queue || []
-						game.response_queue.push({
-							on: 'econ_bombing', pre: true, owner_side: intercept[0].owner_side,
-							play_role: current,
-							candidates: intercept.map(x => ({
-								card_id: x.card_id, card_face: String(x.card_face),
-								owner_side: x.owner_side, name: x.name,
-							})),
-							ctx: { nation, card: card_id, card_obj: c, target: t },
-							intercept_card: card_id, intercept_nation: nation,
-							resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
+						/*
+						 * 【栈重构·第二期】拦截响应压栈帧（econ_bombing 路径），同触发组连续帧。
+						 */
+						const _gidB = 'rg_' + ((game._resp_gid = (game._resp_gid || 0) + 1))
+						intercept.forEach((x, idx) => {
+							push_response_frame(game, {
+								card_id: x.card_id, card_face: String(x.card_face), name: x.name,
+								owner_side: x.owner_side, on: 'econ_bombing', pre: true,
+								ctx: { nation, card: card_id, card_obj: c, target: t },
+								kind: 'space', candidates: [], prompt: '', extra: null,
+								group_id: _gidB, group_idx: idx, ordered: intercept.length <= 1,
+								resume: { action: 'play_card', arg: Object.assign({}, arg, { card: card_id }) },
+								play_role: current,
+								intercept_card: card_id, intercept_nation: nation,
+							})
 						})
+						const _ownerB = intercept[0].owner_side
+						const _curB = (game.active === ALLIES_ROLE) ? ALLIES : AXIS
+						if (_ownerB !== _curB) handoff_to(game, _ownerB, 'response')
+						sync_response_queue_view(game)
 						return game
 					}
 				}

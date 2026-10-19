@@ -407,15 +407,18 @@ console.log('\n=== 9. 第二批 B：需选择的卡返回 pending 并能用 choi
 
 console.log('\n=== 10. resolve_response_choice 动作 + 白名单 ===')
 {
+	const topFrame = (x) => (x.response_stack || []).slice(-1)[0] || null
 	/* build_actions 必须登记，否则客户端点了静默无反应 */
 	const g = rules.setup(1)
 	g.current_nation = '日本'; g.active = 'Axis'
-	g.pending_response_choice = {
+	/* 【纯栈模型】手工构造"待答复响应"= 往 response_stack 压入活动帧（引擎真相源=栈顶帧） */
+	g.response_stack = g.response_stack || []
+	g.response_stack.push({
 		card_id: '15433#1', card_face: '15433', name: '皖南事变',
 		owner_side: 'axis', kind: 'piece',
 		candidates: [{ id: 'cn_w', name: '中国东部 的中国陆军' }],
 		prompt: '选择要消灭的敌方陆军', ctx: {},
-	}
+	})
 	const ba = rules.view(g, 'Axis')
 	ok('白名单含 resolve_response_choice',
 		!!(ba.actions && ba.actions.resolve_response_choice),
@@ -431,11 +434,11 @@ console.log('\n=== 10. resolve_response_choice 动作 + 白名单 ===')
 	g.piece_nation['cn_w'] = '中国'
 	g.piece_type['cn_w'] = 'army'
 	const g2 = rules.action(g, 'Axis', 'resolve_response_choice', { choice: 'bogus' })
-	ok('非法选择被拒（pending 仍在）', !!g2.pending_response_choice,
+	ok('非法选择被拒（pending 仍在）', !!topFrame(g2),
 		'pending=' + JSON.stringify(g2.pending_response_choice))
 	/* 合法选择应执行 */
 	const g3 = rules.action(g, 'Axis', 'resolve_response_choice', { choice: 'cn_w' })
-	ok('合法选择执行后 pending 清除', !g3.pending_response_choice)
+	ok('合法选择执行后 pending 清除', !topFrame(g3))
 	ok('目标陆军被消灭', g3.location['cn_w'] === undefined, 'loc=' + g3.location['cn_w'])
 }
 
