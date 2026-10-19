@@ -22301,25 +22301,22 @@ function play_status_card_impl(game, nation, card_id) {
 		game.pending_balloon = null
 
 	/*
-	 * 【2026-09-30】"X 后立刻"状态卡窗口【不能跨动作残留】：
-	 * game.status_instant 是在"发起陆战 / 建设陆军"那一瞬武装的手动发动窗口，
-	 * 玩家一旦去做别的事（出牌、弃牌、推进阶段、再发起战斗…）就视为放弃，
-	 * 窗口立即关闭。放在最前面，保证任何"其它动作"都清掉。
-	 * 例外：activate_status 本身不清除（由发动分支在成功后清空）；
-	 * 调试动作（debug_*）不清除，便于开发期单独武装后检视。
-	 * 【2026-10-17 修正】对称于 L20500 的增强窗口豁免：同事件级联的
-	 * 【响应结算】(trigger/pass/resolve/reorder/confirm) 与【增强结算】
-	 * (use/skip_armed_offer) 也不清除 status_instant —— 否则"先结算配给(响应)"
-	 * 会误杀同事件的 15346《自由法国》窗口，或"先打增强卡"会误杀状态窗口。
-	 * 这样"同一时点 增强/响应/状态"可任意顺序结算、互不误伤（与 15426+15430
-	 * 同点响应顺序结算同款设计）。真正的"去做别的事"仍会清掉窗口。
+	 * 【栈重构·第三期】status_instant 清除从"动作名白名单"改为【挂起态判定】。
+	 * 原白名单（trigger/pass/resolve/reorder/confirm/use/skip_armed_offer）属打补丁式
+	 * 修复——新增动作易遗漏导致窗口被误杀。第三期改为：只要当前存在任一未决挂起
+	 * （响应栈 / 响应队列 / 增强窗口 armed_offers / 战斗·经济·状态打出等 pending），
+	 * 就不清除窗口，保证"同一时点 增强/响应/状态"可任意顺序结算、互不误伤（与
+	 * 15426+15430 同点响应顺序结算同款设计）；仅当无任何挂起（玩家去做真正的独立
+	 * 回合动作：出牌/弃牌/推进/再发起战斗…）才清空窗口。
+	 * 仍豁免两类系统内部操作：activate_status（发动分支结算成功后自清）、debug_*（开发期检视）。
 	 */
-	const isStatusCascade = action === 'activate_status' ||
-		String(action).startsWith('debug_') ||
-		action === 'trigger_response' || action === 'pass_response' ||
-		action === 'resolve_response_choice' || action === 'response_reorder' || action === 'response_confirm' ||
-		action === 'use_armed_offer' || action === 'skip_armed_offer'
-	if (!isStatusCascade) {
+	const hasSuspended = (game.response_stack || []).length > 0 ||
+		(game.response_queue || []).length > 0 ||
+		(game.armed_offers && game.armed_offers.length > 0) || game.armed_offer ||
+		game.pending_battle || game.pending_econ || game.pending_status_play ||
+		game.pending_uranus || game.pending_autobahn
+	const isStatusInternal = action === 'activate_status' || String(action).startsWith('debug_')
+	if (!hasSuspended && !isStatusInternal) {
 		game.status_instant = []
 		game.pending_status = null
 	}

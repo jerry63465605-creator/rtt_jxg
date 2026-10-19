@@ -196,10 +196,14 @@ frame = {
 
 **前置建议（已采纳）**：第一期 + 第二期成果在本分支 `response-stack-refactor` 统一提交，可整体 revert。
 
-### 第三期（status_instant 清除改为栈内判定）
+### 第三期（status_instant 清除改为栈内/挂起态判定）✅ 已完成（2026-10-19，分支 `response-stack-refactor`）
 
-- 删除 `L22324` 的动作名白名单，改为"栈内动作"判定。
-- 各瞬态窗口绑定其所属帧，帧 pop 时关闭。
+- 删除 `isStatusCascade` 动作名白名单（`trigger_response`/`pass_response`/`resolve_response_choice`/`response_reorder`/`response_confirm`/`use_armed_offer`/`skip_armed_offer` 共 7 个响应/增强结算动作 + `activate_status`/`debug_*`），改为**挂起态集合判定**：
+  `hasSuspended = response_stack 非空 || response_queue 非空 || armed_offers 非空 || armed_offer 存在 || pending_battle || pending_econ || pending_status_play || pending_uranus || pending_autobahn`，任一为真即**不清除** `status_instant` / `pending_status`。
+- 仍豁免两类系统内部操作：`activate_status`（发动分支结算成功后自清）、`debug_*`（开发期检视）。
+- 语义等价原白名单：响应/增强结算动作发生时挂起态必非空；独立回合动作发生时挂起态为空 → 清空窗口。新增动作只要正确维护挂起态即自动兼容，不再需回头补白名单（消除"打补丁式修复、易遗漏"脆弱性）。
+- "各瞬态窗口绑定其所属帧、帧 pop 时关闭"落地为：窗口生命周期绑定到承载它的挂起（响应栈帧 / 增强窗口 / 战斗经济挂起），挂起解除即关闭——与"栈内判定"同义。
+- 验证：`_smoke_fr_respond.js` 17/0（15346《自由法国》配给优先窗口在响应结算期间保留、结算后转绿）、`_smoke_15431_queue.js` 16/0、`_smoke_15430.js` 17/0、`_smoke_15328_attacked.js` 23/0、`_smoke_armed_whitelist.js` 12/0、`check_reuse.js`（B/C 干净，仅 A 类已知索引漂移 WARN）。（注：原 `tools/_smoke_status.js` 脚本路径已变更/未创建，状态卡全面验证以 `fr_respond` 覆盖 15346 + 上述套件替代。）
 
 ---
 
