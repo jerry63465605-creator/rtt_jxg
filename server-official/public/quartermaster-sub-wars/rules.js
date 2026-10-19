@@ -12313,7 +12313,7 @@ function is_in_region(space, region) {
 }
 
 /*
- * 某地区【及其相邻地区】里 nation 的【海军】数量（15427/15428 的触发条件）。
+ * 某地区【及其相邻地区】里 nation 的【海军】数量（通用辅助；15428 早期曾用，现改由 battle_initiators 判定候选海域）。
  * 复用 get_connections + pieces_on，不自己重写遍历。
  */
 function navy_count_near(game, nation, space) {
@@ -12906,7 +12906,11 @@ const RESPONSE_EFFECTS = {
 	},
 	'15428': {
 		name: '舰队决战', actor: '日本',
-		trigger: { on: 'play_start', filter: (g, ctx) => ctx.nation === '日本' },
+		trigger: {
+			on: 'play_start',
+			filter: (g, ctx) => ctx.nation === '日本' &&
+				all_sea_space_ids().some(sp => battle_initiators(g, '日本', sp).length > 0),
+		},
 	},
 	'15429': {
 		name: '卢沟桥事变', actor: '日本',
@@ -13437,17 +13441,29 @@ const RESPONSE_EFFECT_IMPL = {
 			},
 		})
 	},
-	'15428': (game, side, ctx) => {
+	'15428': (game, side, ctx, choice) => {
 		/*
-		 * 出牌阶段开始时：若日本在<中国东部>或其相邻有 >=2 支海军
-		 * -> 在【<南海>】发起 1 次海战（目标固定）。
+		 * 出牌阶段开始时：发起 1 次海战（玩家自选海域）。
+		 * 候选 = 所有「日本有可发起海战单位」的海域；复用 battle_initiators 权威判定，
+		 * 与 do_battle 同源（避免「看得见点不中」）。无候选即跳过，不浪费响应卡。
+		 * 【2026-10-19 修正】原为「<中国东部>相邻 >=2 海军 → 固定在<南海>开战」，
+		 * 与卡面「发起1次海战」不符；改为通用版（选项 B）。
 		 */
-		const cn = space_id_of('中国东部')
-		const sea = space_id_of('南海')
-		if (cn == null || sea == null) return { ok: false, desc: '（地区不存在）' }
-		if (navy_count_near(game, '日本', cn) < 2)
-			return { ok: false, desc: '（<中国东部>或相邻不足 2 支日本海军）' }
-		return do_sea_battle_at(game, sea)
+		const nat = '日本'
+		if (choice === undefined) {
+			const cands = all_sea_space_ids()
+				.filter(sp => battle_initiators(game, nat, sp).length > 0)
+				.map(sp => ({ id: sp, name: data.name_of(sp) }))
+			if (!cands.length) return { ok: false, desc: '（没有可发起海战的海域）' }
+			return {
+				pending: true, kind: 'space',
+				candidates: cands,
+				prompt: '选择要发起海战的海域',
+			}
+		}
+		if (battle_initiators(game, nat, Number(choice)).length === 0)
+			return { ok: false, desc: '（所选海域无法发起海战）' }
+		return do_sea_battle_at(game, Number(choice), nat)
 	},
 	'15431': (game, side, ctx, choice) => {
 		/*
