@@ -14509,7 +14509,9 @@ function promote_deferred_response(game) {
 	if (d.owner_side !== curSide) {
 		handoff_to(game, d.owner_side, 'response')
 	}
-	game.pending_response_choice = d
+	/* 【栈重构·第一期】deferred 续打压栈帧，pending_response_choice 派生为栈顶 */
+	push_response_frame(game, d)
+	game.pending_response_choice = top_response_frame(game)
 	game.log.push('【响应】回到《' + d.name + '》：' + d.prompt)
 	return true
 }
@@ -22816,7 +22818,8 @@ function play_status_card_impl(game, nation, card_id) {
 	 * 然后才消耗该响应卡、弹出队列。
 	 */
 	if (action === 'resolve_response_choice') {
-		const pc = game.pending_response_choice
+		/* 【栈重构·第一期】优先从栈顶帧读取续打；旧全局作为回退兼容 */
+		const pc = top_response_frame(game) || game.pending_response_choice
 		if (!pc) {
 			game.log.push('当前没有等待选择的响应卡')
 			return game
@@ -22861,7 +22864,9 @@ function play_status_card_impl(game, nation, card_id) {
 				 * 只有再次返回 pending 的卡才会走到这里，故安全。
 				 */
 				if (r && r.pending) {
-					game.pending_response_choice = {
+					/* 【栈重构·第一期】续打：弹出当前帧、压入新帧，pending_response_choice 重新派生为栈顶 */
+					pop_response_frame(game)
+					push_response_frame(game, {
 						card_id: pc.card_id,
 						card_face: pc.card_face,
 						name: pc.name,
@@ -22871,7 +22876,8 @@ function play_status_card_impl(game, nation, card_id) {
 						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
-					}
+					})
+					game.pending_response_choice = top_response_frame(game)
 					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
 						game.pending_response_choice.prompt)
 					return game
@@ -22885,6 +22891,8 @@ function play_status_card_impl(game, nation, card_id) {
 				 * defer 时不消耗本卡、不推进队列（本卡仍在结算中）。
 				 */
 				if (r && r.defer) {
+					/* 【栈重构·第一期】defer：弹出当前帧，续打存 deferred（兼容旧全局），pending_response_choice 重新派生为下方帧 */
+					pop_response_frame(game)
 					game.deferred_response_choice = {
 						card_id: pc.card_id,
 						card_face: pc.card_face,
@@ -22896,7 +22904,7 @@ function play_status_card_impl(game, nation, card_id) {
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
 					}
-					game.pending_response_choice = null
+					game.pending_response_choice = top_response_frame(game)
 					game.log.push('【响应】《' + pc.name + '》稍后继续：' +
 						game.deferred_response_choice.prompt)
 					return game
@@ -22907,7 +22915,9 @@ function play_status_card_impl(game, nation, card_id) {
 				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
 			}
 		}
-		game.pending_response_choice = null
+		/* 【栈重构·第一期】正常结算完成：弹出当前帧，pending_response_choice 重新派生为下方帧（或空） */
+		pop_response_frame(game)
+		game.pending_response_choice = top_response_frame(game)
 		consume_response(game, pc.card_id, pc.owner_side)
 		/*
 		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
@@ -23082,8 +23092,8 @@ function play_status_card_impl(game, nation, card_id) {
 					const r = impl(game, c.owner_side, head.ctx)
 					game._resp_settling = false
 					if (r && r.pending) {
-						/* 挂起等选择 —— 不消耗卡、不弹出队列 */
-						game.pending_response_choice = {
+						/* 【栈重构·第一期】续打存入栈帧；pending_response_choice 仅作栈顶派生视图 */
+						const frame = {
 							card_id: c.card_id,
 							card_face: c.card_face,
 							name: c.name,
@@ -23099,8 +23109,9 @@ function play_status_card_impl(game, nation, card_id) {
 							 */
 							extra: r.extra || null,
 						}
-						game.log.push('【响应】《' + c.name + '》需要选择：' +
-							game.pending_response_choice.prompt)
+						push_response_frame(game, frame)
+						game.pending_response_choice = top_response_frame(game)
+						game.log.push('【响应】《' + c.name + '》需要选择：' + frame.prompt)
 						return game
 					}
 					/*
