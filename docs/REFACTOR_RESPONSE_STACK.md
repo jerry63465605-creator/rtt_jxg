@@ -192,6 +192,8 @@ frame = {
 - 全绿：`_smoke_15431_queue.js` 16/16、`_smoke_15430.js` 17/17、`_smoke_fr_respond.js` 17/0、`_smoke_armed_whitelist.js` 12/0、`_smoke_15428.js`（SMOKE_PASS）、`_smoke_15328_attacked.js` 23/0、`_smoke_axis_pact.js` 16/0、`_smoke_delegate.js` ALL PASS、`_smoke_autobahn_resp_fix.js` ALL PASS、`_smoke_armed_handoff.js` 14/0、`_smoke_armed_multiwindow.js` 20/0、`_smoke_15237_whitelist.js` ALL PASS、`_smoke_15426.js` 10/0、`check_reuse.js`（B/C 干净，仅 A 类已知行号漂移 WARN）。
 - **已知预存失败（与本次重构无关，已用 `git stash` 回退 rules.js 到 HEAD 比对确认同款失败）**：`_smoke_pending_union.js` 6 FAIL、`_smoke_jp_response.js` 8 FAIL（含 `resolve_response_choice` 白名单、`15427/15428/15431` 节描述断言）、`test_15430_queue_filter.js` 6 FAIL。根因：这些测试为旧 `response_queue` 中心模型编写，部分断言在栈模型下已不合时宜；其失败在本次改动**之前**即存在，非 Step 4/5/7 引入。
 
+- **[2026-10-19 本轮收尾]** 15430 测试已适配纯栈：`_smoke_15430.js` L112-120 手动模拟 `trigger_response` 的 defer 分支，把续打帧压入 `deferred_response_stack`（原依赖已删除的 `{defer}` 兼容壳手写 `deferred_response_choice`）。因测试直接调 `RESPONSE_EFFECT_IMPL` 绕过 `trigger_response`，框架的 defer 分支不会自动收编续打帧，故需测试侧手动收编。复跑全套冒烟确认：`_smoke_15431_queue.js` 16/16、`_smoke_15430.js` 17/17、`_smoke_fr_respond.js` 17/0、`_smoke_armed_whitelist.js` 12/0、`_smoke_15428.js`（SMOKE_PASS）、`_smoke_15328_attacked.js` 23/0、`check_reuse.js`（B/C 干净，仅 A 类已知行号漂移 WARN）—— 全部通过。Step 4/5/7 正式收尾完成。
+
 **前置建议（已采纳）**：第一期 + 第二期成果在本分支 `response-stack-refactor` 统一提交，可整体 revert。
 
 ### 第三期（status_instant 清除改为栈内判定）
