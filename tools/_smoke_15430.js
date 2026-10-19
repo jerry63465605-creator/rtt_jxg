@@ -134,7 +134,10 @@ console.log('\n=== 15430 奇袭：两步（海战→陆战），海战后响应�
 		ok('T3 15426 建完陆军：继续下一步', rAsk && rAsk.pending === true, JSON.stringify(rAsk && { kind: rAsk.kind, step: rAsk.extra && rAsk.extra.step }))
 		ok('T3 15426 已在选定陆地建成日本陆军', jpArmyOn(g3, txLand), 'txLand=' + txLand)
 
-		// 15426 结算完 -> 清空队列 -> promote 恢复奇袭陆战步（栈模型下压回栈帧）
+		// 15426 结算完 -> 按【引擎 trigger_response ok 路径】收尾：弹栈帧 + 清队列 -> promote 恢复。
+		// （2026-10-20：promote_deferred_response 会按 response_stack 如实重建派生队列，
+		//   故必须先弹掉栈上的 15426 触发帧，只手工删队列项会被重建还原 —— 与真实引擎一致）
+		g3.response_stack = (g3.response_stack || []).filter(f => f.card_id !== '15426')
 		g3.response_queue = g3.response_queue.filter(x =>
 			!(x.candidates || []).some(c => String(c.card_face) === '15426'))
 		if (typeof I.promote_deferred_response === 'function') I.promote_deferred_response(g3)

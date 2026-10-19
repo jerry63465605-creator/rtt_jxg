@@ -6043,8 +6043,10 @@ const STATUS_UI = {
 	'15247': { battle: 'land', attacker_owner: true, spaces_from_window: true },
 	/* 17842 喀秋莎：弃1张手牌后对战斗地区再发起1次陆战 */
 	'17842': { discard: 1, battle: 'land', attacker_owner: true },
-	/* 17846 坦克运输：弃1张[建设陆军]后以此陆军发起1次陆战 */
-	'17846': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' }, battle: 'land', attacker_owner: true },
+	/* 17846 坦克运输：弃1张[建设陆军]或[发起陆战]后以此陆军发起1次陆战
+	 * 【2026-10-20】卡面是"或"，filter.name 用【数组】表达；
+	 * 与服务端的 STATUS_EFFECTS['17846'].cost.discard_is 保持一致（判定同源）。 */
+	'17846': { discard: 1, filter: { type: 'BASIC', name: ['建设陆军', '发起陆战'] }, battle: 'land', attacker_owner: true },
 	/* 17848 正面攻击：弃2张手牌后对战斗地区或相邻地区发起1次陆战 */
 	'17848': { discard: 2, battle: 'land', attacker_owner: true },
 	/* 15245 闪电战前奏类：候选含战斗地区本身（空打用），故 spaces_from_window + include_base */
@@ -6315,11 +6317,20 @@ function start_status_discard(cardId, ui, need) {
  * 现在复用 echo_discard_modal（与资源再分配同款的 modal + card-grid），
  * 在弹框内直接点卡图切换选中，选满后【确认弃牌】才发送。
  */
-/* 客户端镜像 card_matches_filter：状态卡弃牌代价按 filter 限定可选卡（15242 只能选【发起陆战】） */
+/*
+ * 客户端镜像 card_matches_filter：状态卡弃牌代价按 filter 限定可选卡（15242 只能选【发起陆战】）。
+ *
+ * 【2026-10-20】name 支持【数组】= "或" 关系（17846 坦克运输：弃 1 张[建设陆军]或[发起陆战]）。
+ * ⚠ 这是服务端 card_matches_filter 的镜像，两侧必须同步（判定同源）：
+ *   只改服务端会出现"服务端接受[发起陆战]、但客户端候选里根本看不到它"。
+ */
 function card_match_filter_client(c, req) {
 	if (!c || !req) return false
 	if (req.type && c.type && String(c.type).toUpperCase() !== String(req.type).toUpperCase()) return false
-	if (req.name && c.name !== req.name) return false
+	if (req.name) {
+		const names = Array.isArray(req.name) ? req.name : [req.name]
+		if (names.indexOf(c.name) < 0) return false
+	}
 	return true
 }
 
@@ -6386,8 +6397,12 @@ function render_status_discard_box() {
 		if (!shown) {
 			const p = document.createElement("div")
 			p.className = "empty-note"
-			p.textContent = filt && filt.name
-				? '手牌中未找到【' + filt.name + '】作为代价'
+			/* 【2026-10-20】filter.name 可能是数组（"或"），须展开为"建设陆军或发起陆战" */
+			const nmTxt = (filt && filt.name)
+				? (Array.isArray(filt.name) ? filt.name.join('或') : filt.name)
+				: ''
+			p.textContent = nmTxt
+				? '手牌中未找到【' + nmTxt + '】作为代价'
 				: "手牌为空，无法支付代价"
 			grid.appendChild(p)
 		}
@@ -6408,7 +6423,10 @@ function on_status_discard_pick(cardId) {
 		const c = ((view.hands[view.my_nation] && view.hands[view.my_nation].cards) || [])
 			.find(h => h.id === cardId)
 		if (!card_match_filter_client(c, s.ui.filter)) {
-			toast('只能选择【' + (s.ui.filter.name || '指定') + '】作为代价')
+			/* 【2026-10-20】同上：filter.name 可能是数组 */
+			const nm = s.ui.filter.name
+			const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '指定')
+			toast('只能选择【' + nmTxt + '】作为代价')
 			return false
 		}
 	}

@@ -671,6 +671,29 @@ curl.exe -s -o NUL -w "HTTP=%{http_code}\n" http://localhost:8091/   # 期望 20
 
 ## 三、逐条问题档案（按时间倒序追加）
 
+### 2026-10-20 · R64：15425「第二次攻击」框在 counter 抵消阶段提前弹出卡死 —— promote 守卫漏判"战斗代受进行中"
+
+- **症状**：第一次陆战触发代受(代死)→发起方抵消(counter)后，顶部显示 counter 抵消待决的同时，又弹出「是否再发起 1 次陆战？」的第二次攻击框，两个挂起并存导致全局动作闸门死锁（同 R63 的"看得见点不中/卡死"表现）。
+- **根因**：15425 的「第二次攻击」用 `defer:true` 存入 `deferred_response_stack`，由 `promote_deferred_response` 在"响应栈空 + 无 pending_battle"时恢复。但 `do_battle` 内部在防守方代受表态后（`rules.js` L16658-16661）**先于 counter 挂起**就调用了 `battle_reconcile_active` → promote 守卫 `!pending_battle && !top_response_frame` 此刻已成立（on:'battle 已结算、pending_battle 刚清空），于是 deferred 帧被提前 restore，随后 counter 才挂起 `pending_battle`，两框并存。与 R63、15346「配给优先」属同一类：守卫漏判"战斗代受尚未结束"。
+- **修复**：引入布尔标记 `game.battle_in_progress`，进入 `do_battle` 置 `true`、真正完成结算的 return 置 `false`；三处 promote 守卫（`battle_reconcile_active` L21790 / `resolve_response_choice` defer 分支 L23093 / `response_reconcile_active` L14554）统一加 `&& !(game.battle_in_progress||0)`。
+- **关键坑（计数方案的反向 bug）**：最初写成整数计数 `进入 +1 / 完成 -1`，但 `do_battle` 在 defend/counter 阶段会被**多次 resume 调用**，每次进入都 +1 而仅完成 return 才 -1，导致计数残留（counter 完成后 `battle_in_progress` 仍 >0）→ 修复变成反向 bug：第二次攻击框**永不**出现。改用**布尔**（进入 true / 完成 false）则同一场战斗的多次 resume 不会重复累加，单场能干净归零。嵌套战斗极端场景用布尔会误判为同场，但原代码对嵌套战斗的 promote 时序本就未严格处理，可接受。
+- **验证**：新增 `tools/_smoke_15425_defer.js`（12/12 通过），直接复现代受→抵消时序，断言 counter 挂起时 `response_stack` 不含 15425 帧、战斗完成后才 promote。改完 `node --check` + `check_reuse.js`（B/C 类无警告；A 类索引漂移为工作树未提交导致的预存问题）通过。
+- **注意**：本修复与 R63 同源但不同点（R63 是 response_queue 漏 sync 投影，本项是 promote 守卫漏判"战斗代受未结束"）；二者叠加才彻底解决 15425 的卡死。
+
+### 2026-10-20 · R63：15425《海军空降部队》第一次陆战后双方同时卡死 —— effect defer 分支漏同步派生队列（幽灵触发项）
+
+**典型事故**：15425 第一步陆战（夏威夷，美军空军代死待决）发起后：日本视角弹出幽灵框"响应卡等待决定 是否发动《海军空降部队》？（于北太平洋）"（发动/不发动点了都没反应）；美国视角空军替死询问也提交无效——双方同时卡死。
+
+**根因（一类问题）**：栈重构第二期后 `game.response_queue` 是 `response_stack` 的**派生只读视图**，只有 `sync_response_queue_view(game)` 被调用时才重建。`resolve_response_choice` 的 **defer 分支**移除了栈帧却没调 sync → 持久化的 `response_queue` 残留已离栈的 15425 触发项（存档实锤：`response_stack=[]` 而 `response_queue` 仍有 `on:'build'` 项）。两个症状同源：①`view.pending_trigger` 读过期队首（rules.js ~L20391）→ 日本看到幽灵"是否发动"框，点发动/不发动因栈空被"当前没有等待响应的卡牌"空转；②全局动作闸门（~L22673）见"非空队列"只放行响应动作 → 美国的 `resolve_battle`（空军代死应答）被拦 → 双方卡死。
+
+**修复（全部复用现有 `sync_response_queue_view`，3 处补调）**：`resolve_response_choice` 的 defer 分支（核心）与 pending 续打分支、`promote_deferred_response`（压回延期帧后，覆盖全部恢复路径）。
+
+**排查方法**：不要靠推演——直接读存档 `game_state.state`（JSON）里的 `response_stack` / `deferred_response_stack` / `response_queue` / `pending_battle` 四件套，"栈空但队列非空"即为派生视图过期实锤。
+
+**连带发现（测试模拟不忠实）**：`tools/_smoke_15430.js` T4 手工驱动 `impl` 结算 15426 且只手工删队列项，绕过引擎 `trigger_response` ok 路径的"弹栈帧"，导致 15426 触发帧残留栈上；promote 里的新 sync 会按栈如实重建队列、把手工删除项还原 → 该用例 16/1。修法：测试按引擎语义先 `response_stack.filter(f => f.card_id !== '15426')` 再删队列项（对齐真实路径）。**教训：测试绕过 action 层手工改状态时，凡是引擎会"弹帧+同步"的收尾都必须照样模拟，否则新增的如实同步会把模拟残留暴露成假失败。**
+
+验证：`_test15425.js` 9/9（新增 T8 走真实 `request_responses → trigger_response → resolve_response_choice` 链路，断言 defer 后 `response_queue` 清空）；_smoke_15430 17/0、15426 10/0、15431 16/0、fr_respond 17/0、status 22/0。
+
 ### 2026-10-18 · R62：17855《间谍机构》点完卡死、不弹选牌弃牌 UI —— 复用屏幕中央卡图网格 #lend_lease_modal（不新增 UI）
 
 **典型事故**：苏联在德/日/意摸牌阶段结束的挂起窗口点"打出"17855 后，界面卡死、不弹出"看目标国手牌、选 1 张弃置"的卡片网格。
@@ -5660,3 +5683,287 @@ const v = rules.view(g, 'Axis'); console.log(JSON.stringify(v.actions))
 `_smoke_15247_pick` / `_smoke_15247_chain` / `_smoke_autobahn_battle` / `_smoke_autobahn_15247` /
 `_smoke_status` 全 PASS；`check_reuse` B/C 无告警；`test_basic_cards` 294/297（3 项为既有失败）。
 服务器已重启（HTTP=200）。
+
+
+---
+
+## 2026-10-20 15425《海军空降部队》"第二次陆战"询问丢失（与增强卡无关）
+
+**现象**：日本建设海军触发 15425 → 选地区发起第一次陆战 → 之后"是否再发起 1 次陆战"的
+**第二步询问不再出现**。桌面上没有任何增强卡（15311 等）也照样复现，而且时好时坏。
+
+**根因（两个独立缺陷叠加，都不在 armed 路径上）**
+
+① **`battle_in_progress` 状态泄漏（致命）**
+`do_battle` 进入时 `game.battle_in_progress = true`，靠函数体内**逐个出口手写复位**。
+但 do_battle 共 **32 个 return**，只有 2 个会复位（抵消成立、正常末尾），其余 30 个
+（含"没有相邻补给部队"这类日常被拒返回、空打、代受挂起、代受成立、各种校验失败）**全不复位**。
+而 15425 第二步依赖的 `promote_deferred_response` 有 **5 个调用点**，守卫**全部**含
+`!(game.battle_in_progress || 0)`：
+`response_reconcile_active` / `battle_reconcile_active` / `resolve_response_choice` 的 defer 分支 /
+`refresh_armed_window` / `clear_armed_offer`&`removeArmedWindow`。
+→ 一旦被污染，**所有提升路径永久失效**，第二步询问永远躺在 `deferred_response_stack` 里。
+
+实证（只读脚本）：一次普普通通、被拒绝的战斗就把标志钉成 true——
+`{"ok":false,"reason":"没有处于补给状态的本国陆军或海军与 冰岛 相邻"}` 之后
+`battle_in_progress = true`，promote 守卫被永久阻塞。
+
+② **`resolve_battle` 的 defend 出口从不 reconcile**
+空军代受/不代受这一【日常出口】直接 `return game`，而 guard / kv2 / su_step_back 各分支
+都调用了 `battle_reconcile_active`。后果是双重的：
+· `battle_return_active` 悬空 → **操作权不归还**（active 停在防守方，即此前观测到的异常）；
+· promote 无人触达 → 延期帧永不提升。
+
+**修法**
+
+1. `battle_in_progress` 改为**配对计数**：`do_battle` 变成薄包装（进入 +1 / finally -1），
+   原函数体改名 `do_battle_inner`；删除体内三处手写维护（入口 `=true`、抵消分支 `=false`、
+   正常末尾递减）。语义从"整场战斗是否未决"改为"此刻是否在 do_battle 调用栈中"；
+   "战斗未决"交由 `game.pending_battle` 单独承担（promote 守卫本就含 `!game.pending_battle`），
+   因此"第二次询问必须在第一次完全结束后"的玩家口径不变。
+   **不**逐条给 32 个出口补复位——那正是本 bug 的成因，且将来新增 return 必复发；try/finally 是根治。
+2. defend 出口补 `battle_reconcile_active(game)`，与其余分支口径统一。
+
+**诊断方法**：直接读三个量即可定性——
+`game.battle_in_progress` / `game.deferred_response_stack.length` / `view(g,'Axis').response_choice`。
+修复后台面应该是 `battle_in_progress=0`、`deferred=0`、
+`response_choice={"name":"海军空降部队","kind":"option","n":2,"prompt":"是否再发起 1 次陆战？"}`。
+
+⚠ **`view.response_choice` 不带 card / card_face**，只有 `name / kind / candidates / prompt`
+——必须按 name+prompt 判定；若用卡 id 断言，会把"服务端已正确下发"误判成失败（本次踩过）。
+
+**既有失败清单（本次改动前后完全一致，非本次引入）**
+· `test_counter_air` 78/**2**（10.1 防守方可提交、10.3 现在发起方可提交）
+· `test_basic_cards` 294/**3**
+判定方式：**临时反向还原这 4 处改动 → 重跑基线 → 恢复**（revert/restore 对照）。
+另外这两处的 10.1/10.3 也已本文件前述条目解释：`rules.setup(seed)` 开局处于初始弃牌阶段，
+`build_actions` 先被 opening 分支截住，`view.actions` 只剩 `log`/`opening_discard`。
+
+**验证**
+· `node --check rules.js` 通过
+· 端到端场景 A（第一次陆战 → 防守方空军代受）、场景 B（第一次陆战是空打）：
+  第二步均为 `top=15425/{step:ask2}`、`active=Axis`、response_choice 正确下发；
+  **改动前**这两个场景同为 FAIL
+· `_test15425.js` 9/9、`_test_resp.js` 7/7、`_test_view_resp.js` ALL PASS
+· `check_reuse.js` B/C 通过（A 类 19 个 WARN 为 skill 索引行号漂移，存量问题）
+· 服务器已重启（HTTP=200，单进程）
+
+**踩坑**
+· **rules.js 是 CRLF** —— 用脚本做行级正则替换时 `\n` 匹配不到，必须 `\r?\n`。
+· **eval 方式加载 rules.js**：脚本放在 `tools/` 时，源码里的 `require('./data.js')`
+  会按 tools 目录解析而 `MODULE_NOT_FOUND`；用 IIFE 把 `require` 遮蔽成
+  "相对路径一律从模块目录解析"，或把脚本直接放模块目录。
+· **'发起陆战' 是卡牌名不是 action 名**，不能直接喂给 `exports.action`（会抛"未知行动"）。
+
+
+---
+
+## 2026-10-20 17846《坦克运输》弃牌要求修正（漏掉"或[发起陆战]" + 补"以此陆军"）
+
+**对象**：17846 坦克运输，**苏联 STATUS**（`trigger.window='after_build_army'`）。
+⚠ 旧记录把它列在苏联 EFFECT 组，实测 cards.js 与 rules.js 均为 STATUS（已核对）。
+
+**卡面**：建设陆军后，可弃置 1 张 **[建设陆军]或[发起陆战]**：以此陆军发起 1 次陆战。
+
+**发现的不符合项**
+
+1. **代价只认 [建设陆军]** —— 配置为 `cost.discard_is={type:'BASIC',name:'建设陆军'}`，
+   卡面写的"或[发起陆战]"无法支付。根因：`card_matches_filter` 的 name 是**单值精确比较**
+   （`card.name !== filter.name`），结构上无法表达"或"。
+2. **"以此陆军"未限定** —— `status_launch_battle` 只校验 from 存在与地形，
+   可用任意本国合法发起单位，与"以此陆军"不符。
+3. **报错文案** `(cost.discard_is.name||'')` 在数组下会直接拼出 "建设陆军,发起陆战"。
+
+**修法**
+
+· `card_matches_filter` 的 name 支持**数组**（= "或"）；单值写法行为不变，
+  **向后兼容**——既有卡（17843 量与质兼得 / 15242 / 英 STATUS 等）零改动，不新增字段。
+· 17846 的 cost 改为 `name:['建设陆军','发起陆战']`，`desc` 同步。
+· 报错文案在数组时 `join('或')`。
+· run 内补"以此陆军"限定。
+
+**"以此陆军"的实现要点（易踩）**：`arm_status_instant` 压入的 entry 只记
+`{card_id, nation, window, space}` —— **不带 piece id**，因此拿不到新建陆军的 id；
+但每国每格限 1 支，故"**位于建设地区的本国陆军**"与"刚建成的那支"**等价**，据此判定即可。
+单点查表（`game.location/piece_nation/piece_type`），非遍历，不绕过任何原子。
+放在 **17846 自己的 run 内**而非 `status_launch_battle` 加参数——后者同函数还服务
+17842 喀秋莎 / 17848 正面攻击，改动共享函数会波及它们。
+
+**已知但本次搁置（务必留意）**
+
+· **没有前置闸门**：手上无可弃之牌时窗口仍亮、点了才被拒。好在 `picked.length` 校验
+  在真正弃牌**之前**，不会白弃（不同于下面 17841 那条）。
+  ⚠ **不能改用 `tr.requires` 来做闸门** —— `hand_has_matching_card` 在本文件中
+  **只有调用、没有定义**（`tr.requires` 判断处），一旦给卡配上 requires 即 ReferenceError。
+  该坑同时影响 15242 / 17732 等所有带 requires 的状态卡。
+· **付代价后效果失败不回滚**（与 17841 近卫军同款：run 前已扣且不回滚）——点了无合法目标会白弃 1 张。
+· `discard_card` 的返回值被 `activate_status` 忽略（内部 `indexOf<0 → return false`），
+  伪造 id 时会出现"弃牌静默失败而效果照常"。
+
+**验证**：临时脚本 15/15（含单值向后兼容的回归用例）；`check_reuse` B/C ok；
+`_test17841` PASS；`test_basic_cards` 294/3、**与既有基线完全一致**，
+`_test15425` 9/9、`_test_resp` 7/7 —— 无回归。服务器已重启（HTTP=200）。
+
+
+---
+
+## 2026-10-20 17846 弃牌候选"只看得到[建设陆军]"——服务端改了、客户端没同步
+
+**现象**：服务端已把 17846 的代价放宽为"[建设陆军]或[发起陆战]"（`card_matches_filter`
+支持 name 数组），但客户端弃牌弹框里**仍然只有[建设陆军]**可选。
+
+**根因（客户端有两份独立实现，都还是旧的单值）**
+
+1. `STATUS_UI['17846']` 是 **play.js 本地写死**的配置（不是服务端下发），
+   `status_ui_of()` 查的就是这张本地表——所以只改服务端配置，客户端 UI 拿不到新语义。
+2. `card_match_filter_client()` 是服务端 `card_matches_filter` 的**客户端镜像**
+   （注释里就写着"客户端镜像"），仍是 `c.name !== req.name` 单值比较。
+
+**修法（四处，缺一不可）**
+
+· 客户端 `STATUS_UI['17846'].filter.name` → 数组 `['建设陆军','发起陆战']`；
+· `card_match_filter_client` 支持数组（单值行为不变，向后兼容 17843/15242）；
+· `render_status_discard_box` 的"未找到"空态文案；
+· `on_status_discard_pick` 的失败 toast ——
+  后两处若不改，数组会被默认按逗号拼成"建设陆军,发起陆战"。
+
+**教训（判定同源的又一条）**：改 filter 语义必须**同时**改
+① 服务端原子 ② 客户端镜像函数 ③ 客户端 UI 配置 ④ 所有文案拼接点。
+只改服务端 = "服务端接受、但玩家在候选里根本看不到"（与本文件 R37/通用教训 3 同源）。
+
+**验证**：客户端侧 8/8（含单值回归用例）；`node --check play.js` / `rules.js` 均 0；
+服务器已重启。⚠ 客户端需**硬刷新**（Ctrl+F5）才会拿到新的 play.js。
+
+---
+
+## 2026-10-20 海军补给口径修正（过去过严，且与"陆军依赖海军"局面死锁）
+
+**玩家口径原文**：有相邻的**本国陆军部队** + 有相邻的**有补给部队**，**两者都满足**才有补给。
+
+**旧实现（过严）**：要求相邻本组陆军**且该陆军自身处于补给状态** ——
+即把第二条也窄化成"那支补给中的部队本身必须是陆军"。
+
+**修正为**：
+· **A** 相邻有【本国 / 组内盟国】的**陆军**；
+· **B** 相邻有【处于补给状态的部队】，**不限兵种**（陆/海/空军皆可，仍须本国/组内）。
+
+**真实死锁实例（game 21，已复现）**：
+`p45[英国/navy]@北大西洋` 相邻格里**唯一的本组陆军**是 `p44[英国/army]@加拿大`
+（美国陆军 p7 的 `supply_group_partner=false`，英美不同组，不能当桥）；
+而 `p44@加拿大` 相邻只有美国(27)（不同组）和北大西洋的 `p45`
+—— 即它唯一可依赖的本组部队就是 p45。
+于是旧口径下两者**互相要求对方先有补给** → 谁都成不了种子 → **双双判为无补给**。
+新口径下 B 由北海的 `p15`(英海军)/`p30`(英空军，靠不列颠 base 陆军补给) 满足，
+**不再依赖 p44** → 死锁解开，p44/p45 均为 `chain ✓`。
+
+**排查方法**：给 `chain` 来源的棋子做**依赖追溯**（打印它的每个邻格及邻居棋子的
+`同组`/`补给`/`来源`），能一眼看出循环依赖。另注意 `game.last_supply`
+的结构是 `{nation, removed, at_risk}`（补给**阶段结算摘要**），
+**不是** per-piece 补给缓存，别把它当缓存比对（会得出 26 项全不一致的假结论）。
+
+**回归（与旧口径基线逐项一致，零回归）**：
+`test_supply` 39/0；`test_dynamic_supply` 2 项失败（10.2/10.3，预存）；
+`test_connectivity` 48/3（预存）；`test_basic_cards` 294/3（预存）。
+
+
+---
+
+## 2026-10-20 17843《量与质兼得》"弃牌后无高亮、也不能点选建设地"
+
+**现象**：弃 1 张[建设陆军]后进入选地，地图**没有高亮**，点地区也没反应。
+
+**排查链（方法论，先分清两类）** —— 两者客户端表现不同，别一上来就改高亮：
+· query `status_build_spaces` 返回 `ok:false`（"该状态卡当前窗口未激活"）
+  → 客户端 toast + `status_build_pending=false`（点击分支整个失效）；
+· query `ok:true` 但 `spaces=[]` → `highlight_targets` 空（无高亮），
+  点击被 `status_build_cands.indexOf(s) < 0` 拦下。
+实测属**后者**：gid21 打出《建设陆军》于北欧(4)，调 view 后窗口正常武装
+（`ready=true`、`status_instant` 有 17843）、query `ok:true`，但候选 **0**。
+
+⚠ **测试坑**：`after_build_army` 的武装发生在 `build_actions`（**view 计算**）里，
+**不调 view 就永远看不到 `status_instant`**。写此类验证必须补一次 `R.view()`，
+否则会误判成"窗口从未武装"（我第一版就踩了，差点改错地方）。
+
+**根因**：卡面**没写"相邻"**，实现却一律按"相邻"（`status_build_valid` 限定 base 相邻）。
+北欧(4) 相邻只有 罗斯(7)（`can_build=false`：须邻接处于补给状态的同国部队）与两个海域
+→ 全部落选 → 0 候选。
+
+**卡面逐张核对（勿一刀切）**
+
+| 卡 | 卡面 | 范围 |
+|---|---|---|
+| 17843 量与质兼得(苏) | …**建设1支陆军** | 无"相邻" → `all` |
+| 17550 先进造船厂(美) | …**建设1支海军** | 无"相邻" → `all` |
+| 17552 战时生产(美) | …**建设1支陆军** | 无"相邻" → `all` |
+| 15248 合成燃料(德) | …在**相邻地区**建设1支陆军 | `near`（原就正确） |
+| 17547 人工港(美) | …在**相邻地区**建设1支陆军 | `near`（原就正确） |
+
+**修法**
+· 卡配置加 `trigger.build_scope:'all'` 驱动（不硬编码卡 id）；
+· 新增 `status_build_scope_of` / `status_build_ok` / `status_build_candidates`
+  三个 helper，**run 与 query 同源**（避免"高亮了却点不动"）；
+· query 的 near 分支 `get_connections` **补传阵营**——此前未传，
+  与 `status_build_valid` 内部（传了阵营）**漂移**，在"仅某阵营相邻"
+  （15254 战争海军 / 17744 永久邻接）时会高亮出点不动的格子；
+· 17843 卡面是"**建设**"，原实现用 `recruit_piece`（征召）→ 改 `build_piece`。
+
+**验证**：北欧(4) 候选 0 → **8**；真实建成（日志"苏联 在北欧 建设1支陆军"）；
+15248 仍 `scope=near` 且候选全部相邻（未被误放宽）。
+回归：`check_reuse` B/C ok；`_test17841` PASS；`test_basic_cards` 294/3 与基线一致。
+
+⚠ **`_test17841b` 的 FAIL 是预存断言过时**：17841 近卫军已于 2026-10-17 改为
+run 内 `mark_play_done`、**不再用 `cost.skip_play`**（那会 advance_phase 跳空军阶段），
+而该测试仍断言 `skip_play_done`。与本次改动无关，需另行更新该用例。
+
+
+---
+
+## 2026-10-20 17744《土耳其开放海峡》"仅对友方"实际对敌我双方都开放
+
+**卡面**：`"<黑海>和<地中海><巴尔干>和<中东>仅对友方国家相邻。计分阶段：若<中东>
+相邻地区没有敌方国家海军，获得1分。"`
+（17747《西班牙控制直布罗陀》同形：北海-地中海、非洲北部-西欧 + 计分看敌方**陆军**。）
+
+**根因**：`ongoing.only` 有两种语义，处理函数却只认一种。
+
+`apply_status_ongoing` 里三个分支都写 `faction_of_nation(og.only)`，
+而 `faction_of_nation()` **只查国家名表**（`NATION_FACTION`），传阵营字面量返回 null：
+```
+faction_of_nation("axis")   = null      ← 不认阵营
+faction_of_nation("意大利") = "axis"
+```
+· `supply_point_and_markers` / `marker_only`：配置写**国家名**
+  （`only:'法国'/'英国'/'苏联'/'意大利'/'日本'/'中国'`）→ 正确；
+· `pair_adjacency`：配置写**阵营字面量** `only:'axis'` → 算出 `side=null`。
+
+而 `get_connections` 的过滤是 `if (sc.side && sc.side !== side) continue` ——
+**`side` 为 null 时不做任何过滤** → 这组邻接对**轴心与同盟都开放**。
+
+实测（修复前）：
+```
+status_connections = [{"a":14,"b":46,"side":null},{"a":12,"b":16,"side":null}]
+  黑海 <-> 地中海 : 轴心可走=true  同盟可走=true
+```
+⚠ 界面看不出来：日志仍打印"新增 2 组仅对axis的永久相邻"（文案与行为不符）。
+
+**修法**：在 `pair_adjacency` 分支按【字面量优先】归一，两种写法都支持
+（不动 `faction_of_nation` 本身——它调用点很多）：
+```js
+const onlyF = og.only
+	? ((og.only === 'axis' || og.only === 'allies') ? og.only : faction_of_nation(og.only))
+	: null
+```
+
+**排查结论**：17743（尚未收复的意大利）/ 17748（意大利殖民地帝国）**没有同类问题** ——
+它们是纯计分卡，`auto.run` 里直接用 `faction_of_nation(...) === 'axis'` 比较，
+根本不带 `only` 字段。
+
+**验证要对比"打出前后"，别直接断言**：
+17747 的"北海 <-> 地中海"同盟**前后都为 true**，因为**原始地图本就连通**，
+卡只是额外让轴心获得通路。正确断言是
+① 轴心：原本不通 → 通（或原本就通则保持）；
+② 同盟：**前后一致**（不受益）。
+另外 17747 计分开局返回 0 是**对的**（非洲北部开局就有英/法陆军），别误判成 bug。
+
+**回归**：`check_reuse` B/C 无告警；`test_connectivity` 48/3、`test_basic_cards` 294/3，
+均与既有基线一致。服务器已重启（HTTP=200）。

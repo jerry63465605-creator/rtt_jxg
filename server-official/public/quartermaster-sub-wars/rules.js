@@ -625,30 +625,45 @@ function compute_supply(game, conn_snap) {
 
 			if (type === 'navy') {
 				/*
-				 * 海军补给（2026-10-11 收紧）：
-				 *   必须与【本国陆军】相邻、且该陆军处于补给状态，才有补给。
-				 *   大本营 / 预备役 / 友军（非组内）陆军均不算——
-				 *   即"海军必须邻接本国陆军，大本营无关"。
+				 * 海军补给（2026-10-11 收紧 →【2026-10-20 玩家口径修正】）：
+				 *   必须与【本国 / 组内盟国的陆军】相邻。
+				 *   大本营 / 预备役 / 非组内友军（非 17549 组）陆军均不算。
 				 *   17549 盟军远征部队最高司令部激活时，组内盟国
 				 *   （英/法/美）的陆军可充当本国陆军角色（靠港 / 补给）。
+				 *
+				 * ⚠【2026-10-20 口径修正】原实现除"相邻本组陆军"(cond2) 外，
+				 *   还额外要求"该陆军【自身处于补给状态】"(cond1)，条件过于严格：
+				 *   一旦那支陆军自身断补（例如它自己也远离补给源），
+				 *   明明停在港口旁边的海军也被判为无补给。
+				 *   按玩家口径【取消 cond1】：只要相邻有本国/组内盟国陆军即可，
+				 *   不要求那支陆军本身在补给中。
 				 */
-				let cond1 = false
-				let cond2 = false
+				/*
+				 * 【2026-10-20 玩家口径·最终】海军补给须【同时】满足两条：
+				 *   A. 相邻有【本国 / 组内盟国的陆军】；
+				 *   B. 相邻有【处于补给状态的部队】——不限兵种（陆/海/空军皆可），
+				 *      但仍须是本国 / 组内盟国，敌方补给中的部队不算。
+				 *
+				 * ⚠ 与旧实现的差别：旧实现把 B 也窄化成"【那支陆军本身】处于补给状态"
+				 *   （cond1 要求本组陆军且补给中），条件过严：一旦相邻的陆军自身
+				 *   也远离补给源（尤其它与这支海军互相依赖时），明明靠着港的海军
+				 *   也被判无补给。按玩家口径，B 只要"相邻有补给中的部队"即可，
+				 *   不必是陆军、更不必是 A 那一支。
+				 */
+				let hasOwnArmy = false      /* A */
+				let hasSuppliedNb = false   /* B */
 				for (const nb of nbrs) {
 					for (const other of (bySpace[nb] || [])) {
 						const onat = game.piece_nation[other]
 						const otype = game.piece_type[other]
-						/* 仅【本国 / 组内盟国】的陆军可充当港口与补给链节点 */
-						const isOwnArmy = (otype === 'army') &&
-							supply_group_partner(game, nat, onat)
-						if (isOwnArmy) {
-							cond2 = true
-							if (in_supply[other]) cond1 = true
-						}
+						/* 仅【本国 / 组内盟国】的部队参与判定 */
+						if (!supply_group_partner(game, nat, onat)) continue
+						if (otype === 'army') hasOwnArmy = true
+						if (in_supply[other]) hasSuppliedNb = true
 					}
-					if (cond1 && cond2) break
+					if (hasOwnArmy && hasSuppliedNb) break
 				}
-				if (cond1 && cond2) {
+				if (hasOwnArmy && hasSuppliedNb) {
 					in_supply[pid] = true
 					sources[pid] = 'chain'
 					changed = true
@@ -2206,14 +2221,25 @@ function filter_matches_card(card_id, filter) {
 }
 
 /* 卡对象是否匹配 { type, name } 过滤器（activate_status 的 cost.discard_is 用：
- * 17843/17846 的 {type:'BASIC',name:'建设陆军'}、15242 的 {type:'BASIC',name:'发起陆战'}）。
- * card = inst_card(id) 结果；type 走权威 is_card_type(face id)，name 精确比卡名。
+ * 17843 的 {type:'BASIC',name:'建设陆军'}、17846 的 {name:['建设陆军','发起陆战']}、
+ * 15242 的 {type:'BASIC',name:'发起陆战'}）。
+ * card = inst_card(id) 结果；type 走权威 is_card_type(face id)。
+ * name 既可以是【单值】也可以是【数组】——数组表示"或"关系（见下）。
  * ⚠ 与 filter_matches_card(card_id, 字符串枚举) 是两套入口，勿混用。 */
 function card_matches_filter(card, filter) {
 	if (!filter) return true
 	if (!card) return false
 	if (filter.type && !is_card_type(String(card.id), filter.type)) return false
-	if (filter.name && card.name !== filter.name) return false
+	/*
+	 * 【2026-10-20】name 支持【数组】= "或" 关系：
+	 * 17846《坦克运输》卡面为"弃置1张[建设陆军]【或】[发起陆战]"，
+	 * 此前只有单值精确匹配，导致 [发起陆战] 无法作为代价。
+	 * 单值写法行为不变（向后兼容），既有卡无需改动。
+	 */
+	if (filter.name) {
+		const names = Array.isArray(filter.name) ? filter.name : [filter.name]
+		if (names.indexOf(card.name) < 0) return false
+	}
 	return true
 }
 
@@ -3828,18 +3854,22 @@ const STATUS_EFFECTS = {
 		desc: '航空母舰',
 	},
 
-	/* ---- 17552 战时生产：建设陆军后，损耗1张，建设1支陆军 ---- */
+	/* ---- 17552 战时生产：建设陆军后，损耗1张，建设1支陆军 ----
+	 * 【2026-10-20 修正】卡面【无】"相邻"字样 -> build_scope='all'（全图合法建设地）。 ---- */
 	'17552': {
 		trigger: {
 			window: 'after_build_army', once_per_turn: true, cost: { attrition: 1 },
+			build_scope: 'all',
 			desc: '一回合一次，建设陆军后，损耗1张：建设1支陆军',
 			run(game, ctx) {
 				const base = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : null
 				if (base == null) return { ok: false, reason: '当前无建设触发地区' }
 				const space = (ctx.arg && ctx.arg.space != null) ? Number(ctx.arg.space) : null
 				if (space == null) return { ok: false, reason: '请选择建设地区' }
-				if (!status_build_valid(game, ctx.nation, 'army', base, space))
-					return { ok: false, reason: '该地区不可建设（需相邻空格且未被占用）' }
+				const scope = (status_config_of(ctx.card_id) || {}).trigger &&
+					status_config_of(ctx.card_id).trigger.build_scope
+				if (!status_build_ok(game, ctx.nation, 'army', base, space, scope))
+					return { ok: false, reason: '该地区不可建设（需空格且未被占用）' }
 				const r = build_piece(game, ctx.nation, 'army', space)
 				refresh(game)
 				if (!r.ok) return { ok: false, reason: '建设失败：' + r.reason }
@@ -3893,26 +3923,26 @@ const STATUS_EFFECTS = {
 		desc: '人工港',
 	},
 
-	/* ---- 17550 先进造船厂：建设海军后，损耗1张，建设1支海军 ---- */
+	/* ---- 17550 先进造船厂：建设海军后，损耗1张，建设1支海军 ----
+	 * 【2026-10-20 修正】卡面【无】"相邻"字样 -> build_scope='all'（全图合法建设海域）。 ---- */
 	'17550': {
 		trigger: {
 			window: 'after_build_navy', once_per_turn: true, cost: { attrition: 1 },
+			build_scope: 'all',
 			desc: '一回合一次，建设海军后，损耗1张：建设1支海军',
 			run(game, ctx) {
 				const base = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : null
 				if (base == null) return { ok: false, reason: '当前无建设触发地区' }
 				const space = (ctx.arg && ctx.arg.space != null) ? Number(ctx.arg.space) : null
+				const scope = (status_config_of(ctx.card_id) || {}).trigger &&
+					status_config_of(ctx.card_id).trigger.build_scope
 				if (space == null) {
-					/* 多步：先收集"相邻合法建设海域"，交客户端弹选位（need:'space'） */
-					const cands = []
-					for (let sp = 1; sp < data.spaces.length; sp++) {
-						if (!data.spaces[sp]) continue
-						if (status_build_valid(game, ctx.nation, 'navy', base, sp)) cands.push(sp)
-					}
+					/* 多步：收集合法建设海域交客户端弹选位（need:'space'）；与校验同源 */
+					const cands = status_build_candidates(game, ctx.nation, 'navy', base, scope)
 					return { need: 'space', candidates: cands, pick: 1, pickMin: 1, reason: '请选择建设地区' }
 				}
-				if (!status_build_valid(game, ctx.nation, 'navy', base, space))
-					return { ok: false, reason: '该地区不可建设（需相邻海域且未被占用）' }
+				if (!status_build_ok(game, ctx.nation, 'navy', base, space, scope))
+					return { ok: false, reason: '该地区不可建设（需海域且未被占用）' }
 				const r = build_piece(game, ctx.nation, 'navy', space)
 				refresh(game)
 				if (!r.ok) return { ok: false, reason: '建设失败：' + r.reason }
@@ -4009,10 +4039,14 @@ const STATUS_EFFECTS = {
 		desc: '喀秋莎',
 	},
 
-	/* ---- 17843 量与质兼得：after_build_army，弃1张[建设陆军]，再建设1支陆军 ---- */
+	/* ---- 17843 量与质兼得：after_build_army，弃1张[建设陆军]，再建设1支陆军 ----
+	 * 【2026-10-20 修正】① 卡面【无】"相邻"字样，故 build_scope='all'（全图合法建设地），
+	 *       此前被限成"相邻"，在北欧之类地点算出 0 候选 -> 客户端无高亮且点不动；
+	 *   ② 卡面是"【建设】1支陆军"，原实现走 recruit_piece(征召)，现改为 build_piece(建设)。 ---- */
 	'17843': {
 		trigger: {
 			window: 'after_build_army',
+			build_scope: 'all',
 			cost: { discard: 1, discard_is: { type: 'BASIC', name: '建设陆军' } },
 			desc: '建设陆军后，弃置1张[建设陆军]：建设1支陆军',
 			run(game, ctx) {
@@ -4020,25 +4054,43 @@ const STATUS_EFFECTS = {
 				if (base == null) return { ok: false, reason: '当前无建设触发地区' }
 				const space = (ctx.arg && ctx.arg.space != null) ? Number(ctx.arg.space) : null
 				if (space == null) return { ok: false, reason: '请选择建设地区' }
-				if (!status_build_valid(game, ctx.nation, 'army', base, space))
-					return { ok: false, reason: '该地区不可建设（需相邻空格且未被占用）' }
-				const r = recruit_piece(game, ctx.nation, 'army', space)
+				const scope = (status_config_of(ctx.card_id) || {}).trigger &&
+					status_config_of(ctx.card_id).trigger.build_scope
+				if (!status_build_ok(game, ctx.nation, 'army', base, space, scope))
+					return { ok: false, reason: '该地区不可建设（需空格且未被占用）' }
+				const r = build_piece(game, ctx.nation, 'army', space)
 				refresh(game)
-				if (!r.ok) return { ok: false, reason: '征召失败：' + r.reason }
-				return { ok: true, desc: ctx.nation + ' 在' + data.name_of(space) + ' 征召1支陆军' }
+				if (!r.ok) return { ok: false, reason: '建设失败：' + r.reason }
+				return { ok: true, desc: ctx.nation + ' 在' + data.name_of(space) + ' 建设1支陆军' }
 			},
 		},
 		desc: '量与质兼得',
 	},
 
-	/* ---- 17846 坦克运输：after_build_army，弃1张[建设陆军]，以此陆军发起1次陆战 ---- */
+	/* ---- 17846 坦克运输：after_build_army，弃1张[建设陆军]或[发起陆战]，以此陆军发起1次陆战 ----
+	 * 【2026-10-20 修正】原代价只认 [建设陆军]，漏了卡面的"或[发起陆战]"；
+	 *       同时补上"以此陆军"限定（发起单位必须是刚建成的那支）。 ---- */
 	'17846': {
 		trigger: {
 			window: 'after_build_army',
-			cost: { discard: 1, discard_is: { type: 'BASIC', name: '建设陆军' } },
-			desc: '建设陆军后，弃置1张[建设陆军]：以此陆军发起1次陆战',
+			cost: { discard: 1, discard_is: { type: 'BASIC', name: ['建设陆军', '发起陆战'] } },
+			desc: '建设陆军后，弃置1张[建设陆军]或[发起陆战]：以此陆军发起1次陆战',
 			run(game, ctx) {
 				const sp = ctx.ctx.space
+				/*
+				 * 【2026-10-20】"以此陆军"：发起单位【必须】是刚刚建成的那支陆军。
+				 * arm_status_instant 的 entry 只记 {card_id,nation,window,space}、**不带 piece id**，
+				 * 故无法直接拿到那支部队的 id；但每国每格限 1 支，所以
+				 * "位于建设地区的本国陆军" 与 "刚建成的那支" 等价，据此判定。
+				 * 单点查表（game.location/piece_nation/piece_type），非遍历，不绕过任何原子。
+				 */
+				const pid = (ctx.arg && ctx.arg.from != null) ? ctx.arg.from : null
+				if (pid == null)
+					return { ok: false, reason: '请选择发起单位（必须是刚建成的这支陆军）' }
+				if (Number(game.location[pid]) !== Number(sp) ||
+					game.piece_nation[pid] !== ctx.nation ||
+					game.piece_type[pid] !== 'army')
+					return { ok: false, reason: '《坦克运输》只能以刚刚建成的这支陆军发起陆战' }
 				return status_launch_battle(game, ctx.nation, sp, ctx.arg, 'land', get_neighbors(sp))
 			},
 		},
@@ -6615,7 +6667,19 @@ function apply_status_ongoing(game, card_id, nation) {
 	 */
 	if (og.kind === 'pair_adjacency' && og.pairs) {
 		game.status_connections = game.status_connections || []
-		const onlyF = og.only ? faction_of_nation(og.only) : null
+		/*
+		 * 【2026-10-20 修复】og.only 既可能是【阵营字面量】'axis'/'allies'，
+		 * 也可能是【国家名】（如 '意大利'）。原实现一律走 faction_of_nation(og.only)，
+		 * 而它只认国家名 —— 传 'axis' 会返回 null，
+		 * 于是 status_connections.side = null，get_connections 里
+		 * `if (sc.side && sc.side !== side)` 对 null 不做任何过滤，
+		 * 结果这组邻接对【敌我双方】都开放，违背卡面"仅对友方国家相邻"
+		 * （17744 土耳其开放海峡 / 17747 西班牙控制直布罗陀 均受影响）。
+		 * 现按【字面量优先】归一，两种写法都支持，写入的 side 必为真实阵营。
+		 */
+		const onlyF = og.only
+			? ((og.only === 'axis' || og.only === 'allies') ? og.only : faction_of_nation(og.only))
+			: null
 		let added = 0
 		for (const pr of og.pairs) {
 			const a = space_id(pr[0]), b = space_id(pr[1])
@@ -11695,6 +11759,7 @@ function scan_armed_cards(game, when, ctx) {
 			if (!ar.watch && actorNation && nation !== actorNation) continue
 			if (ar.tag && ar.tag !== ctx.tag) continue
 			if (typeof ar.cond === 'function' && !ar.cond(game, ctx)) continue
+			if (typeof ar.filter === 'function' && !ar.filter(game, ctx)) continue
 			if (typeof ar.ready === 'function' && !ar.ready(game, ctx)) continue
 			const need = (ar.cost && ar.cost.attrition) || 0
 			if (need && !can_attrite(game, nation, need)) continue
@@ -11736,6 +11801,21 @@ function removeArmedWindow(game, win) {
 		resume_event_after_armed(game)
 	/* 【2026-10-16】增强窗口关闭后，落账 17749 轴心协定的真实击杀信用 */
 	maybe_settle_axis_pact(game)
+	/*
+	 * 【2026-10-20 修复】armed 窗口清空后，提升被 defer 的续打帧
+	 * （如 15425《海军空降部队》的"二次陆战"）。
+	 * 此前 promote 仅挂在 clear_armed_offer（该函数从未被真实调用路径触发），
+	 * 真实 armed 窗口清理走 refresh_armed_window / removeArmedWindow，
+	 * 导致只有 armed 卡（如 15311 马奇诺）触发、无 response 卡/代死时，
+	 * 15425 续打帧永不提升 → 第二次陆战发动窗口丢失。
+	 * 守卫与 battle_reconcile_active / defer 分支一致（含 top_response_frame），
+	 * 确保"第二次询问在第一次完全结束后"出现。
+	 */
+	if ((game.armed_offers || []).length === 0) {
+		reconcile_handoff(game, 'armed')
+		if (!game.pending_battle && !top_response_frame(game) && !(game.battle_in_progress || 0))
+			promote_deferred_response(game)
+	}
 }
 
 /* 仅移除该 when 的 generic 窗口（保留 17900 的 special 窗口） */
@@ -11872,6 +11952,7 @@ function offer_armed_effects(game, when, ctx) {
 			if (!ar.watch && actorNation && nation !== actorNation) continue
 			if (ar.tag && ar.tag !== ctx.tag) continue
 			if (typeof ar.cond === 'function' && !ar.cond(game, ctx)) continue
+			if (typeof ar.filter === 'function' && !ar.filter(game, ctx)) continue
 			/*
 			 * 【2026-10-01】ready 纯函数预检：这张卡【此刻真的能发动】才进候选。
 			 * 否则会出现"弹了框、点了却什么都没发生"（run 走 skip 分支、
@@ -11954,6 +12035,15 @@ function clear_armed_offer(game) {
 	}
 	/* 【2026-10-16】增强窗口清空后，落账 17749 轴心协定的真实击杀信用 */
 	maybe_settle_axis_pact(game)
+	/*
+	 * 【2026-10-20 修复】armed 增强窗口结算清空后，提升被 defer 的续打帧
+	 * （如 15425《海军空降部队》的"二次陆战"）。
+	 * 此前只由响应卡清空路径（response_reconcile_active）调用 promote_deferred_response，
+	 * armed 窗口清空（clear_armed_offer）漏调，导致战斗中触发的增强卡（如 15311）
+	 * 结算后，15425 续打帧永不提升 → 卡死。守卫与响应路径同款。
+	 */
+	reconcile_handoff(game, 'armed')
+	if (!game.pending_battle && !(game.battle_in_progress || 0)) promote_deferred_response(game)
 }
 
 /* 【2026-10-13 修复】按【阵营】分域清武装窗口。
@@ -11980,6 +12070,12 @@ function clear_armed_offer_for_side(game, side) {
 	}
 	/* 【2026-10-16】增强窗口清空后，落账 17749 轴心协定的真实击杀信用 */
 	maybe_settle_axis_pact(game)
+	/*
+	 * 【2026-10-20 修复】与 clear_armed_offer 同款：按阵营清武装窗口后，
+	 * 提升被 defer 的续打帧（如 15425 的"二次陆战"），避免战斗中增强卡结算后卡死。
+	 */
+	reconcile_handoff(game, 'armed')
+	if (!game.pending_battle && !(game.battle_in_progress || 0)) promote_deferred_response(game)
 }
 
 /* 【2026-10-07】17900 八月风暴的"友方攻击 -> 让权苏联"挂起。
@@ -13603,36 +13699,183 @@ const RESPONSE_EFFECT_IMPL = {
 			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
 		})
 	},
-	'15423': (game, side, ctx, choice) => {
-		/* 日本建设海军后：在建设地区或其相邻发起 1 次海战 */
-		return pick_space_then_battle(game, ctx, choice, {
-			kind: 'sea', base: ctx.space, includeBase: true,
-			prompt: '选择要发起海战的海域（建设地区或其相邻）',
-		})
+	'15423': (game, side, ctx, choice, extra) => {
+		/* 日本建设海军后：在建设地区或其相邻海域【发起 1 或 2 次海战】 */
+		if (choice === undefined) {
+			/* ① 选第 1 个海域（建设海军地区及其相邻海域） */
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'sea', base: ctx.space, includeBase: true,
+				nation: '日本',
+				prompt: '选择要发起海战的海域（建设海军地区及其相邻海域）',
+			})
+			p.extra = { step: 'battle1' }
+			return p
+		}
+		if (extra && extra.step === 'battle1') {
+			/* ② 在该海域发起海战 */
+			const sp = Number(choice)
+			const r1 = do_sea_battle_at(game, sp, '日本')
+			const desc1 = r1.ok ? '在' + data.name_of(sp) + '发起海战'
+				: '（未在' + data.name_of(sp) + '发起海战：' + (r1.reason || '') + '）'
+			if (!r1.ok) return { ok: true, desc: desc1 }
+			/* 还有别的相邻海域才问"是否再战" */
+			const others = (pick_space_then(game, ctx, undefined, {
+				kind: 'sea', base: ctx.space, includeBase: true, nation: '日本',
+			}).candidates || []).filter(c => c.id !== sp)
+			if (!others.length)
+				return { ok: true, desc: desc1 + '（无其他相邻海域可再战）' }
+			return {
+				pending: true,
+				kind: 'option',
+				candidates: [
+					{ id: 1, name: '再发起 1 次海战（共 2 次）' },
+					{ id: 0, name: '完成（共 1 次）' },
+				],
+				prompt: '是否再发起 1 次海战？',
+				extra: { step: 'ask2', desc1: desc1, used: sp },
+			}
+		}
+		if (extra && extra.step === 'ask2') {
+			/* ③ 选"完成"则结束；选"再战"则进入第 2 个海域选择（排除首次） */
+			if (!choice || Number(choice) === 0)
+				return { ok: true, desc: extra.desc1 }
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'sea', base: ctx.space, includeBase: true,
+				nation: '日本',
+				prompt: '选择要再次发起海战的海域（另一相邻海域）',
+			})
+			p.candidates = (p.candidates || []).filter(c => c.id !== extra.used)
+			p.extra = { step: 'battle2' }
+			return p
+		}
+		if (extra && extra.step === 'battle2') {
+			/* ④ 在第 2 个海域发起海战 */
+			const sp = Number(choice)
+			const r2 = do_sea_battle_at(game, sp, '日本')
+			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再发起海战'
+				: '（第 2 次未发起：' + (r2.reason || '') + '）'
+			return { ok: true, desc: extra.desc1 + '；' + desc2 }
+		}
+		return { ok: true, desc: '（潜艇支援：未执行）' }
 	},
-	'15424': (game, side, ctx, choice) => {
-		/* 日本建设海军后：在建设地区或其相邻【征召陆军】 */
-		return pick_space_then(game, ctx, choice, {
-			kind: 'land', base: ctx.space, includeBase: true,
-			prompt: '选择要征召陆军的地区（建设地区或其相邻）',
-			run: (g, sp) => {
-				const r = recruit_piece(g, '日本', 'army', sp)
-				return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '征召陆军'
-					: '（无法征召：' + (r.reason || '') + '）' }
-			},
-		})
+	'15424': (game, side, ctx, choice, extra) => {
+		/* 日本建设海军后：在建设地区相邻陆地【建设 1 或 2 支陆军】（用建设不是征召） */
+		if (choice === undefined) {
+			/* ① 选第 1 个相邻陆地 */
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: false,
+				nation: '日本',
+				prompt: '选择要建设陆军的相邻地区（建设海军地区相邻陆地）',
+			})
+			p.extra = { step: 'region1' }
+			return p
+		}
+		if (extra && extra.step === 'region1') {
+			/* ② 在该地区建设 1 支陆军 */
+			const sp = Number(choice)
+			const r1 = build_piece(game, '日本', 'army', sp)
+			const desc1 = r1.ok ? '在' + data.name_of(sp) + '建设陆军'
+				: '（未在' + data.name_of(sp) + '建成陆军：' + (r1.reason || '') + '）'
+			if (!r1.ok) return { ok: true, desc: desc1 }
+			const others = (pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: false, nation: '日本',
+			}).candidates || []).filter(c => c.id !== sp)
+			if (!others.length)
+				return { ok: true, desc: desc1 + '（无其他相邻地区可再建）' }
+			return {
+				pending: true,
+				kind: 'option',
+				candidates: [
+					{ id: 1, name: '再在另一相邻地区建 1 支陆军（共 2 支）' },
+					{ id: 0, name: '完成（共 1 支）' },
+				],
+				prompt: '是否再在另一相邻地区建 1 支陆军？',
+				extra: { step: 'ask2', desc1: desc1, used: sp },
+			}
+		}
+		if (extra && extra.step === 'ask2') {
+			if (!choice || Number(choice) === 0)
+				return { ok: true, desc: extra.desc1 }
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: false,
+				nation: '日本',
+				prompt: '选择要再建陆军的相邻地区（另一相邻陆地）',
+			})
+			p.candidates = (p.candidates || []).filter(c => c.id !== extra.used)
+			p.extra = { step: 'region2' }
+			return p
+		}
+		if (extra && extra.step === 'region2') {
+			const sp = Number(choice)
+			const r2 = build_piece(game, '日本', 'army', sp)
+			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再建 1 支陆军'
+				: '（第 2 支未建成：' + (r2.reason || '') + '）'
+			return { ok: true, desc: extra.desc1 + '；' + desc2 }
+		}
+		return { ok: true, desc: '（海军特别陆战队：未执行）' }
 	},
-	'15425': (game, side, ctx, choice) => {
-		/* 日本建设海军后：在建设地区或其相邻【部署空军】 */
-		return pick_space_then(game, ctx, choice, {
-			kind: 'land', base: ctx.space, includeBase: true,
-			prompt: '选择要部署空军的地区（建设地区或其相邻）',
-			run: (g, sp) => {
-				const r = build_piece(g, '日本', 'air', sp)
-				return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '部署空军'
-					: '（无法部署：' + (r.reason || '') + '）' }
-			},
-		})
+	'15425': (game, side, ctx, choice, extra) => {
+		/* 日本建设海军后：对建设地区或其相邻陆地【发起 1 或 2 次陆战】（方案 A；卡面文本为准） */
+		if (choice === undefined) {
+			/* ① 选第 1 个相邻陆地 */
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: true,
+				nation: '日本',
+				prompt: '选择要发起陆战的地区（建设海军地区及其相邻陆地）',
+			})
+			p.extra = { step: 'battle1' }
+			return p
+		}
+		if (extra && extra.step === 'battle1') {
+			/* ② 在该地区发起陆战 */
+			const sp = Number(choice)
+			const r1 = do_land_battle_at(game, sp, '日本')
+			const desc1 = r1.ok ? '对' + data.name_of(sp) + '发起陆战'
+				: '（未对' + data.name_of(sp) + '发起陆战：' + (r1.reason || '') + '）'
+			if (!r1.ok) return { ok: true, desc: desc1 }
+			/* 还有别的相邻陆地才问"是否再战"（方案 A：候选不排除首次地区） */
+			const others = (pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: true, nation: '日本',
+			}).candidates || [])
+			if (!others.length)
+				return { ok: true, desc: desc1 + '（无其他相邻地区可再战）' }
+			return {
+				/* defer：第一次陆战已发起（含空军代死 pending_battle 与 on:'battle' 嵌套响应帧），
+				 * 把"是否再战"续打帧存入 deferred_response_stack，
+				 * 等第一次的全部嵌套响应（空军代死/其它响应）完全结算、栈与队列清空后，
+				 * 由 promote_deferred_response 恢复 —— 即"第二次询问在第一次完全结束后"。 */
+				defer: true,
+				kind: 'option',
+				candidates: [
+					{ id: 1, name: '再发起 1 次陆战（共 2 次）' },
+					{ id: 0, name: '完成（共 1 次）' },
+				],
+				prompt: '是否再发起 1 次陆战？',
+				extra: { step: 'ask2', desc1: desc1, used: sp },
+			}
+		}
+		if (extra && extra.step === 'ask2') {
+			/* ③ 选"完成"则结束；选"再战"则进入第 2 个地区选择（方案 A：不排斥首次地区） */
+			if (!choice || Number(choice) === 0)
+				return { ok: true, desc: extra.desc1 }
+			const p = pick_space_then(game, ctx, undefined, {
+				kind: 'land', base: ctx.space, includeBase: true,
+				nation: '日本',
+				prompt: '选择要再次发起陆战的地区（可再次选择同一地区）',
+			})
+			/* 方案 A：第 2 步候选不排除首次地区 */
+			p.extra = { step: 'battle2' }
+			return p
+		}
+		if (extra && extra.step === 'battle2') {
+			/* ④ 在第 2 个地区发起陆战 */
+			const sp = Number(choice)
+			const r2 = do_land_battle_at(game, sp, '日本')
+			const desc2 = r2.ok ? '对' + data.name_of(sp) + '再发起陆战'
+				: '（第 2 次未发起：' + (r2.reason || '') + '）'
+			return { ok: true, desc: extra.desc1 + '；' + desc2 }
+		}
+		return { ok: true, desc: '（海军空降部队：未执行）' }
 	},
 	'15426': (game, side, ctx, choice, extra) => {
 		/* 日本发起海战后：在战斗相邻地区【建设 1 或 2 支陆军】（卡面文本为准）
@@ -14399,9 +14642,12 @@ function response_reconcile_active(game) {
 			/*
 			 * 队列空了：先交还操作权，再提升"延期的响应步骤"
 			 * （顺序不能反 —— promote 内部会重新让权给该步骤的持有方）。
+			 * 【2026-10-20】提升前必须确认无挂起战斗（空军代死 pending_battle）：
+			 * 若第一次战斗的空军代死仍未结算，延期帧（如 15425 的"是否再战"）
+			 * 不能抢在代受之前出现。此守卫与 battle_reconcile_active / defer 分支一致。
 			 */
 			reconcile_handoff(game, 'response')
-			promote_deferred_response(game)
+			if (!game.pending_battle && !(game.battle_in_progress || 0)) promote_deferred_response(game)
 		}
 	}
 	/* 【2026-10-16】响应队列清空后，落账 17749 轴心协定的真实击杀信用 */
@@ -14447,6 +14693,15 @@ function top_response_frame(game) {
 	const s = game.response_stack || []
 	return s.length ? s[s.length - 1] : null
 }
+function remove_response_frame(game, frame) {
+	/* 按引用移除指定帧（而非弹栈顶）：effect 内部 do_battle 触发的 on:'battle'
+	 * 嵌套响应帧会被压到当前 effect 帧之上，弹栈顶会误删它们；
+	 * 改为移除 effect 帧本身，保留其上的嵌套响应帧，让其先结算。 */
+	game.response_stack = game.response_stack || []
+	const i = game.response_stack.indexOf(frame)
+	if (i >= 0) game.response_stack.splice(i, 1)
+	return frame
+}
 
 /* 【栈重构·第二期】递延续打帧暂存独立数组（不在活动栈顶，待 response_stack
  * 清空后再由 promote_deferred_response 压回成为活动帧）。彻底取代旧全局
@@ -14467,6 +14722,8 @@ function promote_deferred_response(game) {
 		handoff_to(game, d.owner_side, 'response')
 	}
 	push_response_frame(game, d)
+	/* 【2026-10-20】延期帧回到活动栈后同步派生队列视图，保持 response_queue 与栈一致 */
+	sync_response_queue_view(game)
 	game.log.push('【响应】回到《' + d.name + '》：' + d.prompt)
 	return true
 }
@@ -15145,6 +15402,49 @@ function status_build_valid(game, nation, type, base, space) {
 	const uf = unit_slot_free(game, nation, type, space)
 	if (!uf.ok) return false
 	return true
+}
+
+/*
+ * 【2026-10-20】状态卡"建设"的地区【范围口径】。
+ *
+ * 卡面差异（逐张核对，勿一刀切）：
+ *   · "在【相邻地区】建设1支陆军" -> scope='near'
+ *       15248 合成燃料(德)、17547 人工港(美)
+ *   · 只写"建设1支X"（【无】相邻字样） -> scope='all'，取全图合法建设地
+ *       17843 量与质兼得(苏)、17550 先进造船厂(美)、17552 战时生产(美)
+ *
+ * 原实现一律按 'near'：17843 在北欧之类地点算出 0 候选，
+ * 客户端因此不高亮、点击也被候选校验拦下 —— 即"没有高亮、也不能点"。
+ *
+ * 由卡配置的 `trigger.build_scope:'all'` 驱动，run 与 query 共享同一判定
+ * （判定同源），避免"高亮了却点不动"。
+ */
+function status_build_scope_of(scope) {
+	return (scope === 'all') ? 'all' : 'near'
+}
+function status_build_ok(game, nation, type, base, space, scope) {
+	if (status_build_scope_of(scope) === 'all') {
+		/* 不限相邻：与全图候选同一套校验（can_build_at 权威 + 槽位空闲） */
+		return can_build_at(game, nation, Number(space), type).ok &&
+			unit_slot_free(game, nation, type, Number(space)).ok
+	}
+	return status_build_valid(game, nation, type, base, space)
+}
+function status_build_candidates(game, nation, type, base, scope) {
+	const out = []
+	if (status_build_scope_of(scope) === 'all') {
+		for (let sp = 1; sp < data.spaces.length; sp++) {
+			if (!data.spaces[sp]) continue
+			if (can_build_at(game, nation, sp, type).ok &&
+				unit_slot_free(game, nation, type, sp).ok) out.push(sp)
+		}
+		return out
+	}
+	/* 连通性唯一枢纽，且必须带阵营（与 status_build_valid 内部同口径） */
+	for (const i of get_connections(game, Number(base), faction_of_nation(nation))) {
+		if (status_build_valid(game, nation, type, base, i)) out.push(i)
+	}
+	return out
 }
 
 function build_candidate_spaces(game, nation, type, opt) {
@@ -16065,7 +16365,31 @@ function resume_event_after_armed(game) {
  *
  * kind 取值 'land'（陆战，目标须陆地）| 'sea'（海战，目标须海域）
  */
+/*
+ * 【2026-10-20 修复】battle_in_progress 改为【配对计数】（真计数，支持嵌套战斗），
+ * 由下面的 do_battle 包装统一保证"进入 +1 / 任何出口 -1"。
+ *
+ * 原实现在函数体内逐个出口手写复位，而 do_battle 共有 32 个 return，
+ * 只有 2 个（抵消成立、正常末尾）会复位 —— 于是【被拒的目标】、【空打】、
+ * 【代受挂起】、【代受成立】等日常路径都会把标志永久钉成 true，
+ * 此后所有 promote_deferred_response 的守卫 !(battle_in_progress) 永久失效，
+ * 表现为 15425《海军空降部队》的"第二次陆战"询问再也不出现（与增强卡无关）。
+ *
+ * 语义澄清：本标志表示"此刻是否仍处在某个 do_battle 调用栈中"（同步保护）；
+ * "整场战斗尚未结束"改由 game.pending_battle 单独承担 —— promote 守卫本就含
+ * !game.pending_battle，故挂起待决期间延期帧（15425 的"是否再战"）依旧不会提前出现，
+ * "第二次询问必须在第一次完全结束后"的口径不变。
+ */
 function do_battle(game, nation, space, target_piece, kind, opt) {
+	game.battle_in_progress = (game.battle_in_progress || 0) + 1
+	try {
+		return do_battle_inner(game, nation, space, target_piece, kind, opt)
+	} finally {
+		game.battle_in_progress = Math.max(0, (game.battle_in_progress || 0) - 1)
+	}
+}
+
+function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	const myFaction = faction_of_nation(nation)
 	const sp = data.spaces[space]
 	if (!sp) return { ok: false, reason: '地区不存在' }
@@ -16678,6 +17002,16 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 					reason: 'piece_removed',
 					was_supplied: rmvSuppliedC,
 				}, false)
+				/* 【2026-10-20 修复】counter 路径与正常战斗路径一致：victim 移除后也武装
+				 * armed 增强窗口（如 15311 马奇诺），否则 15311 在"日本选抵消"时不触发，与预期不符。 */
+				try {
+					offer_armed_effects(game, 'piece_removed', {
+						nation: rmvNationC, piece: victim,
+						piece_nation: rmvNationC, piece_type: rmvTypeC,
+						space: space, reason: 'piece_removed',
+						was_supplied: rmvSuppliedC,
+					})
+				} catch (e) { game.log.push('arm piece_removed(counter) 错误：' + e.message) }
 				/* 【2026-10-16】17749 轴心协定：尝试落账（无窗口则立即 +1） */
 				maybe_settle_axis_pact(game)
 			}
@@ -20831,6 +21165,15 @@ exports.view = function (state, current) {
 			const pc = top_response_frame(game)
 			if (!pc) return null
 			if (pc.owner_side !== side) return null
+			/*
+			 * 【修复·契约一致性】"待发动"帧（request_responses 压栈时 candidates 仍为空）
+			 * 只表示"请决定是否发动"，应由 view.pending_trigger 驱动发动/不发动框。
+			 * 它不应作为 response_choice 下发——否则 view.response_choice 在"等待发动"
+			 * 时就非空，客户端 update_pending_trigger_box 的早退逻辑（if (view.response_choice) return）
+			 * 会把发动框误掐掉，表现为顶部横幅显示"响应卡结算中：请决定是否发动"却无弹窗。
+			 * 仅当帧确有候选（已发动、处于选目标/选项阶段）时才下发。
+			 */
+			if (!pc.candidates || !pc.candidates.length) return null
 			return {
 				card_id: pc.card_id,
 				name: pc.name,
@@ -21610,6 +21953,15 @@ function battle_reconcile_active(game) {
 	if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle) {
 		finish_us_lend_lease(game, game.delegate, game.delegate.nat)
 	}
+	/*
+	 * 【2026-10-20】战斗（含空军代死 pending_battle / su_step_back）结算完毕后，
+	 * 提升"延期的响应续打帧"（如 15425《海军空降部队》的"是否再发起 1 次陆战"），
+	 * 让其在第一次战斗的全部嵌套响应与代受处理完【之后】才由客户端询问。
+	 * 仅当无可挂起战斗、且响应栈已空时才提升，避免与仍在栈上的 on:'battle' 嵌套帧交错；
+	 * 若仍有 on:'battle' 嵌套帧，它们结算时会经 response_reconcile_active 的 else 分支提升。
+	 */
+	if (!game.pending_battle && !top_response_frame(game) && !(game.battle_in_progress || 0))
+		promote_deferred_response(game)
 }
 
 /*
@@ -21704,6 +22056,20 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		/* 【栈重构·第二期】响应挂起判定读栈顶帧（纯栈：pending_response_choice 已删除） */
 		const _tf = top_response_frame(game)
 		if (_tf && _tf.owner_side === side) {
+			/*
+			 * 【修复·契约一致性】栈顶帧有两阶段：
+			 *   待发动（candidates 为空，request_responses 刚压栈）= 等持有方"发动/不发动"，
+			 *     需放行 trigger_response / pass_response / response_reorder / response_confirm；
+			 *   选目标（candidates 非空，trigger_response 后 effect 返回 pending）= 只放行 resolve_response_choice。
+			 * 之前仅凭 owner_side===side 判定，会把"待发动且持有方为本方"误判为选目标，
+			 * 漏掉 trigger/pass_response，导致客户端点击发动/不发动静默无反应。
+			 */
+			if (!_tf.candidates || !_tf.candidates.length) {
+				game.block_reason = 'pending_trigger: 响应队列待【' +
+					(side === 'axis' ? '轴心国' : '同盟国') + '】《' +
+					(_tf.name || _tf.card_id) + '》表态（需点 发动/不发动 才清空）'
+				return { trigger_response: 1, pass_response: 1, response_reorder: 1, response_confirm: 1, log: 1 }
+			}
 			game.block_reason = 'response_stack: 响应卡《' +
 				(_tf.name || _tf.card_id) +
 				'》等待选择目标（点击高亮地区提交）'
@@ -22834,8 +23200,8 @@ function play_status_card_impl(game, nation, card_id) {
 				 * 只有再次返回 pending 的卡才会走到这里，故安全。
 				 */
 				if (r && r.pending) {
-					/* 【栈重构·第二期】续打：弹出当前帧、压入新帧（纯栈，不再写 pending_response_choice） */
-					pop_response_frame(game)
+					/* 【栈重构·第二期】续打：移除当前 effect 帧、压入新帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
+					remove_response_frame(game, pc)
 					push_response_frame(game, {
 						card_id: pc.card_id,
 						card_face: pc.card_face,
@@ -22849,6 +23215,8 @@ function play_status_card_impl(game, nation, card_id) {
 					})
 					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
 						(top_response_frame(game) || {}).prompt)
+					/* 【2026-10-20】帧已换新，同步派生队列视图（与 defer 分支同口径） */
+					sync_response_queue_view(game)
 					return game
 				}
 				/*
@@ -22861,11 +23229,11 @@ function play_status_card_impl(game, nation, card_id) {
 				 */
 				if (r && r.defer) {
 					/*
-					 * 【栈重构·第二期】defer：弹出当前帧，续打存 game.deferred_response_stack
+					 * 【栈重构·第二期】defer：移除当前 effect 帧，续打存 game.deferred_response_stack
 					 * （纯栈：不再写 deferred_response_choice 旧全局）。栈清空后由
-					 * promote_deferred_response 压回成为活动帧。
+					 * promote_deferred_response 压回成为活动帧（按引用移除，保留嵌套响应帧）。
 					 */
-					pop_response_frame(game)
+					 remove_response_frame(game, pc)
 					const df = {
 						card_id: pc.card_id,
 						card_face: pc.card_face,
@@ -22879,6 +23247,24 @@ function play_status_card_impl(game, nation, card_id) {
 					}
 					defer_response_frame(game, df)
 					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
+					/*
+					 * 【2026-10-20 修复·一类问题】栈帧已移除，必须同步派生队列视图：
+					 * 否则 game.response_queue 残留已离栈的触发项——①持有方 view.pending_trigger
+					 * 由过期队首渲染出幽灵"是否发动"框（点发动/不发动均因栈空空转，15425 实测）；
+					 * ②全局动作闸门见非空队列把对方 resolve_battle（空军代死应答）一并拦下，
+					 * 双方同时卡死。 */
+					sync_response_queue_view(game)
+					/*
+					 * 【2026-10-20】defer 后若此刻【没有任何待结算的嵌套响应/挂起战斗】
+					 * （如第一次陆战是空打、且无可触发响应卡、无空军代死），
+					 * 不会再有 resolve/trigger/pass 触达 response_reconcile_active /
+					 * battle_reconcile_active 来恢复延期帧，导致"是否再战"永不出现。
+					 * 故此处补一次【守卫式】提升：仅当无挂起战斗且响应栈已空时才提升，
+					 * 与 battle_reconcile_active / response_reconcile_active 的守卫一致，
+					 * 避免与仍在栈上的 on:'battle' 嵌套帧或待决空军代死交错。
+					 */
+					if (!game.pending_battle && !top_response_frame(game))
+						promote_deferred_response(game)
 					return game
 				}
 			} catch (e) {
@@ -22887,8 +23273,8 @@ function play_status_card_impl(game, nation, card_id) {
 				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
 			}
 		}
-		/* 【栈重构·第二期】正常结算完成：弹出当前帧（纯栈，不再写 pending_response_choice） */
-		pop_response_frame(game)
+		/* 【栈重构·第二期】正常结算完成：移除当前 effect 帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
+		remove_response_frame(game, pc)
 		consume_response(game, pc.card_id, pc.owner_side)
 		/*
 		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
@@ -23520,6 +23906,17 @@ function play_status_card_impl(game, nation, card_id) {
 		 * 战斗预算(event_budget)模型下，单场战斗结算完即结束：
 		 * 预算状态(game.event_budget)始终保留，无需"续打序列"层。
 		 */
+		/*
+		 * 【2026-10-20 修复】代受/不代受这一【日常出口】此前从未调用
+		 * battle_reconcile_active，导致两个后果：
+		 *   ① 操作权不归还 —— battle_return_active 悬空，game.active 停在防守方；
+		 *   ② promote_deferred_response 无人触达 —— 延期续打帧（15425《海军空降部队》
+		 *      的"是否再发起 1 次陆战"）永久留在 deferred，
+		 *      表现即"即使没有增强卡，第二步也不弹出"。
+		 * 与 guard / kv2 / su_step_back 各分支口径统一：本场战斗结算完即 reconcile
+		 * （内部会先归还操作权，再按守卫提升延期帧）。
+		 */
+		battle_reconcile_active(game)
 		return game
 	}
 
@@ -23984,7 +24381,10 @@ function play_status_card_impl(game, nation, card_id) {
 				for (const cid of picked.slice(0, cost.discard)) {
 					const c = inst_card(cid)
 					if (!card_matches_filter(c, cost.discard_is)) {
-						game.log.push('《' + status_name(cardId) + '》的代价必须是指定的牌（' + (cost.discard_is.name || '') + '）')
+						/* 【2026-10-20】discard_is.name 可能是数组（"或"关系），文案须展开为"A或B" */
+						const nm = cost.discard_is.name
+						const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '')
+						game.log.push('《' + status_name(cardId) + '》的代价必须是指定的牌（' + nmTxt + '）')
 						return game
 					}
 				}
@@ -26075,21 +26475,19 @@ exports.query = function (state, current, query, params) {
 		if (!inst && tr.window !== 'play_start')
 			return { ok: false, reason: '该状态卡当前窗口未激活' }
 		const base = inst ? inst.space : null
-		const out = []
-		if (base == null) {
-			/* 【2026-10-17】play_start 类状态卡（如 17841 近卫军）没有"触发地区"base，
-			 * 不能走"相邻 base"逻辑。候选 = 全图所有可合法建设 type 的地区，
-			 * 复用 can_build_at 权威校验，不手写遍历。 */
-			for (let sp = 1; sp < data.spaces.length; sp++) {
-				if (!data.spaces[sp]) continue
-				if (can_build_at(game, nation, sp, type).ok) out.push(sp)
-			}
-		} else {
-			for (const i of get_connections(game, Number(base))) {
-				if (status_build_valid(game, nation, type, base, i)) out.push(i)
-			}
-		}
-		return { ok: true, spaces: out, base: base }
+		/*
+		 * 【2026-10-20】范围口径：
+		 *   · base == null（play_start 类，如 17841 近卫军）-> 全图；
+		 *   · 卡面无"相邻"字样且配置了 build_scope:'all'
+		 *     （17843 量与质兼得 / 17550 先进造船厂 / 17552 战时生产）-> 全图；
+		 *   · 其余（卡面写明"相邻"：15248 / 17547）-> 仍按 base 相邻。
+		 * 候选统一走 status_build_candidates，与各卡 run 的 status_build_ok
+		 * 【同源】；'near' 分支内部按阵营取连通（修复此前 get_connections
+		 * 未传阵营导致的"高亮了却点不动"漂移）。
+		 */
+		const scope = (base == null || tr.build_scope === 'all') ? 'all' : 'near'
+		const out = status_build_candidates(game, nation, type, base, scope)
+		return { ok: true, spaces: out, base: base, scope: scope }
 	}
 
 	/*
