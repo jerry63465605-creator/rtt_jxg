@@ -160,6 +160,8 @@ function update_map() {
 	update_event_done_button()
 	update_air_box()
 	update_violations()
+	/* 【2026-10-20】卡牌"部分成功"的失败清单 -> toast（服务端下发，客户端只负责显示） */
+	update_card_fail_toast()
 
 	/* 计分：分数面板 + 地图上的计分标记 */
 	update_score_panel()
@@ -206,8 +208,12 @@ function update_map() {
 	 * （见 update_pending_autobahn_box），高亮会被顺手清掉。
 	 * 这里在 render 末尾按服务端下发的 targets 重新贴一次，
 	 * 保证"只要预算还在，高亮就一定在"（与 pending_card 同款处理）。
+	 *
+	 * 【2026-10-20】升级为 reapply_all_highlights()：除战斗预算外，一并每帧重贴
+	 * 【建设 / 状态卡选地 / 发起单位 / 让权委托】的候选 —— 这些此前没有重贴保护，
+	 * 高亮活不过一帧（点击判定读内存变量故仍正确，于是"点击正确、高亮不正确"）。
 	 */
-	reapply_event_budget_highlight()
+	reapply_all_highlights()
 }
 
 /*
@@ -229,6 +235,84 @@ function reapply_event_budget_highlight() {
 		return
 	}
 	highlight_targets({ spaces: eb.targets.map(id => ({ id: id })) })
+}
+
+/*
+ * 【2026-10-20】统一【每帧重贴】高亮：建设 / 发起战斗 / 委托 / 预算。
+ *
+ * 病根：highlight_targets() 内部会先 clear_target_highlight()【全清】再贴，
+ * 而 update_map 每帧都会跑一次 —— 凡是不在"每帧重贴名单"里的候选，高亮活不过一帧；
+ * 但点击判定读的是内存变量（status_build_cands、battle_flow、autobahn_cands…），
+ * 与 DOM class 无关，于是表现为"【点击正确、高亮不正确】"。
+ *
+ * 修法：一个函数按【与 on_click_space 相同的优先级】重贴，命中第一个有候选的
+ * 层级即贴并 return —— 保证高亮与点击判定同源，不会出现"高亮 A、点了走 B"。
+ *
+ * 层级顺序（对应 on_click_space 的分支先后）：
+ *   1 armed 选地/选部队   2 状态卡选地   3 battle_flow（发起单位/目标）
+ *   4 建设预算            5 让权委托     6 基本卡目标    7 战斗预算
+ */
+function reapply_all_highlights() {
+	/* 1. 增强卡 armed：选部队(need:'piece') / 选地(need:'space')，含空打地块 */
+	if (pending_armed && pending_armed.need === 'piece') {
+		highlight_pieces(pending_armed.candidates || [], 'armed')
+		if ((pending_armed.spaceCandidates || []).length)
+			highlight_targets({ spaces: pending_armed.spaceCandidates.map(id => ({ id: id })) })
+		return
+	}
+	if (pending_armed && pending_armed.need === 'space') {
+		highlight_targets({ spaces: (pending_armed.candidates || []).map(id => ({ id: id })) })
+		return
+	}
+	/* 2. 状态卡选地：建设候选 或 战斗候选（二者互斥，由 status_build_pending 区分） */
+	if (status_act_phase === 'space') {
+		if (status_build_pending && (status_build_cands || []).length)
+			highlight_targets({
+				spaces: status_build_cands.map(id => ({ id: id, reason: '建设候选' })),
+			})
+		else if ((status_battle_cands || []).length)
+			highlight_targets({
+				spaces: status_battle_cands.map(id => ({ id: id, reason: '可发起战斗的地区' })),
+			})
+		return
+	}
+	/*
+	 * 3. 战斗流程 battle_flow：
+	 *    from   -> 目标地区(.target) + 可发起算子(.pickable)，两者都要贴；
+	 *    target -> 目标地区。
+	 *    ⚠ 算子高亮是独立的 .pickable 类，highlight_targets 的全清不会抹掉它。
+	 */
+	if (battle_flow) {
+		if (battle_flow.step === 'from') {
+			if (pending_targets) highlight_targets(pending_targets)
+			if ((battle_flow.initiators || []).length)
+				highlight_pieces(battle_flow.initiators.map(u => u.id), 'initiator')
+		} else if (battle_flow.step === 'target' && pending_targets) {
+			highlight_targets(pending_targets)
+		}
+		return
+	}
+	/* 4. 建设预算 pending_autobahn（候选由 RPC 返回，已缓存到 autobahn_cands） */
+	if (view && view.pending_autobahn) {
+		if ((autobahn_cands || []).length)
+			highlight_targets({
+				spaces: autobahn_cands.map(id => ({ id: id, reason: '建设候选' })),
+			})
+		return
+	}
+	/* 5. 让权委托（候选随 view 下发，无需缓存） */
+	const dg = (view && (view.su_build_delegate || view.uk_build_delegate ||
+		view.us_china_build || view.us_theater_delegate)) || null
+	if (dg && dg.candidates && dg.candidates.length) {
+		highlight_targets({
+			spaces: dg.candidates.map(c => ({ id: c.id, reason: '委托建设候选' })),
+		})
+		return
+	}
+	/* 6. 基本卡目标 */
+	if (pending_card && pending_targets) { highlight_targets(pending_targets); return }
+	/* 7. 战斗预算（保留既有逻辑，含 remaining<=0 时清除高亮） */
+	reapply_event_budget_highlight()
 }
 
 /* 安全取元素并写文本 */
@@ -3692,6 +3776,37 @@ let peek_cards = null
 let peek_target = null
 
 /* ============================================================
+ * 【2026-10-20】卡牌"部分成功"的失败提示（服务端下发 -> 客户端 toast）
+ *
+ * 场景：《自由法国同盟》pick:2 选中 2 个地区征召法国陆军，
+ * 第 2 个地区被拒（"法国 的陆军已达上限（N）" = 玩家说的"后备兵力不足"）——
+ * 玩家只看到"牌打出去了却只出现 1 支部队"，需要明确告知原因与哪些步骤没做成。
+ *
+ * 判定与文案【全部由服务端算好】（view.last_card_fail = { token, name, fails[] }），
+ * 客户端不二次判断、也不自己猜 —— 与 view.hand_ready 同款"判定同源"口径。
+ *
+ * token 用于识别"这是一条新提示"，避免每次 view 刷新重复弹窗；
+ * 首次进入房间只记录【基线】不弹窗，否则加载时会把历史失败重弹一遍。
+ * ============================================================ */
+let card_fail_token_seen = null
+function update_card_fail_toast() {
+	const f = view && view.last_card_fail
+	if (!f)
+		return
+	if (card_fail_token_seen === null) {
+		card_fail_token_seen = f.token
+		return
+	}
+	if (f.token === card_fail_token_seen)
+		return
+	card_fail_token_seen = f.token
+	const detail = (f.fails || []).join('；')
+	if (!detail)
+		return
+	toast((f.name ? '《' + f.name + '》部分效果未生效：' : '部分效果未生效：') + detail)
+}
+
+/* ============================================================
  * ECHO/EVENT 卡的"选 N 张弃牌代价"弹框（2026-09-25）
  *
  * 流程：
@@ -5593,6 +5708,13 @@ function update_pending_econ_box() {
  * 候选地区高亮仍由 query autobahn_targets 的 on_reply 负责（不在此处贴）。
  * ============================================================ */
 let autobahn_query_remaining = null   /* 上次查询时的剩余次数，仅用于节流，避免每帧打 RPC */
+/*
+ * 【2026-10-20】建设预算的候选【缓存】。
+ * autobahn_targets 是 RPC 异步返回，而 update_map 每帧都会用 highlight_targets
+ * （内部先全清 .target）刷新高亮 —— 不缓存的话候选活不过一帧，
+ * 表现为"能点建设、却看不到高亮"。这里在 on_reply 存一份供每帧重贴。
+ */
+let autobahn_cands = null
 
 function update_pending_autobahn_box() {
 	const pa = view && view.pending_autobahn
@@ -5621,7 +5743,14 @@ function update_pending_autobahn_box() {
 		send_query('autobahn_targets', {})
 	}
 
-	const nm = (pa.actor === '苏联') ? '西伯利亚大铁路' : '高速公路'
+	/*
+	 * 【2026-10-20】17529 委托建设预算（source==='su_build_delegate'）与
+	 * 高速公路/西伯利亚大铁路共用本面板，但语义不同：委托预算【有】结束入口
+	 * （点结束才归还美国并触发国家技能），且建设后可插入发动苏联本国状态卡。
+	 */
+	const isSuDelegate = (pa.source === 'su_build_delegate')
+	const nm = isSuDelegate ? '摩尔曼斯克运输船队'
+		: ((pa.actor === '苏联') ? '西伯利亚大铁路' : '高速公路')
 	box.classList.remove('hide')
 	box.innerHTML = ''
 
@@ -5632,9 +5761,20 @@ function update_pending_autobahn_box() {
 
 	const hint = document.createElement('div')
 	hint.className = 'eb-hint'
-	hint.textContent = '点地图上高亮的地区建设 1 支' + (pa.actor || '德国') +
-		'陆军。收回的部队必须全部重建（本预算无「结束」）。'
+	hint.textContent = isSuDelegate
+		? '苏联建设 1 支陆军：点地图高亮地区建设（可先发动本国状态卡）。完成后点「结束预算」收尾并归还美国。'
+		: '点地图上高亮的地区建设 1 支' + (pa.actor || '德国') +
+			'陆军。收回的部队必须全部重建（本预算无「结束」）。'
 	box.appendChild(hint)
+
+	/* 委托建设预算的收尾按钮（唯一入口；顺序上严格晚于建设与状态卡） */
+	if (isSuDelegate) {
+		const btn = document.createElement('button')
+		btn.className = 'action primary'
+		btn.textContent = '结束预算（归还美国）'
+		btn.onclick = () => send_action('finish_su_build_budget', {})
+		box.appendChild(btn)
+	}
 }
 
 /* ============================================================
@@ -8362,9 +8502,12 @@ function on_reply(q, params) {
 		const actor = (view.pending_autobahn && view.pending_autobahn.actor) || '德国'
 		const title = (actor === '苏联') ? '西伯利亚大铁路' : '高速公路'
 		if (!sps.length) {
+			autobahn_cands = []
 			toast("《" + title + "》当前没有可建设陆军的位置（需处于补给中）")
 			return
 		}
+		/* 【2026-10-20】缓存候选，供 update_map 每帧重贴（见 reapply_all_highlights） */
+		autobahn_cands = sps.map(x => x.id)
 		highlight_targets({ spaces: sps.map(x => ({ id: x.id, reason: x.name })) })
 		toast("请点击一个高亮地区，建设 1 支" + actor + "陆军")
 		return

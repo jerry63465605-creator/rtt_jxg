@@ -1966,11 +1966,22 @@ function consume_extra_play(game, nation) {
 	const ep = game.extra_play
 	if (!ep || ep.nation !== nation) return
 	ep.count = (ep.count || 1) - 1
-	if (ep.count <= 0) game.extra_play = null
+	if (ep.count <= 0) {
+		game.extra_play = null
+		/*
+		 * 【2026-10-20】技能授予的额外打出已打掉 -> 此刻才归还为国家技能扣住的操作权
+		 * （玩家口径：发动技能后要【打出那张牌】才归还）。
+		 */
+		sync_national_skill_handoff(game)
+	}
 }
 
 /* 回合 / 阶段切换时的清理 */
-function clear_extra_play(game) { game.extra_play = null }
+function clear_extra_play(game) {
+	game.extra_play = null
+	/* 同上：额外打出被阶段切换清掉，同步归还，避免操作权永久卡住 */
+	sync_national_skill_handoff(game)
+}
 
 /* ============================================================
  * 【2026-09-30】国家技能
@@ -2117,6 +2128,7 @@ const STARRED_CARDS = {
 	'17717': true, '17718': true, '17719': true, '17720': true, '17721': true,
 	'17726': true, '17732': true, '17737': true,
 	'16703': true,
+	'17734': true,   /* 罗马尼亚增援（玩家 2026-10-20 确认带★：生效后立刻给意大利国家技能窗口） */
 	'17751': true,   /* 俄罗斯解放军（状态卡；玩家 2026-10-18 确认带★） */
 	/* —— 美国★卡（玩家 2026-10-10 口径）——
 	 * 用途：美国国家技能 trigger='star_resolved'（打出★卡结算后触发，一回合一次）。
@@ -2432,12 +2444,12 @@ function maybe_offer_national_skill(game, nation, trigger) {
 		// 仅清【本国】窗口：15237 给德国开了窗口后轮转到英国，
 		// 英国阶段入口的 maybe_offer(英国, 非 star_resolved) 不得误清德国的窗口
 		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
-			game.national_skill_offer = null
+			clear_national_skill_offer(game)
 		return game
 	}
 	if (!national_skill_usable(game, nation)) {
 		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
-			game.national_skill_offer = null
+			clear_national_skill_offer(game)
 		return game
 	}
 	game.national_skill_offer = {
@@ -2448,16 +2460,32 @@ function maybe_offer_national_skill(game, nation, trigger) {
 		cost: cfg.cost,
 		grant: cfg.grant,
 	}
+	/*
+	 * 【2026-10-20】建窗后【立刻】同步让权：必须在调用方（如响应结算末尾的
+	 * response_reconcile_active）归还 'response' 让权【之前】把 'national_skill' 压进
+	 * handoff_stack —— 这样 rectify_active 看到栈上仍有本国让权，就会把 active 留给
+	 * 窗口持有国，而不是弹回 _handoff_base（原行动方）。
+	 */
+	sync_national_skill_handoff(game)
 	const c = cfg.cost || {}
 	const n = c.discard || c.attrition || 0
-	/* 代价文案（含类型限定，如日本"弃 1 张响应牌"） */
+	/*
+	 * 代价文案（含类型限定，如日本"弃 1 张响应牌"）。
+	 * 【2026-10-21 修复】补上 points 分支：意大利代价是 cost:{points:2}（减 2 分），
+	 * 旧写法只认 discard / attrition，于是 n=0 被打成"损耗 0 张牌"——
+	 * 与玩家实际要付的代价完全不符（view.national_skill 侧早已正确处理 points，
+	 * 只有这里的【日志】漏了，形成"面板说减 2 分、日志说损耗 0 张"的撕裂）。
+	 */
 	const costText = c.discard
 		? ('弃置 ' + n + ' 张' + (c.filter === 'response' ? '响应牌' : (c.filter === 'build' ? '建造陆军' : '手牌')))
-		: ('损耗 ' + n + ' 张牌')
-	/* 效果文案 */
-	let grantText = '1 张状态卡'
-	if (cfg.grant && cfg.grant.filter === 'event_status') grantText = '1 张事件牌或状态卡'
-	else if (cfg.grant && cfg.grant.filter === 'response') grantText = '1 张响应牌（暗置）'
+		: (c.attrition ? ('损耗 ' + n + ' 张牌')
+			: (c.points ? ('减 ' + c.points + ' 分') : ''))
+	/*
+	 * 效果文案：复用既有原子 extra_play_filter_desc（与"额外打出"授予口径同源），
+	 * 不再自己写 if 链 —— 旧链只认 event_status / response，
+	 * 意大利的 status_response 会掉进默认值显示成"1 张状态卡"，与面板不一致。
+	 */
+	const grantText = extra_play_filter_desc({ filter: (cfg.grant && cfg.grant.filter) || 'status' })
 	game.log.push('【' + nation + '】可发动' + cfg.name + '：' + costText + '，额外打出 ' + grantText)
 	return game
 }
@@ -2488,14 +2516,21 @@ function after_card_resolved(game, nation, card_id, from_play) {
 	if (!card_id || !is_starred_card(card_id)) {
 		// 仅清【本国】窗口：15210 战斗里英国响应卡结算不得误清德国的窗口
 		if (game.national_skill_offer && game.national_skill_offer.nation === nation)
-			game.national_skill_offer = null
+			clear_national_skill_offer(game)   /* 走统一入口：清窗同时归还操作权 */
 		return game
 	}
 	return maybe_offer_national_skill(game, nation, 'star_resolved')
 }
 
 function clear_national_skill_offer(game) {
-	if (game) game.national_skill_offer = null
+	if (!game) return
+	game.national_skill_offer = null
+	/*
+	 * 【2026-10-20】窗口消失即归还"为国家技能扣住"的操作权。
+	 * 所有清窗路径（使用 / 放弃使用 / 错过即失效 / 非★卡清本国旧窗口…）都收敛到这里，
+	 * 保证"使用或放弃后才归还"不会退化成"操作权永久卡住"。
+	 */
+	reconcile_handoff(game, 'national_skill')
 }
 
 /*
@@ -2600,6 +2635,12 @@ function use_national_skill(game, nation, drop, playCard) {
 	game.log.push('【' + nation + '】使用' + cfg.name + '：' + paid +
 		'，可额外打出 1 张' + extra_play_filter_desc(game.extra_play))
 	clear_national_skill_offer(game)
+	/*
+	 * 【2026-10-20】上面 clear 会连带归还操作权，但此刻【授予的牌还没打出】——
+	 * 按玩家口径必须继续扣住，等玩家打出那张牌（consume_extra_play）后才归还。
+	 * 故 clear 之后立刻再同步一次：sync 会看到 extra_play.source='skill.<国家>' 而重新扣住。
+	 */
+	sync_national_skill_handoff(game)
 	return game
 }
 
@@ -2718,6 +2759,17 @@ function autobahn_resolve(game, nation, arg) {
 		game.log.push('只有【' + pa.actor + '】能选择建设位置')
 		return game
 	}
+	/*
+	 * 【2026-10-20】不允许负数：剩余次数已用尽时不再接受建设。
+	 * 17529 委托预算 remaining=0 表示"建设已完成 / 无合法建设地"，
+	 * 此时只能点「结束预算」收尾；此前无此守卫，remaining 会被扣成 -1
+	 * （西伯利亚大铁路等同源预算也会出现"剩 -1/1"的负数显示）。
+	 */
+	if (pa.remaining <= 0) {
+		game.log.push('建设预算次数已用尽' +
+			(pa.source === 'su_build_delegate' ? '，请点「结束预算」收尾' : ''))
+		return game
+	}
 	const sp = Number(arg && arg.space)
 	if (!sp) {
 		game.log.push('请选择一个建设位置')
@@ -2740,6 +2792,14 @@ function autobahn_resolve(game, nation, arg) {
 		game.log.push((pa.actor === '苏联' ? '西伯利亚大铁路：已在 ' : '高速公路：已在 ') +
 			data.name_of(sp) + ' 建设 1 支陆军，剩余 ' +
 			pa.remaining + ' 次')
+	} else if (pa.source === 'su_build_delegate') {
+		/*
+		 * 【2026-10-20】17529 委托建设预算：建设完成【不自动收尾】。
+		 * 预算保留，让苏联先插入发动 after_build_army 状态卡（及其引发的战斗），
+		 * 由玩家点「结束预算」才归还美国 + 触发 ★卡国家技能（见 finish_su_build_budget）。
+		 */
+		game.log.push('【摩尔曼斯克运输船队】苏联已建设 1 支陆军；' +
+			'可发动本国状态卡，或点「结束预算」收尾')
 	} else {
 		game.pending_autobahn = null
 		game.log.push('高速公路：全部 ' + pa.total + ' 支陆军已重建完成')
@@ -5149,12 +5209,19 @@ function offer_su_build_delegate(game, fromNation) {
 	 */
 	game.su_build_delegate = {
 		nation: '苏联',
+		/*
+		 * 【2026-10-20】steps 只保留步①"在<罗斯>征召"（卡面写死地区、无需玩家选，立即执行）。
+		 * 步②"苏联建设1支陆军"【不再放进 steps】—— 改为走建设预算 pending_autobahn
+		 * （见 open_su_build_budget）：这样每次建设都是真实 build_piece，会武装
+		 * after_build_army 窗口，苏联得以插入发动本国状态卡（17843/17846/17901…）；
+		 * 且收尾改为玩家点「结束预算」才归还美国 + 触发 ★卡国家技能。
+		 */
 		steps: [
 			{ op: 'recruit', type: 'army', spaces: [space_id('罗斯')] },
-			{ op: 'build', type: 'army' },
 		],
 		done: 0,
 		return_nation: fromNation || game.current_nation,
+		card_id: '17529',
 	}
 	game.current_nation = '苏联'
 	game.log.push('【摩尔曼斯克运输船队】美国打出：挂起让权【苏联】在<罗斯>征召1支陆军并建设1支陆军')
@@ -5175,6 +5242,7 @@ function offer_su_build_delegate(game, fromNation) {
 function su_build_autoskip(game) {
 	const dg = game.su_build_delegate
 	if (!dg) return
+	/* 步①征召（<罗斯>）：不可执行则跳过 */
 	while (dg.done < dg.steps.length) {
 		const st = dg.steps[dg.done]
 		const pool = (st.spaces && st.spaces.length) ? st.spaces : (function () {
@@ -5186,14 +5254,77 @@ function su_build_autoskip(game) {
 			st.op === 'build'
 				? can_build_at(game, dg.nation, sp, st.type).ok
 				: can_recruit_at(game, dg.nation, sp, st.type).ok)
-		if (satisfiable) return
+		if (satisfiable) break
 		const where = (st.spaces && st.spaces.length)
 			? st.spaces.map(x => data.name_of(x)).join('/') : '各地'
 		game.log.push('【摩尔曼斯克运输船队】苏联当前无法在<' + where + '>' +
 			(st.op === 'build' ? '建设' : '征召') + piece_type_zh(st.type) + '，自动跳过该步')
 		dg.done++
 	}
-	finish_su_build_delegate(game)
+	/* 步②建设：建立【建设预算】（不再自动收尾，见 open_su_build_budget） */
+	open_su_build_budget(game)
+}
+
+/*
+ * 【2026-10-20】17529 步②"苏联建设1支陆军"改用【建设预算】(pending_autobahn)。
+ *
+ * 为什么（改造动机）：旧实现把建设也放进 delegate.steps，建完立刻 finish 归还美国，
+ * 于是 build_piece 刚武装的苏联 after_build_army 状态卡窗口（17843 量与质兼得 /
+ * 17846 坦克运输 / 17901 工业心脏）随 current_nation 切回美国而失效 —— 苏联玩家
+ * 根本点不到（状态卡触发守卫 nation===current_nation）。
+ *
+ * 新机制（复用 15228 高速公路 / 17827 西伯利亚大铁路 的 pending_autobahn 管线）：
+ *   · 每次建设走真实 build_piece → 写 game.last_built + 武装 after_build_army，
+ *     苏联可在预算存续期插入发动本国状态卡（含其引发的战斗，由已有的
+ *     suspend_autobahn / maybe_resume_autobahn 处理）；
+ *   · 收尾【唯一入口】是玩家点「结束预算」→ 归还美国 + ★卡 after_card_resolved
+ *     （美国国家技能 star_resolved）。顺序上"结束"严格晚于"建设与状态卡"。
+ *
+ * 防死锁（让权铁律 3）：全图无合法建设地时 remaining=0（预算仍在、可直接结束），
+ * 绝不把"候选为空"的步交给玩家。
+ */
+function open_su_build_budget(game) {
+	const dg = game.su_build_delegate
+	if (!dg) return
+	/* 已存在本卡预算则不重建（重复进入保护） */
+	if (game.pending_autobahn && game.pending_autobahn.source === 'su_build_delegate') return
+	/* 全图是否有合法建设地（与候选同源：can_build_at 权威 + 槽位空闲） */
+	let hasSpot = false
+	for (let sp = 1; sp < data.spaces.length; sp++) {
+		if (!data.spaces[sp]) continue
+		if (can_build_at(game, dg.nation, sp, 'army').ok &&
+			unit_slot_free(game, dg.nation, 'army', sp).ok) { hasSpot = true; break }
+	}
+	game.pending_autobahn = {
+		remaining: hasSpot ? 1 : 0,
+		total: 1,
+		actor: dg.nation,
+		source: 'su_build_delegate',
+		delegate: { return_nation: dg.return_nation, card_id: dg.card_id || '17529' },
+	}
+	if (hasSpot)
+		game.log.push('【摩尔曼斯克运输船队】苏联建设预算：点地图高亮地区建设 1 支陆军' +
+			'（可先发动本国状态卡，完成后点「结束预算」收尾）')
+	else
+		game.log.push('【摩尔曼斯克运输船队】苏联当前无合法建设地，可直接点「结束预算」收尾')
+}
+
+/*
+ * 【2026-10-20】结束建设预算 —— 17529 委托的【唯一收尾入口】。
+ * 顺序铁律：必须在玩家点「结束预算」之后才执行，绝不在建设完成时自动调用。
+ */
+function finish_su_build_budget(game) {
+	const pa = game.pending_autobahn
+	const dg = game.su_build_delegate
+	game.pending_autobahn = null
+	game.su_build_delegate = null
+	/* 归还操作权给原行动国（美国）：同阵营让权只还 current_nation（active 从未翻） */
+	const ret = (pa && pa.delegate && pa.delegate.return_nation) ||
+		(dg && dg.return_nation) || '美国'
+	game.current_nation = ret
+	game.log.push('【摩尔曼斯克运输船队】苏联建设委托结束（建设预算已结算）')
+	/* 17529 是★卡：委托链结束按★卡结算口径，向美国弹出国家技能窗口（star_resolved）。 */
+	after_card_resolved(game, ret, '17529')
 }
 
 function finish_su_build_delegate(game) {
@@ -8427,7 +8558,13 @@ const EVENT_EFFECTS = {
 		name: '进击的巴顿',
 		actor: '美国',
 		steps: [
-			{ op: 'build', type: 'army', around: '西欧' },
+			/*
+			 * 【2026-10-21 修正·严格口径】同 17525：卡面是"在<西欧>建设陆军"，
+			 * 没有"或相邻"，故用 spaces 而非 around（后者会放进西欧的全部相邻地区）。
+			 * 第 2 步"对相邻地区发起 1 次陆战"由 useNewPiece 表达（用刚建的陆军发起），
+			 * 与 17534《揍一顿再谈判》同款，不变。
+			 */
+			{ op: 'build', type: 'army', spaces: space_ids_of(['西欧']) },
 			{ op: 'battle', kind: 'land', useNewPiece: true },
 		],
 	},
@@ -8436,8 +8573,15 @@ const EVENT_EFFECTS = {
 		name: '巴西远征军',
 		actor: '美国',
 		steps: [
-			{ op: 'build', type: 'army', around: '拉丁美洲' },
-			{ op: 'build', type: 'navy', around: '南大西洋' },
+			/*
+			 * 【2026-10-21 修正·严格口径】卡面只写"在<拉丁美洲>" / "在<南大西洋>"，
+			 * 【没有】"或相邻" —— 旧写法用 around 会把候选放大成"该地 + 全部相邻地区"
+			 * （南大西洋有 10 条连接，放大尤其离谱），还会因候选 >1 多弹一次选地区框。
+			 * 本模块约定：卡面写"在<X>"用 spaces；只有写"或相邻/及相邻/相邻地区"才用 around
+			 * （对照 16303/17533/17527 用 spaces，16300/16806 用 around）。
+			 */
+			{ op: 'build', type: 'army', spaces: space_ids_of(['拉丁美洲']) },
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['南大西洋']) },
 		],
 	},
 	'16300': {
@@ -8463,7 +8607,12 @@ const EVENT_EFFECTS = {
 		name: '诺曼底登陆',
 		actor: '美国',
 		steps: [
-			{ op: 'build', type: 'navy', around: '北海' },
+			/*
+			 * 【2026-10-21 修正·严格口径】同 17525：卡面是"在<北海>建设 1 支海军"，
+			 * 没有"或相邻"，故用 spaces 而非 around（后者会放进北海的全部相邻海域）。
+			 * 第 2 步本就是 spaces:['西欧']，无需改。
+			 */
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['北海']) },
 			{ op: 'battle', kind: 'land', spaces: space_ids_of(['西欧']) },
 		],
 	},
@@ -11920,6 +12069,50 @@ function sync_armed_handoff(game) {
 	if (!stillCross) reconcile_handoff(game, 'armed')
 }
 
+/*
+ * 【2026-10-20】国家技能窗口的"扣住操作权 / 归还"同步（与 sync_armed_handoff 完全同款）。
+ *
+ * 需求（玩家口径）：★响应卡在【敌方回合】结算并弹出国家技能窗口后，
+ *   操作权【不能立刻归还】给原行动方 —— 必须等窗口持有国点【使用】或【放弃使用】才归还。
+ *   否则响应方一结算完就被踢回、轮不到自己用国家技能（等轮到自己时窗口早已被别国动作冲掉）。
+ *
+ * 口径：
+ *   · 窗口存在 且 窗口所属阵营 ≠ 让权基准方（即"别人回合里我方开的窗口"）-> 扣住；
+ *   · 窗口消失 -> 归还（由 clear_national_skill_offer 统一保证，见该函数）；
+ *   · 自己回合开的窗口不占位（active 本就是自己的，翻转无意义且会让 _handoff_base 语义变复杂）；
+ *   · 持有国被别的国家窗口覆盖时（A 国窗口 -> B 国窗口），先归还旧的再按新持有国重扣。
+ *
+ * 防死锁：窗口开着时 build_actions 对该阵营只放行
+ *   use_national_skill / skip_national_skill / play_card / log（见 build_actions 的门禁），
+ *   点"使用/放弃"即走 clear_national_skill_offer 归还；即便去打别的牌，
+ *   "错过即失效"清窗后也会由同一条路径归还 —— 不存在操作权永久卡住。
+ */
+function sync_national_skill_handoff(game) {
+	if (!game.handoff_stack) game.handoff_stack = []
+	const off = game.national_skill_offer
+	const ep = game.extra_play
+	/*
+	 * 需要扣住操作权的【两种】情况（玩家口径）：
+	 *   ① 窗口还在，等持有国决定 使用 / 放弃；
+	 *   ② 已发动技能、但技能授予的"额外打出"那张牌【还没打出去】——
+	 *      此时就要继续扣住，等玩家把那张牌打完才归还。
+	 * ② 的识别：extra_play.source 以 'skill.' 开头
+	 *   （国家技能走 grant_extra_play(..., 'skill.'+nation, ...)；
+	 *    德国事件卡的额外打出用卡 id 当 source，不会被误认）。
+	 */
+	const epHold = !!ep && String(ep.source || '').indexOf('skill.') === 0
+	const holdNation = off ? off.nation : (epHold ? ep.nation : null)
+	const baseSide = game._handoff_base || (game.active === ALLIES_ROLE ? ALLIES : AXIS)
+	const needHold = !!holdNation && faction_of_nation(holdNation) !== baseSide
+	let h = game.handoff_stack.find(x => x.id === 'national_skill')
+	/* 持有国变了、或已不需要扣：先归还旧的，下面再按新持有国重扣 */
+	if (h && (!needHold || h.holder_role !== faction_role_of_nation(holdNation))) {
+		reconcile_handoff(game, 'national_skill')
+		h = null
+	}
+	if (needHold && !h) handoff_to(game, holdNation, 'national_skill')
+}
+
 function offer_armed_effects(game, when, ctx) {
 	ctx = ctx || {}
 	/* 只考虑"卡面声明的 actor"那一方（德国）的手牌 */
@@ -14134,24 +14327,21 @@ const RESPONSE_EFFECT_IMPL = {
 		return { ok: true, desc: msg }
 	},
 
-	/* 17831 撤退与整编：乌/莫斯科苏陆军被移除后，在西伯利亚/中亚征召陆军 */
+	/* 17831 撤退与整编：乌/莫斯科苏陆军被移除后，在西伯利亚/中亚均征召陆军 */
 	'17831': (game, side, ctx, choice) => {
-		const cands = []
+		const sps = []
 		for (const nm of ['西伯利亚', '中亚']) {
 			const id = space_id_of(nm)
-			if (id != null) cands.push({ id: id, name: nm })
+			if (id != null) sps.push({ id: id, name: nm })
 		}
-		if (choice === undefined) {
-			if (!cands.length) return { ok: false, desc: '（无可用征召地区）' }
-			return {
-				pending: true, kind: 'space', candidates: cands,
-				prompt: '《撤退与整编》选择征召地区（西伯利亚 / 中亚）',
-			}
+		if (!sps.length) return { ok: false, desc: '（无可用征召地区）' }
+		let ok = false, msg = ''
+		for (const sp of sps) {
+			const r = recruit_piece(game, '苏联', 'army', sp.id)
+			if (r.ok) { ok = true; msg += '在' + sp.name + '征召苏联陆军；' }
+			else msg += '（' + sp.name + '无法征召：' + (r.reason || '') + '）'
 		}
-		const sp = Number(choice)
-		const r = recruit_piece(game, '苏联', 'army', sp)
-		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(sp) + '征召苏联陆军'
-			: '（无法征召：' + (r.reason || '') + '）' }
+		return { ok: ok, desc: msg || '（均无法征召）' }
 	},
 
 	/* 17832 列宁格勒保卫战 / 17833 莫斯科保卫战 / 17835 斯大林格勒保卫战 */
@@ -14710,6 +14900,47 @@ function defer_response_frame(game, frame) {
 	game.deferred_response_stack = game.deferred_response_stack || []
 	game.deferred_response_stack.push(frame)
 	return frame
+}
+
+/*
+ * 【2026-10-20 修复·同组多张响应的结算顺序】
+ * 某张响应卡的续打被 defer 时，必须把【同组、且尚未轮到】的兄弟帧一并
+ * 从活动栈摘除、按 group_idx 顺序压进 deferred_response_stack。
+ *
+ * 为什么必须有这一步（缺它就会出现"多张卡效果交错"）：
+ *   defer 会把当前帧移出活动栈，只把它的续打帧排队等待。被留在活动栈里的兄弟帧
+ *   会立刻顶到栈顶 -> view.pending_trigger（派生自活动栈，见 response_queue_view）
+ *   马上给出它们的"是否发动" -> 玩家在本卡还没走完时就先把它们做掉。
+ *   实测《海军空降部队》15425 + 《海军特别陆战队》15424 同点时表现为：
+ *     陆战1 -> 建设1 -> 建设2 -> 陆战2   （建设被插进两场陆战中间）
+ *
+ * 压进延期栈后：
+ *   ① 兄弟帧不再是活动栈顶 -> pending_trigger 看不到 -> 不会被提前发动；
+ *   ② promote_deferred_response 是 FIFO，且只在"响应栈与队列都空、无 pending_battle"
+ *      时才提升 -> 本卡的续打帧先恢复并走完，才轮到下一张。
+ * 于是形成"玩家排好的组内顺序"严格兑现：一张卡完整结束才轮到下一张。
+ *
+ * 口径说明（方案 A·保守）：兄弟帧被提升后仍是"待发动"态，需要持有方再点一次发动。
+ * 只保证顺序正确，不改变"每张都要确认一次"的既有交互。
+ *
+ * @param curFrame 刚被 defer 的当前帧（用它的 group_id 定位同组兄弟）
+ * @return 被排队的兄弟帧数量
+ */
+function defer_remaining_group_frames(game, curFrame) {
+	const gid = curFrame && curFrame.group_id
+	if (gid == null) return 0
+	/* 只看【仍在活动栈】且同组的帧；pending 的等待结算，不能搬走 */
+	const rest = (game.response_stack || [])
+		.filter(f => f !== curFrame && f.group_id === gid && !f.pending)
+		.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+	if (!rest.length) return 0
+	for (const f of rest) {
+		game.response_stack = game.response_stack.filter(x => x !== f)
+		defer_response_frame(game, f)
+	}
+	game.log.push('【响应】等待前一张结算完毕：' +
+		rest.map(f => '《' + f.name + '》').join(' → '))
+	return rest.length
 }
 
 function promote_deferred_response(game) {
@@ -15872,6 +16103,15 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 	const failStep = (st, reason) => {
 		stepFails.push(event_step_label(st) + ' 未执行（' + reason + '）')
 	}
+	/*
+	 * 【2026-10-20】逐地区失败（部分成功、部分被拒）单独收集一份，
+	 * 结算末尾写进 game.last_card_fail -> view -> 客户端 toast。
+	 *
+	 * 典型场景：《自由法国同盟》pick:2 选中 2 个地区征召法国陆军，
+	 * 第 2 个地区因「法国 的陆军已达上限（N）」（即玩家说的"后备兵力不足"）被拒 ——
+	 * 旧实现只把它混在 desc 括号里，玩家表现为"打了牌却只出现 1 支部队"且无从得知原因。
+	 */
+	const spaceFails = []
 	let newPiece = null
 	/*
 	 * 【2026-09-29】prevSpaces：把上一个【产出单位】的 step（build/recruit）
@@ -16162,6 +16402,8 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 				names.push(data.name_of(sp))
 			}
 			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
+			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
+			for (const b of bad) spaceFails.push(event_step_label(st) + '：' + b)
 			const extra = st.grantSupply ? '（本回合内始终处于补给状态）' : ''
 			descs.push('在 ' + names.join('、') + ' 各征召 1 支' +
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
@@ -16185,6 +16427,8 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 				names.push(data.name_of(sp))
 			}
 			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
+			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
+			for (const b of bad) spaceFails.push(event_step_label(st) + '：' + b)
 			descs.push('在 ' + names.join('、') + ' 各建设 1 支' + piece_type_zh(st.type) +
 				(bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
@@ -16298,6 +16542,22 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 
 	const all = costDescs.concat(descs)
 	const out = { ok: true, desc: all.join('；') }
+
+	/*
+	 * 【2026-10-20】卡"打成了、但有一部分没做成" -> 交给客户端 toast 提示玩家。
+	 *
+	 * stepFails  = 整步未执行（如"该地区没有合法位置"）；
+	 * spaceFails = 逐地区部分被拒（如第 2 个征召地兵力已达上限）。
+	 *
+	 * token 自增是为了让客户端能识别"这是一条新提示"，避免同一步多次刷新重复弹窗。
+	 */
+	const allFails = stepFails.concat(spaceFails)
+	if (allFails.length)
+		game.last_card_fail = {
+			token: (game._card_fail_token = (game._card_fail_token || 0) + 1),
+			name: c.name,
+			fails: allFails,
+		}
 
 	/*
 	 * 【2026-09-30】extraPlay：本卡结算后可【额外打出】1 张。
@@ -19880,6 +20140,24 @@ function run_phase_entry(game, phase, nation) {
 
 /* 回合开始时：初始化牌堆并发起手牌 */
 function on_turn_start(game) {
+	/*
+	 * 【2026-10-20】跨回合的让权建设委托【强制收尾】。
+	 * 17529 改为"点结束预算才收尾"后，若玩家没点，委托（su_build_delegate +
+	 * 建设预算）会一直挂着 —— 轮到轴心时仍存在：轴心看到"等待【苏联】建设"
+	 * 横幅不消失、且被 can_act_in_turn 阻塞。回合边界必须收尾
+	 * （归还 current_nation='美国' + ★卡 after_card_resolved；技能窗口是
+	 * 可选窗口，在轴心回合弹给同盟侧不阻塞，玩家可放弃）。
+	 * 17526 民主兵工厂同构处理。
+	 */
+	if (game.su_build_delegate ||
+		(game.pending_autobahn && game.pending_autobahn.source === 'su_build_delegate')) {
+		game.log.push('【摩尔曼斯克运输船队】回合已推进，未完成的委托自动收尾')
+		finish_su_build_budget(game)
+	}
+	if (game.uk_build_delegate) {
+		game.log.push('【民主兵工厂】回合已推进，未完成的委托自动收尾')
+		finish_uk_build_delegate(game)
+	}
 	for (const n of ORDER_OF_NATIONS) {
 		init_nation_deck(game, n)
 		if (!game.hands[n].length && !game.discard[n].length) {
@@ -20462,6 +20740,33 @@ exports.view = function (state, current) {
 	let my_nation = (() => {
 		const cur = game.current_nation
 		if (cur && faction_of_nation(cur) === side) return cur
+		/*
+		 * 【2026-10-20 修复："轴心手牌没有给到意大利"】
+		 * 上面只认【当前行动国】；敌方回合里本方握着某个窗口时（★响应 -> 国家技能、
+		 * 技能授予的额外打出、响应卡表态、武装窗口），当前行动国仍是【对方】（如英国），
+		 * 于是退回 nation_of_player() = 本阵营【排最前】的国家（轴心=德国、同盟=英国）。
+		 * 后果：view.hands['意大利'].cards = null（只给张数），而客户端手牌区一律读
+		 * view.hands[view.my_nation].cards —— 于是意大利看不到自己的手牌，
+		 * 既无法选择代价牌，也无法打出技能授予的那张牌。
+		 *
+		 * 故按"此刻真正该谁行动"依次判定窗口归属国：
+		 *   ① 国家技能窗口（含已发动、待打出授予牌的阶段）
+		 *   ② 响应栈栈顶帧的持有国（本方正在表态 / 选目标）
+		 *   ③ 本方的武装增强窗口
+		 * 都拿不到才退回代表国，保证平时行为不变。
+		 */
+		const off = game.national_skill_offer
+		if (off && off.nation && faction_of_nation(off.nation) === side) return off.nation
+		const ep = game.extra_play
+		if (ep && ep.nation && faction_of_nation(ep.nation) === side &&
+			String(ep.source || '').indexOf('skill.') === 0) return ep.nation
+		const tf = top_response_frame(game)
+		if (tf && tf.owner_side === side) {
+			const rn = response_holder_nation(game, tf.card_id)
+			if (rn && faction_of_nation(rn) === side) return rn
+		}
+		const ao = (game.armed_offers || []).find(w => w.nation && faction_of_nation(w.nation) === side)
+		if (ao) return ao.nation
 		return nation_of_player(game, current)
 	})()
 	/* 【2026-10-12】17510 我们的政治哲学：挂起给英国期间，本方（同盟）视角下把
@@ -21231,11 +21536,25 @@ exports.view = function (state, current) {
 			return { actor: pb.actor, card: pb.card, can_pay: hand.length >= 3 }
 		})(),
 
-		extra_play: (game.extra_play && game.extra_play.nation === game.current_nation)
+		/*
+		 * 【2026-10-20 修复："没有可以免费打出的标识"】
+		 * 旧判定 `nation === game.current_nation`：敌方回合里本国靠 ★响应 拿到国家技能、
+		 * 被授予额外打出时，current_nation 仍是【对方】（英国）而权利归意大利 ->
+		 * view.extra_play 恒为 null -> 客户端既看不到"可额外打出…（不占名额）"的提示，
+		 * extra_play_allows_card() 也一律返回 false，表现为"高亮了却没有免费打出的标识"。
+		 *
+		 * 改为按【阵营】判定（与 my_nation 同款口径）：权利归属国属于本方就下发。
+		 * 对方阵营仍收不到，不会"残留在别人的 view 里"。
+		 * 一并补上 nation / phase —— 客户端 check_phase_for_card 与手牌提示都读
+		 * view.extra_play.phase 来判断"该权利在当前阶段是否生效"。
+		 */
+		extra_play: (game.extra_play && faction_of_nation(game.extra_play.nation) === side)
 			? {
+				nation: game.extra_play.nation,
 				source: game.extra_play.source,
 				source_name: game.extra_play.source_name,
 				filter: game.extra_play.filter,
+				phase: game.extra_play.phase || 'play',
 				cards: game.extra_play.cards ? game.extra_play.cards.slice() : null,
 			}
 			: null,
@@ -21258,6 +21577,10 @@ exports.view = function (state, current) {
 
 		/* 【2026-10-07 诊断】当前是哪种挂起在拦常规动作（play_card 不在白名单时看这个） */
 		block_reason: game.block_reason || null,
+
+		/* 【2026-10-20 诊断】卡牌"部分成功"的失败清单（数据由服务端算好，
+		 * 客户端不二次判断，只负责 toast）：{ token, name, fails[] }。 */
+		last_card_fail: game.last_card_fail || null,
 
 		/* 【2026-10-18】拦截捕获：最近一次被拦截目标卡牌的唯一标识，供 UI 提示 */
 		last_intercept: game.last_intercept || null,
@@ -22167,6 +22490,12 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 			 * 现象正是"结算中发动不了、结算完毕反而能发动"。
 			 */
 			Object.assign(acts, register_status_actions(game, side, { resolve_autobahn: 1, log: 1 }))
+			/*
+			 * 【2026-10-20】17529 委托建设预算：放行收尾动作（【追加】而非替换，
+			 * 保留 resolve_autobahn 与状态卡发送权，防白名单死锁）。
+			 */
+			if (game.pending_autobahn.source === 'su_build_delegate')
+				acts.finish_su_build_budget = 1
 		/*
 		 * 【2026-10-16 修复】高速公路结算期间若同侧仍有武装增强窗口
 		 * （如 15311 马奇诺·法军被移除触发），必须一并放行 use_armed_offer/skip_armed_offer：
@@ -22393,6 +22722,11 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	/* 17529 摩尔曼斯克运输船队：让权苏联期间，仅苏联可征召/建设 */
 	if (game.su_build_delegate && faction_of_nation(game.su_build_delegate.nation) === side) {
 		acts.resolve_su_build_delegate = 1
+		/*
+		 * 【2026-10-20】兜底放行收尾：预算与委托可能不对称残留
+		 * （预算分支因 pa=null 不命中时，委托分支必须仍能发出 finish）。
+		 */
+		acts.finish_su_build_budget = 1
 	}
 	/* 17537 美国人民同情中国：美国帮中国征召，仅美国可操作 */
 	if (game.us_china_build && faction_of_nation('美国') === side) {
@@ -22911,6 +23245,8 @@ function play_status_card_impl(game, nation, card_id) {
 	 */
 	if (game.pending_autobahn && action !== 'resolve_autobahn' && action !== 'activate_status' &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+		/* 【2026-10-20】17529 委托建设预算的收尾入口必须放行，否则玩家点不了「结束预算」 */
+		action !== 'finish_su_build_budget' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('高速公路结算中：请依次在地图上选择建设位置（剩余 ' +
 			game.pending_autobahn.remaining + ' 次）')
@@ -23244,8 +23580,22 @@ function play_status_card_impl(game, nation, card_id) {
 						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
+						/* 【2026-10-20】带上组信息，便于恢复后仍能被组相关逻辑识别 */
+						group_id: pc.group_id,
+						group_idx: pc.group_idx,
 					}
 					defer_response_frame(game, df)
+					/*
+					 * 【2026-10-20 修复·同组多张响应卡交错生效】
+					 * 本卡把自己的续打排进延期栈后，活动栈里还剩同组的兄弟帧 ——
+					 * 若不处理，它们立刻成为栈顶、pending_trigger 马上给出"是否发动"，
+					 * 玩家会在本卡没走完时先把它们做掉（15425+15424 实测：
+					 * 陆战1 -> 建设1 -> 建设2 -> 陆战2）。
+					 * 这里把兄弟帧一并排到延期栈【排在本卡续打帧之后】，
+					 * FIFO 提升自然保证"本卡先走完 -> 才轮到下一张"。
+					 * 注意必须放在 defer_response_frame(game, df) 之后，保证顺序是 [本卡续打, 兄弟…]。
+					 */
+					defer_remaining_group_frames(game, pc)
 					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
 					/*
 					 * 【2026-10-20 修复·一类问题】栈帧已移除，必须同步派生队列视图：
@@ -23276,6 +23626,27 @@ function play_status_card_impl(game, nation, card_id) {
 		/* 【栈重构·第二期】正常结算完成：移除当前 effect 帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
 		remove_response_frame(game, pc)
 		consume_response(game, pc.card_id, pc.owner_side)
+		/*
+		 * 【2026-10-21 修复·一类问题】★响应卡的 star_resolved 钩子此前【只接了一半】：
+		 *   · trigger_response 有，但它只在 effect「一次调用就返回 ok」时才走到
+		 *     （pending / defer 分支在它之前就 return 了）；
+		 *   · 而凡是【需要玩家选目标】的响应卡都在【本函数】结算 —— 这里却从未调用
+		 *     after_card_resolved。
+		 * 于是：带★的响应卡只要需要选牌，就永远触发不了国家技能
+		 *   （意大利 17732《德国军事顾问》即此；17734 因不选牌所以能触发，差异正在于此）。
+		 *
+		 * 位置的两个讲究：
+		 *   ① 必须在【完成路径】（pending / defer 两分支之后）——多步卡的中间步会再次返回
+		 *      pending，若放在上面日志处就会【每一步触发一次】；放这里严格"只在真正结算完时
+		 *      触发一次"，与 trigger_response 同口径。
+		 *   ② 必须在 response_reconcile_active 【之前】——这样 maybe_offer_national_skill
+		 *      内部 sync_national_skill_handoff 压的 'national_skill' 让权，能赶在 'response'
+		 *      让权归还之前进栈，操作权才会留给窗口持有国（敌人回合场景的关键）。
+		 */
+		if (!intercepted) {
+			const _nc = inst_card(pc.card_face)
+			if (_nc) after_card_resolved(game, _nc.nation, pc.card_face)
+		}
 		/*
 		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
 		 * 而不是直接删掉整张队列项。原因：本次海战被嵌套触发的新响应项可能同时含
@@ -23432,12 +23803,29 @@ function play_status_card_impl(game, nation, card_id) {
 					const r = impl(game, c.owner_side, f.ctx)
 					game._resp_settling = false
 					if (r && r.pending) {
-						/* 帧留栈（已是栈顶 group 成员），更新字段并标记 pending，挂起等 resolve */
+						/*
+						 * 【2026-10-20 修复·同一时点多张响应】必须把挂起帧移到【栈顶】。
+						 *
+						 * view.response_choice / build_actions / resolve_response_choice 三者都只读
+						 * 栈顶帧(top_response_frame)。旧实现仅在【原位】标记 f.pending ——
+						 * 当同组还有后续帧压在本帧之上时，栈顶是那些"待发动"帧（candidates 为空）：
+						 *   ① view.response_choice 因 candidates 为空返回 null -> 选目标框永不出现；
+						 *   ② build_actions 只放行 trigger/pass -> 本帧永远等不到 resolve_response_choice。
+						 * 表现为"同一时点使用多张响应卡时，只有第一张起效、后面全部不执行且界面卡住"。
+						 *
+						 * 改法：复用既有栈原语，把 f 从原位摘除后压回栈顶
+						 * （remove_response_frame + push_response_frame）。
+						 * ⚠ 安全性：effect 返回 pending 意味着"尚未执行任何游戏动作、先问玩家选目标"，
+						 *   故此刻不可能有 Effect 内部触发的嵌套响应帧需要抢在其之前结算；
+						 *   若将来出现这种卡，应把 f 插到"嵌套新帧之下"而非直接压栈顶。
+						 */
 						f.pending = true
 						f.kind = r.kind || 'space'
 						f.candidates = r.candidates || []
 						f.prompt = r.prompt || ('请选择《' + c.name + '》的目标')
 						f.extra = r.extra || null
+						remove_response_frame(game, f)
+						push_response_frame(game, f)
 						game.log.push('【响应】《' + c.name + '》需要选择：' + f.prompt)
 						sync_response_queue_view(game)
 						return game
@@ -23459,12 +23847,25 @@ function play_status_card_impl(game, nation, card_id) {
 							candidates: r.candidates || [],
 							prompt: r.prompt || ('请选择《' + c.name + '》的目标'),
 							extra: r.extra || null,
+							/* 【2026-10-20】带上组信息，恢复后仍能被组相关逻辑识别 */
+							group_id: f.group_id,
+							group_idx: f.group_idx,
 						}
 						game.response_stack = game.response_stack.filter(x => x !== f)
 						defer_response_frame(game, df)
+						/*
+						 * 【2026-10-20 修复·同组多张响应卡交错生效】
+						 * 旧实现这里 `continue` 到下一帧 —— 本卡续打还在延期栈排队，
+						 * 组循环却立刻去执行兄弟卡，导致多张卡的效果互相交错
+						 * （15425+15424：陆战1 -> 建设1 -> 建设2 -> 陆战2）。
+						 * 改为：把剩余兄弟帧也排进延期栈（在本卡续打之后），
+						 * 然后直接 return —— 组循环在此打住，
+						 * 由 promote_deferred_response 按 FIFO 依次恢复，严格兑现玩家排的顺序。
+						 */
+						defer_remaining_group_frames(game, f)
 						sync_response_queue_view(game)
 						game.log.push('【响应】《' + c.name + '》稍后继续：' + df.prompt)
-						continue
+						return game
 					}
 					game.log.push('【响应】《' + c.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
 					if (r && r.cancel) intercepted = true
@@ -24758,17 +25159,41 @@ function play_status_card_impl(game, nation, card_id) {
 	 * arg 不需要参数（要走哪张状态卡由玩家随后点手牌决定）。
 	 */
 	if (action === 'use_national_skill') {
-		if (!game.national_skill_offer || game.national_skill_offer.nation !== game.current_nation) {
+		/*
+		 * 【2026-10-20 修复·敌人回合★响应后技能点不动的真实根因】
+		 * 旧判断用 `game.current_nation`（【回合当前国】）比对窗口归属国 ——
+		 * 可 ★响应卡往往在【敌方回合】结算：此时 current_nation 仍是对方（如英国），
+		 * 而窗口归意大利 -> 二者不等 -> 直接拒绝并记"当前没有可用的国家技能窗口"，
+		 * 表现为"弹框在、但点了完全没反应"（客户端 send_action 发出却被服务端静默拒）。
+		 *
+		 * 正确口径（与 rtt-pending-clear-side 同款）：判定一律用【窗口归属国】，
+		 * 权限则用动作入口的 side（真正执行方阵营）校验，绝不用 current_nation 代理。
+		 */
+		const off = game.national_skill_offer
+		if (!off) {
 			game.log.push('当前没有可用的国家技能窗口')
 			return game
 		}
+		/*
+		 * 授权以【提交方阵营 side】为准。
+		 * 后面那个 current_nation 分支只是兼容回退：部分内部调用 / 测试脚手架会把
+		 * 【国家名】当 role 传（此时 side 会被推导成 AXIS，见 rtt-response-stack 记录的
+		 * "第二参是角色非国家名"反模式）。真实客户端一律传 'Axis'/'Allies'，走的是 side 分支。
+		 * 两个条件都指向"窗口归属国本人操作"，不会放给真正的对方阵营。
+		 */
+		if (faction_of_nation(off.nation) !== side && off.nation !== game.current_nation) {
+			game.log.push('只有【' + off.nation + '】所在阵营可以使用该国家技能窗口')
+			return game
+		}
 		/* arg.play 供一步模式（日本）使用：同时选代价牌 + 要打出的牌 */
-		return use_national_skill(game, game.current_nation,
+		return use_national_skill(game, off.nation,
 			(arg && arg.drop) || null, (arg && arg.play) || null)
 	}
 	if (action === 'skip_national_skill') {
-		if (game.national_skill_offer) {
-			game.log.push('【' + game.current_nation + '】不使用国家技能')
+		const off = game.national_skill_offer
+		if (off) {
+			/* 同上：日志用窗口归属国，不用 current_nation */
+			game.log.push('【' + off.nation + '】不使用国家技能')
 			clear_national_skill_offer(game)
 		}
 		return game
@@ -25210,8 +25635,23 @@ function play_status_card_impl(game, nation, card_id) {
 	 * }
 	 */
 	if (action === 'play_card') {
-		const nation = game.current_nation
+		let nation = game.current_nation
 		const card_id = arg && arg.card
+		/*
+		 * 【2026-10-20 修复："不能免费打出"】
+		 * 走【额外打出】通道时，打牌主体可能【不是】当前行动国：
+		 * 敌方回合里意大利靠 ★响应 拿到国家技能并被授予额外打出，此刻 current_nation
+		 * 仍是【英国】，下面的回合归属校验（isTurnSide）会直接拒：
+		 *   "现在轮到【英国】行动，轴心暂不能打牌"。
+		 * 故若提交方阵营 == 权利归属国阵营、且这张牌就在该国手牌里，
+		 * 本次打出的主体就是【权利归属国】。
+		 * 只有真的在行使该权利时才切换，正常出牌路径完全不受影响。
+		 */
+		const ep0 = game.extra_play
+		if (ep0 && ep0.nation && faction_of_nation(ep0.nation) === mySide &&
+			(game.hands[ep0.nation] || []).indexOf(card_id) >= 0) {
+			nation = ep0.nation
+		}
 		const c = inst_card(card_id)
 
 		/*
@@ -26091,6 +26531,28 @@ function play_status_card_impl(game, nation, card_id) {
 			return game
 		}
 		resolve_su_build_delegate(game, arg || {})
+		return game
+	}
+
+	/* ---------- 17529 摩尔曼斯克运输船队：结束建设预算（收尾委托） ----------
+	 * 【2026-10-20】建设预算的唯一收尾入口：归还美国 + ★卡 after_card_resolved。 */
+	if (action === 'finish_su_build_budget') {
+		const pa = game.pending_autobahn
+		const dg = game.su_build_delegate
+		/*
+		 * 【2026-10-20】兜底：预算与委托状态可能【不对称残留】
+		 * （如旧存档里只剩 su_build_delegate 而预算已失）——任一存在即可收尾。
+		 */
+		if ((!pa || pa.source !== 'su_build_delegate') && !dg) {
+			game.log.push('当前没有待结束的《摩尔曼斯克运输船队》建设预算')
+			return game
+		}
+		const actorNation = (pa && pa.actor) || (dg && dg.nation) || '苏联'
+		if (faction_of_nation(actorNation) !== side) {
+			game.log.push('现在轮到【苏联】结束建设预算，另一阵营暂不能提交')
+			return game
+		}
+		finish_su_build_budget(game)
 		return game
 	}
 
