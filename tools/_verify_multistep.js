@@ -17,6 +17,7 @@ const path = require('path')
 const MOD = path.join(__dirname, '..', 'server-official', 'public', 'quartermaster-sub-wars')
 const rules = require(path.join(MOD, 'rules.js'))
 const d = require(path.join(MOD, 'data.js')).data
+const SEQ = require(path.join(MOD, 'tools', 'event_click_seq.js'))
 
 let pass = 0, fail = 0
 function ok(label, cond, extra) {
@@ -45,41 +46,28 @@ function mk(withFrenchArmy) {
 	return g
 }
 
-/* 完整走一遍客户端流程：返回最终执行的 game */
+/* 完整走一遍客户端流程：返回最终执行的 game
+ * （2026-10-21 起改用共享驱动器 tools/event_click_seq.js，见其文件头注释） */
 function runClientFlow(g, label, withFr) {
 	console.log('\n--- ' + label + ' ---')
-	const spaces = []
-	let tg = rules.query(g, 'Allies', 'event_targets', { card: '15325#1' })
-	console.log('  ① 初始: need=' + tg.need + ' step=' + tg.step +
-		' total=' + tg.total + ' 候选=' + candNames(tg))
-	if (tg.need !== 'space') { return { g, tg } }
-
-	/* 玩家逐步选择：选候选里【合法】的第一个（跳过会失败的，如已有本国单位） */
-	let guard = 0
-	while (tg.need === 'space' && guard++ < 5) {
-		/*
-		 * 局面B 的 step0 候选含"西欧"，但西欧【已】有法国陆军，
-		 * 再建会失败（每国每格限 1 支）—— 真实玩家也会避开，
-		 * 这里选第一个【可建设】的候选（而不是盲目取第一个）。
-		 */
-		let s = candIds(tg)[0]
+	/*
+	 * 玩家逐步选择：选候选里【合法】的第一个（跳过会失败的，如已有本国单位）。
+	 * 局面B 的 step0 候选含"西欧"，但西欧【已】有法国陆军，
+	 * 再建会失败（每国每格限 1 支）—— 真实玩家也会避开，
+	 * 故这里显式换一个（picker 由调用方给，驱动器不替玩家猜）。
+	 */
+	const picker = (tg) => {
+		const ids = SEQ.candIds(tg)
+		let s = ids[0]
 		if (tg.step === 0 && s === WEU && withFr) {
-			const alt = candIds(tg).find(x => x !== WEU)
+			const alt = ids.find(x => x !== WEU)
 			if (alt != null) s = alt
 		}
-		spaces[tg.step] = s
-		console.log('  ② 选 step' + tg.step + ' = ' + d.name_of(s) +
-			' -> 累积 spaces=' + JSON.stringify(spaces))
-		tg = rules.query(g, 'Allies', 'event_targets', {
-			card: '15325#1', spaces: spaces.slice(),
-		})
-		console.log('     再查: need=' + tg.need +
-			(tg.step != null ? ' step=' + tg.step : '') +
-			(tg.candidates ? ' 候选=' + candNames(tg) : ''))
+		return s
 	}
-	console.log('  ③ need=null -> 提交 play_card {spaces:' + JSON.stringify(spaces) + '}')
-	g = rules.action(g, 'Allies', 'play_card', { card: '15325#1', spaces: spaces.slice() })
-	return { g, tg, spaces }
+	const r = SEQ.driveEventCard(g, 'Allies', '15325#1', picker, { log: true })
+	console.log('  ③ need=null -> 提交 play_card ' + JSON.stringify(r.arg))
+	return { g: r.game, tg: r.last, spaces: (r.arg.spaces || []).slice(), arg: r.arg }
 }
 
 /* ===== 局面 A：初始（法国无部队） ===== */
@@ -97,23 +85,39 @@ ok('A: 卡已打出（离开手牌）',
 /* ===== 局面 B：西欧已有法国陆军（玩家实际可能遇到的） ===== */
 let b = runClientFlow(mk(true), '局面B：西欧已有法国陆军', true)
 ok('B: 最终 need=null（选齐）', b.tg.need === null, 'need=' + b.tg.need)
-ok('B: 逐步选了 2 步（spaces 长度 2）',
-	b.spaces && b.spaces.filter(x => x != null).length === 2,
-	JSON.stringify(b.spaces))
+/*
+ * 【2026-10-21 随"战斗预算制"更新】
+ * 15325 的 battle 步已改为"建立战斗预算"（rules.js event_card_needs：
+ * `if (st.op === 'battle') continue` —— 不再要求出牌时预选攻击目标），
+ * 于是建设步候选唯一时【首次查询即 need=null】，不再有"逐步选 2 步"的交互。
+ * 旧断言"spaces 长度 2"是该重构前的口径；多步累积（spaces[step]）的覆盖
+ * 现已由 _test17532.js 承担（3 步：remove + 建海军 + 建陆军）。
+ */
+ok('B: 建设步候选唯一 -> 首次查询即选齐（无需逐步选）',
+	b.tg.need === null && (b.arg.spaces || []).length === 0,
+	'arg=' + JSON.stringify(b.arg))
 const frB = Object.keys(b.g.location).filter(p =>
 	b.g.piece_nation[p] === '法国' && b.g.piece_type[p] === 'army' && b.g.location[p] != null)
 ok('B: 【关键】法国陆军增加（建设生效）', frB.length === 2,
 	'法国陆军在 ' + frB.map(p => d.name_of(b.g.location[p])).join('、'))
-ok('B: 日志含建设 + 陆战', b.g.log.some(l => /建设/.test(l) && /陆战/.test(l)),
+/* 建设效果以盘面为准（见上）；日志侧断言"建立陆战预算" */
+ok('B: 日志显示建立陆战预算',
+	b.g.log.some(l => l.indexOf('陆战') >= 0 && l.indexOf('预算') >= 0),
 	b.g.log.slice(-1)[0] || '')
 ok('B: 卡已打出', (b.g.hands['英国'] || []).indexOf('15325#1') < 0)
 
-/* ===== 对照：旧行为（只填 step1）会失败 ===== */
+/* ===== 对照：不传 spaces（旧客户端行为） ===== */
 console.log('\n--- 对照：只提交 step1（旧客户端行为）---')
 let c = mk(true)
 c = rules.action(c, 'Allies', 'play_card', { card: '15325#1', spaces: [null, ITA] })
-ok('对照: 卡【未】打出（仍在手里）—— 这正是旧 bug',
-	(c.hands['英国'] || []).indexOf('15325#1') >= 0,
+/*
+ * 【2026-10-21 更新】旧 bug 是"只填 step1 -> 服务端发现后续 step 没选 ->
+ * 返回 pending -> 整张卡不执行、牌留手里"。战斗预算制之后 battle 步不再
+ * 需要预选目标，同样的提交现在能正常执行（建陆军 + 建立预算）。
+ * 断言随之反转为正向：卡应离开手牌。
+ */
+ok('对照: 现在能正常打出（离开手牌）—— 旧 bug 已被预算制消除',
+	(c.hands['英国'] || []).indexOf('15325#1') < 0,
 	'日志=' + (c.log.slice(-1)[0] || ''))
 
 console.log('\n通过 ' + pass + ' / 失败 ' + fail)

@@ -572,6 +572,8 @@ function update_phase_buttons() {
 	update_us_theater_box()
 	/* 【2026-10-10】17528/17531/17535 美国事件卡挂起项 */
 	update_us_replay()
+	/* 【2026-10-20】17528 重打接手：牌已回手牌 + 拿到免费额外打出权 */
+	update_us_replay_armed()
 	/* 【2026-10-17】17513 战时生产委员会：选状态卡重置 */
 	update_us_wartime_box()
 	update_us_merchant()
@@ -993,6 +995,13 @@ function extra_play_allows_card(c) {
 	if (ep.filter === "north") return NORTH_OPS_FACES.indexOf(face) >= 0
 	if (ep.filter === "drawn")
 		return Array.isArray(ep.cards) && ep.cards.indexOf(c.id) >= 0
+	/*
+	 * 【2026-10-21】17528《广阔的资源》重打：只此【指定实例那一张】可额外打出。
+	 * 与 drawn 同款（ep.cards 存实例 id，c.id 也是实例 id，直接比）。
+	 * 缺这个分支会落到末尾 return true —— 每张牌都挂"额外打出"角标。
+	 */
+	if (ep.filter === "card")
+		return Array.isArray(ep.cards) && ep.cards.indexOf(c.id) >= 0
 	/* 【2026-09-30】国家技能：只能额外打出【状态卡】 */
 	if (ep.filter === "status") return c.type === "STATUS"
 	/* 【2026-10-01】英国国家技能：事件牌或状态牌 */
@@ -1013,6 +1022,8 @@ function extra_play_hint() {
 	if (!ep) return ""
 	if (ep.filter === "north") return "可额外打出 1 张[北方行动]"
 	if (ep.filter === "drawn") return "可额外打出 1 张刚刚抽到的牌"
+	/* 【2026-10-21】17528 重打：只此一张 */
+	if (ep.filter === "card") return "可额外打出 1 张指定牌（不占名额）"
 	if (ep.filter === "status") return "可额外打出 1 张状态卡（国家技能，不占名额）"
 	if (ep.filter === "event_status") return "可额外打出 1 张事件牌或状态牌（国家技能，不占名额）"
 	if (ep.filter === "status_response") return "可额外打出 1 张状态卡或响应牌（国家技能，不占名额）"
@@ -1491,6 +1502,41 @@ function update_us_replay() {
 	}
 	foot.appendChild(ok)
 	box.appendChild(foot)
+}
+
+/*
+ * 【2026-10-20】17528《广阔的资源》重打的【接手】。
+ *
+ * 服务端 resolve_us_replay 现在只做"把牌捡回手牌 + 授予一次性免费额外打出"，
+ * 然后下发 view.us_replay_armed = { card, token }。这里收到【新 token】时，
+ * 直接复用 on_click_hand_card —— 与玩家在手牌里点这张卡【完全同路】：
+ *   · BASIC  -> start_basic_card（选目标地区 / 选发起单位，battle_flow）
+ *   · EVENT  -> query('event_targets') 算候选 -> 高亮 -> 点地图提交
+ *   · ECON   -> 按 econ_targets 选目标国 / 单目标自动带参
+ * 拦截、时点、名额、国家技能钩子因此全部与真实出牌同源。
+ *
+ * 旧实现在服务端内部无参调 play_card，需要"先选目标"的卡（发起陆战/海战、
+ * 多步事件）会直接失败或被"兜底"挪进弃牌堆并清掉额外打出权 ——
+ * 表现就是"选了牌要重打，地图却点不动/毫无反应"。
+ *
+ * token 只增不减：同一 token 不重复触发；首次进房间只记基线。
+ */
+let us_replay_armed_seen = null
+function update_us_replay_armed() {
+	const dg = view && view.us_replay_armed
+	if (!dg || !dg.card) { us_replay_armed_seen = null; return }
+	if (us_replay_armed_seen === dg.token) return
+	us_replay_armed_seen = dg.token
+	/* 从手牌里取真实卡对象（含 econ_targets 等视图字段），取不到再兜底 */
+	let c = null
+	const n = view.my_nation
+	const cards = (n && view.hands && view.hands[n] && view.hands[n].cards) || []
+	c = cards.find(x => String(x.id) === String(dg.card)) || null
+	if (!c) c = inst_card_client(dg.card)
+	if (!c) return
+	toast('《广阔的资源》：《' + (c.name || '?') +
+		'》已回到手牌，请按正常流程打出（不占本回合成名配额）')
+	on_click_hand_card(c, null)
 }
 
 /* 【2026-10-11】17531 现购自运政策：美国为友方英/苏/中/法征召部队（先选国、再点地图选地区、再选兵种） */
@@ -2623,6 +2669,13 @@ let pending_event_picks = null
  * -> 带完整 spaces 重新 query -> need 为 null 时才 send_action。
  */
 let pending_event_spaces = null
+/*
+ * 【2026-10-21 战区移动转标准管线】多步卡里【选部队】步骤的累积。
+ * 与 pending_event_spaces 完全同款：玩家每选一步 -> 累积到 pending_event_pieces[step]
+ * -> 带完整 pieces 重新 query -> need 为 null 时才 send_action。
+ * 不累积的话，后面选建设地区那次提交会丢掉 piece，服务端 remove 步读不到参数而失败。
+ */
+let pending_event_pieces = null
 
 let pending_echo_discard = null
 /*
@@ -2642,6 +2695,7 @@ function query_event_targets(card_id) {
 	pending_event_targets = null
 	pending_event_choice = null
 	pending_event_spaces = null /* 新一轮选择，清空累积 */
+	pending_event_pieces = null /* 同上：清空选部队累积 */
 	/* 【2026-10-14】委托打牌时带上 nation=被委托国，服务端据此计算该国的事件目标 */
 	send_query("event_targets", { card: card_id, nation: lend_lease_active || undefined })
 	console.log("[QUERY] send_query returned")
@@ -2714,6 +2768,30 @@ function highlight_event_pieces(tg) {
 function submit_event_piece(pieceId) {
 	const card = pending_event_card
 	if (!card) return
+	/*
+	 * 【2026-10-21 战区移动转标准管线】多步卡（total>1）必须【累积后重查】，
+	 * 不能像单步卡那样立刻提交 —— 否则这次提交里没有后续建设步骤的 spaces，
+	 * 服务端会把它们判成"没有可建设的地区"而整卡失败；且后续选地区那次提交
+	 * 又会丢掉这里的 piece，导致 remove 步读不到参数。
+	 * 口径与选地区完全同款（见 on_click_space 里 total>1 的分支）。
+	 */
+	const total = (pending_event_targets && pending_event_targets.total) || 1
+	if (total > 1) {
+		const step = pending_event_targets.step != null ? pending_event_targets.step : 0
+		if (!pending_event_pieces) pending_event_pieces = []
+		pending_event_pieces[step] = pieceId
+		send_query("event_targets", {
+			card: card.id,
+			pieces: pending_event_pieces.slice(),
+			...(pending_event_spaces && pending_event_spaces.length
+				? { spaces: pending_event_spaces.slice() } : {}),
+			...(pending_event_choice != null ? { choice: pending_event_choice } : {}),
+			nation: lend_lease_active || undefined,
+		})
+		toast("已选部队（第 " + (step + 1) + "/" + total + " 步）")
+		clear_piece_highlight("event_piece")
+		return
+	}
 	const arg = { card: card.id, piece: pieceId }
 	/* 代价（弃牌）在 cancel_event_card 之前取出，否则会被清掉 */
 	if (pending_echo_cards && pending_echo_cards.length)
@@ -2876,6 +2954,7 @@ function cancel_event_card() {
 	pending_event_choice = null
 	pending_event_picks = null
 	pending_event_spaces = null
+	pending_event_pieces = null
 	pending_echo_discard = null
 	pending_echo_cards = null
 	clear_target_highlight()
@@ -8019,6 +8098,15 @@ function on_click_space(evt) {
 				send_query("event_targets", {
 					card: pending_event_card.id,
 					spaces: pending_event_spaces.slice(),
+					/*
+					 * 【2026-10-21 修复】必须把已累积的 pieces 一并回传
+					 * （与 submit_event_piece 回传 spaces 对称）：
+					 * 17532 这类"先 remove 再 build"的多步卡，若选建设地区时
+					 * 丢掉 pieces，服务端会重新问"选要移除的部队" ->
+					 * 客户端再问选地区 -> 两张皮球踢来踢去，永远提交不了。
+					 */
+					...(pending_event_pieces && pending_event_pieces.length
+						? { pieces: pending_event_pieces.slice() } : {}),
 					...(pending_event_choice != null ? { choice: pending_event_choice } : {}),
 					/* 【2026-10-14】委托打牌带 nation=被委托国 */
 					nation: lend_lease_active || undefined,
@@ -8655,6 +8743,15 @@ function on_reply(q, params) {
 				arg.spaces = pending_event_spaces.slice()
 				const one = pending_event_spaces.find(x => x != null)
 				if (one != null) arg.space = one
+			}
+			/*
+			 * 【2026-10-21】与 spaces 同款：多步卡最终提交必须带上累积的 pieces，
+			 * 否则服务端 op:'remove' 读不到要移除的部队。
+			 */
+			if (pending_event_pieces && pending_event_pieces.length) {
+				arg.pieces = pending_event_pieces.slice()
+				const one = pending_event_pieces.find(x => x != null)
+				if (one != null) arg.piece = one
 			}
 			if (pending_event_choice != null)
 				arg.choice = pending_event_choice
