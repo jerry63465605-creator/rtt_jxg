@@ -4926,6 +4926,7 @@ const STATUS_EFFECTS = {
 	}
 
 	function status_on_econ(game, tag, target, actor) {
+		const fired = []
 		for (const n in (game.table || {})) {
 			for (const cid of (game.table[n] || [])) {
 				const c = inst_card(cid)
@@ -4937,6 +4938,7 @@ const STATUS_EFFECTS = {
 				if (rc.when === 'econ_target') {
 					if (rc.tag && rc.tag !== tag) continue
 					if (target !== '德国') continue
+					fired.push(cid)
 					if (rc.attacker_attrition) {
 						/* 【2026-10-17 修复】经济战来源国被强制损耗属【被动损耗】，
 						 * 用 attrition_passive：牌库不足差额每张扣 1 分（与 status_on_attacked 同口径）。 */
@@ -4958,6 +4960,7 @@ const STATUS_EFFECTS = {
 				if (rc.when === 'econ_used') {
 					const tags = Array.isArray(rc.tag) ? rc.tag : [rc.tag]
 					if (tags.indexOf(tag) < 0) continue
+					fired.push(cid)
 					if (rc.add_attrition) { const lost = attrition_passive(game, target, rc.add_attrition); void lost }
 					if (rc.add_score) add_axis_score(game, rc.add_score)
 					if (rc.extra_if_space_army && de_units_in(game, rc.extra_if_space_army.space, ['army'], rc.extra_if_space_army.nation) >= 1) {
@@ -4967,6 +4970,7 @@ const STATUS_EFFECTS = {
 				}
 			}
 		}
+		if (fired.length) notify_german_status_used(game, fired)
 	}
 
 function status_config_of(card_id) {
@@ -6899,10 +6903,39 @@ function apply_status_ongoing(game, card_id, nation) {
 }
 
 /*
+ * 【2026-10-22】状态卡实例【弃置】：从桌面移除 + 撤光环 + 进弃牌堆。
+ * 供 15328《破译恩尼格码》复用（按【实例 id】，区别于按卡面匹配的 discard_table_card）。
+ */
+function discard_status_instance(game, nation, inst_id) {
+	if (!inst_id) return null
+	const t = game.table[nation] || []
+	const i = t.indexOf(inst_id)
+	if (i < 0) return null
+	t.splice(i, 1)
+	revert_status_ongoing(game, inst_id, nation)
+	game.discard[nation] = game.discard[nation] || []
+	game.discard[nation].push(inst_id)
+	return inst_id
+}
+
+/*
+ * 【2026-10-22】"德国状态卡效果已发动"统一上报（供 15328《破译恩尼格码》）。
+ *
+ * 复用既有的 status_attacked 事件（原只用于"被攻击 reaction"）。玩家 2026-10-22 确认：
+ *   · 手动 activate_status（效果真正发动成功）-> 上报
+ *   · react when 'attacked' / 'econ_used' / 'econ_target' -> 上报
+ *   · auto（计分阶段自动生效）-> 【不】上报
+ * ctx.cards = 本次发动的德国状态卡【实例 id】列表；多张时由 15328 选 1 张弃置。
+ */
+function notify_german_status_used(game, cardIds) {
+	if (!cardIds || !cardIds.length) return null
+	return request_responses(game, 'status_attacked', { nation: '德国', cards: cardIds }, false)
+}
+
+/*
  * 状态卡【离场】时撤销光环（A4①：只撤光环，地图改动永久保留）。
  *
- * 目前离场入口只有 15328 破译恩尼格码（弃置德国刚发动的状态卡）；
- * 将来新增弃置手段时复用本函数即可。
+ * 离场入口：15328 破译恩尼格码（经 discard_status_instance）等。
  */
 function revert_status_ongoing(game, card_id, nation) {
 	const cfg = status_config_of(card_id)
@@ -13625,10 +13658,10 @@ const RESPONSE_PRE_CANCEL = new Set(['15329', '17736'])
 
 const RESPONSE_EFFECT_IMPL = {
 	'15328': (game, side, ctx, choice) => {
-		/* 候选 = 被攻击发动的德国状态卡（status_attacked 场景总是走这里） */
+		/* 候选 = 本次发动效果的德国状态卡（status_attacked 的 ctx.cards） */
 		const cards = ctx.cards || []
 		if (!cards.length) return { ok: false, reason: '没有可弃置的德国状态卡' }
-		/* 第一次进入（无 choice）：统一弹窗选 1 张（单卡/多卡都走选窗） */
+		/* 第一次进入（无 choice）：弹窗选 1 张（用户口径：多张仍选 1 张） */
 		if (choice == null) {
 			const candidates = cards.map(cid => {
 				const c = inst_card(cid)
@@ -13636,11 +13669,11 @@ const RESPONSE_EFFECT_IMPL = {
 			})
 			return { pending: true, kind: 'card', candidates, prompt: '破译恩尼格码：选择弃置 1 张德国状态卡' }
 		}
-		/* 第二次（玩家已选 choice = 卡实例 id）：从 game.table[德国] 移除 */
-		const arr = game.table[ctx.nation] || []
-		const i = arr.indexOf(choice)
-		if (i >= 0) arr.splice(i, 1)
-		const c = inst_card(choice)
+		/* 第二次（choice = 卡实例 id）：桌面移除 + 撤光环 + 进弃牌堆（复用原子） */
+		const owner = ctx.nation || '德国'
+		const inst = discard_status_instance(game, owner, choice)
+		if (!inst) return { ok: false, reason: '该状态卡已不在桌面' }
+		const c = inst_card(inst)
 		return { ok: true, desc: '弃置《' + (c ? c.name : '状态卡') + '》' }
 	},
 	'15329': (game, side, ctx) => {
@@ -25661,6 +25694,14 @@ function play_status_card_impl(game, nation, card_id) {
 			nation: owner, card: cardId, card_obj: inst_card(cardId),
 			from_status: true,
 		}, false)
+		/*
+		 * 【2026-10-22】德国状态卡【效果发动成功】-> 上报 15328《破译恩尼格码》。
+		 * 用户口径：手动 activate_status / attacked / econ_used / econ_target 算，auto 不算。
+		 * 放在效果结算之后（"发动效果后：弃置该卡"），skip 不算真正发动。
+		 */
+		const _cCard = inst_card(cardId)
+		if (_cCard && _cCard.nation === '德国' && !r.skip)
+			notify_german_status_used(game, [cardId])
 
 		/*
 		 * 【2026-09-28 玩家口径】代价是【跳过出牌阶段】的状态卡发动后，
