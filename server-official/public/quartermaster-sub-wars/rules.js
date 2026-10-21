@@ -7359,6 +7359,17 @@ function can_build_at(game, nation, space, type) {
 			return { ok: false, reason: data.name_of(space) + ' 有敌方部队' }
 	}
 
+	/*
+	 * 【2026-10-22 修复·候选给出"已被占用"的地区】
+	 * 槽位（每国每格：陆军/海军合计 1 支、空军 1 支）必须在这里统一校验：
+	 * 旧实现只在大本营/邻接分支返回 ok，不看槽位，而真正落子的 build_piece 会拒。
+	 * 结果：建设候选/地图高亮包含已占格（如苏联大本营已有陆军仍被列为合法建设地），
+	 * 玩家点了才报"已有本国单位"；17820《方面军》更因此建不出新单位，
+	 * 战斗预算 useNewPiece 拿到 null -> 目标恒空、无法发起战斗（玩家反馈）。
+	 */
+	const slotChk = unit_slot_free(game, nation, type, space)
+	if (!slotChk.ok) return slotChk
+
 	const nbrs = get_connections(game, space, myFaction) || []
 
 	/*
@@ -16477,7 +16488,9 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	 * 旧实现只把它混在 desc 括号里，玩家表现为"打了牌却只出现 1 支部队"且无从得知原因。
 	 */
 	const spaceFails = []
-	let newPiece = null
+	/* 【2026-10-22】续跑（event_step_next / armed 续跑）时恢复"刚产出的单位"，
+	 * 否则 useNewPiece 的 battle 步在续跑里拿不到发起者（见 maybe_pause_event_step）。 */
+	let newPiece = (opt && opt.newPiece != null) ? opt.newPiece : null
 	/*
 	 * 【2026-09-29】prevSpaces：把上一个【产出单位】的 step（build/recruit）
 	 * 实际执行的地区累积下来，供后续 useNewPiece 的 step 计算候选
@@ -16489,7 +16502,7 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	 *   （查询阶段 event_card_needs 已传，所以高亮能显示，
 	 *     但执行阶段没传 -> 玩家点了却什么都没发生。）
 	 */
-	let prevSpaces = null
+	let prevSpaces = (opt && opt.prevSpaces) ? opt.prevSpaces.slice() : null
 	/*
 	 * 【2026-10-21】remove 步的序号计数：用于把 arg.piece（单值）对应到【第 0 个】
 	 * remove 步，多步累积时则用 arg.pieces[i]（见 op:'remove' 分支）。
@@ -16793,7 +16806,8 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			if (!r.ok) { failStep(st, r.reason || '无法移除该部队'); continue }
 			descs.push('移除 1 支' + piece_type_zh(pType))
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
-			const ps = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			const ps = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
+				{ newPiece: newPiece, prevSpaces: prevSpaces })
 			if (ps) return ps
 			continue
 			}
@@ -16816,11 +16830,16 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：征召后若存在 after_recruit 增强窗口，同样挂起等待。 */
 			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_recruit')) {
-				game.pending_event_armed = { card_id, nation, resumeStep: i + 1, extra: !!extra }
+				game.pending_event_armed = {
+					card_id, nation, resumeStep: i + 1, extra: !!extra,
+					/* 【2026-10-22】跨挂起携带刚产出的单位（battle 的 useNewPiece 依赖） */
+					newPiece: newPiece, prevSpaces: prevSpaces,
+				}
 				return { ok: true, pending: true, armedPause: true, cardResolved: false, desc: descs.join('；') }
 			}
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
-			const psR = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			const psR = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
+				{ newPiece: newPiece, prevSpaces: prevSpaces })
 			if (psR) return psR
 			continue
 			}
@@ -16844,11 +16863,16 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
 			 * 挂起等待该窗口全部结算完，再从第 i+1 步续跑，最后由 resume_event_after_armed 触发国家技能。 */
 			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_build_navy')) {
-				game.pending_event_armed = { card_id, nation, resumeStep: i + 1, extra: !!extra }
+				game.pending_event_armed = {
+					card_id, nation, resumeStep: i + 1, extra: !!extra,
+					/* 【2026-10-22】跨挂起携带刚产出的单位（battle 的 useNewPiece 依赖） */
+					newPiece: newPiece, prevSpaces: prevSpaces,
+				}
 				return { ok: true, pending: true, armedPause: true, cardResolved: false, desc: descs.join('；') }
 			}
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
-			const psB = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			const psB = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
+				{ newPiece: newPiece, prevSpaces: prevSpaces })
 			if (psB) return psB
 			continue
 			}
@@ -16901,6 +16925,17 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			if (st.useNewPiece && newPiece != null) {
 				from = newPiece
 				grant_supply(game, newPiece, game.turn || 1)
+			}
+			/*
+			 * 【2026-10-22 修复·死预算】卡面"以此陆军/海军发起1次战斗"：
+			 * 若上一步没产出单位（建设失败/被自动跳过），useNewPiece 就没有发起者。
+			 * 旧实现照样建立预算（newPiece=null）-> event_battle_targets 恒为 []，
+			 * 玩家只能点「结束」= 玩家反馈的"给了战斗预算却无法发起战斗"。
+			 * 此时本步判为未执行（记入 last_card_fail），不建立空预算。
+			 */
+			if (st.useNewPiece && newPiece == null && from == null) {
+				failStep(st, '没有可发起战斗的新单位（前一步未建成/未征召）')
+				continue
 			}
 			const remaining = step_pick_count(st)
 			game.event_budget = {
@@ -17007,12 +17042,19 @@ function has_armed_window(game, nation, when) {
  * 旧实现一个 action 内把所有步跑完，窗口被后续步覆盖、或在 view 里懒武装时已错过
  * （见 docs/event-step-machine.md §1.3）。
  */
-function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt) {
+function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt, carry) {
 	if (!opt || !opt.oneStep) return null
 	if (i + 1 >= steps.length) return null     /* 最后一步：不停，交给调用方收尾 */
 	const nxt = steps[i + 1]
 	const label = event_step_label(nxt)
 	const doneDesc = descs.length ? descs[descs.length - 1] : ''
+	/*
+	 * 【2026-10-22 修复·续跑丢失 newPiece】停机只存了 arg（玩家选择），
+	 * 而本步"刚建/征召出的那支单位"是局部变量 newPiece —— 续跑到 battle 步时
+	 * useNewPiece 拿到 null，战斗预算目标恒空（17820《方面军》"给了预算发不出战斗"）。
+	 * 这里把 newPiece / prevSpaces 一并落盘，event_step_next 续跑时原样传回。
+	 */
+	carry = carry || {}
 	game.pending_event_step = {
 		card_id: card_id,
 		nation: nation,
@@ -17024,6 +17066,9 @@ function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt
 		desc: descs.join('；'),
 		next_label: label,
 		extra: !!opt.extra,
+		/* 跨步携带：刚产出的单位 + 产出地区（battle 的 useNewPiece 依赖它们） */
+		newPiece: (carry.newPiece != null) ? carry.newPiece : null,
+		prevSpaces: carry.prevSpaces ? carry.prevSpaces.slice() : null,
 		token: (game._event_step_token = (game._event_step_token || 0) + 1),
 	}
 	game.log.push('【' + nation + '】《' + (inst_card(card_id) ? inst_card(card_id).name : card_id) +
@@ -17110,7 +17155,8 @@ function resume_event_after_armed(game) {
 	 * 否则 armed 窗口结算完又会把后面所有步一次跑完，状态卡时点照样错过。
 	 * extra 显式取自挂起时记录（旧代码用的是未定义的裸 extra，恒为 falsy）。
 	 */
-	const r = resolve_event_card(game, nation, card_id, {}, resumeStep, pend.extra, { oneStep: true, extra: pend.extra })
+	const r = resolve_event_card(game, nation, card_id, {}, resumeStep, pend.extra,
+		{ oneStep: true, extra: pend.extra, newPiece: pend.newPiece, prevSpaces: pend.prevSpaces })
 	if (r && r.ok && !r.pending) {
 		/* 全部分步执行完毕（含所有 armed 窗口）：卡入弃牌堆 + 国家技能 */
 		finish_event_card(game, nation, card_id, { extra: pend.extra })
@@ -25475,7 +25521,7 @@ function play_status_card_impl(game, nation, card_id) {
 		arg.card = ps.card_id
 		game.pending_event_step = null
 		const r = resolve_event_card(game, ps.nation, ps.card_id, arg, ps.step, ps.extra,
-			{ oneStep: true, extra: ps.extra })
+			{ oneStep: true, extra: ps.extra, newPiece: ps.newPiece, prevSpaces: ps.prevSpaces })
 		if (r && r.ok && !r.pending) {
 			/* 与旧"一步到底"路径保持日志一致：打出《X》—— <各步描述> */
 			if (r.desc) game.log.push('【' + ps.nation + '】打出《' + nmc + '》—— ' + r.desc)
