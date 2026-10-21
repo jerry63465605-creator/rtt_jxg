@@ -1870,8 +1870,10 @@ function de_soviet_armies_near_german(game) {
  * ============================================================
  */
 
-/* 卡面带 [北方行动] 标签的德国卡（out/de_cards.csv 核对） */
-const NORTH_OPS_FACES = ['15211', '15220', '15224', '15241', '15249']
+/* 卡面带 [北方行动] 标签的德国卡（out/de_cards.csv 核对）
+ * 【2026-10-22】补上 15236《瑞典支援芬兰》—— 卡面首词就是 [北方行动]，
+ * 旧名单漏了它，导致"可打出1张[北方行动]"的过滤对它自己（同名第二张）不成立。 */
+const NORTH_OPS_FACES = ['15211', '15220', '15224', '15236', '15241', '15249']
 
 function is_north_ops_card(card_id) {
 	return NORTH_OPS_FACES.indexOf(String(inst_card_id(card_id))) >= 0
@@ -9180,9 +9182,16 @@ const EVENT_EFFECTS = {
 		 */
 		cond(game) {
 			const ross = space_id('罗斯')
-			if (de_is_controlled(game, ross, '德国') || de_is_controlled(game, ross, '苏联'))
-				return { ok: true }
-			return { ok: false, reason: '<罗斯>没有德国或苏联陆军' }
+			if (ross == null) return { ok: false, reason: '<罗斯> 未配置' }
+			/*
+			 * 【2026-10-22 修复】卡面要求的是<罗斯>有德国或苏联【陆军】。
+			 * 旧实现用 de_is_controlled（只看"有任意部队"），罗斯上空一架德国飞机
+			 * 也会误判为满足前提（实测：只放德国 air 也照常建海军）。
+			 */
+			const ok = pieces_on(game, ross).some(p =>
+				game.piece_type[p] === 'army' &&
+				(game.piece_nation[p] === '德国' || game.piece_nation[p] === '苏联'))
+			return ok ? { ok: true } : { ok: false, reason: '<罗斯>没有德国或苏联陆军' }
 		},
 		steps: [
 			{ op: 'build', type: 'navy', spaces: space_ids_of(['波罗的海']) },
@@ -17037,6 +17046,17 @@ function finish_event_card(game, nation, card_id, opt) {
 	game.discard[nation] = game.discard[nation] || []
 	if (game.discard[nation].indexOf(card_id) < 0) game.discard[nation].push(card_id)
 	/*
+	 * 【2026-10-22 修复·分步卡丢失"额外打出"】
+	 * resolve_event_card 只在【首次调用】(startStep<=0) 里发放 extraPlay；
+	 * 而多步卡一旦走分步执行机（15236 建海军 -> 征召陆军），首次调用就 return 了
+	 * （stepPause），续跑时 startStep>0 又跳过发放 —— 于是"可打出1张[北方行动]"
+	 * 永远发不出来（实测 extra_play 恒为 null）。
+	 * 本函数是分步卡的统一收尾点，在这里补发；非分步卡不走这里，不会重复发放。
+	 */
+	const _eff = card_effect_of(card_id)
+	if (_eff && _eff.extraPlay && !opt.noExtraPlay)
+		grant_extra_play(game, nation, String(inst_card_id(card_id)), nm, _eff.extraPlay)
+	/*
 	 * 【2026-10-22 修复】出牌名额改由【打出瞬间】在 play_card 的 stepPause / armedPause
 	 * 分支统一占用（timing/extra 除外）。此处不再重复 mark ——
 	 * 否则意大利《意大利万岁》这类"两次行动"会在收尾时被二次 mark 而少一次。
@@ -19193,8 +19213,20 @@ function check_phase_for_card(game, nation, c, arg) {
 		if (extra_play_allows(game, nation, cid, instId))
 			return { ok: true, extra: true }
 		/* 普通打出：每回合 1 张，受 play_done 限制 */
-		if (game.play_done && game.play_done[nation])
+		if (game.play_done && game.play_done[nation]) {
+			/*
+			 * 【2026-10-22 文案修复】此时玩家手里还有"额外打出"权利，只是这张牌不在范围内
+			 * （如 15236 只允许再打 1 张[北方行动]）。旧文案直接说"已打出 1 张牌"，
+			 * 玩家会误以为额外打出没生效 —— 改成说明真实原因。
+			 */
+			if (has_extra_play(game, nation))
+				return {
+					ok: false,
+					reason: '《' + c.name + '》不在额外打出范围内（本次额外打出只能：' +
+						extra_play_filter_desc(game.extra_play) + '）',
+				}
 			return { ok: false, reason: nation + ' 本回合出牌阶段已打出 1 张牌（每回合 1 张）' }
+		}
 		return { ok: true }
 	}
 
