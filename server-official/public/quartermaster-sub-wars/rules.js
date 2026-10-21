@@ -1824,6 +1824,36 @@ function add_allied_score(game, n) {
 	if (!n) return
 	game.score[ALLIES] = (game.score[ALLIES] || 0) + n
 }
+
+/*
+ * 【2026-10-22】"本回合被移除的部队"计数（17512《战俘》用）。
+ *
+ * 术语铁律（见 rtt-turn-system）：卡面的"本回合"= **1 个国家回合**
+ * （game.current_nation 那一段），不是整轮 6 国。因此计数必须：
+ *   · 在【国家轮转】时清零（next_phase 跑完 7 阶段 / next_nation）；
+ *   · 按【被移除部队所属阵营】分别累计 —— 《战俘》只该数"敌方"部队，
+ *     旧实现用一个全局总数，同盟部队被打掉也会被美国算成分。
+ */
+function reset_removed_this_turn(game) {
+	game.removed_this_turn = 0
+	game.removed_this_turn_by_faction = { axis: 0, allies: 0 }
+}
+/* 登记 1 支被移除的部队（removedNation = 被移除方国名，须在 delete 前读取） */
+function note_removed(game, removedNation, n) {
+	n = (n == null) ? 1 : n
+	if (!n) return
+	game.removed_this_turn = (game.removed_this_turn || 0) + n
+	const f = faction_of_nation(removedNation)
+	if (!f) return
+	const d = game.removed_this_turn_by_faction ||
+		(game.removed_this_turn_by_faction = { axis: 0, allies: 0 })
+	d[f] = (d[f] || 0) + n
+}
+/* 某阵营在当前【国家回合】内被移除的部队数 */
+function removed_this_turn_of_faction(game, faction) {
+	const d = game.removed_this_turn_by_faction
+	return (d && d[faction]) || 0
+}
 function de_army_spaces(game, nation) {
 	const out = []
 	for (const p in game.piece_nation)
@@ -7814,8 +7844,8 @@ function eliminate_piece(game, nation, space, target_piece) {
 	delete game.location[victim]
 	/* 【2026-10-16】17749 轴心协定：登记真实击杀信用 */
 	axis_pact_register(game, nation, space, victim)
-	game.removed_this_turn = (game.removed_this_turn || 0) + 1
-	for (const air of killedAirs) { delete game.location[air]; game.removed_this_turn = (game.removed_this_turn || 0) + 1 }
+	note_removed(game, vNation, 1)
+	for (const air of killedAirs) { delete game.location[air]; note_removed(game, vNation, 1) }
 	refresh(game)
 
 	/* 事后类响应卡：本算子被移除后，持有方可选择还原/保护 */
@@ -10746,10 +10776,22 @@ const ECHO_EFFECTS = {
 		steps: [{
 			op: 'run',
 			run(game, nation) {
-				const n = game.removed_this_turn || 0
+				/*
+				 * 【2026-10-22 修复·"本回合"= 1 个国家回合（rtt-turn-system）】
+				 * 旧实现读全局 removed_this_turn（谁被移除都 +1，且只在 17512 结算时清零）：
+				 *   · 同轮内德国/意大利/日本/苏联/英国回合被移除的部队会一起算给美国；
+				 *   · 同盟自己的部队被打掉也算成"敌方部队"（方向完全反了）。
+				 * 现在：按【被移除方阵营】分别累计（note_removed），只数敌方阵营；
+				 * 计数在【国家轮转】时清零（next_phase 跑完 7 阶段 / next_nation），
+				 * 因此天然等于"美国这一个国家回合内"。
+				 */
+				const myF = faction_of_nation(nation) || ALLIES
+				const enemyF = (myF === AXIS) ? ALLIES : AXIS
+				const n = removed_this_turn_of_faction(game, enemyF)
 				if (n > 0) {
-					add_allied_score(game, n)
-					game.removed_this_turn = 0
+					if (myF === AXIS) add_axis_score(game, n)
+					else add_allied_score(game, n)
+					reset_removed_this_turn(game)
 					return { ok: true, desc: '因本回合 ' + n + ' 支敌方部队被移除，获得 ' + n + ' 分' }
 				}
 				return { ok: true, skip: true, desc: '本回合没有敌方部队被移除' }
@@ -17800,9 +17842,13 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			const rmvTypeC = game.piece_type[victim]
 			const rmvSuppliedC = !!compute_supply(game).in_supply[victim]
 			const victimRemovedC = !is_protected(game, victim)
+			/* 抵消成立：双方各掉 1 支空军 —— 分别按各自阵营计数（不能合并成 +2） */
+			const dfAirNation = game.piece_nation[defend_air]
+			const ctAirNation = game.piece_nation[counter_air]
 			delete game.location[defend_air]
 			delete game.location[counter_air]
-			game.removed_this_turn = (game.removed_this_turn || 0) + 2
+			note_removed(game, dfAirNation, 1)
+			note_removed(game, ctAirNation, 1)
 			/* 受保护部队本回合无法被移除（抵消成立时原目标照常移除，但 protect 优先） */
 			if (is_protected(game, victim)) {
 				game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的' +
@@ -17879,8 +17925,8 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 
 		/* 不抵消：代受成立 —— 防守方损失空军，原目标部队保住 */
 		/* 【总体战】此处只移除空军 -> 不触发损耗（空军移除不掉牌） */
+		note_removed(game, game.piece_nation[defend_air], 1)
 		delete game.location[defend_air]
-		game.removed_this_turn = (game.removed_this_turn || 0) + 1
 		refresh(game)
 		/*
 		 * 【2026-09-25 第 2 步】代受空军也算"发起战斗成功"，
@@ -17924,7 +17970,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			piece_type_zh(game.piece_type[victim]) + '受保护，本回合无法被移除')
 	} else {
 		delete game.location[victim]
-		game.removed_this_turn = (game.removed_this_turn || 0) + 1
+		note_removed(game, rmvNation, 1)
 		/* 【总体战】陆军 / 空军 被移除 -> 其代表团所属国损耗 1（同国去重，敌方限定） */
 		total_war_attrition(game, [{ nation: rmvNation, type: rmvType }])
 		/* 触发"被移除"响应钩子（15330 防御姿态 / 15334 驱逐舰 等事后还原类）：
@@ -20992,6 +21038,9 @@ function advance_phase(game) {
 	const ni = ORDER_OF_NATIONS.indexOf(nation)
 	const nextNation = ORDER_OF_NATIONS[(ni + 1) % ORDER_OF_NATIONS.length]
 	game.current_nation = nextNation
+	/* 【2026-10-22】国家回合切换：清零"本回合被移除部队"计数（17512 战俘）。
+	 * 卡面的"本回合"= 1 个国家回合，故必须在【国家轮转】这一刻清零，而不是整轮。 */
+	reset_removed_this_turn(game)
 	let turn_changed = false
 	let finalWin = null
 	/*
@@ -24019,6 +24068,8 @@ function play_status_card_impl(game, nation, card_id) {
 		let i = ORDER_OF_NATIONS.indexOf(game.current_nation)
 		if (i < 0) i = ORDER_OF_NATIONS.length - 1   /* 未知 -> 从头开始 */
 		game.current_nation = ORDER_OF_NATIONS[(i + 1) % ORDER_OF_NATIONS.length]
+		/* 【2026-10-22】国家回合切换：清零"本回合被移除部队"计数（17512 战俘） */
+		reset_removed_this_turn(game)
 		/* 操作权同步到新行动国所属阵营 */
 		game.active = faction_role_of_nation(game.current_nation)
 		game.log.push(side + ' 行动国交替为：' + game.current_nation +
@@ -28762,6 +28813,10 @@ if (typeof module !== 'undefined') {
 		/* 【2026-10-22】17729 卡佩里尼链：响应窗口暂停/续跑（测试 seam） */
 		advance_italy_chain,
 		resume_italy_chain,
+		/* 【2026-10-22】17512 战俘：本回合（1 个国家回合）按阵营统计的被移除部队数 */
+		reset_removed_this_turn,
+		note_removed,
+		removed_this_turn_of_faction,
 		/* 【2026-10-18】各国兵力总数上限校验（测试用） */
 		unit_cap_ok,
 		nation_unit_count,
