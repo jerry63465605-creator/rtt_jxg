@@ -16897,17 +16897,25 @@ function finish_event_card(game, nation, card_id, opt) {
 }
 
 /*
- * 【2026-10-21 方案 B】当前是否"有未决的步骤边界窗口"（状态卡 / 增强卡 / 响应 / 战斗）。
- * event_step_next 与 view 的 disabled 判定共用，保证客户端按钮态与服务端口径一致。
+ * 【2026-10-21 方案 B】停机时的"待决窗口"分两类：
+ *   hard（硬阻塞）—— 必须处理完才能推进：响应卡、战斗结算、经济战结算。
+ *     这些状态下 build_actions 本来就只放行对应动作，推进是无意义的。
+ *   soft（可放弃）—— 状态卡窗口 / 增强卡窗口：给玩家【时点】，但玩家有权不用。
+ *     旧实现把 soft 也当成硬阻塞，而"放弃窗口"原本的唯一途径是"做别的动作"
+ *     （status_instant 靠动作入口清除）—— 停机期间那条路被 hasSuspended 堵了，
+ *     于是玩家不想发动时【永远点不了下一步】= 卡死（2026-10-21 用户实测）。
+ *     典型场景：窗口已武装但代价付不起（17544/17547/17550 都要损耗 1 张，
+ *     牌库空时 activate_status 会失败），玩家除了放弃别无选择。
  */
-function event_step_blockers(game) {
-	const b = []
-	if ((game.armed_offers || []).length) b.push('增强卡窗口')
-	if ((game.status_instant || []).length) b.push('状态卡窗口')
-	if (top_response_frame(game)) b.push('响应卡')
-	if (game.pending_battle) b.push('战斗结算')
-	if (game.pending_econ) b.push('经济战结算')
-	return b
+function event_step_blockers(game, side) {
+	const hard = [], soft = []
+	if ((game.armed_offers || []).some(w => faction_of_nation(w.nation) === side))
+		soft.push('增强卡窗口')
+	if ((game.status_instant || []).length) soft.push('状态卡窗口')
+	if (top_response_frame(game)) hard.push('响应卡')
+	if (game.pending_battle) hard.push('战斗结算')
+	if (game.pending_econ) hard.push('经济战结算')
+	return { hard, soft, all: hard.concat(soft) }
 }
 
 /*
@@ -22125,21 +22133,23 @@ exports.view = function (state, current) {
 				const ps = game.pending_event_step
 				if (!ps) return null
 				if (faction_of_nation(ps.nation) !== side) return null
-				const blockers = event_step_blockers(game)
+				const bl = event_step_blockers(game, side)
 				return {
-				card_id: ps.card_id,
-				card_name: (inst_card(ps.card_id) || {}).name || ps.card_id,
-				nation: ps.nation,
-				step: ps.step,
-				total: ps.total,
-				/* 已完成步骤的描述（面板展示"已完成：移除 1 支海军"） */
-				desc: ps.desc || '',
-				/* 下一步的动作文案（服务端算，客户端直接显示） */
-				next_label: ps.next_label || '',
-				token: ps.token,
-				/* 未清窗口时列出原因，客户端禁用「下一步」并展示 */
-				blockers: blockers,
-				can_next: blockers.length === 0,
+					card_id: ps.card_id,
+					card_name: (inst_card(ps.card_id) || {}).name || ps.card_id,
+					nation: ps.nation,
+					step: ps.step,
+					total: ps.total,
+					/* 已完成步骤的描述（面板展示"已完成：移除 1 支海军"） */
+					desc: ps.desc || '',
+					/* 下一步的动作文案（服务端算，客户端直接显示） */
+					next_label: ps.next_label || '',
+					token: ps.token,
+					/* 硬阻塞：必须处理完才能推进（客户端据此禁用按钮） */
+					blockers: bl.hard,
+					/* 软窗口：可发动的时点，也可直接点「下一步」放弃 */
+					offers: bl.soft,
+					can_next: bl.hard.length === 0,
 				}
 				})(),
 
@@ -25042,13 +25052,18 @@ function play_status_card_impl(game, nation, card_id) {
 			return game
 		}
 		/*
-		 * 闸门：状态卡/增强卡/响应/战斗窗口未清空 -> 拒绝。
-		 * 这正是"建设完第一支部队后给触发时点，全完毕后继续"的体现。
+		 * 闸门：硬阻塞（响应卡/战斗/经济战）未清 -> 拒绝，玩家必须先处理。
+		 * 软窗口（状态卡/增强卡）只是"给时点"，玩家点「下一步」即视为放弃。
 		 */
-		const blockers = event_step_blockers(game)
-		if (blockers.length) {
-			game.log.push('请先处理当前的' + blockers.join('、') + '，再点《' + nmc + '》的「下一步」')
+		const bl = event_step_blockers(game, side)
+		if (bl.hard.length) {
+			game.log.push('请先处理当前的' + bl.hard.join('、') + '，再点《' + nmc + '》的「下一步」')
 			return game
+		}
+		if (bl.soft.length) {
+			game.log.push('《' + nmc + '》放弃未处理的' + bl.soft.join('、') + '，继续后续步骤')
+			game.status_instant = []
+			clear_armed_offer_for_side(game, side)
 		}
 		const arg = Object.assign({}, ps.accum || {})
 		arg.card = ps.card_id

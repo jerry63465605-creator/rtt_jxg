@@ -6957,10 +6957,18 @@ function update_event_step_box() {
 	const hint = document.createElement('div')
 	hint.className = 'eb-hint'
 	if (ps.can_next) {
-		hint.textContent = '下一步：' + (ps.next_label || '继续') +
-			'（可先发动状态卡/响应卡，再点「下一步」）'
+		/*
+		 * 有可发动的窗口时明确告知"也可以直接下一步放弃"——
+		 * 旧实现把状态卡窗口当成硬阻塞，玩家不想发动就永远卡住
+		 * （代价付不起时尤其致命：窗口已武装但 activate_status 会失败）。
+		 */
+		hint.textContent = ps.offers && ps.offers.length
+			? ('下一步：' + (ps.next_label || '继续') +
+				'（有可发动的' + ps.offers.join('、') + '；不发动就直接点「下一步」）')
+			: ('下一步：' + (ps.next_label || '继续') +
+				'（可先发动状态卡/响应卡，再点「下一步」）')
 	} else {
-		/* 有未决窗口：说明原因，按钮禁用（判定同源：服务端 blockers） */
+		/* 硬阻塞（响应卡/战斗/经济战）：必须处理完才能推进 */
 		hint.textContent = '请先处理当前的' + (ps.blockers || []).join('、') +
 			'，再点「下一步」'
 	}

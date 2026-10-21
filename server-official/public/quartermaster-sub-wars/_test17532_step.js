@@ -94,17 +94,17 @@ const q = (g, arg) => rules.query(g, 'Allies', 'event_targets', Object.assign({ 
 			e.window === 'after_build_navy'),
 		JSON.stringify(g.status_instant))
 	const vStep = rules.view(g, 'Allies').pending_event_step
-	check('④c 此时面板 can_next=false（要先给时点）',
-		vStep && vStep.can_next === false && vStep.blockers.indexOf('状态卡窗口') >= 0,
-		JSON.stringify(vStep && vStep.blockers))
-	/* 闸门：窗口未处理不许推进 */
-	rules.action(g, 'Allies', 'event_step_next', {})
-	check('④d 窗口未清时 event_step_next 被拒',
-		g.log.some(l => l.indexOf('请先处理当前的') >= 0 && l.indexOf('状态卡窗口') >= 0),
-		g.log.slice(-1)[0])
-	check('④e 第三步尚未执行',
-		!Object.keys(g.location).some(p => g.location[p] === sea('中东') && g.piece_type[p] === 'army'))
-	/* 玩家在该时点发动 17550（先进造船厂：损耗1张，再建1支海军） */
+	/*
+	 * 注意：状态卡窗口是【软】窗口（给时点但可放弃），不构成硬阻塞 ——
+	 * 否则玩家不想发动/代价付不起就永远点不了下一步（2026-10-21 卡死 bug）。
+	 * "拦住推进"只对响应卡/战斗/经济战生效，见 ④'' 节。
+	 */
+	check('④c 有状态卡窗口时 can_next=true（软窗口，不卡死）',
+		vStep && vStep.can_next === true && vStep.blockers.length === 0,
+		JSON.stringify(vStep))
+	check('④c2 offers 列出状态卡窗口', vStep && vStep.offers.indexOf('状态卡窗口') >= 0,
+		JSON.stringify(vStep && vStep.offers))
+	/* 玩家可以选择发动（④f），也可以直接放弃推进（④' 节）——两条路都通 */
 	rules.action(g, 'Allies', 'activate_status', { card: '17550#1', space: sea('阿拉伯海') })
 	check('④f 时点内成功发动状态卡',
 		g.log.some(l => l.indexOf('先进造船厂') >= 0), g.log.slice(-3).join(' | '))
@@ -117,6 +117,67 @@ const q = (g, arg) => rules.query(g, 'Allies', 'event_targets', Object.assign({ 
 		!g.pending_event_step && (g.discard['美国'] || []).indexOf('17532#1') >= 0 &&
 		g.play_done['美国'] === true)
 	check('④j 日志有分步结算完成', g.log.some(l => l.indexOf('分步结算完成') >= 0))
+}
+
+/* ============ ④' 玩家【不想】发动窗口：点下一步放弃后必须能继续（防卡死） ============ */
+{
+	const g = mk(true)
+	I.resolve_event_card(g, '美国', '17532#1', FULL, 0, false, { oneStep: true })
+	rules.action(g, 'Allies', 'event_step_next', {})      /* 第二步：建海军 -> 武装窗口 */
+	rules.view(g, 'Allies')
+	const ps1 = g.pending_event_step
+	check("④'a 窗口已武装", (g.status_instant || []).length > 0)
+	/* 关键：软窗口不构成硬阻塞 —— can_next 必须为 true，否则玩家卡死 */
+	const v1 = rules.view(g, 'Allies').pending_event_step
+	check("④'b 有状态卡窗口时 can_next 仍为 true（不卡死）",
+		v1 && v1.can_next === true, 'can_next=' + (v1 && v1.can_next))
+	check("④'c offers 列出状态卡窗口", v1 && v1.offers.indexOf('状态卡窗口') >= 0,
+		JSON.stringify(v1 && v1.offers))
+	check("④'d blockers（硬）为空", v1 && v1.blockers.length === 0,
+		JSON.stringify(v1 && v1.blockers))
+	/* 玩家不发动，直接点下一步 */
+	rules.action(g, 'Allies', 'event_step_next', {})
+	check("④'e 放弃后第三步（建陆军）已执行",
+		Object.keys(g.location).some(p => g.location[p] === sea('中东') && g.piece_type[p] === 'army'))
+	check("④'f 放弃后窗口被清空", (g.status_instant || []).length === 0,
+		JSON.stringify(g.status_instant))
+	check("④'g 日志记录了放弃", g.log.some(l => l.indexOf('放弃未处理的') >= 0),
+		g.log.slice(-2).join(' | '))
+	check("④'h 收尾完成（挂起清空+入弃牌堆+占名额）",
+		!g.pending_event_step && (g.discard['美国'] || []).indexOf('17532#1') >= 0 &&
+		g.play_done['美国'] === true)
+	check("④'i 未误建 17550 的海军（放弃即不发动）",
+		Object.keys(g.location).filter(p => g.location[p] === sea('阿拉伯海')).length === 0)
+}
+
+/* ============ ④'' 硬阻塞（响应帧）才真的拦住 ============ */
+{
+	const g = mk(false)
+	/* 英国桌面暗置 15334《驱逐舰》：补给中的英国/美国海军被移除时触发（真实路径） */
+	g.table_responses = [{
+		card_id: '15334#1', card_face: '15334', nation: '英国',
+		owner_side: 'allies', name: '驱逐舰',
+	}]
+	/* step0 移除美国海军 -> request_responses('piece_removed') 真实压帧 -> 停机 */
+	I.resolve_event_card(g, '美国', '17532#1', FULL, 0, false, { oneStep: true })
+	check("④''a0 响应帧已真实压栈", (g.response_stack || []).length > 0,
+		JSON.stringify((g.response_stack || []).map(f => f.card_face)))
+	const v2 = rules.view(g, 'Allies').pending_event_step
+	check("④''a 有响应帧时 can_next=false", v2 && v2.can_next === false,
+		'can_next=' + (v2 && v2.can_next))
+	check("④''b blockers 含响应卡", v2 && v2.blockers.indexOf('响应卡') >= 0,
+		JSON.stringify(v2 && v2.blockers))
+	const before = JSON.stringify(g.pending_event_step)
+	rules.action(g, 'Allies', 'event_step_next', {})
+	/* 被拦下即可：可能是 action 入口的通用响应闸门（"响应结算中…不能进行其它操作"），
+	 * 也可能是本机制的闸门（"请先处理当前的响应卡"）—— 两者都是正确的双保险。 */
+	check("④''c 硬阻塞时 event_step_next 被拒",
+		g.log.some(l => (l.indexOf('请先处理当前的') >= 0 && l.indexOf('响应卡') >= 0) ||
+			l.indexOf('响应结算中') >= 0),
+		g.log.slice(-1)[0])
+	check("④''d 挂起未被改动", JSON.stringify(g.pending_event_step) === before)
+	check("④''e 第二步尚未执行",
+		!Object.keys(g.location).some(p => g.location[p] === sea('印度洋')))
 }
 
 /* ============ ⑤ 无窗口时连点两步直达收尾 ============ */
