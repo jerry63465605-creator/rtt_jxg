@@ -3629,12 +3629,17 @@ const STATUS_EFFECTS = {
 		desc: '地中海基地',
 	},
 
-	/* ---- 17840 焦土作战：乌克兰去补给 + 减标记（永久）---- */
+	/* ---- 17840 焦土作战：乌克兰去补给 + 减标记，剩余标记仅苏联可计分（永久）---- */
 	'17840': {
 		ongoing: {
 			kind: 'remove_supply_and_marker',
-			spaces: [{ space: '乌克兰', markers: 1 }],
-			desc: '乌克兰不再为任何国家提供补给，并减少 1 个计分标记（永久）',
+			/*
+			 * only：剩余标记改为"仅对该国生效"。
+			 * 玩家 2026-10-22 口径：焦土后乌克兰那 1 个标记只对苏联有效，
+			 * 轴心即使占着乌克兰也拿不到这 1 分（被焦土清掉的是"公共"分）。
+			 */
+			spaces: [{ space: '乌克兰', markers: 1, only: '苏联' }],
+			desc: '乌克兰不再为任何国家提供补给，并减少 1 个计分标记；剩余标记仅对苏联有效（永久）',
 		},
 		desc: '焦土作战',
 	},
@@ -6770,7 +6775,11 @@ function apply_status_ongoing(game, card_id, nation) {
 				if (sp == null) continue
 				remove_supply_point(game, sp, null)
 				if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
-				lines.push(data.name_of(sp) + ' 移除补给点' + (r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : ''))
+				/* 与 17840 同款：r.only 给出时把剩余标记改为仅该国可计分（17845 未配置则不变） */
+				if (r.only) set_marker_owner(game, sp, r.only)
+				lines.push(data.name_of(sp) + ' 移除补给点' +
+					(r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : '') +
+					(r.only ? '（剩余标记仅对' + r.only + '有效）' : ''))
 				refresh(game)
 			}
 		}
@@ -6783,7 +6792,16 @@ function apply_status_ongoing(game, card_id, nation) {
 			if (sp == null) continue
 			remove_supply_point(game, sp, null)
 			if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
-			lines.push(data.name_of(sp) + ' 移除补给点' + (r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : ''))
+			/*
+			 * 【2026-10-22 修复·焦土后乌克兰标记只对苏联有效】
+			 * 旧实现只删 1 个标记，剩 1 个仍是无主（轴心占着乌克兰也能拿分）。
+			 * 玩家口径：剩下的标记仅苏联可计分。复用既有 set_marker_owner，
+			 * 不新增标记类型/新配置通道；r.only 缺省时保持无主，其它卡不受影响。
+			 */
+			if (r.only) set_marker_owner(game, sp, r.only)
+			lines.push(data.name_of(sp) + ' 移除补给点' +
+				(r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : '') +
+				(r.only ? '（剩余标记仅对' + r.only + '有效）' : ''))
 			refresh(game)
 		}
 	}
