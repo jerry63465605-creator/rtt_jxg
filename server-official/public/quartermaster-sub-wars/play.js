@@ -1143,17 +1143,39 @@ function update_italy_chain_box() {
 	}
 	const pc = ch.pickedCard
 	if (ch.sub) {
+		/*
+		 * 【2026-10-22 修复·《空军力量》经 17729 打出没有生效】
+		 * 旧实现只提示"点地图"，提交的只有 {space}；《空军力量》必需的三选一 mode
+		 * 无处可选，服务端拿不到 mode -> 卡打出了但毫无效果（玩家反馈）。
+		 * 改为复用【真实出牌】的 start_basic_card 流程：
+		 *   · 《空军力量》-> 既有 show_mode_chooser（部署 / 夺取制空权 / 调度）
+		 *   · 发起陆战/海战 -> 既有战斗两步流程（选发起单位）
+		 * 最终提交由 submit_basic_card 路由到 resolve_italy_play（与租借法案同范式）。
+		 */
+		const cid = pc.card_id || pc.id
+		/* 每帧重贴路由（提交后 cancel_basic_card 会清掉它，但链还没推进时仍应保持） */
+		italy_chain_active = ch.pickedNation || pc.nation || null
+		if (italy_chain_sub_started !== cid) {
+			italy_chain_sub_started = cid
+			start_basic_card({ id: cid, card_id: cid, name: pc.name, type: pc.type })
+		}
 		ask_state = { kind: 'italy_chain_sub' }
 		render_ask_box('卡佩里尼：打出《' + pc.name + '》',
-			'请在地图上点击一个合法位置来打出该基本卡。', [
+			pending_card
+				? '请按提示选择模式/目标（与平时打出该基本卡完全一致）。'
+				: '请在地图上点击一个合法位置来打出该基本卡。', [
 				{ label: '放弃打出（留弃牌堆）', cls: 'ghost', onClick: () => {
 					ask_state = null
 					render_ask_box(null, null, null)
+					cancel_basic_card()
 					send_action('resolve_italy_chain', { choice: 'discard' })
 				} },
 			])
 		return
 	}
+	/* 不在打出子状态：清掉链打牌的临时态，避免误路由后续普通出牌 */
+	italy_chain_active = null
+	italy_chain_sub_started = null
 	const opt = [
 		{ label: '置于牌堆顶', cls: 'primary', onClick: () => {
 			ask_state = null; render_ask_box(null, null, null)
@@ -5041,6 +5063,11 @@ let pending_card = null      /* 正在等待选目标的卡 */
 let pending_mode = null      /* 《空军力量》的 mode */
 let pending_targets = null   /* { spaces: [...], pieces: [...] } */
 let lend_lease_active = null /* 租借法案委托中：当前被委托国（如 '英国'）；非空时基本卡选目标提交改走 resolve_us_lend_lease_play */
+/* 【2026-10-22】17729 卡佩里尼：链中打出基本卡时同样复用 start_basic_card 流程
+ * （《空军力量》的三选一、发起陆战/海战的选发起单位都由既有 UI 完成），
+ * 最终提交改走 resolve_italy_play。非空 = 当前被处置国。 */
+let italy_chain_active = null
+let italy_chain_sub_started = null /* 已启动基本卡流程的实例 id，避免每帧重复 start */
 
 function start_basic_card(c) {
 	/* 再点同一张 -> 取消 */
@@ -5172,6 +5199,10 @@ function cancel_basic_card() {
 	pending_targets = null
 	battle_flow = null
 	lend_lease_active = null
+	/* 【2026-10-22】17729 链打牌路由清掉（否则后续普通出牌会被误路由到 resolve_italy_play）。
+	 * italy_chain_sub_started 不在这里清：提交后到 view 更新的空档里若再跑一帧，
+	 * 否则会重开一次模式选择框；它由链推进（ch.sub 消失）时统一复位。 */
+	italy_chain_active = null
 	clear_piece_highlight("initiator")
 	clear_target_highlight()
 	if (ask_state && ask_state.kind !== "remove")
@@ -5189,6 +5220,14 @@ function cancel_basic_card() {
  * 三处共用：on_space_click_for_card / finish_battle_card / on_pick_airforce_piece。
  * 各调用点各自负责 cancel_basic_card 清理。 */
 function submit_basic_card(arg) {
+	/*
+	 * 【2026-10-22】17729 卡佩里尼委托打牌：与租借法案同款改路由。
+	 * 必须放在 play_card 之前——否则牌会当成"当前行动国自己出牌"结算，名额/归属都错。
+	 */
+	if (italy_chain_active) {
+		send_action('resolve_italy_play', arg)
+		return
+	}
 	if (lend_lease_active) {
 		arg.nation = lend_lease_active
 		send_action('resolve_us_lend_lease_play', arg)
@@ -7946,6 +7985,11 @@ function on_click_space(evt) {
 	 */
 	/* 17729 卡佩里尼：打出基本卡选目标位置 */
 	if (view && view.delegate && view.delegate.mode === 'order' && view.delegate.sub) {
+		/*
+		 * 【2026-10-22】改走真实基本卡流程：需要 mode（空军力量三选一）/发起单位，
+		 * 不能再直接提交裸 {space}（那样 mode 丢失 -> 卡打出了却没效果）。
+		 */
+		if (on_space_click_for_card(s)) return
 		send_action('resolve_italy_play', { space: s })
 		return
 	}

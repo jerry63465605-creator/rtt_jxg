@@ -22978,6 +22978,12 @@ function battle_reconcile_active(game) {
 	if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle) {
 		finish_us_lend_lease(game, game.delegate, game.delegate.nat)
 	}
+	/* 【2026-10-22】17729 卡佩里尼：经链打出的基本卡若进入战斗，战斗结算后续跑链 */
+	if (game.delegate && game.delegate.mode === 'order' && game.delegate.waiting_battle) {
+		game.delegate.waiting_battle = false
+		advance_italy_chain(game)
+		refresh(game)
+	}
 	/*
 	 * 【2026-10-20】战斗（含空军代死 pending_battle / su_step_back）结算完毕后，
 	 * 提升"延期的响应续打帧"（如 15425《海军空降部队》的"是否再发起 1 次陆战"），
@@ -26479,15 +26485,37 @@ function play_status_card_impl(game, nation, card_id) {
 		if (!ch || !ch.sub || ch.sub.kind !== 'play') return game
 		const nat = ch.sub.nation
 		const cid = ch.sub.card
-		const space = (arg && arg.space != null) ? arg.space : null
 		const nm = (inst_card(String(inst_card_id(cid))) || {}).name || cid
-		const r = resolve_basic_card(game, nat, cid, { space: space })
+		/*
+		 * 【2026-10-22 修复·《空军力量》经 17729 打出没有生效】
+		 * 旧实现只把 { space } 传给 resolve_basic_card，客户端选的 mode
+		 * （部署/夺取制空权/调度）与发起单位 piece/from 全被丢掉：
+		 *   · 《空军力量》命中"未指定 mode"分支 -> 卡打出了但毫无效果（玩家反馈）；
+		 *   · 发起陆战/海战也拿不到发起单位。
+		 * 这里原样透传客户端参数（与 play_card 的 BASIC 分支同口径，不重复判定）。
+		 */
+		const full = Object.assign({}, arg || {})
+		delete full.nation
+		const r = resolve_basic_card(game, nat, cid, full)
 		if (r && r.pending) {
-			game.log.push('【' + nat + '】《卡佩里尼》打出《' + nm + '》需要额外目标，本次跳过战斗，该牌留在弃牌堆')
-		} else if (!r || !r.ok) {
+			/*
+			 * 进入战斗（可能要防守方决定空军代受）：链必须暂停，等 battle_reconcile_active
+			 * 续跑。旧实现"跳过战斗"继续抽下一张，会和挂起战斗抢序。
+			 */
+			ch.results.push({ nation: nat, card: cid, choice: 'play' })
+			ch.step++
+			ch.waiting_battle = true
+			ch.sub = null
+			ch.pickedNation = null
+			ch.pickedCard = null
+			game.log.push('【' + nat + '】《卡佩里尼》打出《' + nm + '》进入战斗，战斗结算后继续处置')
+			refresh(game)
+			return game
+		}
+		if (!r || !r.ok) {
 			game.log.push('【' + nat + '】《卡佩里尼》打出《' + nm + '》失败：' + ((r && r.reason) || '未知') + '，该牌留在弃牌堆')
 		} else {
-			game.log.push('【' + nat + '】《卡佩里尼》打出了《' + nm + '》')
+			game.log.push('【' + nat + '】《卡佩里尼》打出了《' + nm + '》—— ' + (r.desc || ''))
 		}
 		ch.results.push({ nation: nat, card: cid, choice: 'play' })
 		ch.step++
