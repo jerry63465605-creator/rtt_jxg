@@ -13149,12 +13149,20 @@ const RESPONSE_EFFECTS = {
 		trigger: {
 			on: 'play_card',
 			filter: (game, ctx, owner_side) => {
-				/* 英国卡牌生效后 */
+				/*
+				 * 【2026-10-22 修复·发动时点】玩家口径：
+				 *   · 状态卡"打出"（置桌面）/ "发动效果" 都不算（卡不在弃牌堆）；
+				 *   · 正常打出 / 额外打出 / 响应卡效果结算并入弃牌堆 -> 算；
+				 *   · 因国家技能/代价弃牌进堆 -> 不算（那类不经过 play_card 事件）。
+				 * 判定同源：直接看弃牌堆里有没有这张【实例】。
+				 */
+				if (ctx.from_status) return false          /* 状态卡发动 ≠ 卡牌生效 */
 				const c = ctx.card_obj
-				if (!c) return false
+				if (!c || c.type === 'STATUS') return false
 				/* "英国卡牌"= 卡的 nation 字段是英国（卡组归属） */
 				const cardData = CARD_BY_ID[inst_card_id(c.id)]
-				return cardData && cardData.nation === '英国'
+				if (!cardData || cardData.nation !== '英国') return false
+				return (game.discard[ctx.nation] || []).indexOf(ctx.card) >= 0
 			},
 		},
 		/* effect 实现见本文件 RESPONSE_EFFECT_IMPL[cardId]（dispatch 走那里，本字段已废弃） */
@@ -13699,12 +13707,12 @@ const RESPONSE_EFFECT_IMPL = {
 		const dn = ctx.nation
 		const d = game.discard[dn] || []
 		const i = d.indexOf(ctx.card)
-		if (i >= 0) {
-			d.splice(i, 1)
-			game.decks[dn] = game.decks[dn] || []
-			game.decks[dn].unshift(ctx.card)
-			shuffle_deck(game, dn)
-		}
+		/* 【2026-10-22】找不到就如实失败（不再假报"已洗回"，见通用教训：能点的≠能成功的） */
+		if (i < 0) return { ok: false, reason: '该牌不在弃牌堆，无法洗回牌堆' }
+		d.splice(i, 1)
+		game.decks[dn] = game.decks[dn] || []
+		game.decks[dn].unshift(ctx.card)
+		shuffle_deck(game, dn)
 		return { ok: true, desc: '将卡牌洗回牌堆' }
 	},
 	'15334': (game, side, ctx) => {
@@ -14838,6 +14846,20 @@ function consume_response(game, card_id, owner_side) {
 	const nation = r.nation || first_nation_of_side(owner_side)
 	game.discard[nation] = game.discard[nation] || []
 	game.discard[nation].push(card_id)
+}
+
+/*
+ * 【2026-10-22】响应卡【效果结算并入弃牌堆】之后，按 play_card 事件再问一次，
+ * 供 15333《配给》把刚结算的英国响应卡洗回牌堆
+ * （玩家口径：响应卡发效果进弃牌堆也算"卡牌生效"）。
+ * 复用 play_card 事件：其它监听者（15329 只认 ECON）的 filter 会自行拒绝。
+ */
+function notify_response_resolved(game, instId) {
+	const c = inst_card(instId)
+	if (!c) return
+	request_responses(game, 'play_card', {
+		nation: c.nation, card: instId, card_obj: c,
+	}, false)
 }
 
 /*
@@ -24302,6 +24324,8 @@ function play_status_card_impl(game, nation, card_id) {
 		/* 【栈重构·第二期】正常结算完成：移除当前 effect 帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
 		remove_response_frame(game, pc)
 		consume_response(game, pc.card_id, pc.owner_side)
+		/* 【2026-10-22】响应卡结算并入弃牌堆后，问 15333《配给》是否洗回 */
+		notify_response_resolved(game, pc.card_id)
 		/*
 		 * 【2026-10-21 修复·一类问题】★响应卡的 star_resolved 钩子此前【只接了一半】：
 		 *   · trigger_response 有，但它只在 effect「一次调用就返回 ok」时才走到
@@ -24565,6 +24589,8 @@ function play_status_card_impl(game, nation, card_id) {
 			 * 必须弹 f 而非栈顶，否则会误弹内部触发的帧。 */
 			game.response_stack = game.response_stack.filter(x => x !== f)
 			consume_response(game, c.card_id, c.owner_side)
+			/* 【2026-10-22】同上：响应卡结算并入弃牌堆后问 15333 */
+			notify_response_resolved(game, c.card_id)
 		}
 		/*
 		 * 15329 反潜战术拦截生效（cancel）：被拦截的牌【进弃牌堆、效果无效】。
