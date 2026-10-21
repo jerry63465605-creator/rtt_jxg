@@ -116,14 +116,24 @@ function setup17532() {
 	r = q({ choice: 0, pieces: ['usaN'], spaces: [null, sea('印度洋'), armySpace] })
 	check('B3d 全齐后 need=null', r && r.need === null, JSON.stringify(r))
 
-	/* 真正提交 */
+	/*
+	 * 真正提交。注意：2026-10-21 方案 B 起，真实打牌路径按"一个原子动作一停"推进
+	 * （docs/event-step-machine.md），所以提交后只执行第 1 步（移除），
+	 * 后续两步要由 event_step_next 逐次推进。分步机制本身由 _test17532_step.js 覆盖。
+	 */
 	T.action(g, 'Allies', 'play_card', {
 		card: '17532#1', choice: 0, pieces: ['usaN'],
 		spaces: [null, sea('印度洋'), armySpace],
 	})
-	const logs = g.log.slice(-6).join(' | ')
+	const logs0 = g.log.slice(-6).join(' | ')
 	check('B3e 选中的海军被移除', !g.location['usaN'])
 	check('B3f 未选中的陆军保留', !!g.location['usaA'])
+	check('B3e2 提交后停在第 1 步（方案 B）',
+		!!g.pending_event_step && g.pending_event_step.step === 1,
+		JSON.stringify(g.pending_event_step))
+	T.action(g, 'Allies', 'event_step_next', {})   /* 第二步：建海军 */
+	T.action(g, 'Allies', 'event_step_next', {})   /* 第三步：建陆军 -> 收尾 */
+	const logs = g.log.slice(-8).join(' | ')
 	check('B3g 印度洋建成海军',
 		Object.keys(g.location).some(p => g.location[p] === sea('印度洋') &&
 			g.piece_nation[p] === '美国' && g.piece_type[p] === 'navy'))
@@ -141,6 +151,8 @@ function setup17532() {
 		card: '17532#1', choice: 1, pieces: ['usaA'],
 		spaces: [null, sea('印度'), sea('阿拉伯海')],
 	})
+	T.action(g, 'Allies', 'event_step_next', {})
+	T.action(g, 'Allies', 'event_step_next', {})
 	check('B4a 选中的陆军被移除', !g.location['usaA'])
 	check('B4b 印度建成陆军',
 		Object.keys(g.location).some(p => g.location[p] === sea('印度') &&
@@ -148,6 +160,7 @@ function setup17532() {
 	check('B4c 阿拉伯海建成海军',
 		Object.keys(g.location).some(p => g.location[p] === sea('阿拉伯海') &&
 			g.piece_nation[p] === '美国' && g.piece_type[p] === 'navy'))
+	check('B4d 卡入弃牌堆', (g.discard['美国'] || []).indexOf('17532#1') >= 0)
 }
 
 console.log('\n' + (fails === 0 ? 'ALL PASS' : fails + ' FAILED'))

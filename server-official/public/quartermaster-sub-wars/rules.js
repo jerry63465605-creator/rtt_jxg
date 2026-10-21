@@ -16105,8 +16105,14 @@ function run_effect_tactics(game, ctx) {
  *
  * 返回 { ok, desc } 或 { ok:false, reason } 或 { ok:true, need:{...} }（还缺参数）。
  */
-function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
+function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	startStep = startStep || 0
+	/*
+	 * 【2026-10-21 方案 B·分步执行机】opt.oneStep = 每执行完一个原子动作就停机，
+	 * 由玩家点「下一步」推进（详见 docs/event-step-machine.md）。
+	 * 不传则维持旧行为：一个 action 内把所有 step 跑完。
+	 */
+	opt = opt || {}
 	const eff = card_effect_of(card_id)
 	const c = inst_card(card_id)
 	if (!eff || !c)
@@ -16630,8 +16636,11 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 			const r = remove_piece(game, owner, id)
 			if (!r.ok) { failStep(st, r.reason || '无法移除该部队'); continue }
 			descs.push('移除 1 支' + piece_type_zh(pType))
+			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
+			const ps = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			if (ps) return ps
 			continue
-		}
+			}
 		if (st.op === 'recruit') {
 			const where = spaces.length ? spaces : [space]
 			if (!where.length) { failStep(st, '没有可征召的地区'); continue }
@@ -16651,11 +16660,14 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：征召后若存在 after_recruit 增强窗口，同样挂起等待。 */
 			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_recruit')) {
-				game.pending_event_armed = { card_id, nation, resumeStep: i + 1 }
+				game.pending_event_armed = { card_id, nation, resumeStep: i + 1, extra: !!extra }
 				return { ok: true, pending: true, armedPause: true, cardResolved: false, desc: descs.join('；') }
 			}
+			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
+			const psR = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			if (psR) return psR
 			continue
-		}
+			}
 
 		if (st.op === 'build') {
 			const where = spaces.length ? spaces : [space]
@@ -16676,11 +16688,14 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra) {
 			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
 			 * 挂起等待该窗口全部结算完，再从第 i+1 步续跑，最后由 resume_event_after_armed 触发国家技能。 */
 			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_build_navy')) {
-				game.pending_event_armed = { card_id, nation, resumeStep: i + 1 }
+				game.pending_event_armed = { card_id, nation, resumeStep: i + 1, extra: !!extra }
 				return { ok: true, pending: true, armedPause: true, cardResolved: false, desc: descs.join('；') }
 			}
+			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
+			const psB = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt)
+			if (psB) return psB
 			continue
-		}
+			}
 
 		if (st.op === 'eliminate') {
 			/*
@@ -16827,6 +16842,75 @@ function has_armed_window(game, nation, when) {
 }
 
 /*
+ * 【2026-10-21 方案 B·分步执行机】remove/build/recruit 步执行成功后调用：
+ * 若开启了 oneStep 且【还有后续步】，就把状态落成 pending_event_step 并返回挂起结果，
+ * 由玩家点「下一步」(event_step_next) / 选完目标 (event_step_pick) 推进。
+ * 返回 null = 不需要停（最后一步，或未开启 oneStep）。
+ *
+ * 为什么必须停机：卡面语义是"建设/征召一个部队后【立刻】可发动状态卡/响应卡"，
+ * 旧实现一个 action 内把所有步跑完，窗口被后续步覆盖、或在 view 里懒武装时已错过
+ * （见 docs/event-step-machine.md §1.3）。
+ */
+function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt) {
+	if (!opt || !opt.oneStep) return null
+	if (i + 1 >= steps.length) return null     /* 最后一步：不停，交给调用方收尾 */
+	const nxt = steps[i + 1]
+	const label = event_step_label(nxt)
+	const doneDesc = descs.length ? descs[descs.length - 1] : ''
+	game.pending_event_step = {
+		card_id: card_id,
+		nation: nation,
+		step: i + 1,
+		total: steps.length,
+		choice: (arg && arg.choice != null) ? arg.choice : null,
+		/* 累积参数浅拷贝：spaces/pieces 数组在本步之后不再被改写，浅拷足够 */
+		accum: Object.assign({}, arg),
+		desc: descs.join('；'),
+		next_label: label,
+		extra: !!opt.extra,
+		token: (game._event_step_token = (game._event_step_token || 0) + 1),
+	}
+	game.log.push('【' + nation + '】《' + (inst_card(card_id) ? inst_card(card_id).name : card_id) +
+		'》第 ' + (i + 1) + '/' + steps.length + ' 步完成：' + doneDesc +
+		'（下一步：' + label + '）')
+	return {
+		ok: true, pending: true, stepPause: true, cardResolved: false,
+		desc: descs.join('；'),
+	}
+}
+
+/*
+ * 【2026-10-21 方案 B】事件卡收尾：入弃牌堆 + 占名额 + 日志 + ★国家技能窗口。
+ * 由 event_step_next / event_step_pick 在最后一步执行完后调用
+ * （play_card 的正常路径仍走其既有的 EVENT 分支收尾，不经过这里）。
+ */
+function finish_event_card(game, nation, card_id, opt) {
+	opt = opt || {}
+	const nm = inst_card(card_id) ? inst_card(card_id).name : card_id
+	game.discard[nation] = game.discard[nation] || []
+	if (game.discard[nation].indexOf(card_id) < 0) game.discard[nation].push(card_id)
+	if (game.turn_phase === 'play' && !opt.extra) mark_play_done(game, nation)
+	game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
+	game.log.push('【' + nation + '】《' + nm + '》分步结算完成')
+	after_card_resolved(game, nation, card_id)
+	return game
+}
+
+/*
+ * 【2026-10-21 方案 B】当前是否"有未决的步骤边界窗口"（状态卡 / 增强卡 / 响应 / 战斗）。
+ * event_step_next 与 view 的 disabled 判定共用，保证客户端按钮态与服务端口径一致。
+ */
+function event_step_blockers(game) {
+	const b = []
+	if ((game.armed_offers || []).length) b.push('增强卡窗口')
+	if ((game.status_instant || []).length) b.push('状态卡窗口')
+	if (top_response_frame(game)) b.push('响应卡')
+	if (game.pending_battle) b.push('战斗结算')
+	if (game.pending_econ) b.push('经济战结算')
+	return b
+}
+
+/*
  * 【2026-10-21】解除【战区移动】的推进冻结。
  * 只要本国还有增强卡窗口就保持冻结；窗口全部清空才解冻，
  * 由 removeArmedWindow / clear_armed_offer / clear_armed_offer_for_side 调用
@@ -16842,19 +16926,19 @@ function resume_event_after_armed(game) {
 	if (!pend) return
 	game.pending_event_armed = null
 	const { nation, card_id, resumeStep } = pend
-	/* 续跑剩余 step（startStep 会跳过已完成的步，复用 resolve_event_card 同款循环） */
-	const r = resolve_event_card(game, nation, card_id, {}, resumeStep, extra)
+	/*
+	 * 【2026-10-21 方案 B】续跑同样按"一个原子动作一停"推进，
+	 * 否则 armed 窗口结算完又会把后面所有步一次跑完，状态卡时点照样错过。
+	 * extra 显式取自挂起时记录（旧代码用的是未定义的裸 extra，恒为 falsy）。
+	 */
+	const r = resolve_event_card(game, nation, card_id, {}, resumeStep, pend.extra, { oneStep: true, extra: pend.extra })
 	if (r && r.ok && !r.pending) {
 		/* 全部分步执行完毕（含所有 armed 窗口）：卡入弃牌堆 + 国家技能 */
-		game.discard[nation] = game.discard[nation] || []
-		if (game.discard[nation].indexOf(card_id) < 0) game.discard[nation].push(card_id)
-		if (game.turn_phase === 'play' && !extra) mark_play_done(game, nation)
-		game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
-		game.log.push('【' + nation + '】打出《' + (inst_card(card_id) ? inst_card(card_id).name : card_id) + '》—— 分步结算完成')
-		after_card_resolved(game, nation, card_id)
+		finish_event_card(game, nation, card_id, { extra: pend.extra })
 	}
-	/* 若 r.pending 仍为真（又被 after_recruit 挂起），pending_event_armed 已由本次 resolve 重新写入，
-	 * 等下一轮 armed 清空后再续跑。 */
+	/* 若 r.pending 仍为真（又被 after_recruit 挂起 / 分步停机），
+	 * pending_event_armed 或 pending_event_step 已由本次 resolve 重新写入，
+	 * 等下一轮窗口清空（或玩家点下一步）后再继续。 */
 }
 
 /*
@@ -20682,6 +20766,13 @@ function create_empty_game_state(seed, scenario) {
 		pending_script: null,
 		script_return_active: null,
 		/*
+		 * 【2026-10-21 方案 B·分步执行机】多步事件卡的"步骤边界"挂起。
+		 * 每执行完一个原子动作（remove/build/recruit）就停在这里，等玩家点
+		 * 「下一步」(event_step_next) 或选完目标 (event_step_pick) 再推进，
+		 * 以便在两步之间插入状态卡/增强卡/响应窗口。详见 docs/event-step-machine.md。
+		 */
+		pending_event_step: null,
+		/*
 		 * 【2026-09-30】国家技能：
 		 *   national_skill_used   nation -> 用过的回合数（"一回合一次"）
 		 *   national_skill_offer  当前可选的机会窗口（null = 没有）
@@ -22022,8 +22113,35 @@ exports.view = function (state, current) {
 				initiators: inits,
 				enemies: enemies,
 				descs: (b.descs || []).slice(),
-			}
-		})(),
+				}
+				})(),
+
+				/*
+				* 【2026-10-21 方案 B·分步执行机】事件卡的步骤边界挂起。
+				* 只发给归属阵营；文案/可点性全部由服务端算好（客户端不二次判断）。
+				* 详见 docs/event-step-machine.md。
+				*/
+				pending_event_step: (function () {
+				const ps = game.pending_event_step
+				if (!ps) return null
+				if (faction_of_nation(ps.nation) !== side) return null
+				const blockers = event_step_blockers(game)
+				return {
+				card_id: ps.card_id,
+				card_name: (inst_card(ps.card_id) || {}).name || ps.card_id,
+				nation: ps.nation,
+				step: ps.step,
+				total: ps.total,
+				/* 已完成步骤的描述（面板展示"已完成：移除 1 支海军"） */
+				desc: ps.desc || '',
+				/* 下一步的动作文案（服务端算，客户端直接显示） */
+				next_label: ps.next_label || '',
+				token: ps.token,
+				/* 未清窗口时列出原因，客户端禁用「下一步」并展示 */
+				blockers: blockers,
+				can_next: blockers.length === 0,
+				}
+				})(),
 
 		/* 【2026-10-18】17851 天王星行动：重复选择菜单（仅苏联阵营可见）。 */
 		pending_uranus: (function () {
@@ -22969,6 +23087,14 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		acts.event_battle = 1
 		acts.event_finish = 1
 	}
+	/*
+	 * 【2026-10-21 方案 B·分步执行机】事件卡停在步骤边界时，只放行
+	 * 「下一步」与「执行本步」两个动作（窗口动作由上方通用逻辑照常提供）。
+	 * ⚠ 不登记 = 客户端按钮点了静默无反应（pitfalls 通用教训 11）。
+	 */
+	if (game.pending_event_step && faction_of_nation(game.pending_event_step.nation) === side) {
+		acts.event_step_next = 1
+	}
 
 	/* 17850 大清洗：苏联结束中立的一次性出牌机会（仅苏联所属阵营可见） */
 	if (game.su_purge_offer && faction_of_nation('苏联') === side &&
@@ -23058,11 +23184,17 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		acts.su_17817_proceed = 1
 	}
 
-	return Object.assign({
+	/*
+	 * 【2026-10-21 方案 B】事件卡停在步骤边界时，【不放行 play_card】：
+	 * 该卡已离手，玩家此时想打的必然是别的牌 —— 必须先把当前卡走完
+	 * （处理窗口 + 点「下一步」），否则会出现"一张卡分步中又插进另一张卡"的乱序。
+	 * 服务端拒绝 + 客户端手牌守卫 + 这里不放行，三端同源。
+	 */
+	const base = {
 		/* 回合状态机 */
 		next_phase: 1,
 		resource_swap: 1,       /* 资源再分配：弃 3 张牌挑 1 张基本卡 */
-		play_card: 1,           /* 阶段限定打牌（见 check_phase_for_card） */
+		play_card: game.pending_event_step ? 0 : 1,  /* 阶段限定打牌（见 check_phase_for_card） */
 		discard_one: 1,         /* 出牌阶段②：弃置 1 张手牌 */
 		minus_score: 1,         /* 出牌阶段③：减 1 分 */
 		discard_in_discard_phase: 1,  /* 弃牌阶段：主动弃任意数量手牌 */
@@ -23079,7 +23211,8 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		resolve_supply: 1,
 		next_nation: 1,
 		log: 1,
-	}, acts)
+	}
+	return Object.assign(base, acts)
 }
 
 /*
@@ -23271,6 +23404,24 @@ function play_status_card_impl(game, nation, card_id) {
 		}
 	}
 	/*
+	 * 【2026-10-21 方案 B】分步停机期间，玩家一旦去做【独立的回合动作】
+	 * （出牌/弃牌/推进阶段/再发起战斗…）即视为放弃后续步骤：卡入弃牌堆收尾，
+	 * 不卡死。自身动作（下一步/选目标/发动状态卡）与响应动作不清不算放弃。
+	 */
+	const isStepOwnAction = action === 'event_step_next' || action === 'event_step_pick' ||
+		action === 'activate_status' || action === 'use_armed_offer' || action === 'skip_armed_offer' ||
+		action === 'trigger_response' || action === 'pass_response' ||
+		action === 'resolve_response_choice' || action === 'response_reorder' || action === 'response_confirm'
+	if (game.pending_event_step && !isStepOwnAction &&
+		faction_of_nation(game.pending_event_step.nation) === side) {
+		const ps = game.pending_event_step
+		game.pending_event_step = null
+		game.log.push('【' + ps.nation + '】《' +
+			(inst_card(ps.card_id) ? inst_card(ps.card_id).name : ps.card_id) +
+			'》分步结算被中断，剩余步骤作废')
+		finish_event_card(game, ps.nation, ps.card_id, { extra: ps.extra })
+	}
+	/*
 	 * 【2026-10-06】《气球炸弹》可选窗口同样"错过即失效"：
 	 * 玩家一旦去做别的事（再打牌、推进阶段…）就视为放弃，窗口关闭。
 	 * 自身的两个动作（弃牌回手/完成）不清除。
@@ -23293,6 +23444,19 @@ function play_status_card_impl(game, nation, card_id) {
 		(game.armed_offers && game.armed_offers.length > 0) || game.armed_offer ||
 		game.pending_battle || game.pending_econ || game.pending_status_play ||
 		game.pending_uranus || game.pending_autobahn ||
+		/*
+		 * 【2026-10-21 方案 B】事件卡分步停机也必须算【有未决挂起】：
+		 * 否则玩家在两步之间发动状态卡时，status_instant 会被本函数下方的
+		 * 清除逻辑当场清掉（与 us_theater_delegate 同款问题，见下）。
+		 */
+		game.pending_event_step ||
+		/*
+		 * 【2026-10-21 修复·一类问题】战斗预算(event_budget)进行中同样算未决挂起。
+		 * 预算流程日志写着"每战结算后可插入状态/免死/飞机代受等"，但此前这里没列
+		 * event_budget —— 玩家下一次点目标发兵(event_battle)会在入口把
+		 * status_instant 清掉，after_land 窗口（闪电战/15245）根本来不及发动。
+		 */
+		game.event_budget ||
 		/*
 		 * 【2026-10-21 修复·一类问题】"非挂起的多步 delegate"也必须算【有未决挂起】。
 		 * 此前只列了真正的 pending_* 挂起态，于是战区移动（us_theater_delegate）这类
@@ -24856,6 +25020,50 @@ function play_status_card_impl(game, nation, card_id) {
 		discard_card(game, b.nation, b.card_id)
 		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
 		after_card_resolved(game, b.nation, b.card_id)
+		return game
+	}
+
+	/*
+	 * 【2026-10-21 方案 B·分步执行机】「下一步」：执行多步事件卡的下一个原子动作。
+	 * 详见 docs/event-step-machine.md。
+	 *
+	 * 设计要点：客户端的"选目标"仍是【一次收齐所有步】再提交（既有流程不变），
+	 * 分步切分的是【执行】—— 每执行完一个原子动作就停机，让玩家在两步之间
+	 * 插入状态卡/增强卡/响应窗口，再点「下一步」继续。
+	 * 因此本动作不需要额外参数：所有步的目标都已存在挂起的 accum 里。
+	 * （startStep>0 时 resolve_event_card 会跳过 needs/代价/cond 闸门，见其 L16125 分支。）
+	 */
+	if (action === 'event_step_next') {
+		const ps = game.pending_event_step
+		if (!ps) { game.log.push('当前没有待推进的事件卡步骤'); return game }
+		const nmc = inst_card(ps.card_id) ? inst_card(ps.card_id).name : ps.card_id
+		if (faction_of_nation(ps.nation) !== side) {
+			game.log.push('现在轮到【' + ps.nation + '】推进《' + nmc + '》，另一阵营暂不能提交')
+			return game
+		}
+		/*
+		 * 闸门：状态卡/增强卡/响应/战斗窗口未清空 -> 拒绝。
+		 * 这正是"建设完第一支部队后给触发时点，全完毕后继续"的体现。
+		 */
+		const blockers = event_step_blockers(game)
+		if (blockers.length) {
+			game.log.push('请先处理当前的' + blockers.join('、') + '，再点《' + nmc + '》的「下一步」')
+			return game
+		}
+		const arg = Object.assign({}, ps.accum || {})
+		arg.card = ps.card_id
+		game.pending_event_step = null
+		const r = resolve_event_card(game, ps.nation, ps.card_id, arg, ps.step, ps.extra,
+			{ oneStep: true, extra: ps.extra })
+		if (r && r.ok && !r.pending) {
+			/* 与旧"一步到底"路径保持日志一致：打出《X》—— <各步描述> */
+			if (r.desc) game.log.push('【' + ps.nation + '】打出《' + nmc + '》—— ' + r.desc)
+			finish_event_card(game, ps.nation, ps.card_id, { extra: ps.extra })
+		} else if (r && r.reason) {
+			game.log.push('《' + nmc + '》第 ' + (ps.step + 1) + ' 步未执行（' + r.reason + '），卡片结算收尾')
+			finish_event_card(game, ps.nation, ps.card_id, { extra: ps.extra })
+		}
+		refresh(game)
 		return game
 	}
 
@@ -26636,7 +26844,13 @@ function play_status_card_impl(game, nation, card_id) {
 				push_discard_direct(game, nation, card_id)
 				return game
 			}
-			const r = resolve_event_card(game, nation, card_id, arg || {}, 0, extra)
+			/*
+			 * 【2026-10-21 方案 B】真实打牌路径也按"一个原子动作一停"推进：
+			 * 每执行完 remove/build/recruit 就停机等玩家点「下一步」，
+			 * 以便在两步之间插入状态卡/增强卡/响应窗口（docs/event-step-machine.md）。
+			 * 单步卡不受影响（停机条件含 `i+1 < steps.length`）。
+			 */
+			const r = resolve_event_card(game, nation, card_id, arg || {}, 0, extra, { oneStep: true, extra: extra })
 			if (!r.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
 				return game
@@ -26649,6 +26863,18 @@ function play_status_card_impl(game, nation, card_id) {
 				const hi = (game.hands[nation] || []).indexOf(card_id)
 				if (hi >= 0) game.hands[nation].splice(hi, 1)
 				game.log.push('【' + nation + '】《' + c.name + '》—— ' + r.desc)
+				return game
+			}
+			/*
+			 * 【2026-10-21 方案 B】分步停机：卡已"打出"但后续原子动作待玩家点「下一步」。
+			 * 与 armedPause 同口径：把卡移出手牌（防重复打出），留待收尾时入弃牌堆，
+			 * 且暂不触发国家技能。
+			 */
+			if (r.stepPause) {
+				const hi = (game.hands[nation] || []).indexOf(card_id)
+				if (hi >= 0) game.hands[nation].splice(hi, 1)
+				game.log.push('【' + nation + '】《' + c.name + '》—— ' + r.desc +
+					'（点「下一步」继续）')
 				return game
 			}
 			/*

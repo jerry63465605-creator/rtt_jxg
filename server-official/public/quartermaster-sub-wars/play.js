@@ -532,6 +532,8 @@ function update_phase_buttons() {
 	update_pending_econ_box()
 	/* 战斗预算(event_budget)面板：独立于 ask_box，展示剩余机会/目标/结束按钮 */
 	update_event_budget_box()
+	/* 【2026-10-21 方案 B】事件卡分步执行机的步骤边界面板（下一步 / 待处理窗口） */
+	update_event_step_box()
 	/* 【2026-10-18】17851 天王星行动：重复选择菜单 */
 	update_uranus_box()
 	/* 【2026-10-18】17852 罗科索夫斯基：选牌打出状态卡 */
@@ -2977,6 +2979,16 @@ function on_click_hand_card(c, d) {
 		view.us_theater_delegate || view.us_replay ||
 		view.us_merchant || (view.delegate && view.delegate.mode === 'single') || view.us_political) {
 		toast("请先完成当前的让权建设事项（点击地图上高亮的地区，由英国/苏联建设；或美国帮中国征召/战区移动）")
+		return
+	}
+	/*
+	 * 【2026-10-21 方案 B】事件卡停在步骤边界时，手牌不可点（该卡已离手，
+	 * 这里挡的是"想去打别的牌"——必须先处理窗口并点「下一步」把当前卡走完）。
+	 * 服务端 build_actions 同步不放行 play_card，两端同源。
+	 */
+	if (view.pending_event_step) {
+		toast("请先完成《" + (view.pending_event_step.card_name || "当前") +
+			"》的剩余步骤（点侧栏「下一步」）")
 		return
 	}
 	/* 初始阶段：点手牌 = 选/取消一张弃牌（最多 3 张） */
@@ -6903,6 +6915,69 @@ function update_event_budget_box() {
 	if (eb.can_finish && eb.targets && eb.targets.length) {
 		highlight_targets({ spaces: eb.targets.map(id => ({ id: id })) })
 	}
+}
+
+/* ============================================================
+ * 【2026-10-21 方案 B】事件卡分步执行机的"步骤边界"面板。
+ *
+ * 服务端把多步事件卡按"一个原子动作一停"推进（docs/event-step-machine.md）：
+ * 每执行完 remove/build/recruit 就停在这里，让玩家在两步之间插入
+ * 状态卡 / 增强卡 / 响应窗口，处理完再点「下一步」。
+ *
+ * 文案与可点性【全部由服务端算好下发】（view.pending_event_step）：
+ *   next_label 下一步动作文案、desc 已完成步骤、blockers 未清窗口原因、can_next 是否可推进。
+ * 客户端只负责显示与派发 event_step_next，不二次判断（pitfalls 通用教训 3）。
+ * ============================================================ */
+function update_event_step_box() {
+	const ps = view && view.pending_event_step
+	const box = document.getElementById('event_step_box')
+	if (!box) return
+	if (!ps) {
+		box.classList.add('hide')
+		box.innerHTML = ''
+		return
+	}
+	box.classList.remove('hide')
+	box.innerHTML = ''
+
+	const title = document.createElement('div')
+	title.className = 'eb-title'
+	title.textContent = '《' + (ps.card_name || '事件') + '》第 ' +
+		(ps.step + 1) + '/' + ps.total + ' 步'
+	box.appendChild(title)
+
+	/* 已完成的步骤（服务端拼好的描述） */
+	if (ps.desc) {
+		const done = document.createElement('div')
+		done.className = 'eb-log'
+		done.textContent = '已完成：' + ps.desc
+		box.appendChild(done)
+	}
+
+	const hint = document.createElement('div')
+	hint.className = 'eb-hint'
+	if (ps.can_next) {
+		hint.textContent = '下一步：' + (ps.next_label || '继续') +
+			'（可先发动状态卡/响应卡，再点「下一步」）'
+	} else {
+		/* 有未决窗口：说明原因，按钮禁用（判定同源：服务端 blockers） */
+		hint.textContent = '请先处理当前的' + (ps.blockers || []).join('、') +
+			'，再点「下一步」'
+	}
+	box.appendChild(hint)
+
+	const btn = document.createElement('button')
+	btn.className = 'action primary'
+	btn.textContent = '下一步'
+	btn.disabled = !ps.can_next
+	btn.onclick = () => {
+		if (!ps.can_next) {
+			toast('请先处理当前的' + (ps.blockers || []).join('、'))
+			return
+		}
+		send_action('event_step_next', {})
+	}
+	box.appendChild(btn)
 }
 
 /* ============================================================
