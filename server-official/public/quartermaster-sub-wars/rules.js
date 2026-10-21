@@ -16966,7 +16966,11 @@ function finish_event_card(game, nation, card_id, opt) {
 	const nm = inst_card(card_id) ? inst_card(card_id).name : card_id
 	game.discard[nation] = game.discard[nation] || []
 	if (game.discard[nation].indexOf(card_id) < 0) game.discard[nation].push(card_id)
-	if (game.turn_phase === 'play' && !opt.extra) mark_play_done(game, nation)
+	/*
+	 * 【2026-10-22 修复】出牌名额改由【打出瞬间】在 play_card 的 stepPause / armedPause
+	 * 分支统一占用（timing/extra 除外）。此处不再重复 mark ——
+	 * 否则意大利《意大利万岁》这类"两次行动"会在收尾时被二次 mark 而少一次。
+	 */
 	game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
 	game.log.push('【' + nation + '】《' + nm + '》分步结算完成')
 	after_card_resolved(game, nation, card_id)
@@ -25280,7 +25284,17 @@ function play_status_card_impl(game, nation, card_id) {
 			}
 		}
 		/* 【2026-09-30 德国增强】预算卡（含英国战斗事件卡）结算后入弃牌堆 */
-		discard_card(game, b.nation, b.card_id)
+		/*
+		 * 【2026-10-22 修复·多步事件卡吞卡】多步 EVENT 在 play_card 的 stepPause/
+		 * armedPause 分支已把卡移出手牌；而 discard_card 要求牌仍在手牌（indexOf<0 直接
+		 * return），于是 17828 百团大战这类"征召+战斗预算"的卡打完后【凭空消失】、
+		 * 既不进弃牌堆也不触发弃牌堆相关效果。
+		 * 在手牌 -> discard_card（保留手牌类计分）；已离手 -> push_discard_direct。
+		 */
+		if ((game.hands[b.nation] || []).indexOf(b.card_id) >= 0)
+			discard_card(game, b.nation, b.card_id)
+		else
+			push_discard_direct(game, b.nation, b.card_id)
 		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
 		after_card_resolved(game, b.nation, b.card_id)
 		return game
@@ -27253,6 +27267,8 @@ function play_status_card_impl(game, nation, card_id) {
 			if (r.armedPause) {
 				const hi = (game.hands[nation] || []).indexOf(card_id)
 				if (hi >= 0) game.hands[nation].splice(hi, 1)
+				/* 【2026-10-22】同 stepPause：卡已打出（离手）即占名额 */
+				if (!timing && !extra) mark_play_done(game, nation)
 				game.log.push('【' + nation + '】《' + c.name + '》—— ' + r.desc)
 				return game
 			}
@@ -27264,6 +27280,15 @@ function play_status_card_impl(game, nation, card_id) {
 			if (r.stepPause) {
 				const hi = (game.hands[nation] || []).indexOf(card_id)
 				if (hi >= 0) game.hands[nation].splice(hi, 1)
+				/*
+				 * 【2026-10-22 修复·多步事件卡不占出牌名额】
+				 * 多步 EVENT 在第 1 步后 stepPause 停机：卡已打出（离手），必须在这里占名额。
+				 * 旧实现只在最后一步"非战斗"时由 finish_event_card 补占；
+				 * 若最后一步是【战斗预算】（如 17828 百团大战：中国征召→中国发起陆战），
+				 * 后续由 event_finish 收尾且不 mark → 整张卡【不占出牌名额】。
+				 * 现在：打出即占（timing/extra 除外），finish_event_card 不再重复占。
+				 */
+				if (!timing && !extra) mark_play_done(game, nation)
 				game.log.push('【' + nation + '】《' + c.name + '》—— ' + r.desc +
 					'（点「下一步」继续）')
 				return game
