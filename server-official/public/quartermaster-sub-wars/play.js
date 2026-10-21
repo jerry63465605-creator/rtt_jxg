@@ -2741,7 +2741,7 @@ function highlight_event_targets(tg) {
 			if (el) el.classList.add("sel")
 		}
 	}
-	toast("《" + card.name + "》：请点击一个高亮地区" +
+	toast("《" + (card ? card.name : "?") + "》：请点击一个高亮地区" +
 		(tg.pick > 1 ? "（选 " + tg.pick + " 个）" : ""))
 	/* 多选时显示 Done 按钮 */
 	update_event_done_button()
@@ -2756,6 +2756,13 @@ function highlight_event_targets(tg) {
  */
 function highlight_event_pieces(tg) {
 	const card = pending_event_card
+	/*
+	 * 【2026-10-22】update_map 每帧会按 pending_event_targets 重贴高亮；
+	 * 多步卡（17825 铁托游击队）走完 need:null 收尾时 pending_event_card 已清空，
+	 * 若 pending_event_targets 还留着 need:'piece'，这里会读 null.name 崩溃。
+	 * 已不在选部队上下文时直接返回，收尾由 cancel_event_card 统一清靶。
+	 */
+	if (!card) return
 	const cands = (tg.candidates || []).map(c => c.id)
 	if (!cands.length) {
 		toast("《" + (card ? card.name : "?") + "》当前没有合法目标")
@@ -8862,7 +8869,13 @@ function on_reply(q, params) {
 				arg.choice = pending_event_choice
 			lend_play_action(arg)
 			toast("打出《" + pending_event_card.name + "》")
-			pending_event_card = null
+			/*
+			 * 【2026-10-22】必须走统一清理：只置空 pending_event_card 会把
+			 * pending_event_targets（need:'piece'）留成脏状态，下一帧 update_map
+			 * 重贴高亮时 highlight_event_pieces 读到 null.name 直接抛
+			 * "Cannot read properties of null (reading 'name')"（17825 多步完成后必现）。
+			 */
+			cancel_event_card()
 			return
 		}
 		/*
