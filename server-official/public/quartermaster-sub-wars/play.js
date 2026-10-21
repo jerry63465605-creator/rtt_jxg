@@ -4475,15 +4475,16 @@ function submit_peek() {
 	 *         置顶组 order 小者更靠近牌堆顶；置底组 order 小者更靠近牌堆底。
 	 *   (A) 15305 双十字系统：order + peek_cards（置对手牌堆顶）。
 	 */
-	if (isTB) {
-		const placement = peek_order.map((id, i) => ({
-			id: id,
-			where: peek_where[id] || "top",
-			order: i,
-		}))
-		send_action("play_card", { card: cardId, placement: placement })
-	} else {
-		send_action("play_card", {
+	const payload = isTB
+		? {
+			card: cardId,
+			placement: peek_order.map((id, i) => ({
+				id: id,
+				where: peek_where[id] || "top",
+				order: i,
+			})),
+		}
+		: {
 			card: cardId,
 			order: peek_order.slice(),
 			/*
@@ -4494,7 +4495,19 @@ function submit_peek() {
 			peek_cards: localMode
 				? peek_cards.map(c => c.id)
 				: (view.peek ? (view.peek.cards || []).map(c => c.id) : []),
-		})
+		}
+	/*
+	 * 【2026-10-22 修复·假成功】send_action 在动作不在 view.actions 白名单时
+	 * 【静默 return false】（不发包、无日志）。旧实现不检查返回值，照常清空
+	 * 本地状态并弹"已按指定方式重组牌堆" —— 于是出现"提示成功，但服务端
+	 * 根本没收到、弹框不消失"的假象，排查极费时。
+	 * 这里改为：没发出去就如实提示【并保留已排的顺序】，不谎报成功。
+	 */
+	if (!send_action("play_card", payload)) {
+		toast("提交失败：当前不接受出牌" +
+			(view.block_reason ? "（" + view.block_reason + "）" : "") +
+			"，已保留排序，请稍后再试")
+		return
 	}
 	peek_order = []
 	peek_where = {}
@@ -6940,19 +6953,12 @@ function update_event_step_box() {
 	box.classList.remove('hide')
 	box.innerHTML = ''
 
+	/* 结构与 #event_budget_box 保持一致：title -> hint -> log -> button */
 	const title = document.createElement('div')
 	title.className = 'eb-title'
 	title.textContent = '《' + (ps.card_name || '事件') + '》第 ' +
 		(ps.step + 1) + '/' + ps.total + ' 步'
 	box.appendChild(title)
-
-	/* 已完成的步骤（服务端拼好的描述） */
-	if (ps.desc) {
-		const done = document.createElement('div')
-		done.className = 'eb-log'
-		done.textContent = '已完成：' + ps.desc
-		box.appendChild(done)
-	}
 
 	const hint = document.createElement('div')
 	hint.className = 'eb-hint'
@@ -6986,6 +6992,14 @@ function update_event_step_box() {
 		send_action('event_step_next', {})
 	}
 	box.appendChild(btn)
+
+	/* 已完成的步骤（服务端拼好的描述）—— 与 #event_budget_box 的 descs 同在按钮之后 */
+	if (ps.desc) {
+		const done = document.createElement('div')
+		done.className = 'eb-log'
+		done.textContent = '已完成：' + ps.desc
+		box.appendChild(done)
+	}
 }
 
 /* ============================================================

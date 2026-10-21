@@ -10041,13 +10041,23 @@ const ECHO_EFFECTS = {
 		name: '威瑟堡行动', actor: '德国',
 		armed: {
 			when: 'scoring_north', actor: '德国', cost: { attrition: 1 },
-			desc: '[北方行动]计分阶段开始时：在<北海>征召陆军；可打出1张[北方行动]',
+			/*
+			 * 【2026-10-22 修复·征召地区】原实现写的是<北海>，但北海是【海域】
+			 * （data.js: id=17, terrain='sea'），而 can_recruit_at 对陆军要求
+			 * 陆地 —— 于是恒定失败并回显"未征召：只能在陆地地区征召陆军"，
+			 * 玩家看到的就是"威瑟堡行动不能征召陆军"。
+			 * 正确地区是<北欧>（id=4, terrain='land'）：
+			 *   · 与同批[北方行动]卡一致（15249 狼群战术的额外损耗也写北欧）；
+			 *   · 玩家口径：威瑟堡行动 = 入侵丹麦/挪威，落在北欧。
+			 * 文案同步改为北欧，避免"写北欧、说北海"的误导。
+			 */
+			desc: '[北方行动]计分阶段开始时：在<北欧>征召陆军；可打出1张[北方行动]',
 			run(game, ctx) {
-				const nb = space_id('北海')
+				const nb = space_id('北欧')
 				let d = '未征召'
 				if (nb != null) {
 					const r = recruit_piece(game, '德国', 'army', nb)
-					d = r.ok ? '在北海征召陆军' : ('未征召：' + r.reason)
+					d = r.ok ? '在北欧征召陆军' : ('未征召：' + r.reason)
 				}
 				/*
 				 * 【2026-10-16 修复】15211 在【计分阶段】触发并授予额外打出，
@@ -18991,6 +19001,34 @@ function check_phase_for_card(game, nation, c, arg) {
 		return { ok: true, timing: true }
 	}
 
+	/*
+	 * 【2026-10-22 修复·额外打出必须跨阶段生效】
+	 *
+	 * 现象：15211《威瑟堡行动》在【计分阶段】授予 [北方行动] 额外打出，
+	 * 15249《狼群战术》/15241《瑞典铁矿》（都是 STATUS）客户端亮着
+	 * "额外打出"角标，点下去却打不出（用户反馈）。
+	 *
+	 * 根因：STATUS 卡按规则②只能在【出牌阶段】打出；而旧逻辑把
+	 * extra_play_allows 只写在下方 `ph === 'play'` 分支里 —— 非出牌阶段
+	 * 根本不会去查额外打出权，于是直接落到阶段兜底拒绝。
+	 * 即"权利存在（has_extra_play 为真、filter 也放行），却没处兑现"。
+	 *
+	 * 修法：卡面"可打出1张[北方行动]"本身就是【跨阶段授权】，权利即合法窗口
+	 * —— 只要此刻持有允许这张牌的额外打出权，任何阶段都放行（extra:true
+	 * = 不占出牌名额）。
+	 *
+	 * ⚠ 只放在 EFFECT 分支【之后】：增强卡仍以 trigger_ready（CARD_TRIGGERS
+	 *   的 play_start/load）为准，不因额外打出权而绕过自身时点声明。
+	 *
+	 * ⚠ 不影响其它授予：has_extra_play 会校验 ep.phase === 当前阶段，
+	 *   故德国/英国国家技能、17528 重打等"出牌阶段权利"不会因此在别的阶段放行。
+	 */
+	{
+		const cidEp = (c && c.id != null) ? c.id : c
+		if (extra_play_allows(game, nation, cidEp, instId))
+			return { ok: true, extra: true }
+	}
+
 	/* ② 出牌阶段：打 1 张（名额由 play_done 管） */
 	if (ph === 'play') {
 		/*
@@ -20196,7 +20234,8 @@ function phase_scoring(game, nation, opts) {
 	opts = opts || {}
 	/*
 	 * 【2026-09-30 德国增强 B 组】[北方行动]计分阶段开始时，触发 scoring_north 装载卡
-	 * （如 威瑟堡行动：在<北海>征召陆军；可打出 1 张[北方行动]）。
+	 * （如 威瑟堡行动：在<北欧>征召陆军；可打出 1 张[北方行动]）。
+	 * 【2026-10-22】原写<北海>，但北海是海域、陆军只能在陆地征召，恒定失败；已改<北欧>。
 	 * 仅在德国计分阶段触发。
 	 */
 	if (nation === '德国')
@@ -20392,7 +20431,12 @@ function phase_scoring(game, nation, opts) {
 
 /*
  * 即时胜利（easy_rule 九）：
- * 美国的计分阶段结束时，若某阵营比对方领先至少 30 分，立即获胜。
+ * 【2026-10-21 时机修正】美国【摸牌】阶段结束时，若某阵营比对方领先至少 30 分，立即获胜。
+ *
+ * 旧实现在美国【计分】阶段结束就判定，会把美国随后的弃牌/摸牌两个阶段跳过；
+ * 且计分阶段内打响应/增强改棋盘后分数还会变（见 advance_phase 的落账注释），
+ * 口径也不稳。摸牌阶段是每国 7 阶段的最后一个，此时美国本回合计分已全部落账，
+ * 是卡面语义的正确时点。
  */
 function check_instant_win(game, nation) {
 	if (nation !== '美国') return null
@@ -20405,22 +20449,79 @@ function check_instant_win(game, nation) {
 
 /*
  * 终局胜利（easy_rule 九）：
- * 20 个回合结束后，轴心国获得 0.5 分，然后总分较高的阵营获胜。
+ * 【2026-10-21 时机修正】第 20 回合（T20）【美国摸牌阶段】结束时，轴心国获得 0.5 分，
+ * 然后总分较高的阵营获胜。
+ *
+ * 旧实现在"跑完 20 回合轮转国家时"（game.turn > 20，即第 21 回合起点）判定，
+ * 与卡面"T20 美国摸牌阶段"不符 —— 那会把第 21 回合的开局动作也跑一遍才结束。
+ * 现在只认 game.turn === 20，且由 advance_phase 在美国摸牌阶段边界调用。
+ *
+ * 幂等：0.5 分只加一次（final_win_applied 落 state，防重复调用重复加分）。
  */
 function check_final_win(game) {
-	if ((game.turn || 1) <= 20) return null
+	if ((game.turn || 1) !== 20) return null
+	if (game.final_win_applied) return null
+	game.final_win_applied = true
 	game.score.axis = (game.score.axis || 0) + 0.5
 	const a = game.score.axis
 	const b = game.score.allies || 0
-	if (a > b) return game_end(game, AXIS, '终局：20 回合后轴心 ' + a + ' : ' + b)
-	if (b > a) return game_end(game, ALLIES, '终局：20 回合后同盟 ' + b + ' : ' + a)
+	if (a > b) return game_end(game, AXIS, '终局：T20 美国摸牌阶段，轴心 +0.5 后 ' + a + ' : ' + b)
+	if (b > a) return game_end(game, ALLIES, '终局：T20 美国摸牌阶段，同盟 ' + b + ' : ' + a)
 	return game_end(game, null, '终局平分：' + a + ' : ' + b)
 }
 
-/* 结束游戏并记录结果 */
+/*
+ * 【2026-10-21】美国摸牌阶段结束时的胜负判定（两个规则的统一入口）。
+ *
+ * 时机：美国 7 个阶段全部跑完（摸牌是最后一个）、即将轮转到下一国时。
+ * 顺序：先判即时胜利（领先 30），T20 再判终局（轴心 +0.5 后比总分）。
+ * 两者都在【美国本回合计分已落账】之后（计分阶段早于摸牌阶段）。
+ */
+function check_win_on_us_draw_end(game) {
+	if (game.game_over) return null
+	const r = check_instant_win(game, '美国')
+	if (r) return r
+	return check_final_win(game)
+}
+
+/*
+ * 结束游戏并记录结果。
+ *
+ * 【2026-10-21 修复·终局契约】旧实现只写 game.winner / game.win_reason，
+ * 而 RTT 引擎判定"对局结束"的依据在 server.js 的 put_new_state：
+ *
+ *     if (is_nobody_active(state.active)) {        // active === 'None' || active === null
+ *         update_game_scores(..., state.result, ...)
+ *         SQL_FINISH_GAME.run(is_move, state.result, ...)   // 落库 result + status=2
+ *         if (state.result && state.result !== "None") update_elo_ratings(game_id)
+ *     }
+ *
+ * 少了 active=null 与 result 这两行，即使判出胜负，引擎仍认为对局在进行中：
+ * 不落库 result、不算 ELO、不切终局界面，阶段还会继续跑（分数照涨）。
+ *
+ * 参照 POG（paths-of-glory/rules.js 的 goto_game_over）：
+ *     game.state='game_over'; game.active='None'; game.result=faction_name(result)
+ * 本模块没有独立的 game.state 状态机（用 game.winner 表达终局），
+ * 故只需补 active + result 两个字段即可满足引擎契约。
+ *
+ * result 取值口径（server.js 的 is_winner 用子串匹配）：
+ *     'Axis' / 'Allies' → 该方胜；'Draw' → 双方和。
+ */
 function game_end(game, faction, reason) {
 	game.winner = faction
 	game.win_reason = reason
+	/*
+	 * 终局标记单独一个字段，不能用 game.winner 代替：
+	 * 和局时 faction 为 null，`if (!game.winner)` 会判成"未结束"，
+	 * 于是 advance_phase 后面的 active 轮转把 active 从 null 覆盖回 role 名，
+	 * 引擎就认为对局还在进行（和局无法落库）。见 _verify_victory.js 用例②。
+	 */
+	game.game_over = true
+	/* 终局契约：让引擎识别结束 + 记录结果（faction 是小写阵营 key，result 用 role 名） */
+	game.active = null
+	game.result = faction === ALLIES ? ALLIES_ROLE
+		: faction === AXIS ? AXIS_ROLE
+		: 'Draw'
 	game.log.push('【游戏结束】' + reason)
 	return { winner: faction, reason: reason }
 }
@@ -20649,7 +20750,12 @@ function advance_phase(game) {
 				else if (f === ALLIES) add_allied_score(game, ps)
 			}
 			if (game.pending_scoring) game.pending_scoring[nation] = 0
-			if (nation === '美国') check_instant_win(game, nation)  // 含本次分，保持原“美国计分结束领先30判胜”
+			/*
+			 * 【2026-10-21 时机修正】即时胜利不再在这里判。
+			 * 旧代码：`if (nation === '美国') check_instant_win(game, nation)`
+			 * —— 在美国【计分】阶段结束就判，会跳过美国随后的弃牌/摸牌两阶段。
+			 * 现改为在美国【摸牌】阶段结束时判（见下方"美国摸牌阶段结束"处）。
+			 */
 		}
 		game.turn_phase = PHASES[i + 1].key
 		/*
@@ -20667,6 +20773,22 @@ function advance_phase(game) {
 	const ni = ORDER_OF_NATIONS.indexOf(nation)
 	const nextNation = ORDER_OF_NATIONS[(ni + 1) % ORDER_OF_NATIONS.length]
 	game.current_nation = nextNation
+	let turn_changed = false
+	let finalWin = null
+	/*
+	 * 【2026-10-21 时机修正】胜负判定时点 = 美国【摸牌】阶段结束。
+	 *
+	 * 美国是 ORDER_OF_NATIONS 的最后一个，摸牌又是 7 阶段的最后一个，
+	 * 所以"美国 + 摸牌阶段 + 本国 7 阶段跑完"正好是卡面语义的那个时点：
+	 *   · 即时胜利：某阵营领先 ≥ 30 分；
+	 *   · 终局胜利：仅 T20，轴心 +0.5 后分高者胜。
+	 * 两处旧调用点已移除（计分阶段结束 / turn 轮转时），不再重复判定。
+	 *
+	 * 放在轮转 active 之前：game_end 会把 active 置 null 结束对局，
+	 * 若先算 active 会被下面那行 `game.active = faction_role_of_nation(...)` 覆盖掉。
+	 */
+	if (nation === '美国' && game.turn_phase === 'draw')
+		finalWin = check_win_on_us_draw_end(game)
 	/* 17732 借用状态卡：意大利回合结束后清除（修复"过意大利回合后窗口不消失"）。
 	 * 旧条件 italy_borrow.turn !== game.turn 错误：game.turn 是整轮 6 国序号、
 	 * 整轮才 +1（见 7657/18088），意大利→德国轮转时 game.turn 不变，条件永不成立，
@@ -20682,8 +20804,6 @@ function advance_phase(game) {
 			clear_national_skill_offer(game)
 	}
 
-	let turn_changed = false
-	let finalWin = null
 	if (game.nations_done >= ORDER_OF_NATIONS.length) {
 		game.nations_done = 0
 		game.turn = (game.turn || 1) + 1
@@ -20691,8 +20811,12 @@ function advance_phase(game) {
 		/* 清掉上一回合到期的修正器（如马奇诺防线"本回合内"） */
 		prune_modifiers(game)
 		on_turn_start(game)
-		/* 终局判定（easy_rule 九）：20 个回合结束后结算 */
-		finalWin = check_final_win(game)
+		/*
+		 * 【2026-10-21 时机修正】终局判定不在这里做。
+		 * 旧代码：`finalWin = check_final_win(game)`（game.turn > 20，即第 21 回合起点）
+		 * —— 与卡面"T20 美国摸牌阶段"不符，会把第 21 回合的开局动作也跑一遍才结束。
+		 * 现由上方"美国 + 摸牌阶段"边界统一判定（含幂等保护）。
+		 */
 	}
 
 	/*
@@ -20702,26 +20826,35 @@ function advance_phase(game) {
 	 *
 	 * 放在这里而不是 run_phase_entry：判定依据是"该国的【回合开始】"，
 	 * 与具体进入哪个阶段无关。此时 current_nation 已切到新国家。
-	 */
-	const joinedNations = check_neutral_end_on_turn(game, nextNation)
-	/* 【2026-10-19】结算"战斗参战"延迟到回合开始的状态卡效果（大清洗/大萧条的余波） */
-	resolve_pending_neutral_effects(game, nextNation)
-
-	/*
-	 * 【关键】操作权（active）必须跟着"当前行动国所属阵营"走。
 	 *
-	 * 国家顺序是 德(轴) 英(同) 日(轴) 苏(同) 意(轴) 美(同)，
-	 * 阵营在每个国家之间就交替了，而不是等 6 国跑完才换。
-	 * 之前只在 nations_done 归零时翻转 active，导致轮到英国时
-	 * active 还停在 Axis ——【同盟视角】被判定成"不是我的回合"，
-	 * 顶栏显示"等待对方行动"、actions 为 null，什么都做不了。
+	 * 【2026-10-21】终局已判出时不再做任何轮转副作用：game_end 置了
+	 * active=null + result，下面的 active 轮转、阶段进入、参战判定都会把
+	 * 终局状态改回"进行中"（active 被覆盖成 role 名，引擎就认为对局没结束）。
 	 */
-	game.active = faction_role_of_nation(game.current_nation)
+	let joinedNations = []
+	if (!game.game_over) {
+		joinedNations = check_neutral_end_on_turn(game, nextNation)
+		/* 【2026-10-19】结算"战斗参战"延迟到回合开始的状态卡效果（大清洗/大萧条的余波） */
+		resolve_pending_neutral_effects(game, nextNation)
 
-	game.turn_phase = PHASES[0].key
-	run_phase_entry(game, game.turn_phase, game.current_nation)
+		/*
+		 * 【关键】操作权（active）必须跟着"当前行动国所属阵营"走。
+		 *
+		 * 国家顺序是 德(轴) 英(同) 日(轴) 苏(同) 意(轴) 美(同)，
+		 * 阵营在每个国家之间就交替了，而不是等 6 国跑完才换。
+		 * 之前只在 nations_done 归零时翻转 active，导致轮到英国时
+		 * active 还停在 Axis ——【同盟视角】被判定成"不是我的回合"，
+		 * 顶栏显示"等待对方行动"、actions 为 null，什么都做不了。
+		 */
+		game.active = faction_role_of_nation(game.current_nation)
+
+		game.turn_phase = PHASES[0].key
+		run_phase_entry(game, game.turn_phase, game.current_nation)
+	} else {
+		game.log.push('【' + (game.current_nation || '?') + '】回合不再推进：对局已结束')
+	}
 	return {
-		nation_changed: true, phase: game.turn_phase,
+		nation_changed: !game.game_over, phase: game.turn_phase,
 		turn_changed: turn_changed, nation: game.current_nation,
 		final_win: finalWin,
 		neutral_ended: joinedNations,
@@ -20911,6 +21044,10 @@ function create_empty_game_state(seed, scenario) {
 		/* 胜负：已结束时记录结果，否则 winner 为 null */
 		winner: null,
 		win_reason: null,
+		/* 【2026-10-21】终局"轴心 +0.5"只加一次（check_final_win 幂等标记） */
+		final_win_applied: false,
+		/* 【2026-10-21】终局标记（含和局）；和局时 winner 为 null，故不能只用 winner 判终局 */
+		game_over: false,
 	}
 }
 
@@ -22746,9 +22883,16 @@ function register_status_actions(game, side, acts) {
 	return acts
 }
 
-function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
+function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	/* 先清空上一帧的原因残留 */
 	game.block_reason = null
+
+	/*
+	 * 【2026-10-21】终局后只留 log：引擎已据 active=null 结束对局，
+	 * 客户端动作表不该再出现任何可提交项（与 exports.action 的冻结守卫同源）。
+	 * 必须放在【所有】提前 return 之前（含下面的 game.opening 分支）。
+	 */
+	if (game.game_over) return { log: 1 }
 
 	/* 初始阶段：整个局面只接受 opening_discard（仅当前弃牌国阵营可提交） */
 	if (game.opening) {
@@ -23226,6 +23370,33 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 }
 
 /*
+ * 【2026-10-22 防死锁】peek 排序弹框挂起期间，必须放行 play_card。
+ *
+ * 背景：peek 弹框【不可取消】（play.html 里取消/关闭按钮已直接移除）——
+ * 牌一摊开信息就拿到了（看对手手牌 / 看自己牌堆顶），必须排完序点
+ * 【确认排列】才能收尾。而下面这些分支是【排他式提前 return】且不含 play_card：
+ *   · pending_echo（15214 战术革新两步）      -> { resolve_effect, log }
+ *   · pending_event_step（分步机停机）         -> base.play_card = 0
+ *   · pending_status_play（他国状态卡打出）    -> { log }
+ * 于是：客户端 send_action 因 view.actions 无此 key 而【静默不发】，
+ * 但 submit_peek 末尾的 toast 是【无条件】弹出的，会显示"已按指定方式重组牌堆"；
+ * 服务端 game.peek 没被清掉 -> 弹框不消失、卡也出不去。
+ * 表现为"提示成功，但弹框不消失"（本次用户反馈）。
+ *
+ * 与 armed_offer / national_skill_offer 分支补 play_card 是【同款】防死锁处理。
+ * 归属方判定：被摊开的牌所属国家 = game.peek.card 的卡面归属国
+ * （注意不能用 game.peek.nation —— 15305 那里存的是"被看牌的一方"）。
+ */
+function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
+	const acts = build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigger)
+	if (game.peek && (game.peek.cards || []).length && game.peek.card) {
+		const cd = CARD_BY_ID[String(inst_card_id(game.peek.card))]
+		if (cd && faction_of_nation(cd.nation) === side) acts.play_card = 1
+	}
+	return acts
+}
+
+/*
  * 复用：把一张状态卡从手牌正面朝上放到桌面并应用持续效果（不检查出牌阶段、不占出牌名额）。
  * play_card 的 STATUS 分支与「17850 大清洗」结束中立奖励共用。
  */
@@ -23327,6 +23498,17 @@ function play_status_card_impl(game, nation, card_id) {
  exports.action = function (state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+
+	/*
+	 * 【2026-10-21】终局冻结：game_end 一旦置上 winner（同时置 active=null +
+	 * result，引擎随即结束对局并落库），本模块不再接受任何普通动作，
+	 * 避免"胜负已分还在跑阶段 / 改分数"把 result 覆盖掉。
+	 * 引擎内部动作（.undo / .resign / .timeout 等，以 '.' 开头）与 log 放行。
+	 */
+	if (game.game_over && action !== 'log' && String(action).charAt(0) !== '.') {
+		game.log.push('对局已结束（' + (game.win_reason || '') + '），不再接受动作')
+		return game
+	}
 
 	/*
 	 * 【2026-10-19】大清洗(17850)让权：在【动作边界】把视角翻给苏联。
@@ -25947,17 +26129,68 @@ function play_status_card_impl(game, nation, card_id) {
 		return game
 		}
 		if (action === 'skip_armed_offer') {
-		const win = (game.armed_offers || []).find(w => faction_of_nation(w.nation) === side)
-		if (win) {
-			/* 15353：跳过对敌方状态卡的拦截 -> 记"本回合放行"，敌方重发时不再弹窗 */
-			if (win.when === 'enemy_status_effect' && win.ctx && win.ctx.card) {
-				game.status_intercept_skipped = game.status_intercept_skipped || {}
-				game.status_intercept_skipped[win.ctx.card] = freq_key(game)
+			const win = (game.armed_offers || []).find(w => faction_of_nation(w.nation) === side)
+			if (win) {
+				/* 15353：跳过对敌方状态卡的拦截 -> 记"本回合放行"，敌方重发时不再弹窗 */
+				if (win.when === 'enemy_status_effect' && win.ctx && win.ctx.card) {
+					game.status_intercept_skipped = game.status_intercept_skipped || {}
+					game.status_intercept_skipped[win.ctx.card] = freq_key(game)
+				}
+				/*
+				 * 【2026-10-21 修复】15352 / 16700：跳过对敌方[增强卡]的拦截后，
+				 * 必须把【被挂起的那次出牌】续跑完。
+				 *
+				 * 旧实现只 `removeArmedWindow` 后 return，于是：
+				 *   · 敌方那张增强卡既不入弃牌堆、也不结算效果（卡留在手牌里）；
+				 *   · play_card 收尾的 request_responses('play_card') 不会触发
+				 *     —— 对方响应卡因此永远不生效（用户实测反馈）；
+				 *   · 玩家再点那张牌会再次弹同一个窗，形成"问了->放弃->什么都没发生"的死循环。
+				 *
+				 * 做法：先记下被拦截的卡并登记"本回合放行"（echo_intercept_skipped），
+				 * 再移除窗口（sync_armed_handoff 随把 active 归还原阵营）、
+				 * 重跑同一次 play_card。放行标记让 ECHO 分支跳过再次询问、直接执行。
+				 *
+				 * 多拦截方（如英国 15352 + 意大利 16700 同时有窗）时，续跑会再次派发
+				 * 剩余窗口，全部放弃后才真正结算 —— 语义正确。
+				 */
+				let resumeEcho = null
+				if (win.when === 'enemy_echo_played' && win.ctx && win.ctx.card && win.ctx.nation)
+					resumeEcho = { card: win.ctx.card, nation: win.ctx.nation }
+				game.log.push('【' + win.nation + '】放弃打出增强卡')
+				/*
+				 * 【2026-10-21 修复·回归】记"本国家回合放行【这一张】"——
+				 * 与 15353 的 status_intercept_skipped 完全同款（按被拦截卡的实例 id 记）。
+				 *
+				 * 为什么必须记：被挂起的那次出牌续跑后，玩家提交参数时
+				 * （如 15215《卓越规划》点【确认排列】回传 placement）
+				 * 若不再放行，enemy_echo_played 窗口会【再次弹出】并提前 return：
+				 *   · game.peek 不变、弹框不关 → 玩家看到"确认排列点击无效"；
+				 *   · 且对方可以无限次拒绝，这张卡永远打不完。
+				 * 按实例 id 记，故同一回合打【别的】增强卡仍会正常询问。
+				 */
+				if (resumeEcho) {
+					game.echo_intercept_skipped = game.echo_intercept_skipped || {}
+					game.echo_intercept_skipped[resumeEcho.card] = freq_key(game)
+				}
+				removeArmedWindow(game, win)
+				if (resumeEcho) {
+					/*
+					 * 防御：若窗口期间该牌已被移走（弃置/损耗等），就不续跑 ——
+					 * 否则 play_card 会拿 current_nation 当主体，可能误判成"别国出牌"。
+					 */
+					if ((game.hands[resumeEcho.nation] || []).indexOf(resumeEcho.card) < 0) {
+						game.log.push('【' + resumeEcho.nation + '】《' +
+							((inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card) +
+							'》已不在手牌，无需续跑')
+					} else {
+						const nm = (inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card
+						game.log.push('【' + resumeEcho.nation + '】《' + nm + '》未被拦截，照常结算')
+						exports.action(game, faction_role_of_nation(resumeEcho.nation), 'play_card',
+							{ card: resumeEcho.card })
+					}
+				}
 			}
-			game.log.push('【' + win.nation + '】放弃打出增强卡')
-			removeArmedWindow(game, win)
-		}
-		return game
+			return game
 		}
 	/* 【2026-10-08】17721 钢铁条约：德国放弃状态卡打出，控制权归还意大利 */
 	if (action === 'event_delegate_decline') {
@@ -26147,6 +26380,17 @@ function play_status_card_impl(game, nation, card_id) {
 	if (action === 'play_card') {
 		let nation = game.current_nation
 		const card_id = arg && arg.card
+		/*
+		 * 【2026-10-21 修复】__skip_echo_intercept 是【一次性】标记：
+		 * 15352/16700 的 run 结算后置位，必须在【任何 play_card 开头】先清除
+		 * —— 这一点上方 ECHO 分支的注释里一直这么写，实际却只在 ECHO 分支内
+		 * `delete`（在检查之后），于是标记泄漏：拦截过一次后，之后所有增强卡
+		 * 都不再询问（实测：连打两张《云雾》，第二张的拦截窗口不再弹）。
+		 *
+		 * ⚠ echo_intercept_skipped 不在此列：它是"已放弃拦截"的放行标记，
+		 *   由 freq_key 自动过期（本国家回合结束即失效），无需在这里清。
+		 */
+		delete game.__skip_echo_intercept
 		/*
 		 * 【2026-10-20 修复："不能免费打出"】
 		 * 走【额外打出】通道时，打牌主体可能【不是】当前行动国：
@@ -26436,7 +26680,19 @@ function play_status_card_impl(game, nation, card_id) {
 			 *   16700 结算后置位，下次任何 play_card 开头先清除，
 			 *   避免"一次拦截后永久不再询问"。
 			 */
-			if (!game.__skip_echo_intercept) {
+			/*
+			 * 【2026-10-21】echo_intercept_skipped：英国/意大利【已放弃】拦截这张卡
+			 * 时记下（值与 15353 的 status_intercept_skipped 同款 = freq_key，
+			 * 锚定本国家回合），表示"这张卡本次已放行，不要再问一次"。
+			 *
+			 * 为什么不能缺：被挂起的那次出牌续跑后，玩家提交参数时会再走一次
+			 * 本分支（如 15215 点【确认排列】回传 placement）。若此时又弹窗，
+			 * 本分支会提前 return —— 弹框不关、卡不结算，玩家看到的就是
+			 * "确认排列点击无效"，且对方可以无限拒绝、这张卡永远打不完。
+			 */
+			const _echoSkipped =
+				(game.echo_intercept_skipped || {})[card_id] === freq_key(game)
+			if (!game.__skip_echo_intercept && !_echoSkipped) {
 				try {
 					offer_armed_effects(game, 'enemy_echo_played', {
 						nation: nation, card: card_id, space: null,
@@ -26449,7 +26705,7 @@ function play_status_card_impl(game, nation, card_id) {
 					return game
 				}
 			}
-			/* 一次性标记：用掉即清 */
+			/* 一次性标记：用掉即清（echo_intercept_skipped 由 freq_key 自动过期，不清） */
 			delete game.__skip_echo_intercept
 
 			/* ② 执行（与事件卡同一个执行器） */
@@ -26546,7 +26802,18 @@ function play_status_card_impl(game, nation, card_id) {
 				game.log.push('《' + c.name + '》效果尚未实现')
 				return game
 			}
-			if (game.turn_phase !== 'play') {
+			/*
+			 * 【2026-10-22 修复·状态卡也须尊重"额外打出"通道】
+			 * 现象：15211《威瑟堡行动》在【计分阶段】授予 [北方行动] 额外打出，
+			 * 15249《狼群战术》/15241《瑞典铁矿》都是 [北方行动] 状态卡，客户端亮着
+			 * "额外打出"角标，点下去却打不出（玩家反馈）。
+			 * 根因：本分支【硬编码】了"只能在出牌阶段打出"，把 check_phase_for_card
+			 * 已经放行的 extra:true 又挡了回去 —— 与 EVENT/RESPONSE/ECON 分支只认
+			 * chk.extra（不重复卡阶段）不一致（通用教训 11/18：白名单式放行别套进这里）。
+			 * 修法：复用同一个 extra 标志（已由 check_phase_for_card 校验 phase/turn/
+			 * count/filter），非出牌阶段但属额外打出时放行。零新增机制。
+			 */
+			if (game.turn_phase !== 'play' && !extra) {
 				game.log.push('《' + c.name + '》只能在出牌阶段打出')
 				return game
 			}
@@ -28226,6 +28493,7 @@ if (typeof module !== 'undefined') {
 		phase_scoring,
 		check_final_win,
 		check_instant_win,
+		check_win_on_us_draw_end,
 		game_end,
 		init_markers,
 		ensure_markers,

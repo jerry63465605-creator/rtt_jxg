@@ -278,6 +278,7 @@ resource(资源再分配) → play(出牌) → airforce(空军) → supply(补�
 | **`project-structure.md`**（本文） | 项目结构现状 |
 | **`known-issues.md`** | 当前遗留问题与未完成项 |
 | **`pitfalls.md`** | 踩坑记录：通用教训 18 条 + 契约坑 R1–R11 + 逐条档案 R28–R36 |
+| **`talkthrough-2026-10-21.md`** | 2026-10-21 改动复盘**讲解稿**（吞牌 / 重打真实化 / 连带小 bug / UI 对齐），适合讲给别人听 |
 | `status-cards-design.md` | 状态卡口径真源（玩家逐条确认） |
 | `todo-deferred.md` | 延后事项（法国 183 / 中国 180） |
 | `HANDOFF.md` | ⚠ 已过时（2026-09-25），结构部分以本文为准 |

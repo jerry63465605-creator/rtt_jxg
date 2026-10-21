@@ -10,7 +10,7 @@ CORE,15207,152,0,7,JU-52 空投补给,EFFECT,1,回合开始时，若场上有德
 CORE,15208,152,0,8,齐柏林伯爵号,EFFECT,1,建设海军后，损耗1张牌：在该海域部署或调度1支空军。,cards_sliced/sheet152_r0_c8.png,逐张
 CORE,15209,152,0,9,伞兵,EFFECT,1,出牌阶段开始时，损耗1张牌：对1个相邻德国空军的地区发起1次陆战。,cards_sliced/sheet152_r0_c9.png,逐张
 CORE,15210,152,1,0,施佩伯爵海军上将号,EFFECT,1,建设海军后，损耗1张牌：在<亚速尔>相邻地区发起1次海战。,cards_sliced/sheet152_r1_c0.png,逐张
-CORE,15211,152,1,1,威瑟堡行动,EFFECT,1,[北方行动] 计分阶段开始时，损耗1张牌：在<北海>征召陆军。可打出1张[北方行动]。,cards_sliced/sheet152_r1_c1.png,逐张
+CORE,15211,152,1,1,威瑟堡行动,EFFECT,1,[北方行动] 计分阶段开始时，损耗1张牌：在<北欧>征召陆军。可打出1张[北方行动]。,cards_sliced/sheet152_r1_c1.png,逐张
 CORE,15212,152,1,2,G7e 鱼雷,EFFECT,1,打出[潜艇行动]后，损耗1张牌：发起1次海战。,cards_sliced/sheet152_r1_c2.png,逐张
 CORE,15213,152,1,3,云雾,EFFECT,1,出牌阶段开始时：本回合中空军无法防御战斗。,cards_sliced/sheet152_r1_c3.png,逐张
 CORE,15214,152,1,4,战术革新,EFFECT,1,出牌阶段开始时，弃置德国场上1张[状态卡]：打出1张[状态卡]。,cards_sliced/sheet152_r1_c4.png,逐张
