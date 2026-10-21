@@ -27021,6 +27021,36 @@ function play_status_card_impl(game, nation, card_id) {
 			 * 大清洗建立，玩家被引导先打陆战、错过/错乱大清洗时机。
 			 */
 			if (inst_card_id(card_id) === '17817' && nation === '苏联') {
+				/*
+				 * 【2026-10-22 修复·禁止空打出】
+				 * 卡面要求"选择 1 支相邻苏联陆军的德国陆军"；没有这样的德国陆军时不能打。
+				 * 旧实现无条件结束中立并置 su_17817_pending，随后 resolve_event_card
+				 * 无条件建立 event_budget；若无相邻德/苏陆军，预算 targets 为空
+				 * → 地图无高亮、点哪都无反应（玩家反馈"卡死无法发起战斗"）。
+				 *
+				 * 口径（玩家 2026-10-22 确认）：只判【相邻】，不查补给 ——
+				 * 补给由战斗发起时按通用规则判定；玩家可先用 17838 等状态卡补上补给再打。
+				 * 故这里用 get_connections + pieces_on（不套 battle_initiators 的补给过滤）。
+				 */
+				const _hasAdj = (function () {
+					const fact = faction_of_nation('苏联')
+					for (const p of Object.keys(game.piece_type || {})) {
+						if (game.piece_type[p] !== 'army' || game.piece_nation[p] !== '德国') continue
+						const sp = game.location[p]
+						if (sp == null) continue
+						for (const nb of get_connections(game, sp, fact)) {
+							if (pieces_on(game, nb).some(q =>
+								game.piece_nation[q] === '苏联' && game.piece_type[q] === 'army'))
+								return true
+						}
+					}
+					return false
+				})()
+				if (!_hasAdj) {
+					game.log.push('【苏联】《进攻是最好的防守》无法打出：' +
+						'没有与苏联陆军相邻的德国陆军')
+					return game
+				}
 				if (is_neutral(game, '苏联')) {
 					end_neutral(game, '苏联', '打出事件《进攻是最好的防守》')
 				}
@@ -27593,6 +27623,9 @@ function play_status_card_impl(game, nation, card_id) {
 			return game
 		}
 		game.log.push('【苏联】《进攻是最好的防守》战斗预算已建立')
+		/* 【2026-10-22】兜底：同上，无目标时提示用「结束」收尾。 */
+		if (game.event_budget && !event_battle_targets(game, game.event_budget).length)
+			game.log.push('（提示）当前没有可发起的对德陆战目标，请点「结束《进攻是最好的防守》」收尾')
 		return game
 	}
 
