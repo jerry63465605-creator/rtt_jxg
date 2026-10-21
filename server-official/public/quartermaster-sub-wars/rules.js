@@ -8173,12 +8173,17 @@ function fire_trigger(game, on, ctx) {
 			console.warn('[fire_trigger] filter error for', r.card_id, e)
 			continue
 		}
+		const _card = inst_card(String(inst_card_id(r.card_id)))
 		out.push({
 			card_id: r.card_id,      /* 实例 id */
 			card_face: faceId,      /* 卡面 id */
 			owner_side: r.owner_side,
 			nation: r.nation,
-			name: eff.name,
+			/*
+			 * 【2026-10-22 修复】多数 RESPONSE_EFFECTS 没配 name -> 客户端响应框
+			 * 显示《》《undefined》、服务端拦截日志也是《》。回落到 cards.js 的真实卡名。
+			 */
+			name: eff.name || (_card && _card.name) || String(faceId),
 		})
 	}
 	return out
@@ -9618,6 +9623,22 @@ const EVENT_EFFECTS = {
 function advance_italy_chain(game) {
 	const ch = game.delegate
 	if (!ch) return
+	/*
+	 * 【2026-10-22 修复·17729 "置于牌堆顶 / 留在弃牌堆"点了没反应】
+	 * 上一张打出的牌可能开出响应窗口（如 德国《发起陆战》消灭苏军 ->
+	 * 17831 的 piece_removed 等同盟国表态）。action 入口此时会挡下一切非响应动作，
+	 * 但旧实现照样抽下一张牌并让当前国"处置" —— 客户端 17729 选择框还在，
+	 * 点置顶/弃置全被服务端静默拒绝，表现为卡死。
+	 * 这里改为挂起：调用方已清空 pickedNation/pickedCard（框会自动隐藏），
+	 * 等响应栈清空后由 response_reconcile_active -> resume_italy_chain 续跑。
+	 */
+	if ((game.response_stack && game.response_stack.length) ||
+		(game.response_queue && game.response_queue.length)) {
+		ch.waiting_response = true
+		game.log.push('【卡佩里尼】等待响应结算后继续处置')
+		return
+	}
+	ch.waiting_response = false
 	while (ch.step < ch.order.length) {
 		const nat = ch.order[ch.step]
 		const dis = game.discard[nat] || []
@@ -9637,6 +9658,19 @@ function advance_italy_chain(game) {
 	}
 	finish_delegate(game, game.delegate)
 	game.log.push('【卡佩里尼】所有友方玩家处置完毕')
+}
+
+/* 【2026-10-22】响应窗口清空后，续跑被它挂起的 17729 卡佩里尼链。
+ * 只在"栈/队列确实已空且没有挂起战斗"时推进，避免与空军代受 / 延期响应抢序。 */
+function resume_italy_chain(game) {
+	const ch = game.delegate
+	if (!ch || ch.mode !== 'order' || !ch.waiting_response) return
+	if ((game.response_stack && game.response_stack.length) ||
+		(game.response_queue && game.response_queue.length)) return
+	if (game.pending_battle || (game.battle_in_progress || 0)) return
+	ch.waiting_response = false
+	advance_italy_chain(game)
+	refresh(game)
 }
 
 /* ============================================================
@@ -15031,6 +15065,9 @@ function response_reconcile_active(game) {
 			 */
 			reconcile_handoff(game, 'response')
 			if (!game.pending_battle && !(game.battle_in_progress || 0)) promote_deferred_response(game)
+			/* 【2026-10-22】响应清空后，续跑被响应窗口挂起的 17729 卡佩里尼链
+			 * （早先推进到一半时开出了响应窗口，见 advance_italy_chain 的守卫） */
+			resume_italy_chain(game)
 		}
 	}
 	/* 【2026-10-16】响应队列清空后，落账 17749 轴心协定的真实击杀信用 */
@@ -21477,12 +21514,33 @@ exports.view = function (state, current) {
 			on: head.on,
 			pre: head.pre,
 			owner_side: head.owner_side,
-			candidates: head.candidates.map(c => ({ card_id: c.card_id, card_face: c.card_face, name: c.name })),
+			/*
+			 * 【2026-10-22】老存档里栈帧的 name 可能是 undefined（fire_trigger 旧实现
+			 * 只取 eff.name），这里再做一次兜底，保证响应框/日志显示真实卡名。
+			 */
+			candidates: head.candidates.map(c => ({
+				card_id: c.card_id, card_face: c.card_face,
+				name: c.name || (inst_card(String(c.card_face)) || {}).name || c.card_face,
+			})),
 			order: head.order ? head.order.slice() : head.candidates.map(c => c.card_id),
 			skip: head.skip || {},
 			ordered: !!head.ordered,
 			space: (head.ctx && head.ctx.space) || null,
 			nation: (head.ctx && head.ctx.nation) || null,
+		}
+	})()
+
+	/*
+	 * 【2026-10-22】"是否有响应窗口在等表态"（对双方都下发，只含持有方 + 卡名）。
+	 * 17729 卡佩里尼等"链/委托"型 UI 据此让位：响应未清空时它们的按钮必然被
+	 * 服务端拒绝，留在屏幕上只会让玩家连点、误以为卡死。
+	 */
+	const responsePending = (() => {
+		const tf = top_response_frame(game)
+		if (!tf) return null
+		return {
+			owner_side: tf.owner_side,
+			name: tf.name || (inst_card(String(tf.card_face)) || {}).name || null,
 		}
 	})()
 
@@ -22186,6 +22244,9 @@ exports.view = function (state, current) {
 		 * 含可触发的响应卡名与上下文（地区/国家），供客户端弹询问框。
 		 */
 		pending_trigger: pendingTrigger,
+
+		/* 【2026-10-22】响应窗口是否在等表态（双方可见，仅含持有方 + 卡名） */
+		response_pending: responsePending,
 
 		/* 【2026-10-07 诊断】当前是哪种挂起在拦常规动作（play_card 不在白名单时看这个） */
 		block_reason: game.block_reason || null,
@@ -23247,8 +23308,13 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	if (game.delegate && game.delegate.mode === 'order') {
 		const cur = game.delegate.pickedNation
 		const sub = game.delegate.sub
+		/* 等待响应结算：没有待处置牌，也不放行 17729 的选择动作（否则点了静默失败） */
+		if (game.delegate.waiting_response && !cur) {
+			game.block_reason = 'italy_chain: 《卡佩里尼》等待响应结算后继续'
+			return { log: 1 }
+		}
 		game.block_reason = 'italy_chain: 《卡佩里尼》等待【' + (cur || '?') + '】处置抽到的牌'
-		if (cur && faction_of_nation(cur) === side)
+		if (cur && faction_of_nation(cur) === side && (sub || game.delegate.pickedCard))
 			return {
 				resolve_italy_chain: sub ? 0 : 1,
 				resolve_italy_play: sub ? 1 : 0,
@@ -23936,7 +24002,8 @@ function play_status_card_impl(game, nation, card_id) {
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		const hd = game.response_queue[0]
 		game.log.push('响应结算中：等待【' + (hd.owner_side === 'axis' ? '轴心国' : '同盟国') +
-			'】是否发动《' + hd.candidates.map(x => x.name).join('》《') + '》，' +
+			'】是否发动《' + hd.candidates.map(x =>
+				x.name || (inst_card(String(x.card_face)) || {}).name || x.card_face).join('》《') + '》，' +
 			'在此期间不能进行其它操作')
 		return game
 	}
@@ -24514,7 +24581,8 @@ function play_status_card_impl(game, nation, card_id) {
 		const head = groupFrames[0]
 		if (action === 'pass_response') {
 			game.log.push('【' + (top.owner_side === 'axis' ? '轴心国' : '同盟国') +
-				'】放弃发动响应（《' + groupFrames.map(f => f.name).join('》《') + '》留于桌面）')
+				'】放弃发动响应（《' + groupFrames.map(f =>
+					f.name || (inst_card(String(f.card_face)) || {}).name || f.card_face).join('》《') + '》留于桌面）')
 			/* 拦截类 play_card 需要重放被挂起的出牌动作 */
 			const resume = top.resume
 			const resume_role = top.play_role
@@ -28585,6 +28653,9 @@ if (typeof module !== 'undefined') {
 		request_responses,
 		fire_trigger,
 		RESPONSE_EFFECTS,
+		/* 【2026-10-22】17729 卡佩里尼链：响应窗口暂停/续跑（测试 seam） */
+		advance_italy_chain,
+		resume_italy_chain,
 		/* 【2026-10-18】各国兵力总数上限校验（测试用） */
 		unit_cap_ok,
 		nation_unit_count,

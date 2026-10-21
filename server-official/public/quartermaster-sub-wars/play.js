@@ -1117,6 +1117,19 @@ function update_it_delegate_box() {
  * 当前待处置国抽到一张牌，玩家选：打出(基本卡)/置牌堆顶/留弃牌堆。 */
 function update_italy_chain_box() {
 	const ch = (view && view.delegate && view.delegate.mode === 'order') ? (view.italy_chain || view.delegate) : null
+	/*
+	 * 【2026-10-22 修复·17729 "置于牌堆顶 / 留在弃牌堆"点了没反应】
+	 * 有响应窗口在等表态时，服务端会拒绝一切非响应动作 —— 此时必须把 17729 的
+	 * 选择框收起来（否则玩家连点、误以为卡死；日志里能连点 6 次全是空动作）。
+	 * 响应结算完服务端会续跑链，选择框自动重开。
+	 */
+	if (view && (view.response_pending || (ch && ch.waiting_response))) {
+		if (ask_state && (ask_state.kind === 'italy_chain' || ask_state.kind === 'italy_chain_sub')) {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		return
+	}
 	if (!ch || !ch.pickedCard) {
 		if (ask_state && ask_state.kind === 'italy_chain') {
 			ask_state = null
