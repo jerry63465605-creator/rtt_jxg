@@ -15468,20 +15468,35 @@ function event_card_needs(game, nation, card_id, arg) {
 		const bal = space_ids_of(['巴尔干'])[0]
 		const enemies = pieces_on(game, bal).filter(p =>
 			game.piece_type[p] === 'army' && faction_of_nation(game.piece_nation[p]) !== '苏联')
-		/* 阶段①：仍需选敌方单位 */
-		if (arg.piece == null && enemies.length) {
+		/*
+		 * 阶段①：仍需选敌方单位。
+		 * 【2026-10-22 修复·客户端没弹"英国/苏联"选择】
+		 * ① 必须带 step/total：缺 total 时客户端 submit_event_piece 按【单步】直接
+		 *    send_action(play_card)，服务端随后返回 need:'choice' 但客户端已清空状态、
+		 *    不再弹选择框（玩家反馈"没给选择苏联还是英国"）。
+		 * ② 必须兼容多步累积形态 arg.pieces[0]：客户端选完部队重查发的是 pieces（数组），
+		 *    只读 arg.piece 会永远停在阶段①、无限重复要选部队。
+		 */
+		const gotPiece = (Array.isArray(arg.pieces) && arg.pieces[0] != null) ? arg.pieces[0] : arg.piece
+		if (gotPiece == null && enemies.length) {
 			return {
-				need: 'piece', pick: 1, pickMin: 1,
+				need: 'piece', step: 0, total: 2, pick: 1, pickMin: 1,
 				candidates: enemies,
 				prompt: '选择<巴尔干>要消灭的敌方陆军',
 			}
 		}
-		/* 阶段②：弹国别选择（卡面：征召英国或苏联陆军） */
+		/*
+		 * 阶段②：弹国别选择（卡面：征召英国或苏联陆军）。
+		 * 【2026-10-22 修复】可征召性必须按【消灭该敌之后的影子盘面】算：
+		 * 否则巴尔干仍被敌方占据时 can_recruit_at 对英/苏都返回"有敌方部队"，
+		 * 两个选项全被 disabled 灰掉，玩家同样选不了。
+		 */
 		if (arg.choice == null) {
-			const okUK = can_recruit_at(game, '英国', bal, 'army').ok
-			const okSU = can_recruit_at(game, '苏联', bal, 'army').ok
+			const g2 = (gotPiece != null) ? shadow_without_pieces(game, [String(gotPiece)]) : game
+			const okUK = can_recruit_at(g2, '英国', bal, 'army').ok
+			const okSU = can_recruit_at(g2, '苏联', bal, 'army').ok
 			return {
-				need: 'choice', count: 2,
+				need: 'choice', step: 1, total: 2, count: 2,
 				options: [
 					{ index: 0, label: '征召英国陆军', disabled: !okUK },
 					{ index: 1, label: '征召苏联陆军', disabled: !okSU },

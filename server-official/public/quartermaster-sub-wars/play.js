@@ -2934,8 +2934,16 @@ function show_event_choice(tg) {
 			b.onclick = () => {
 				pending_event_choice = opt.index
 				box.classList.add("hide")
-				/* 选完 choice 后，可能还要选地区 -> 再查一次 */
-				send_query("event_targets", { card: card.id, choice: opt.index, nation: lend_lease_active || undefined })
+				/*
+				 * 【2026-10-22 修复·17825 铁托游击队"没弹英国/苏联选择"】
+				 * choice 之前可能已经选过【部队】（消灭敌方陆军）或地区；重查必须把
+				 * 已累积的 pieces/spaces 一起带上，否则服务端读不到前序选择、
+				 * 又退回 need:'piece'（选择框一闪就没 / 永远停在选部队）。
+				 */
+				const q = { card: card.id, choice: opt.index, nation: lend_lease_active || undefined }
+				if (pending_event_pieces && pending_event_pieces.length) q.pieces = pending_event_pieces.slice()
+				if (pending_event_spaces && pending_event_spaces.length) q.spaces = pending_event_spaces.slice()
+				send_query("event_targets", q)
 				/* 这次查询的 result 会带 need='space' 或 need=null */
 			}
 		}
