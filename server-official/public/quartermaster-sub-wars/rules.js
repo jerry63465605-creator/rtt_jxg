@@ -27303,8 +27303,13 @@ function play_status_card_impl(game, nation, card_id) {
 		/* 大清洗消费后，若 17817 待结算，自动建立对德战斗预算 */
 		if (game.su_17817_pending) {
 			const r2 = resolve_event_card(game, '苏联', '17817', {})
-			if (r2.ok) game.log.push('（大清洗后）《进攻是最好的防守》战斗预算已建立')
-			else game.log.push('（大清洗后）战斗预算建立失败：' + r2.reason)
+			if (r2.ok) {
+				game.log.push('（大清洗后）《进攻是最好的防守》战斗预算已建立')
+				/* 【2026-10-22】兜底：大清洗打出的状态牌可能改变局面（补给/棋子），
+				 * 若建立后仍无目标，明确提示用「结束」收尾，避免"看着预算无处可点"。 */
+				if (game.event_budget && !event_battle_targets(game, game.event_budget).length)
+					game.log.push('（提示）当前没有可发起的对德陆战目标，请点「结束《进攻是最好的防守》」收尾')
+			} else game.log.push('（大清洗后）战斗预算建立失败：' + r2.reason)
 			game.su_17817_pending = null
 		}
 		/* 【2026-10-19】大清洗让权收尾：归还视角与操作权 */
