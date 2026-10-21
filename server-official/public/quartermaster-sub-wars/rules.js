@@ -5307,8 +5307,20 @@ function su_build_autoskip(game) {
 			(st.op === 'build' ? '建设' : '征召') + piece_type_zh(st.type) + '，自动跳过该步')
 		dg.done++
 	}
-	/* 步②建设：建立【建设预算】（不再自动收尾，见 open_su_build_budget） */
-	open_su_build_budget(game)
+	/*
+	 * 【2026-10-22 修复·征召被建设预算抢先】
+	 * 只有征召步【已执行或已跳过】（done >= steps.length）才建立建设预算。
+	 *
+	 * 旧实现无条件 open_su_build_budget：征召步 done=0、还在等玩家点<罗斯>时，
+	 * pending_autobahn 就先建立了；而 build_actions 的 pending_autobahn 排他分支
+	 * 只放行 resolve_autobahn / finish_su_build_budget，不含 resolve_su_build_delegate
+	 * → 客户端点征召因 view.actions 无此 key 静默不发（玩家看到"征召不能进行"），
+	 * 建设却因 resolve_autobahn 在册而正常。
+	 *
+	 * 现在：征召期间不建预算（客户端可正常点<罗斯>发 resolve_su_build_delegate）；
+	 * 其 done++ 后再进本函数 → done>=len → 才开建设预算。建设流程完全不变。
+	 */
+	if (dg.done >= dg.steps.length) open_su_build_budget(game)
 }
 
 /*
