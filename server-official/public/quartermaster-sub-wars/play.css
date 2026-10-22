@@ -65,7 +65,7 @@ main { background-color: #2b3a45; }
 #map {
 	width: 4835px;
 	height: 1612px;
-	background-image: url(map.png);
+	background-image: url(map.webp);   /* 【2026-10-22】底图转 WebP（2.5 MB -> 0.3 MB） */
 	background-size: 4835px 1612px;
 	background-repeat: no-repeat;
 }

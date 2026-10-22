@@ -755,8 +755,22 @@ function do_next_phase() {
  */
 const HAND_LIMIT = 7
 
+/*
+ * 卡图 URL。
+ *
+ * 【2026-10-22 素材转 WebP】cards/ 下原 PNG 每张 ~400 KB（384x576 RGBA），
+ * 转 WebP q85 后 ~38 KB，总体 172.4 MB -> 17.0 MB（省 90%，实测卡面小字清晰）。
+ * 转换脚本：tools/optimize_images.py（原 png 保留作母版，发布包排除）。
+ *
+ * 因此：cards.js 的 img 字段仍是 "xxx.png"（只当文件名基用，不改 446 处），
+ * 这里统一把扩展名换成 .webp。扩展名变了 = 天然破缓存，无需 ?v=。
+ */
+const CARD_IMG_EXT = ".webp"
+
 function card_image_url(c) {
-	return c && c.img ? ("cards/" + c.img) : null
+	if (!c || !c.img)
+		return null
+	return "cards/" + String(c.img).replace(/\.png$/i, "") + CARD_IMG_EXT
 }
 
 /* 建一张卡元素（卡图优先，缺图则回落为文字卡） */
@@ -849,7 +863,7 @@ function build_response_card_elt(c, faceUp, meta) {
 	const d = document.createElement("div")
 	if (faceUp && c) {
 		d.className = "card t-" + (c.type || "RESPONSE")
-		const url = c.img ? ("cards/" + c.img) : null
+		const url = card_image_url(c)      /* 【2026-10-22】统一走 webp */
 		if (url)
 			d.style.backgroundImage = "url(" + JSON.stringify(url) + ")"
 		const fb = document.createElement("div")
