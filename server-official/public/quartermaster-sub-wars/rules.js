@@ -16703,7 +16703,13 @@ function run_effect_tactics(game, ctx) {
 			const cc = inst_card(id)
 			return cc && cc.type === 'STATUS'
 		})
-		game.pending_echo = { card: card_id, step: 'play', candidates: handStatus.map(id => obj_of(id)) }
+		/* 【2026-10-23】补 title：否则客户端 update_pending_echo_box 落到 `pe.title || "选择"`
+		 * 只显示一个"选择"标题，玩家不知道在选什么（用户反馈"选择1/？"一类文案）。 */
+		game.pending_echo = {
+			card: card_id, step: 'play',
+			title: '《战术革新》：选择要免费打出的状态卡',
+			candidates: handStatus.map(id => obj_of(id)),
+		}
 		return {
 			ok: true, pending: true, need: 'echo_play_status',
 			desc: '已弃置《' + inst_card(did).name + '》，请选择要免费打出的状态卡',
@@ -16713,7 +16719,11 @@ function run_effect_tactics(game, ctx) {
 	/* 初始进入：需要德国场上至少 1 张状态卡 */
 	if (!onTable.length)
 		return { ok: false, reason: '《战术革新》需要德国场上至少有 1 张[状态卡]可弃置，当前没有' }
-	game.pending_echo = { card: card_id, step: 'discard', candidates: onTable.map(id => obj_of(id)) }
+	game.pending_echo = {
+		card: card_id, step: 'discard',
+		title: '《战术革新》：选择要弃置的德国状态卡',
+		candidates: onTable.map(id => obj_of(id)),
+	}
 	return {
 		ok: true, pending: true, need: 'echo_discard_status',
 		desc: '选择要弃置的德国状态卡（空打前奏）',

@@ -2794,12 +2794,46 @@ function query_event_targets(card_id) {
 
 /* 客户端取卡对象（从 view.hands 或 CARDS 里找） */
 function inst_card_client(card_id) {
-	/* view.hand_cards 可能已含卡对象 */
-	const hc = (view.hand_cards || []).find(c => String(c.id) === String(card_id))
+	/*
+	 * 【2026-10-23 修复"卡名显示 ？"】
+	 *
+	 * 原实现只查 view.hand_cards / view.all_cards —— 而服务端【两个都不下发】
+	 * （view 里只有 hands[nation].cards 与 table_cards[nation]），
+	 * 于是永远走兜底 { name:"?", type:"?" }，
+	 * 造成：《广阔的资源》委托卡名、事件卡打牌提示、17546 第 2 步"已选第 1 张"
+	 * 全部显示"？"。
+	 *
+	 * 现改为按【服务端实际下发的字段】依次查找：
+	 *   ① 本国手牌 -> ② 其它国手牌（委托/揭示）-> ③ 桌面卡 -> ④ 老字段（兼容）
+	 * 匹配同时兼容实例 id（'15253#50'）与卡面 id（15253）。
+	 */
+	const id = String(card_id)
+	const hit = (x) => x && (String(x.id) === id || String(x.card_id) === id)
+
+	const hands = view.hands || {}
+	const mine = (hands[view.my_nation] || {}).cards || []
+	let c = mine.find(hit)
+	if (c) return c
+
+	for (const n of Object.keys(hands)) {
+		if (n === view.my_nation) continue
+		c = ((hands[n] || {}).cards || []).find(hit)
+		if (c) return c
+	}
+
+	const tc = view.table_cards || {}
+	for (const n of Object.keys(tc)) {
+		c = (tc[n] || []).find(hit)
+		if (c) return c
+	}
+
+	/* 兼容旧字段（若将来服务端补下发） */
+	const hc = (view.hand_cards || []).find(hit)
 	if (hc) return hc
-	/* 兜底：从 view.all_cards 里找（若有） */
-	const ac = (view.all_cards || []).find(c => String(c.id) === String(card_id))
-	return ac || { id: card_id, name: "?", type: "?" }
+	const ac = (view.all_cards || []).find(hit)
+	if (ac) return ac
+
+	return { id: card_id, name: "?", type: "?" }
 }
 
 /* 高亮可选地区，等玩家点地图 */
@@ -3019,15 +3053,25 @@ function show_event_choice(tg) {
 	for (const opt of opts) {
 		const b = document.createElement("button")
 		b.className = "action"
-		b.textContent = opt.label || ("选项 " + (opt.index + 1))
-		if (opt.disabled) {
+		/*
+		 * 【2026-10-23】字段兼容：服务端 options 存在三种写法
+		 *   {index,label,disabled}（event_card_needs，本通道正确写法）
+		 *   {id,label,enabled}    （红色管弦乐队等旧写法）
+		 *   字符串数组             （pending_uranus，客户端不读）
+		 * 这里统一读 index/id、disabled/enabled、label/name，
+		 * 避免落到"选项 undefined"或提交 choice:undefined。
+		 */
+		const idx = (opt.index != null) ? opt.index : opt.id
+		const isDisabled = !!opt.disabled || opt.enabled === false
+		b.textContent = opt.label || opt.name || ("选项 " + (Number(idx) + 1))
+		if (isDisabled) {
 			/* 不合法选项：暗置（可见但不可点） */
 			b.disabled = true
 			b.classList.add("disabled")
 			if (opt.reason) b.title = opt.reason
 		} else {
 			b.onclick = () => {
-				pending_event_choice = opt.index
+				pending_event_choice = idx
 				box.classList.add("hide")
 				/*
 				 * 【2026-10-22 修复·17825 铁托游击队"没弹英国/苏联选择"】
