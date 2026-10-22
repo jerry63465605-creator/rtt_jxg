@@ -877,6 +877,16 @@ function resolve_supply(game, nation) {
 		/* 部队位置变了 -> 海峡控制权与连通性都要重算 */
 		refresh(game)
 	}
+	/*
+	 * 【2026-10-23 D3 补洞】15216《总体战》：断补移除陆军同样触发。
+	 * 逐支调用（不是一次传数组）——total_war_attrition 内部按国家去重，
+	 * 一次传多支会让"同一国 3 支断补"只损耗 1 张；逐支才符合
+	 * 「陆军被移除后，其所有者损耗 1 张牌」的每支一次。
+	 */
+	for (const d of deletedInfo) {
+		if (d.type === 'army')
+			total_war_attrition(game, [{ nation: d.nation, type: d.type }])
+	}
 	/* 移除后挂起响应卡（事后类：15330/15334 等） */
 	for (const d of deletedInfo) {
 		const ctx = {
@@ -2812,6 +2822,13 @@ function econ_remove_piece(game, space, piece) {
 	delete game.location[piece]
 	for (const air of killedAirs) delete game.location[air]
 	refresh(game)
+
+	/*
+	 * 【2026-10-23 D3 补洞】15216《总体战》：
+	 * 卡面「陆军被移除后，其所有者损耗 1 张牌」没有"战斗中"限定，
+	 * 因此经济战移除陆军同样要结算（此前只有 do_battle_inner 两条路径调用了它）。
+	 */
+	total_war_attrition(game, [{ nation: vNation, type: vType }])
 
 	/* 事后类响应卡：算子被移除后，持有方可选择还原/保护 */
 	const ctx = {
@@ -7911,6 +7928,14 @@ function eliminate_piece(game, nation, space, target_piece) {
 	note_removed(game, vNation, 1)
 	for (const air of killedAirs) { delete game.location[air]; note_removed(game, vNation, 1) }
 	refresh(game)
+
+	/*
+	 * 【2026-10-23 D3 补洞】15216《总体战》：
+	 * 此前只有 do_battle_inner 的两条路径调用了 total_war_attrition，
+	 * 卡牌效果"消灭该陆军"不触发 —— 与卡面「陆军被移除后…」不符，此处补上。
+	 * （killedAirs 是空军，total_war_attrition 内部按 type==='army' 自行跳过。）
+	 */
+	total_war_attrition(game, [{ nation: vNation, type: vType }])
 
 	/* 事后类响应卡：本算子被移除后，持有方可选择还原/保护 */
 	const ctx = {
@@ -29283,6 +29308,9 @@ if (typeof module !== 'undefined') {
 		compute_supply,
 		piece_in_supply,
 		resolve_supply,
+		/* 【2026-10-23 D3】移除部队的两条路径与《总体战》结算（供回归测试） */
+		econ_remove_piece,
+		total_war_attrition,
 		/* 建设与战斗 */
 		can_build_at,
 		unit_slot_free,
