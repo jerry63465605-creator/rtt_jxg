@@ -191,6 +191,47 @@ compute_supply(game, conn_snap)   // 纯函数，不改 state
 来源：`out/spaces_calibrated.json` 的 `supply:true`，编译进 `data.js`。
 运行时可通过 `supply_override` 增删或限定国家/阵营（`docs/supply-points.md`）。
 
+### 7.1 动态层 API 与语义（2026-10-23 核对）
+
+```js
+add_supply_point(game, space, factionOrNation)     // factionOrNation = null | 'axis' | 'allies' | 国家名
+remove_supply_point(game, space, factionOrNation)
+reset_supply_point(game, space)                    // 删除整格 override，回落地图标定
+```
+
+| 调用 | `supply_override[space]` | 语义 |
+|---|---|---|
+| `add(sp, null)` | `{axis:true, allies:true}` | 两阵营都成为补给点 |
+| `add(sp, 'allies')` | `{allies:true}` | 仅同盟 |
+| `add(sp, '苏联')` | `{nations:{苏联:true}}` | **仅苏联**（同阵营他国也不算，且不回落地图默认） |
+| `remove(sp, null)` | `{axis:false, allies:false}` | 对所有人失效（焦土 / 迁都） |
+| `remove(sp, '苏联')` | `{nations:{苏联:false}}` | **只让苏联失效**，别国回落地图标定 |
+
+**优先级**：国家维度 > 阵营维度 > 地图标定。
+
+**大小写**：`'Axis'` / `'Allies'` 会被归一为小写阵营键（2026-10-09 修复的历史 bug：大写值会误落进国家维度，导致补给点对全阵营失效）。
+
+### 7.2 2026-10-23 修复
+
+`is_supply_point` 原实现里，只要"只设了国家维度"就 `return false`，于是
+`remove_supply_point(sp, '苏联')` 会把**同阵营其他国家**也一并判为"不是补给点"
+（静态★格子上，美国会被误判断补）。
+
+现改为按 `nations` 里的值区分：
+
+- 存在 `true` 条目 → 「仅对该国」→ 别国 `false`（且不回落）
+- 全是 `false` 条目 → 「只对该国失效」→ 别国回落 `base`
+
+宽松查询（省略 faction，供 UI 用）同步修正。
+
+### 7.3 已知设计：补给点变更**永久不撤销**
+
+`revert_status_ongoing` 里明确标注「15345/15347 supply_point_and_markers：A4① 永久，不撤销」，
+17840 焦土 / 17845 迁都同样只写不撤。
+
+即：**即使发动的状态卡后来离场，补给点的增删仍然保留**。
+若某张卡的卡面要求"卡在才生效"，需另建 revert 分支（目前没有这种卡）。
+
 ---
 
 ## 8. 代码实现状态（2026-10-23 已完成）

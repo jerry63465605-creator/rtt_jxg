@@ -486,9 +486,22 @@ function is_supply_point(game, space, faction, nation) {
 		return !!ov.nations[nation]
 
 	if (faction != null) {
-		/* ② 只设了国家维度（没设任何阵营维度）时，
-		 *    阵营查询【不成立】且【不回落】地图默认 —— 否则"仅对意大利"会被同阵营他国拿到。 */
-		if (hasNations && ov.axis === undefined && ov.allies === undefined) return false
+		/*
+		 * ② 只设了国家维度（没设任何阵营维度）时，按 nations 里的值区分两种语义：
+		 *
+		 *   · 有【true】条目（add_supply_point(sp, '意大利')）-> "仅对该国"：
+		 *     别国一律 false，且【不回落】地图默认（否则同阵营他国白拿）。
+		 *   · 全是【false】条目（remove_supply_point(sp, '苏联')）-> "只对该国失效"：
+		 *     别国必须【回落】到地图标定。
+		 *
+		 * 【2026-10-23】原实现一律 return false，导致"按国家对一人移除"会把
+		 * 同阵营其他国家也一并失效（静态★ 的格子上，美国会被误判为无补给）。
+		 */
+		if (hasNations && ov.axis === undefined && ov.allies === undefined) {
+			const anyTrue = Object.keys(ov.nations).some(k => ov.nations[k] === true)
+			if (anyTrue) return false
+			return base
+		}
 		const v = ov[faction]
 		return (v === undefined) ? base : !!v
 	}
@@ -498,8 +511,8 @@ function is_supply_point(game, space, faction, nation) {
 	if (hasNations && Object.keys(ov.nations).some(k => ov.nations[k] === true)) return true
 	/* 阵营被显式关掉且无国家维度 -> 确定不是 */
 	if (ov.axis === false && ov.allies === false && !hasNations) return false
-	/* 有显式"否"的国家设置但没匹配到任何"是" -> 不是 */
-	if (hasNations) return false
+	/* 只有"某国失效"的条目 -> 对别国仍是地图标定值（不能一律判不是） */
+	if (hasNations) return base
 	return base
 }
 
