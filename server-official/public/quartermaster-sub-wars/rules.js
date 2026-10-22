@@ -2016,7 +2016,8 @@ function de_army_spaces(game, nation) {
 	return out
 }
 function de_is_controlled(game, space, nation) {
-	return pieces_on(game, space).some(p => game.piece_nation[p] === nation)
+	/* 【2026-10-23 D7】手写 some -> has_pieces（归属条件显式化） */
+	return has_pieces(game, { space: space, nation: nation })
 }
 function de_soviet_armies_near_german(game) {
 	const gArmy = {}
@@ -4721,7 +4722,7 @@ const STATUS_EFFECTS = {
 				if (id == null) return 0
 				const nbs = (data.spaces[id].connections || [])
 				const all = nbs.length > 0 && nbs.every(s =>
-					pieces_on(game, s).some(p => game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy'))
+					has_pieces(game, { space: s, nation: '日本', types: ['navy'] }))
 				return all ? 1 : 0
 			},
 			desc: '计分阶段：<硫磺岛>相邻地区都有日本海军+1' },
@@ -5107,7 +5108,7 @@ const STATUS_EFFECTS = {
 				if (!status_active(game, cid, n)) continue
 				const rc = cfg.react
 				if (rc.space && space_id(rc.space) !== space) continue
-				if (rc.has_army && !pieces_on(game, space).some(p => game.piece_nation[p] === rc.has_army && game.piece_type[p] === 'army')) continue
+				if (rc.has_army && !has_pieces(game, { space: space, nation: rc.has_army, types: ['army'] })) continue
 				if (rc.type && rc.type !== kind) continue
 				/* 【2026-10-17 修复】攻击方被德国状态卡强制损耗属【被动损耗】，
 				 * 必须用 attrition_passive：牌库不足时差额每张扣 1 分
@@ -6644,7 +6645,7 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 			if (!inits.length)
 				return { ok: false, reason: '无相邻的' + atk + '发起单位（须在战斗地区相邻且处于补给状态）' }
 			/* 目标格若有同阵营单位则无法攻击（do_battle 会拒"有我方单位"） */
-			if ((pieces_on(game, e.space) || []).some(p => faction_of_nation(game.piece_nation[p]) === atkFaction))
+			if (has_pieces(game, { space: e.space, faction: atkFaction }))
 				return { ok: false, reason: '战斗地区已有友方单位，无法攻击' }
 			return { ok: true, space: e.space }
 		}
@@ -9378,7 +9379,7 @@ const EVENT_EFFECTS = {
 			let n = 0
 			for (let sp = 1; sp < data.spaces.length; sp++) {
 				if (!data.spaces[sp]) continue
-				const ctrl = pieces_on(game, sp).some(p => game.piece_nation[p] === '德国')
+				const ctrl = has_pieces(game, { space: sp, nation: '德国' })
 				if (ctrl && sp !== hb) {
 					add_axis_score(game, 1)
 					remove_marker(game, sp, 1)
@@ -9699,8 +9700,7 @@ const EVENT_EFFECTS = {
 					const tgt = space_id('非洲北部')
 					const adj = (data.spaces[tgt] && data.spaces[tgt].connections) || []
 					for (const sp of adj) {
-						const pieces = pieces_on(game, sp)
-						if (pieces.some(p => game.piece_nation[p] === '英国' && game.piece_type[p] === 'army'))
+						if (has_pieces(game, { space: sp, nation: '英国', types: ['army'] }))
 							return { ok: false, reason: '相邻地区有英国陆军' }
 					}
 					return { ok: true }
@@ -9731,8 +9731,7 @@ const EVENT_EFFECTS = {
 					const tgt = space_id('中东')
 					const adj = (data.spaces[tgt] && data.spaces[tgt].connections) || []
 					for (const sp of adj) {
-						const pieces = pieces_on(game, sp)
-						if (pieces.some(p => game.piece_nation[p] === '英国' && game.piece_type[p] === 'army'))
+						if (has_pieces(game, { space: sp, nation: '英国', types: ['army'] }))
 							return { ok: false, reason: '相邻地区有英国陆军' }
 					}
 					return { ok: true }
@@ -9750,7 +9749,7 @@ const EVENT_EFFECTS = {
 			let n = 0
 			for (let sp = 1; sp < data.spaces.length; sp++) {
 				if (!data.spaces[sp]) continue
-				const ctrl = pieces_on(game, sp).some(p => game.piece_nation[p] === '意大利')
+				const ctrl = has_pieces(game, { space: sp, nation: '意大利' })
 				if (ctrl && sp !== hb) {
 					add_axis_score(game, 1)
 					remove_marker(game, sp, 1)
@@ -16328,7 +16327,7 @@ function build_candidate_spaces(game, nation, type, opt) {
 		out = pool.filter(i => nearAll.indexOf(i) >= 0)
 	}
 	if (opt.slotFree !== false) {
-		out = out.filter(i => !pieces_on(game, i).some(p => game.piece_nation[p] === nation && game.piece_type[p] === type))
+		out = out.filter(i => !has_pieces(game, { space: i, nation: nation, types: [type] }))
 	}
 	return out
 }
@@ -16450,9 +16449,7 @@ function step_space_candidates(game, actor, st, arg, prevSpaces, budget) {
 			const want = (st.kind === 'sea') ? 'sea' : 'land'
 			if (sp.terrain !== want) continue
 			/* 目标必须是纯敌方或空地 */
-			const occ = pieces_on(game, i)
-			const hasMine = occ.some(p => faction_of_nation(game.piece_nation[p]) === myFaction)
-			if (hasMine) continue
+			if (has_pieces(game, { space: i, faction: myFaction })) continue
 			/* 需要一支相邻的、处于补给状态的本国陆/海军 */
 			let canInit = battle_initiators(game, effActor, i).length > 0
 			/*
@@ -20238,8 +20235,7 @@ function axis_supply_points_held(game) {
 		const isSupply = sp.supply || is_supply_point(game, sp.id)
 		const hasNationMarker = markers_on(game, sp.id).some(m => m.owner != null)
 		if (!isSupply && !hasNationMarker) continue
-		const occ = pieces_on(game, sp.id)
-		if (occ.some(p => faction_of_nation(game.piece_nation[p]) === AXIS))
+		if (has_pieces(game, { space: sp.id, faction: AXIS }))
 			held.push({ id: sp.id, name: sp.name, supply: isSupply, marker: hasNationMarker })
 	}
 
@@ -27913,7 +27909,7 @@ function do_action(state, current, action, arg) {
 						const region = [hb].concat(get_connections(game, hb, '美国')).map(Number)
 						for (const s of region) {
 							if (!data.spaces[s]) continue
-							usAir += pieces_on(game, s).filter(p => game.piece_nation[p] === '美国' && game.piece_type[p] === 'air').length
+							usAir += count_pieces(game, { space: s, nation: '美国', types: ['air'] })
 						}
 					}
 					if (usAir > 0) {
