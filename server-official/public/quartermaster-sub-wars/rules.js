@@ -12208,7 +12208,22 @@ const ECHO_EFFECTS = {
 		name: '里海舰队', actor: '苏联',
 		steps: [{
 			op: 'recruit', type: 'army',
-			spaces: space_ids_of(['中亚', '中东']),
+			/*
+			 * 【2026-10-23 修复】候选改为【动态算 <里海> 的相邻陆地】，不再写死。
+			 *
+			 * 原配置写死 ['中亚','中东']，但里海几何相邻的陆地实际有 3 个：
+			 * 中亚(10) / 中东(16) / **乌克兰(45)** —— 漏了乌克兰，
+			 * 导致卡面"在<里海>相邻地区征召 1 支陆军"在乌克兰不生效。
+			 *
+			 * 走 get_connections（阵营视角，与点击判定同源）+ 地形过滤，
+			 * 后续再由 event_cands_filter 按 can_recruit_at 过滤空位。
+			 */
+			spacesFn: (game, actor) => {
+				const cas = space_id('里海')
+				if (cas == null) return []
+				return get_connections(game, cas, faction_of_nation(actor || '苏联'))
+					.filter(id => (data.spaces[id] || {}).terrain === 'land')
+			},
 		}],
 	},
 
