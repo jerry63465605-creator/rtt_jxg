@@ -223,6 +223,63 @@ if (is_protected(game, victim)) { … } else {
 - Q3.2 空军连带规则（地区内本国部队被移除后，空军必须调度/移除）现在**是否已实现**？若没有，这就是要补的副作用，D3 会顺手带上（需单独加测试）
 - Q3.3 `econ_remove_piece` 是否等价于 `eliminate_piece`（经济战移除是否触发 `piece_removed` 响应）？
 
+### D3 取证（2026-10-23）：副作用矩阵与已证实的缺陷
+
+**隐含副作用集**（没有任何一处文档/函数完整定义过，全靠各实现"照抄自己需要的几条"）：
+
+| 副作用 | 作用 |
+|---|---|
+| `note_removed` | 17512《战俘》本回合被移除计数 |
+| `total_war_attrition` | 15216《总体战》陆军被移除→其所有者损耗 1 |
+| `axis_pact_register` | 17749 轴心协定击杀信用 |
+| `is_protected` | 15334 驱逐舰等"本回合不可被移除" |
+| `request_responses('piece_removed')` | 事后还原类响应卡 |
+| `offer_armed_effects('piece_removed')` | 15311 马奇诺等增强卡 |
+| `refresh` | 连通缓存 |
+
+**16 处实现对照**：
+
+| 行 | 函数 | 覆盖的副作用 | 判定 |
+|---|---|---|---|
+| 826 | `compute_supply` | 无 | ✅ 虚拟陆军注入/清理，故意 |
+| 873 | `resolve_supply` | is_protected, request_responses, refresh | ⚠ 缺 total_war |
+| 2812/2813 | `econ_remove_piece` | request_responses, refresh | ⚠ 缺 total_war / note_removed / axis_pact |
+| 7908/7912 | `eliminate_piece` | note_removed, axis_pact, request_responses, refresh, armed | ⚠ 缺 total_war |
+| 11668 | 17708 意空军（对象方法） | 仅 refresh | ⚠ 缺 note_removed（口径待定） |
+| 17951/17952/17961 | `do_battle_inner` | 全部 7 项 | ✅ 但为**手工实现**，与 eliminate 重复 |
+| 18032/18075/18127 | `do_battle_inner` | 全部 7 项 | ✅ 同上 |
+| 18266 | `seize_air` | axis_pact, refresh | ⚠ 缺 note_removed（口径待定；空军不触发总体战正确） |
+| 19564 | `remove_piece`（玩家主动收回） | request_responses, refresh | ✅ 主动收回不计数，合理 |
+| 24455 | `do_action` 强制移除路径 | is_protected, request_responses, refresh, →remove_piece | ✅ |
+
+**已证实缺陷 · 15216《总体战》漏 3 条路径**
+
+卡面：「出牌阶段开始时：本回合内，**陆军被移除后**，其所有者损耗 1 张牌。」（无"战斗中"限定）
+
+`total_war_attrition` 全库只有 **2 个调用点**，都在 `do_battle_inner`（17965、18078）。故：
+
+| 路径 | 是否触发 |
+|---|---|
+| 战斗中被消灭（陆战/海战代受） | ✅ |
+| 卡牌效果"消灭该陆军"（`eliminate_piece`） | ❌ **实测不触发** |
+| 断补移除（`resolve_supply`） | ❌ |
+| 经济战移除（`econ_remove_piece`） | ❌ |
+
+实验（`eliminate_piece` + 手工注入 `army_removed_attrition` modifier，复刻 `echo_mod_active` 判定为 true）：
+英国牌堆损耗 0 张（有/无 modifier 完全一致）→ 确认漏触发。
+
+**待裁定的规则口径 · 17512《战俘》**
+
+卡面：「计分阶段开始时：本回合内每有 1 支**敌方部队被移除**，获得 1 分。」
+`note_removed` 目前只覆盖：卡牌消灭、战斗（代受空军/抵消空军/目标）。
+**未覆盖**：断补移除、经济战移除、夺取制空权消灭敌空军。
+→ 需玩家裁定"被移除"是否包含这三类（字面上包含；若只算战斗击杀则现状正确）。
+
+**待定问题（补充）**
+- Q3.4 15216《总体战》是否应覆盖 卡牌消灭 / 断补 / 经济战 三条路径？（我判断应覆盖：卡面无"战斗中"限定）
+- Q3.5 17512《战俘》的"被移除"是否包含 断补 / 经济战 / 制空权？
+- Q3.6 是否接受"两阶段"：**先补副作用（小改、可测）**，暂不做 6 处 `do_battle_inner` 的结构合并（合并会改变响应触发时序，风险高）？
+
 ---
 
 ### D4 · 阶段 key 常量 —— 231 处
@@ -358,8 +415,8 @@ put_back_to_hand(game, nation, card, index)   // 索引失效时 append
 | 项 | 结论 | 讨论日期 | 备注 |
 |---|---|---|---|
 | 审计工具落地 | 待定 | | |
-| D1 日志前缀 | 待定 | | |
-| D2 refresh 兜底 | 待定 | | |
+| D1 日志前缀 | **只修 3 处缺陷，不做封装** | 2026-10-23 | 已实施 `4b8e8a0`：补给日志/行动国交替/收回部队开关的阵营 key 泄漏与格式问题 |
+| D2 refresh 兜底 | **跳过** | 2026-10-23 | 取证结论：现状 0 处漏调（14 个写 location 的函数，12 个有 refresh、2 个是 compute_supply 虚拟陆军故意不调；4 seed×400 步动态检测 0 次不一致；阳性对照有效）。兜底仅"防未来"，收益不足 |
 | D3 移除部队 | 待定 | | |
 | D4 阶段 key | 待定 | | |
 | D5 手牌原语 | 待定 | | |
