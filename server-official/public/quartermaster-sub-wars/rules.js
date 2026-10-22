@@ -13691,6 +13691,15 @@ function run_sea_air_deploy(game, ctx, nat) {
 		const from = game.location[air]
 		game.location[air] = space
 		refresh(game)
+		/*
+		 * 【2026-10-23 修复】调度同样要上报 after_deploy_air。
+		 *
+		 * 卡面写的是"在海域【部署或调度】飞机后"——15406 南云忠一 / 17511 美国陆军游骑兵
+		 * 等 after_deploy_air 卡在"调度"路径原先永远不触发，因为只有"部署"分支
+		 * 经 build_piece（内部有 offer_armed_effects）才会上报，这里是直接改 location。
+		 * 与 26834（另一处空军调度入口）保持一致。
+		 */
+		offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nat })
 		return { ok: true, desc: '调度空军 ' + data.name_of(from) + ' → ' + data.name_of(space) }
 	}
 
