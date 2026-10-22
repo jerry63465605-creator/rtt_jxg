@@ -135,6 +135,7 @@ function pieces_on(game, space) {
  * opt.radius    n = 含半径 n（几何邻接 BFS；0 等价于仅本格）
  * opt.terrain   'sea' | 'land' 地形过滤
  * opt.side      'axis' | 'allies'：用阵营视角邻接（含海峡/受限连接），仅单跳
+ * opt.snap      compute_connections() 的结果（可选）：与 side 配合，避免重复计算
  * opt.excludeSelf true = 把起点本身排除（卡面写"相邻地区"而非"X 或相邻"时用）
  */
 function region_spaces(game, opt) {
@@ -168,7 +169,7 @@ function region_spaces(game, opt) {
 	}
 	const seen = new Set([start])
 	if (opt.side) {
-		for (const nb of (get_connections(game, start, opt.side) || [])) seen.add(Number(nb))
+		for (const nb of (get_connections(game, start, opt.side, opt.snap) || [])) seen.add(Number(nb))
 	} else if (opt.radius) {
 		let frontier = [start]
 		for (let d = 0; d < opt.radius; d++) {
@@ -1852,17 +1853,12 @@ function count_uncontrolled_seas_near(game, spaceName, faction) {
 	   - 北海等"仅盟友侧"受限连接属于盟友专属通道，轴心卡不应计入。
 	   故连通性取【与传入 faction 相反】的一侧（17713 传 ALLIES → 用 AXIS 侧）。 */
 	const side = (faction === ALLIES) ? AXIS : ALLIES
-	const snap = compute_connections(game)
-	const seas = [id]
-	for (const nb of get_connections(game, id, side, snap)) {
-		const sp = data.spaces[nb]
-		if (sp && sp.terrain === 'sea' && seas.indexOf(nb) < 0) seas.push(nb)
-	}
+	/* 区域展开走统一原语（含本格）；连通性用阵营视角 + 实时快照，与旧实现逐字等价 */
+	const seas = region_spaces(game, {
+		space: id, side, terrain: 'sea', snap: compute_connections(game),
+	})
 	let n = 0
-	for (const sp of seas) {
-		const ctrl = pieces_on(game, sp).some(p => faction_of_nation(game.piece_nation[p]) === faction)
-		if (!ctrl) n++
-	}
+	for (const sp of seas) if (!has_pieces(game, { space: sp, faction: faction })) n++
 	return n
 }
 
@@ -28980,6 +28976,8 @@ if (typeof module !== 'undefined') {
 		list_pieces,
 		count_pieces,
 		has_pieces,
+		/* 组合语义（保留独立：阵营视角 + 海域 + 未被控制计数），内部已用上面四个原语实现 */
+		count_uncontrolled_seas_near,
 		/* 建设 / 战斗 / 空军 */
 		new_piece_id,
 		can_build_at,

@@ -220,5 +220,38 @@ console.log('\n=== O. supplied（仅"处于补给状态"的棋子，17521 用）
 		'insup=' + insup)
 }
 
+console.log('\n=== P. count_uncontrolled_seas_near（P3 改写后与旧实现逐字对照） ===')
+{
+	/* 旧实现的原样复刻（只用 data + compute_connections + get_connections + pieces_on） */
+	const old_impl = (g, spaceName, faction) => {
+		const sid = I.data.id_of(spaceName)
+		if (sid == null) return 0
+		const side = (faction === 'allies') ? 'axis' : 'allies'
+		const snap = I.compute_connections(g)
+		const seas = [sid]
+		for (const nb of I.get_connections(g, sid, side, snap)) {
+			const sp = I.data.spaces[nb]
+			if (sp && sp.terrain === 'sea' && seas.indexOf(nb) < 0) seas.push(nb)
+		}
+		let n = 0
+		for (const sp of seas) {
+			const ctrl = I.pieces_on(g, sp).some(p => I.faction_of_nation(g.piece_nation[p]) === faction)
+			if (!ctrl) n++
+		}
+		return n
+	}
+	const cases = []
+	{ const g = base(); cases.push(['空盘', g]) }
+	{ const g = base(); put(g, 'p1', '德国', 'navy', id('地中海')); cases.push(['轴心占地中海', g]) }
+	{ const g = base(); put(g, 'p1', '英国', 'navy', id('地中海')); cases.push(['同盟占地中海', g]) }
+	{ const g = base(); put(g, 'p1', '德国', 'army', id('中东')); cases.push(['轴心占中东(海峡)', g]) }
+	{ const g = base(); put(g, 'p1', '英国', 'navy', id('非洲北部')); cases.push(['同盟在非洲北部', g]) }
+	for (const [name, g] of cases) {
+		const a = I.count_uncontrolled_seas_near(g, '地中海', 'allies')
+		const b = old_impl(g, '地中海', 'allies')
+		ok('对照一致：' + name, a === b, 'new=' + a + ' old=' + b)
+	}
+}
+
 console.log('\n' + (fail === 0 ? 'ALL PASS' : fail + ' FAIL'))
 process.exitCode = fail ? 1 : 0
