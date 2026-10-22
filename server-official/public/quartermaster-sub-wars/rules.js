@@ -21246,10 +21246,26 @@ function phase_discard(game, nation) {
 	game.discard_phase_count = game.discard_phase_count || {}
 	game.discard_phase_count[nation] = 0
 
-	const dropped = enforce_hand_limit(game, nation)
-	game.phase_note = (dropped.length
-		? nation + ' 自动弃置 ' + dropped.length + ' 张超限手牌；'
-		: '') + nation + ' 可主动弃置任意数量的手牌'
+	/*
+	 * 【2026-10-23 玩家口径】手牌超上限时【不再自动弃】。
+	 *
+	 * 旧实现 enforce_hand_limit = splice(HAND_LIMIT, over)，直接砍掉手牌数组尾部
+	 * （= 最后摸到的那几张），玩家无法决定弃哪些。
+	 * 现改为挂起 pending_hand_limit，由玩家用【现成的弃牌阶段选牌 UI】自选：
+	 *   点手牌框选 -> 侧栏【确认弃牌】 -> action 'discard_in_discard_phase' { cards }
+	 * 与开局布阵 do_opening_discard 同一套范式（挂起 + 必须恰好 N 张），零新增 UI。
+	 *
+	 * 正常流程下手牌不会超限（摸牌阶段只补到 7 张），只在卡牌效果加手牌时才触发。
+	 */
+	const over = (game.hands[nation] || []).length - HAND_LIMIT
+	if (over > 0) {
+		game.pending_hand_limit = { nation: nation, need: over }
+		game.phase_note = nation + ' 手牌 ' + game.hands[nation].length + ' 张超出上限 ' +
+			HAND_LIMIT + '，请自选弃置 ' + over + ' 张'
+		return
+	}
+	game.pending_hand_limit = null
+	game.phase_note = nation + ' 可主动弃置任意数量的手牌'
 }
 
 /*
@@ -21466,6 +21482,14 @@ function advance_phase(game) {
 			 */
 		}
 		game.turn_phase = PHASES[i + 1].key
+		/*
+		 * 【2026-10-23 兜底】离开弃牌阶段即清超限挂起。
+		 * 正常流程由 next_phase 的守卫阻止带挂起推进，这里只防 debug 强制跳阶段等情况
+		 * 残留一个永远清不掉的 pending_hand_limit。
+		 */
+		if (game.turn_phase !== PH.DISCARD && game.pending_hand_limit) {
+			game.pending_hand_limit = null
+		}
 		/*
 		 * 【2026-10-09 16701 意大利万岁】出牌阶段结束即失效。
 		 * 权利类状态必须【两处】清：进入出牌阶段时清一次（跨回合），
@@ -22768,6 +22792,14 @@ exports.view = function (state, current) {
 			current_nation: ORDER_OF_NATIONS[game.opening.index],
 		} : null,
 		phase_note: game.phase_note || '',
+		/*
+		 * 【2026-10-23】弃牌阶段手牌超上限的挂起（需玩家自选弃 N 张）。
+		 * 客户端据此把【确认弃牌】按钮的要求从"至少 1 张"改成"恰好 N 张"，
+		 * 与开局布阵（view.opening 要求恰好 3 张）同一套 UI，无新增控件。
+		 */
+		pending_hand_limit: game.pending_hand_limit
+			? { nation: game.pending_hand_limit.nation, need: game.pending_hand_limit.need }
+			: null,
 		/*
 		 * 出牌阶段「三选一」是否已用掉（无行动点概念）。
 		 * 客户端据此禁用/提示三项动作。
@@ -25013,6 +25045,27 @@ function do_action(state, current, action, arg) {
 			game.log.push('【收回部队】请先选择要收回的部队，或点「跳过」，再结束阶段')
 			return game
 		}
+		/*
+		 * 【2026-10-23】手牌超上限挂起时不能推进阶段 ——
+		 * 必须先自选弃够 N 张。否则玩家一路点「结束阶段」就等于跳过弃牌，
+		 * 又回到「引擎替玩家决定」的老问题。
+		 */
+		if (game.pending_hand_limit) {
+			const hln = game.pending_hand_limit.nation
+			/*
+			 * 防御：挂起期间手牌可能已减少（弃牌阶段允许"打牌模式"打出手牌），
+			 * 降到上限内则 need 过期，直接解除放行 —— 否则永远凑不齐 N 张、阶段卡死。
+			 */
+			if ((game.hands[hln] || []).length <= HAND_LIMIT) {
+				game.pending_hand_limit = null
+				game.phase_note = hln + ' 手牌已在上限 ' + HAND_LIMIT + ' 张内，无需强制弃牌'
+				game.log.push('【' + hln + '】手牌已降至上限内，超限弃牌要求自动解除')
+			} else {
+				game.log.push('【弃牌阶段】请先自选弃置 ' + game.pending_hand_limit.need +
+					' 张超限手牌，再结束阶段')
+				return game
+			}
+		}
 		const nation = game.current_nation || ORDER_OF_NATIONS[0]
 		const from = game.turn_phase || PHASES[0].key
 		/*
@@ -25099,6 +25152,17 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		/*
+		 * 【2026-10-23 防御】挂起期间手牌仍可能减少 —— 弃牌阶段允许"打牌模式"
+		 * 打出手牌，一打就可能降到上限内，此时 need 已过期。
+		 * 此处自动解除挂起，避免玩家永远凑不齐 N 张而卡死阶段。
+		 */
+		if (game.pending_hand_limit && game.pending_hand_limit.nation === nation &&
+			(game.hands[nation] || []).length <= HAND_LIMIT) {
+			game.pending_hand_limit = null
+			game.phase_note = nation + ' 手牌已在上限 ' + HAND_LIMIT + ' 张内，无需强制弃牌'
+			game.log.push('【' + nation + '】手牌已降至上限内，超限弃牌要求自动解除')
+		}
+		/*
 		 * 支持两种传参：
 		 *   { card: <id> }          弃 1 张
 		 *   { cards: [<id>, ...] }  一次确认弃多张（UI 的"确认弃牌"按钮）
@@ -25125,6 +25189,19 @@ function do_action(state, current, action, arg) {
 			seen[id] = true
 		}
 
+		/*
+		 * 【2026-10-23】手牌超上限挂起时，必须【恰好】弃够 need 张：
+		 * 少于 need 还没弃到上限；多于 need 属于"主动弃牌"，应拆成下一次提交。
+		 * 与开局布阵 do_opening_discard 的"必须恰好 3 张"同一口径。
+		 */
+		const hl = game.pending_hand_limit
+		const hlMine = !!(hl && hl.nation === nation)
+		if (hlMine && list.length !== hl.need) {
+			game.log.push('【' + nation + '】手牌超出上限 ' + hl.need +
+				' 张，必须【恰好】弃置 ' + hl.need + ' 张（当前选 ' + list.length + ' 张）')
+			return game
+		}
+
 		const names = []
 		for (const id of list) {
 			const c = inst_card(id)
@@ -25137,6 +25214,12 @@ function do_action(state, current, action, arg) {
 		game.log.push('【' + nation + '】弃牌阶段：主动弃置 ' + list.length +
 			' 张（' + names.join('、') + '），本阶段累计已弃 ' +
 			game.discard_phase_count[nation] + ' 张')
+		if (hlMine) {
+			/* 已弃到上限：清挂起，此后本阶段可继续主动弃牌（规则允许） */
+			game.pending_hand_limit = null
+			game.phase_note = nation + ' 已弃至上限 ' + HAND_LIMIT + ' 张，可继续主动弃牌或结束阶段'
+			game.log.push('【' + nation + '】手牌已达上限 ' + HAND_LIMIT + ' 张，超限弃牌完成')
+		}
 		return game
 	}
 
@@ -29793,7 +29876,12 @@ if (typeof module !== 'undefined') {
 		attrition_cards,
 		attrition_passive,
 		can_attrite,
+		/*
+		 * 【2026-10-23】enforce_hand_limit 已不再被弃牌阶段调用（改为玩家自选），
+		 * 保留导出仅为兼容旧测试；phase_discard 是新的挂起式入口。
+		 */
 		enforce_hand_limit,
+		phase_discard,
 		hand_view,
 		/* 回合状态机 */
 		home_base_of,

@@ -60,6 +60,15 @@ console.log('\n=== C. 行为回归：7 阶段推进 ===')
 	ok('初始阶段 = PH.RESOURCE', g.turn_phase === I.PH.RESOURCE, g.turn_phase)
 	/* 直接驱动阶段推进（跳过开局弃牌：把 opening 置空并进入正式流程） */
 	g.opening = null
+	/*
+	 * 【2026-10-23】开局抽 10 张，正常对局由初始布阵弃到 7 张。
+	 * 弃牌阶段超限现在会挂起等玩家自选弃牌（见 _smoke_hand_limit_pick.js），
+	 * 若不清到上限，本测试会卡在 discard 阶段重复一次、与"阶段顺序"无关地失败。
+	 * 故这里先把手牌降到上限 —— 本测试只验证 7 阶段推进。
+	 */
+	for (const n of Object.keys(g.hands || {})) {
+		g.hands[n] = (g.hands[n] || []).slice(0, I.HAND_LIMIT)
+	}
 	const seen = []
 	for (let i = 0; i < 7; i++) {
 		seen.push(g.turn_phase)

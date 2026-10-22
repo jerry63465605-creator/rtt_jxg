@@ -1,0 +1,132 @@
+# 弃牌阶段：手牌超上限改为玩家自选（2026-10-23）
+
+> 玩家口径：**"复用现用的弃牌逻辑和客户端 UI，不要新增"**。
+> 本文记录现状、改法、复用清单、边界防御与回修入口。
+
+---
+
+## 一、问题
+
+原 `phase_discard` 进入弃牌阶段时直接调 `enforce_hand_limit`：
+
+```js
+/* 旧实现（已不再被弃牌阶段调用） */
+function enforce_hand_limit(game, nation) {
+	const over = game.hands[nation].length - HAND_LIMIT
+	if (over <= 0) return []
+	const dropped = game.hands[nation].splice(HAND_LIMIT, over)   // 砍掉数组尾部
+	game.discard[nation].push(...dropped)
+	return dropped
+}
+```
+
+`splice(HAND_LIMIT, over)` 砍掉的是**手牌数组尾部**——即最后摸到的那几张，
+玩家无法决定弃哪几张。与 17837《KV-2 重型坦克》「替玩家挑前 4 张」是同一类问题。
+
+---
+
+## 二、现有相关规则（改前盘点，避免改错前提）
+
+| 项 | 现状 |
+|---|---|
+| 手牌上限 | `HAND_LIMIT = 7`（`rules.js:1038`） |
+| 摸牌阶段 | 把**手牌补到 7 张**（不是固定摸 2 张），故正常流程不会超限 |
+| 开局布阵 | 每国抽 10 张 → 依次弃 3 留 7；走 `do_opening_discard`，**已是玩家自选** |
+| 弃牌阶段 | 可主动弃**任意数量**手牌，不限张数（`discard_in_discard_phase`） |
+| 何时会超限 | 只有**卡牌效果加手牌**（如额外摸牌）才会让弃牌阶段开始时 > 7 张 |
+
+结论：**开局布阵早已实现"自选弃到 7"**，弃牌阶段的超限是唯一还"自动砍"的路径。
+
+---
+
+## 三、改法：照搬开局布阵范式，零新增 UI
+
+### 3.1 服务端 4 处
+
+| # | 位置 | 改动 |
+|---|---|---|
+| ① | `phase_discard`（`rules.js:21245`） | 超限不自动弃，设 `game.pending_hand_limit = { nation, need }`，`phase_note` 提示"请自选弃置 N 张" |
+| ② | `discard_in_discard_phase`（`rules.js:25148`） | 挂起时要求**恰好** `need` 张（多/少都拒），弃完清挂起 |
+| ③ | `next_phase`（`rules.js:25053`） | 挂起未清则拒绝推进阶段，提示"请先自选弃置 N 张" |
+| ④ | `advance_phase`（`rules.js:21488`） | 离开弃牌阶段兜底清挂起（防 debug 跳阶段残留） |
+| ⑤ | `view`（`rules.js:22800`） | 下发 `pending_hand_limit: { nation, need }` |
+
+`enforce_hand_limit` 函数本身**保留**（仍导出），但已无调用方，注释标明"不再被弃牌阶段使用"。
+
+### 3.2 客户端 2 处（全部复用现有控件）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| ① | `update_phase_buttons`（`play.js:486`） | 【确认弃牌】按钮加一个分支：挂起时要求**恰好 need 张**，文案"请选 N 张（x/N）" / "确认弃 N 张（达上限）" |
+| ② | `update_hand_panel` 的 `hand_limit_note`（`play.js:3623`） | 文案从"弃牌阶段将弃到 7"改为"点手牌框选，再点【确认弃 N 张】" |
+
+---
+
+## 四、复用清单（明确"没有新增什么"）
+
+| 复用对象 | 来源 | 说明 |
+|---|---|---|
+| 选牌交互 | `discard_pick` + 点手牌切换选中 | 弃牌阶段原有，未改 |
+| 提交按钮 | `#btn_confirm_discard`【确认弃牌】 | 原有控件，只加一个文案分支 |
+| 提交 action | `discard_in_discard_phase { cards }` | 原有 action，只加"恰好 N 张"校验 |
+| 按钮禁用范式 | 开局布阵 `inOpening` 的 `discard_pick.length !== 3` | 同一写法，只是 3 换成 `need` |
+| 服务端挂起范式 | `do_opening_discard`（挂起 + 恰好 N 张 + 清挂起） | 同一套 |
+
+**没有新增**：没有新 modal、没有新按钮、没有新 DOM 元素、没有新 action。
+
+---
+
+## 五、边界与防御
+
+| 场景 | 处理 |
+|---|---|
+| 挂起期间玩家用【打牌模式】打出手牌，手牌降到 ≤7 | `discard_in_discard_phase` 与 `next_phase` 都会先检查 `hands.length <= HAND_LIMIT` → **自动解除挂起**并写日志，避免"永远凑不齐 N 张、阶段卡死" |
+| 弃够后又想继续弃 | 挂起已清，回到原有逻辑（任意数量） |
+| debug 强制跳阶段 | `advance_phase` 离开 discard 时兜底清 |
+| 手牌恰好 7 张 | 不设挂起，与原行为一致 |
+
+---
+
+## 六、测试
+
+`tools/_smoke_hand_limit_pick.js`（28 项，ALL PASS）
+
+| 段 | 覆盖 |
+|---|---|
+| A | 9 张 → 挂起 `need=2`，**手牌仍 9 张未自动弃**，内容未变，`phase_note` 文案 |
+| B | 恰好 7 张 → 无挂起 |
+| C/D | 弃 1 张（need=3）/ 弃 4 张 → 均拒绝，挂起仍在，日志写"必须【恰好】弃置 3 张" |
+| E | 恰好 2 张 → 成功；**断言弃的是所选前两张、不是尾部两张** |
+| F/G | 挂起时 `next_phase` 被拒；弃够后可通过 |
+| H | 无挂起时仍可主动弃任意数量（原功能未破坏） |
+| I | `view.pending_hand_limit` 下发 / 未超限时为 `null` |
+| J/K | 手牌被动降到上限内 → 挂起自动解除（两条路径各一个） |
+
+顺带修正 `_smoke_phase_keys.js`：C 段原来直接用开局 10 张手牌跑 7 阶段，
+现在会合法地卡在 discard 等玩家弃牌 —— 改为先把手牌降到上限（正常对局由初始布阵完成），
+本测试只验证阶段顺序。
+
+**全量回归**：53 个 smoke，失败 19 个，**名单与改动前完全一致**（新增 0）。
+
+---
+
+## 七、回修入口
+
+| 症状 | 先看 |
+|---|---|
+| 弃牌阶段点了没反应 / 阶段推不动 | `next_phase` 守卫（`rules.js:25053`）—— 检查 `pending_hand_limit` 是否残留 |
+| 【确认弃牌】按钮灰着点不了 | 客户端 `hlMine` 分支（`play.js:486`）与服务端 `need` 是否一致 |
+| 提示"必须恰好弃置 N 张"但手牌不足 N | 手牌被动减少的场景，应触发自动解除（`rules.js:25159` / `25056`） |
+| 手牌被自动砍掉 | 检查是否还有别处调 `enforce_hand_limit`（当前应为 0 调用） |
+| 开局布阵弃牌异常 | 与本改动无关，看 `do_opening_discard`（`rules.js:21361`） |
+
+---
+
+## 八、同类"替玩家决定"仍存在的 2 处（本次未动）
+
+| # | 位置 | 现状 |
+|---|---|---|
+| 1 | `resolve_armed_offer` 弃牌代价 | `drop` 为空时 `pool.slice(0, discNeed)` 自动取前 N 张 |
+| 3 | 17553 抗日义勇军 | 未指定 `arg.card` 时静默跳过弃牌（漏收代价） |
+
+①可照 17837 的 `arg.drop` 校验写法改；③需要先确认"没牌可弃时该不该强制"。

@@ -482,11 +482,23 @@ function update_phase_buttons() {
 		const inOpening = !!view.opening && is_my_turn()
 		const show = inDiscard || inOpening
 		confirmBtn.classList.toggle("hide", !show)
+		/*
+		 * 【2026-10-23】弃牌阶段手牌超上限：服务端下发 pending_hand_limit.need，
+		 * 必须【恰好】弃够 need 张（否则服务端拒绝）。
+		 * 与开局布阵「必须恰好 3 张」同一套按钮文案，无新增控件。
+		 */
+		const _hl = view.pending_hand_limit
+		const hlMine = !!(_hl && _hl.nation === view.my_nation && _hl.need > 0)
 		if (inOpening) {
 			confirmBtn.disabled = discard_pick.length !== 3
 			confirmBtn.textContent = discard_pick.length === 3
 				? "确认弃 3 张"
 				: "请选 3 张（" + discard_pick.length + "/3）"
+		} else if (inDiscard && hlMine) {
+			confirmBtn.disabled = discard_pick.length !== _hl.need
+			confirmBtn.textContent = discard_pick.length === _hl.need
+				? "确认弃 " + _hl.need + " 张（达上限）"
+				: "请选 " + _hl.need + " 张（" + discard_pick.length + "/" + _hl.need + "）"
 		} else {
 			confirmBtn.disabled = !discard_pick.length
 			confirmBtn.textContent = discard_pick.length
@@ -3607,8 +3619,13 @@ function update_hand_panel() {
 				note.textContent = "（初始布阵：等待【" + view.opening.current_nation + "】弃 3 张，本方暂不可操作）"
 				note.className = ""
 			} else {
-				note.textContent = "（" + handLen + "/" + HAND_LIMIT +
-					" 超出 " + (handLen - HAND_LIMIT) + " 张，弃牌阶段将弃到 " + HAND_LIMIT + "）"
+				/* 【2026-10-23】弃牌阶段超限改为玩家自选：提示要选几张，而不是"将自动弃到 7" */
+				const _hl2 = view.pending_hand_limit
+				note.textContent = (_hl2 && _hl2.nation === view.my_nation && _hl2.need > 0)
+					? ("（" + handLen + "/" + HAND_LIMIT + " 超出 " + _hl2.need +
+						" 张：点手牌框选，再点【确认弃 " + _hl2.need + " 张】）")
+					: ("（" + handLen + "/" + HAND_LIMIT +
+						" 超出 " + (handLen - HAND_LIMIT) + " 张，弃牌阶段将弃到 " + HAND_LIMIT + "）")
 				note.className = "over"
 			}
 		} else {
