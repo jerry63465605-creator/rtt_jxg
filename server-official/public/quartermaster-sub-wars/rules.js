@@ -6295,10 +6295,10 @@ function su_attrition_score(game, nation, card_id) {
 
 /* 【2026-10-10】17545 曼哈顿计划：美国【弃牌阶段】弃置任意手牌后，美国阵营 +1 分（一回合一次）。
  * 由 discard_card 在牌进入弃牌堆时调用（nation 为被弃牌的持有国）。
- * 仅限弃牌阶段（game.turn_phase==='discard'），不计资源再分配/出牌阶段弃牌。 */
+ * 仅限弃牌阶段（game.turn_phase===PH.DISCARD），不计资源再分配/出牌阶段弃牌。 */
 function us_discard_score(game, nation, card_id) {
 	if (nation !== '美国') return
-	if (game.turn_phase !== 'discard') return
+	if (game.turn_phase !== PH.DISCARD) return
 	if (!table_has(game, '美国', 17545)) return
 	if ((game.status_used || {})['17545'] === freq_key(game)) return
 	const f = faction_of_nation('美国')
@@ -6408,7 +6408,7 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 	}
 	switch (tr.window) {
 		case 'play_start':
-			if (game.turn_phase !== 'play')
+			if (game.turn_phase !== PH.PLAY)
 				return { ok: false, reason: '只能在出牌阶段发动' }
 			if ((game.skip_play_done || {})[nation] === game.turn)
 				return { ok: false, reason: '本回合已跳过出牌阶段' }
@@ -6457,7 +6457,7 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 			return { ok: true }
 
 		case 'after_naval': {
-			if (game.turn_phase !== 'play')
+			if (game.turn_phase !== PH.PLAY)
 				return { ok: false, reason: '只能在出牌阶段发动' }
 			const lb = game.last_battle
 			if (!lb || lb.turn !== game.turn || lb.kind !== 'sea' ||
@@ -6567,10 +6567,10 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 			return { ok: true, space: e.space }
 		}
 
-		/* 17546 铆钉女工：弃牌阶段开始时（turn_phase==='discard'）可手动发动 */
+		/* 17546 铆钉女工：弃牌阶段开始时（turn_phase===PH.DISCARD）可手动发动 */
 		case 'discard_start':
 			{
-				if (game.turn_phase !== 'discard')
+				if (game.turn_phase !== PH.DISCARD)
 					return { ok: false, reason: '仅能在「弃牌阶段」发动' }
 				return { ok: true }
 			}
@@ -7298,6 +7298,29 @@ const PHASES = [
 	{ key: 'discard', zh: '弃牌阶段' },
 	{ key: 'draw', zh: '抓牌阶段' },
 ]
+
+/*
+ * 【2026-10-23 D4】阶段 key 常量。
+ *
+ * 为什么要它：阶段 key 是字符串，`=== 'palying'` 这种拼错不会报错，
+ * 只表现为"某阶段行为静默失效"（极难查）。全部改用常量后，拼错 = ReferenceError，
+ * 立刻暴露；改名也只需改这里。
+ *
+ * 用法约定：凡"阶段语义"（turn_phase 的比较/赋值/传参、phase_index、run_phase_entry）
+ * 一律用 PH.*，不再写字面量。测试 tools/_smoke_phase_keys.js 会扫描源码强制这条约定。
+ *
+ * ⚠ 注意区分：'supply' 也用于"断补 reason 字段"、'discard' 也用于"弃牌堆 key"、
+ * 'play' 也用于"委托 step 名"，那些【不是阶段】，保持字面量原样。
+ */
+const PH = {
+	RESOURCE: 'resource',
+	PLAY: 'play',
+	AIRFORCE: 'airforce',
+	SUPPLY: 'supply',
+	SCORING: 'scoring',
+	DISCARD: 'discard',
+	DRAW: 'draw',
+}
 
 /* 各国大本营所在的地区名 */
 const HOME_SPACE = {
@@ -8169,7 +8192,7 @@ function trigger_ready(game, card_id, nation) {
 	 * 即玩家可在"占用出牌名额的 1 张牌"之前，先打出这些增强卡。
 	 */
 	if (tr.kind === 'play_start') {
-		if (game.turn_phase !== 'play')
+		if (game.turn_phase !== PH.PLAY)
 			return {
 				ok: false,
 				reason: '《' + c.name + '》只能在出牌阶段开始时打出（当前是' +
@@ -19133,7 +19156,7 @@ function check_play_phase(game, nation, card) {
 	if (!nation) return { ok: false, reason: '当前没有行动国' }
 	if (is_timing_card(card))
 		return { ok: true, timing: true }   /* 时机牌不受阶段配额限制 */
-	if (game.turn_phase !== 'play')
+	if (game.turn_phase !== PH.PLAY)
 		return { ok: true, free: true }     /* 空军阶段等行为独立结算 */
 	if (game.play_done && game.play_done[nation])
 		return { ok: false, reason: nation + ' 本回合出牌阶段已行动（三选一）' }
@@ -19153,7 +19176,7 @@ function check_play_phase(game, nation, card) {
 }
 
 function mark_play_done(game, nation) {
-	if (game.turn_phase === 'play') {
+	if (game.turn_phase === PH.PLAY) {
 		game.play_done = game.play_done || {}
 		game.play_done[nation] = true
 		/*
@@ -19178,7 +19201,7 @@ function mark_play_done(game, nation) {
 function it_italy_viva_left(game, nation) {
 	if (nation !== '意大利') return 0
 	if (!game.it_viva) return 0
-	if (game.turn_phase !== 'play') return 0
+	if (game.turn_phase !== PH.PLAY) return 0
 	/* 额外机会只给 1 次：第 1 次行动后放行第 2 次，第 2 次后不再放行 */
 	return (game.it_viva_used || 0) >= 1 ? 0 : 1
 }
@@ -20741,7 +20764,7 @@ function phase_scoring(game, nation, opts) {
 		for (const cid of (game.table[n2] || [])) {
 			if (!status_active(game, cid, n2)) continue
 			const cfg = status_config_of(cid)
-			if (!cfg || !cfg.auto || cfg.auto.phase !== 'scoring') continue
+			if (!cfg || !cfg.auto || cfg.auto.phase !== PH.SCORING) continue
 			if (cfg.auto.trigger_nation) {
 				if (cfg.auto.trigger_nation !== nation) continue
 			} else {
@@ -21130,7 +21153,7 @@ function do_opening_discard(game, current, arg) {
  */
 function maybe_advance_after_skip_play(game) {
 	if (!game.pending_advance_phase) return game
-	if (game.turn_phase !== 'play') { game.pending_advance_phase = false; return game }
+	if (game.turn_phase !== PH.PLAY) { game.pending_advance_phase = false; return game }
 	if ((game.response_queue || []).length || 		game.pending_trigger ||
 		game.pending_battle || game.pending_econ || game.pending_uranus || game.pending_status_play || game.pending_autobahn || game.event_budget) {
 		return game   /* 还有未决事项（含战斗预算），继续等 */
@@ -21154,7 +21177,7 @@ function advance_phase(game) {
 	if (i >= 0 && i < PHASES.length - 1) {
 		/* 【2026-10-17】计分阶段结束：基于最新棋盘重算并落账
 		 * （加分延迟到进弃牌阶段才真实生效；重算确保计分阶段内打响应/增强改棋盘后分数正确） */
-		if (game.turn_phase === 'scoring') {
+		if (game.turn_phase === PH.SCORING) {
 			phase_scoring(game, nation, { silent: true })   // 落账前重算，刷新 pending_scoring[nation]
 			const ps = (game.pending_scoring && game.pending_scoring[nation]) || 0
 			if (ps) {
@@ -21176,7 +21199,7 @@ function advance_phase(game) {
 		 * 权利类状态必须【两处】清：进入出牌阶段时清一次（跨回合），
 		 * 阶段推进时再清一次（跨阶段）；只清一次会残留。
 		 */
-		if (game.turn_phase !== 'play') { game.it_viva = false; game.it_viva_used = 0 }
+		if (game.turn_phase !== PH.PLAY) { game.it_viva = false; game.it_viva_used = 0 }
 		run_phase_entry(game, game.turn_phase, nation)
 		return { nation_changed: false, phase: game.turn_phase, turn_changed: false, nation: nation }
 	}
@@ -21203,7 +21226,7 @@ function advance_phase(game) {
 	 * 放在轮转 active 之前：game_end 会把 active 置 null 结束对局，
 	 * 若先算 active 会被下面那行 `game.active = faction_role_of_nation(...)` 覆盖掉。
 	 */
-	if (nation === '美国' && game.turn_phase === 'draw')
+	if (nation === '美国' && game.turn_phase === PH.DRAW)
 		finalWin = check_win_on_us_draw_end(game)
 	/* 17732 借用状态卡：意大利回合结束后清除（修复"过意大利回合后窗口不消失"）。
 	 * 旧条件 italy_borrow.turn !== game.turn 错误：game.turn 是整轮 6 国序号、
@@ -21528,7 +21551,7 @@ function create_empty_game_state(seed, scenario) {
 		 * 回合内的阶段（7 阶段状态机，见 PHASES）
 		 * 注意：RTT 的 state.phase 是它自己的字段，这里用 turn_phase 区分
 		 */
-		turn_phase: 'resource',
+		turn_phase: PH.RESOURCE,
 		/* 行动顺序国家（回合内部轮转，非 RTT role） */
 		current_nation: ORDER_OF_NATIONS[0],
 		/* 本回合已轮过的国家数：0..6，到 6 表示本国回合结束 */
@@ -23155,7 +23178,7 @@ exports.view = function (state, current) {
 		/* 弃牌阶段：本阶段已主动弃掉几张（可继续弃） */
 		my_discard_count: (my_nation && game.discard_phase_count)
 			? (game.discard_phase_count[my_nation] || 0) : 0,
-		can_discard_freely: !!(my_nation && game.turn_phase === 'discard' &&
+		can_discard_freely: !!(my_nation && game.turn_phase === PH.DISCARD &&
 			(game.hands[my_nation] || []).length > 0),
 
 		/*
@@ -23164,7 +23187,7 @@ exports.view = function (state, current) {
 		 */
 		my_swap_count: (my_nation && game.resource_swaps)
 			? (game.resource_swaps[my_nation] || 0) : 0,
-		can_resource_swap: !!(my_nation && game.turn_phase === 'resource' &&
+		can_resource_swap: !!(my_nation && game.turn_phase === PH.RESOURCE &&
 			(game.hands[my_nation] || []).length >= 3 &&
 			!(game.resource_swaps && game.resource_swaps[my_nation]) &&
 			/* 17850 大清洗：苏联桌面有《大清洗》时禁用[资源再分配]
@@ -23175,11 +23198,11 @@ exports.view = function (state, current) {
 			? '【大清洗】：苏联无法执行资源再分配' : null,
 
 		/* 17548 胜利花园：美国资源再分配弃置手牌数改为 1 */
-		rs_min_drop: (my_nation && game.turn_phase === 'resource')
+		rs_min_drop: (my_nation && game.turn_phase === PH.RESOURCE)
 			? ((my_nation === '美国' && table_has(game, '美国', 17548)) ? 1 : 3) : 3,
 		/* 17551 战时国债：美国可在弃牌堆搜寻基本卡 */
 		rs_can_discard_take: !!(my_nation && my_nation === '美国' && table_has(game, '美国', 17551)
-			&& game.turn_phase === 'resource'
+			&& game.turn_phase === PH.RESOURCE
 			&& !(game.resource_swaps && game.resource_swaps[my_nation])),
 
 		/* ---- 收回本国部队（easy_rule 五.1）---- */
@@ -24368,7 +24391,7 @@ function do_action(state, current, action, arg) {
 			game.discard[pa.nation] = game.discard[pa.nation] || []
 			if (game.discard[pa.nation].indexOf(pa.card_id) < 0)
 				game.discard[pa.nation].push(pa.card_id)
-			if (game.turn_phase === 'play') mark_play_done(game, pa.nation)
+			if (game.turn_phase === PH.PLAY) mark_play_done(game, pa.nation)
 			game.log.push('【' + pa.nation + '】《' + (inst_card(pa.card_id) ? inst_card(pa.card_id).name : pa.card_id) + '》增强窗口错过，后续步骤作废')
 		}
 	}
@@ -24741,7 +24764,7 @@ function do_action(state, current, action, arg) {
 	 */
 	if (action === 'resource_swap') {
 		const nation = game.current_nation
-		if (game.turn_phase !== 'resource') {
+		if (game.turn_phase !== PH.RESOURCE) {
 			game.log.push('非资源再分配阶段，无法执行')
 			return game
 		}
@@ -24799,7 +24822,7 @@ function do_action(state, current, action, arg) {
 	 */
 	if (action === 'discard_in_discard_phase') {
 		const nation = game.current_nation
-		if (game.turn_phase !== 'discard') {
+		if (game.turn_phase !== PH.DISCARD) {
 			game.log.push('【' + nation + '】只有弃牌阶段才能主动弃牌')
 			return game
 		}
@@ -25266,7 +25289,7 @@ function do_action(state, current, action, arg) {
 				/* 用【原打出方】的 role 重放，保证回合归属校验通过 */
 				const r = exports.action(game, resume_role || current, resume.action, resume.arg)
 				game.__skip_play_intercept = null
-				if (game.pending_advance_phase && game.turn_phase !== 'play')
+				if (game.pending_advance_phase && game.turn_phase !== PH.PLAY)
 					game.pending_advance_phase = false
 				return r || game
 			}
@@ -26136,7 +26159,7 @@ function do_action(state, current, action, arg) {
 		const nation = game.current_nation
 		const { air, target, card } = arg || {}
 
-		if (game.turn_phase !== 'airforce') {
+		if (game.turn_phase !== PH.AIRFORCE) {
 			game.log.push('非空军阶段，无法调度空军')
 			return game
 		}
@@ -26362,7 +26385,7 @@ function do_action(state, current, action, arg) {
 				discard_card(game, owner, bc)
 				/*
 				 * 出牌名额由【这张建设卡】占掉（状态卡本身不额外占）。
-				 * mark_play_done 内部只在 turn_phase === 'play' 时才置位，
+				 * mark_play_done 内部只在 turn_phase === PH.PLAY 时才置位，
 				 * 所以在别人回合/非出牌阶段触发时不会误伤（本卡"不受阶段影响"）。
 				 */
 				mark_play_done(game, owner)
@@ -26539,7 +26562,7 @@ function do_action(state, current, action, arg) {
 		 * 此时不能推进阶段——等玩家答完（pending_trigger 清空）再推进，
 		 * 否则会跳过响应卡的询问窗口。推进放在下面统一处理。
 		 */
-		if (cost.skip_play && game.turn_phase === 'play') {
+		if (cost.skip_play && game.turn_phase === PH.PLAY) {
 			if (game.pending_trigger || (game.response_queue || []).length) {
 				/* 有响应卡待答复：先答，记一个标记，答完由 finish_response 推进 */
 				game.pending_advance_phase = true
@@ -27467,7 +27490,7 @@ function do_action(state, current, action, arg) {
 			/*
 			 * 空军阶段打出的是《空军力量》 —— 用掉空军阶段的二选一名额。
 			 */
-			if (game.turn_phase === 'airforce') {
+			if (game.turn_phase === PH.AIRFORCE) {
 				game.air_done = game.air_done || {}
 				game.air_done[nation] = true
 			}
@@ -27700,7 +27723,7 @@ function do_action(state, current, action, arg) {
 			 * 修法：复用同一个 extra 标志（已由 check_phase_for_card 校验 phase/turn/
 			 * count/filter），非出牌阶段但属额外打出时放行。零新增机制。
 			 */
-			if (game.turn_phase !== 'play' && !extra) {
+			if (game.turn_phase !== PH.PLAY && !extra) {
 				game.log.push('《' + c.name + '》只能在出牌阶段打出')
 				return game
 			}
@@ -28677,7 +28700,7 @@ exports.query = function (state, current, query, params) {
 			phase_note: game.phase_note || '',
 			play_done: !!(game.play_done || {})[game.current_nation],
 			air_done: !!(game.air_done || {})[game.current_nation],
-			can_discard_freely: game.turn_phase === 'discard',
+			can_discard_freely: game.turn_phase === PH.DISCARD,
 			discard_count: (game.discard_phase_count || {})[game.current_nation] || 0,
 			swap_count: (game.resource_swaps || {})[game.current_nation] || 0,
 			active_role: game.active,
@@ -29221,6 +29244,9 @@ exports.dont_snap = function (state) {
 
 if (typeof module !== 'undefined') {
 	module.exports._internal = {
+		/* 【2026-10-23 D4】阶段 key 常量（测试用来校验源码约定） */
+		PH,
+		PHASES,
 		/* 【2026-10-22】行动记录 / 时间回溯（测试用） */
 		HISTORY_MAX,
 		ROLLBACK_MAX,
