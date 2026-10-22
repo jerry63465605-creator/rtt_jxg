@@ -201,6 +201,12 @@ function update_map() {
 	if (pending_armed && pending_armed.need === 'space')
 		highlight_targets({ spaces: (pending_armed.candidates || []).map(id => ({ id: id })) })
 	/*
+	 * 【2026-10-22】"收回部队"询问（view.pending_ask）的候选高亮同样要每帧重贴：
+	 * 交互改成"点地图上的算子收回"之后，高亮丢了就等于没提示。
+	 */
+	if (view && view.pending_ask && (view.pending_ask.pieces || []).length)
+		highlight_pieces(view.pending_ask.pieces.map(p => p.id), 'ask_remove')
+	/*
 	 * 【2026-10-07】战斗预算(event_budget)的目标高亮同样要【每帧重贴】。
 	 *
 	 * 高亮是【全局共享】的 DOM class（.target），任何面板的清理都会抹掉它；
@@ -4937,28 +4943,35 @@ function render_national_skill_box(title, text, options) {
 	render_box_into("national_skill_box", title, text, options)
 }
 
-/* view.pending_ask：友方出牌回合开始，询问是否收回该国部队 */
+/*
+ * view.pending_ask：收回部队询问
+ *
+ * 【2026-10-22 玩家口径】不要列表按钮，改成 17532《战区移动》那种
+ * "地图上高亮 + 点算子直接移除"的交互：
+ *   · 候选部队由服务端下发（本方阵营全部部队），这里只负责高亮；
+ *   · 面板只留标题/提示 + 「跳过」，不列清单；
+ *   · 点击处理在 on_click_piece 的 pending_ask 分支（发 remove_piece）。
+ */
 function update_ask_box_from_view() {
 	const ask = view && view.pending_ask
 	if (!ask || !ask.pieces || !ask.pieces.length) {
-		if (ask_state && ask_state.kind === "remove")
+		if (ask_state && ask_state.kind === "remove") {
 			ask_state = null
+			clear_piece_highlight("ask_remove")
+			render_ask_box(null, null, [])
+		}
 		return
 	}
 	ask_state = { kind: "remove" }
-	/*
-	 * 【2026-10-22】询问范围已扩到【本方阵营任意部队】：
-	 * 标题按阵营显示，列表项带上国名（否则多国混在一起分不清谁是谁）。
-	 */
+	highlight_pieces(ask.pieces.map(p => p.id), "ask_remove")
 	const facLabel = (ask.faction === "allies") ? "同盟国" : (ask.faction === "axis" ? "轴心国" : ask.nation)
 	render_ask_box(
-		"【" + facLabel + "】是否收回部队？",
-		"可收回本方阵营的任意部队（点一次收回 1 支，可连续点）；也可点「跳过」结束询问",
-		ask.pieces.map(p => ({
-			label: (TYPE_LABEL[p.type] || p.type) + " @ " + p.loc_name +
-				(p.nation ? "（" + p.nation + "）" : ""),
-			onClick: () => send_action("remove_piece", { piece: p.id }),
-		})).concat([{ label: "跳过", cls: "primary", onClick: () => send_action("clear_ask", {}) }])
+		"【" + facLabel + "】收回部队（" + ask.pieces.length + " 支可收回）",
+		"点击地图上高亮的本方部队即可收回（可连续点，任意支数、任意兵种）；点「跳过」结束询问。",
+		[{ label: "跳过", cls: "primary", onClick: () => {
+			clear_piece_highlight("ask_remove")
+			send_action("clear_ask", {})
+		} }]
 	)
 }
 
@@ -8483,6 +8496,22 @@ function on_click_piece(evt) {
 			toast('《' + rc.name + '》对该部队生效')
 		} else {
 			toast('《' + rc.name + '》不能选这支部队')
+		}
+		return
+	}
+
+	/*
+	 * 【2026-10-22】"收回部队"询问：点地图上高亮的本方部队直接收回。
+	 * 交互对齐 17532《战区移动》：不弹列表，只高亮 + 点算子；候选由服务端下发。
+	 */
+	if (view && view.pending_ask) {
+		const pa = view.pending_ask
+		const isCand = (pa.pieces || []).some(p => String(p.id) === String(id))
+		if (isCand) {
+			send_action('remove_piece', { piece: id })
+			toast('已收回该部队（可继续点其它高亮部队，或点「跳过」）')
+		} else {
+			toast('只能收回高亮的【本方】部队；不想收回请点「跳过」')
 		}
 		return
 	}
