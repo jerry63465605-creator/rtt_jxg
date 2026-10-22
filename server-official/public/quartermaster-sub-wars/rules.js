@@ -24485,11 +24485,23 @@ function do_action(state, current, action, arg) {
 			.filter(p => game.location[p] != null && game.piece_nation[p] === nation && !before.in_supply[p])
 
 		const removed = resolve_supply(game, nation)
+		/*
+		 * 【2026-10-23 修复·阵营 key 泄漏】原写法 `side + ' 补给阶段…'` 里
+		 * side 是内部 key（'axis'/'allies'），玩家会在日志里看到
+		 * 「axis 补给阶段【日本】：全部部队均处于补给状态」。
+		 * 改用 side_label() 转中文，并把归属放进【】——这条日志通常是该动作的
+		 * 首行，直接影响"行动记录"的摘要。
+		 */
+		/*
+		 * 阵营按【国家】推（faction_of_nation(nation)），不要用提交方 side：
+		 * 委托/让权期间提交方可能与 nation 不同阵营（实测会出现「轴心国 英国 补给阶段」）。
+		 */
+		const supSide = side_label(faction_of_nation(nation))
 		if (removed.length) {
-			game.log.push(side + ' 补给阶段【' + nation + '】：移除断补部队 ' +
+			game.log.push('【' + supSide + '】' + nation + ' 补给阶段：移除断补部队 ' +
 				removed.map(p => p).join(', '))
 		} else {
-			game.log.push(side + ' 补给阶段【' + nation + '】：全部部队均处于补给状态')
+			game.log.push('【' + supSide + '】' + nation + ' 补给阶段：全部部队均处于补给状态')
 		}
 		game.last_supply = { nation: nation, removed: removed, at_risk: atRisk }
 		return game
@@ -24507,8 +24519,11 @@ function do_action(state, current, action, arg) {
 		reset_removed_this_turn(game)
 		/* 操作权同步到新行动国所属阵营 */
 		game.active = faction_role_of_nation(game.current_nation)
-		game.log.push(side + ' 行动国交替为：' + game.current_nation +
-			'（操作权交给 ' + game.active + '）')
+		/* 【2026-10-23 修复】side 是小写阵营 key、game.active 是大写 role 名，
+		 * 原来两者都直接进中文日志（「axis 行动国交替为：苏联（操作权交给 Allies）」）。
+		 * 统一经 side_label() 转成"轴心国/同盟国"。 */
+		game.log.push('【' + side_label(side) + '】行动国交替为：' + game.current_nation +
+			'（操作权交给 ' + side_label(faction_of_nation(game.current_nation)) + '）')
 		return game
 	}
 
@@ -24833,8 +24848,10 @@ function do_action(state, current, action, arg) {
 			 */
 			prepare_remove_ask(game, game.current_nation)
 		}
-		game.log.push((side === ALLIES ? '同盟国' : '轴心国') +
-			' 的"收回部队"已' + (v ? '开启' : '关闭') +
+		/* 【2026-10-23 修复】原文案是「轴心国 的"收回部队"已开启」——
+		 * 「的」前多一个空格、且没有【】包裹，混在日志里无法一眼看出是阵营级动作。
+		 * 改为「【轴心国】"收回部队"开关：已开启（可收回 3 支）」。 */
+		game.log.push('【' + side_label(side) + '】"收回部队"开关：已' + (v ? '开启' : '关闭') +
 			(v && game.pending_ask ? '（可收回 ' + (game.pending_ask.pieces || []).length + ' 支）' : ''))
 		return game
 	}
