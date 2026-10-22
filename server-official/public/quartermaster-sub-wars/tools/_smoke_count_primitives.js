@@ -205,5 +205,20 @@ console.log('\n=== N. side（阵营视角连通，含海峡） ===')
 	ok('side 结果非空（轴心视角有邻接）', sps.length > 1, JSON.stringify(sps.map(x => I.data.name_of(x))))
 }
 
+console.log('\n=== O. supplied（仅"处于补给状态"的棋子，17521 用） ===')
+{
+	const g = base()
+	put(g, 'o1', '美国', 'navy', id('美国'))        /* 大本营，必有补给 */
+	put(g, 'o2', '美国', 'navy', id('菲律宾'))      /* 远离本土，可能断补给 */
+	const sup = I.compute_supply(g)
+	const all = I.count_pieces(g, { types: ['navy'], nation: '美国' })
+	const insup = I.count_pieces(g, { types: ['navy'], nation: '美国', supplied: true })
+	ok('supplied 结果不超过全量', insup <= all, 'all=' + all + ' in=' + insup)
+	ok('大本营海军在补给中', !!sup.in_supply['o1'], 'in_supply[o1]=' + !!sup.in_supply['o1'])
+	ok('supplied 结果与 compute_supply 一致',
+		insup === ['o1', 'o2'].filter(p => sup.in_supply[p]).length,
+		'insup=' + insup)
+}
+
 console.log('\n' + (fail === 0 ? 'ALL PASS' : fail + ' FAIL'))
 process.exitCode = fail ? 1 : 0

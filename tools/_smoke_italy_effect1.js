@@ -66,7 +66,7 @@ console.log('=== 前置：配置与注册 ===')
 	ok('17707 注册 self/scoring', CT['17707'] && CT['17707'].kind === 'self' && CT['17707'].phase === 'scoring')
 	ok('17709 注册 self/scoring', CT['17709'] && CT['17709'].kind === 'self' && CT['17709'].phase === 'scoring')
 	ok('17710 注册 self/scoring', CT['17710'] && CT['17710'].kind === 'self' && CT['17710'].phase === 'scoring')
-	ok('原子 count_units_all 可用', typeof (I.count_units_all || (typeof count_units_all === 'function' ? count_units_all : null)) === 'function' || true)
+	ok('原子 count_pieces 可用（原 count_units_all 已并入）', typeof I.count_pieces === 'function')
 }
 
 console.log('\n=== 17707：计分阶段每有1支意海军 +1 分 ===')

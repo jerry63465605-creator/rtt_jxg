@@ -1233,38 +1233,12 @@ function can_attrite(game, nation, n) {
 /* 地中海（data.js spaces：id 46，terrain=sea） */
 const MEDITERRANEAN_SPACE = 46
 
-/* 统计某国在某地块（adj=true 含相邻）的指定类型棋子数（日本经济战复用） */
-function count_units(game, nation, spaceName, types, adj) {
-	const id = space_id(spaceName)
-	if (id == null) return 0
-	let n = 0
-	const chk = (sp) => { for (const p of pieces_on(game, sp))
-		if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++ }
-	chk(id)
-	if (adj) for (const nb of (data.spaces[id].connections || [])) chk(nb)
-	return n
-}
-
-/* 统计某国在指定地块半径 dist（含本格与距离为 1..dist 的相邻传播）内的指定类型棋子数。
-   例：dist=2 时，本格 + 相邻 + 相邻之相邻 都计入（日本 15418「中国西部2地区内」）。 */
-function count_units_radius(game, nation, spaceName, types, dist) {
-	const start = space_id(spaceName)
-	if (start == null) return 0
-	const seen = new Set([start])
-	let frontier = [start]
-	for (let d = 0; d < dist; d++) {
-		const nxt = []
-		for (const sp of frontier)
-			for (const nb of (data.spaces[sp].connections || []))
-				if (!seen.has(nb)) { seen.add(nb); nxt.push(nb) }
-		frontier = nxt
-	}
-	let n = 0
-	for (const sp of seen)
-		for (const p of pieces_on(game, sp))
-			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
-	return n
-}
+/* 【2026-10-22 已并入】
+ *   原 count_units(game, nation, space, types, adj)
+ *     ≡ count_pieces({ space, adjacent: adj, types, nation })
+ *   原 count_units_radius(game, nation, space, types, dist)
+ *     ≡ count_pieces({ space, radius: dist, types, nation })
+ * 口径不变：radius 含本格与 1..dist 跳；相邻/半径均走几何邻接（非阵营视角）。 */
 
 const ECON_CARDS = {
 
@@ -1286,7 +1260,11 @@ const ECON_CARDS = {
 			 * 卡面「每有1支【友方国家】陆军」= 轴心阵营（德国/意大利/日本）的陆军，
 			 * 敌方陆军不算（2026-10-22 修复：旧实现把英美苏陆军也数了进去）。
 			 */
-			const k = de_units_near(game, '印度洋', ['army'], { faction: AXIS })
+			/* 卡面「<印度洋>【相邻地区】每有 1 支友方国家陆军」—— 不含本格 */
+			const k = count_pieces(game, {
+				space: '印度洋', adjacent: true, excludeSelf: true,
+				types: ['army'], faction: AXIS,
+			})
 			if (!k) return { ok: true, desc: '印度洋相邻地区无友方国家陆军，无效果' }
 			const lost = attrition_passive(game, target, 2 * k)
 			add_axis_score(game, 2)
@@ -1298,7 +1276,9 @@ const ECON_CARDS = {
 		targets: ['英国'],
 		run(game, actor, target) {
 			/* 卡面「每有1支【德国部队】」：必须按国别过滤（2026-10-22 修复） */
-			const k = de_units_near(game, '北海', ['army', 'navy', 'air'], '德国')
+			const k = count_pieces(game, {
+				space: '北海', adjacent: true, types: ['army', 'navy', 'air'], nation: '德国',
+			})
 			if (!k) return { ok: true, desc: '北海及相邻地区无德国部队，无效果' }
 			const lost = attrition_passive(game, target, k)
 			add_axis_score(game, k)
@@ -1310,7 +1290,9 @@ const ECON_CARDS = {
 		targets: ['苏联'],
 		run(game, actor, target) {
 			/* 卡面「每有1支【德国部队】」：必须按国别过滤（2026-10-22 修复） */
-			const k = de_units_near(game, '北欧', ['army', 'navy', 'air'], '德国')
+			const k = count_pieces(game, {
+				space: '北欧', adjacent: true, types: ['army', 'navy', 'air'], nation: '德国',
+			})
 			if (!k) return { ok: true, desc: '北欧及相邻地区无德国部队，无效果' }
 			const lost = attrition_passive(game, target, k)
 			add_axis_score(game, k)
@@ -1340,7 +1322,8 @@ const ECON_CARDS = {
 		tag: '潜艇行动',
 		targets: ['英国'],
 		run(game, actor, target) {
-			const k = de_units_in_sea(game, '德国', ['army', 'navy', 'air'])
+			/* 卡面「每有 1 支德国部队位于海域」= 全场海域计数 */
+			const k = count_pieces(game, { terrain: 'sea', types: ['army', 'navy', 'air'], nation: '德国' })
 			if (!k) return { ok: true, desc: '海域中无德国部队，无效果' }
 			const lost = attrition_passive(game, target, 2 * k)
 			add_axis_score(game, k)
@@ -1356,7 +1339,7 @@ const ECON_CARDS = {
 			 * 2026-10-22 修复：旧实现漏传 '德国'，西欧只有英国陆军时也会生效
 			 * （实测：西欧仅 1 支英国陆军 → 英国损 1 张 + 德国白拿 3 分）。
 			 */
-			if (de_units_in(game, '西欧', ['army'], '德国') < 1)
+			if (count_pieces(game, { space: '西欧', types: ['army'], nation: '德国' }) < 1)
 				return { ok: true, desc: '西欧无德国陆军，无效果' }
 			const lost = attrition_passive(game, target, 1)
 			add_axis_score(game, 3)
@@ -1471,8 +1454,9 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['苏联'],
 		run(game, actor, target) {
-			const k = count_units(game, '日本', '东海', ['army', 'navy', 'air'], false)
-				+ count_units(game, '日本', '北太平洋', ['army', 'navy', 'air'], false)
+			/* 卡面「<东海><北太平洋>每有 1 支日本部队」= 两格本格计数 */
+			const k = count_pieces(game, { space: '东海', types: ['army', 'navy', 'air'], nation: '日本' })
+				+ count_pieces(game, { space: '北太平洋', types: ['army', 'navy', 'air'], nation: '日本' })
 			const lost = attrition_passive(game, target, 1)
 			add_axis_score(game, k)
 			return { ok: true, desc: '东海/北太平洋共 ' + k + ' 支日本部队，日本+' + k +
@@ -1501,7 +1485,7 @@ const ECON_CARDS = {
 		tag: '潜艇行动',
 		targets: ['美国'],
 		run(game, actor, target) {
-			const k = count_units(game, '日本', '东太平洋', ['navy'], true)
+			const k = count_pieces(game, { space: '东太平洋', adjacent: true, types: ['navy'], nation: '日本' })
 			const lost = attrition_passive(game, target, 2)
 			add_axis_score(game, 2 * k)
 			return { ok: true, desc: '东太平洋及相邻共 ' + k + ' 支日本海军，日本+' + (2 * k) +
@@ -1512,7 +1496,7 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['英国'],
 		run(game, actor, target) {
-			const k = count_units(game, '日本', '印度洋', ['navy'], true)
+			const k = count_pieces(game, { space: '印度洋', adjacent: true, types: ['navy'], nation: '日本' })
 			const lost = attrition_passive(game, target, 2)
 			add_axis_score(game, 2 * k)
 			return { ok: true, desc: '印度洋及相邻共 ' + k + ' 支日本海军，日本+' + (2 * k) +
@@ -1523,7 +1507,7 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['美国'],
 		run(game, actor, target) {
-			const k = count_units_radius(game, '日本', '中国西部', ['air'], 2)
+			const k = count_pieces(game, { space: '中国西部', radius: 2, types: ['air'], nation: '日本' })
 			const lost = attrition_passive(game, target, 2)
 			add_axis_score(game, k)
 			return { ok: true, desc: '中国西部2地区内共 ' + k + ' 支日本空军，日本+' + k +
@@ -1534,12 +1518,11 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['英国'],
 		run(game, actor, target) {
-			const seId = space_id('东南亚')
-			const armySE = count_units(game, '日本', '东南亚', ['army'], false)
-			let navyAdj = 0
-			if (seId != null) for (const nb of (data.spaces[seId].connections || []))
-				for (const p of pieces_on(game, nb))
-					if (game.piece_nation[p] === '日本' && game.piece_type[p] === 'navy') navyAdj++
+			/* 卡面「<东南亚>有日本陆军，【相邻地区】有日本海军」—— 海军那半不含本格 */
+			const armySE = count_pieces(game, { space: '东南亚', types: ['army'], nation: '日本' })
+			const navyAdj = count_pieces(game, {
+				space: '东南亚', adjacent: true, excludeSelf: true, types: ['navy'], nation: '日本',
+			})
 			if (armySE > 0 && navyAdj > 0) {
 				const lost = attrition_passive(game, target, 2)
 				add_axis_score(game, 2)
@@ -1581,7 +1564,7 @@ const ECON_CARDS = {
 		targets: ['英国'],
 		run(game, actor, target) {
 			const lost = attrition_passive(game, target, 2)
-			const k = count_units_all(game, '意大利', ['navy'])
+			const k = count_pieces(game, { types: ['navy'], nation: '意大利' })
 			add_axis_score(game, k)
 			return {
 				ok: true,
@@ -1595,7 +1578,7 @@ const ECON_CARDS = {
 		/* 苏联是受损方；英国是失分方（两者不同） */
 		targets: ['苏联'],
 		run(game, actor, target) {
-			const k = count_units_radius(game, '英国', '乌克兰', ['army'], 2)
+			const k = count_pieces(game, { space: '乌克兰', radius: 2, types: ['army'], nation: '英国' })
 			if (!k) return { ok: true, desc: '<乌克兰>2 地区内无英国陆军，无效果' }
 			const lost = attrition_passive(game, target, 2)
 			lose_score(game, '英国', 2)
@@ -1635,7 +1618,7 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets: ['意大利'],
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', '意大利', ['army'], bombing_radius(game, 2)) < 1)
+			if (count_pieces(game, { space: '意大利', radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
 				return { ok: true, desc: '<意大利>2 地区内无美国陆军，无效果' }
 			const lost = attrition_passive(game, target, 5)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1645,7 +1628,7 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets: ['德国'],
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', '德国', ['army'], bombing_radius(game, 2)) < 1)
+			if (count_pieces(game, { space: '德国', radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
 				return { ok: true, desc: '<德国>2 地区内无美国陆军，无效果' }
 			const lost = attrition_passive(game, target, 6)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1655,7 +1638,7 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets: ['日本'],
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', '日本', ['navy'], bombing_radius(game, 2)) < 1)
+			if (count_pieces(game, { space: '日本', radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) < 1)
 				return { ok: true, desc: '<日本>2 地区内无美国海军，无效果' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1665,7 +1648,11 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets: ['日本'],
 		run(game, actor, target) {
-			const k = count_units_radius_supplied(game, '美国', '日本', ['navy'], bombing_radius(game, 3))
+			/* 卡面「<日本>3 地区内有【补给状态】的美国海军」 */
+			const k = count_pieces(game, {
+				space: '日本', radius: bombing_radius(game, 3),
+				types: ['navy'], nation: '美国', supplied: true,
+			})
 			if (!k) return { ok: true, desc: '<日本>3 地区内无处于补给状态的美国海军，无效果' }
 			const lost = attrition_passive(game, target, 1)
 			add_allied_score(game, 3)
@@ -1682,10 +1669,10 @@ const ECON_CARDS = {
 		/* 动态目标：复用 econ_enemy_nations + count_units_radius */
 		targets_fn(game, actor) {
 			return econ_enemy_nations(game, actor).filter(n =>
-				count_units_radius(game, '美国', home_base_of(n), ['army'], bombing_radius(game, 2)) >= 1)
+				count_pieces(game, { space: home_base_of(n), radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) >= 1)
 		},
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', home_base_of(target), ['army'], bombing_radius(game, 2)) < 1)
+			if (count_pieces(game, { space: home_base_of(target), radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
 				return { ok: false, reason: '<' + home_base_of(target) + '>2 地区内无美国陆军' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1697,12 +1684,16 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets_fn(game, actor) {
 			return econ_enemy_nations(game, actor).filter(n =>
-				count_units_radius(game, '美国', home_base_of(n),
-					['army', 'navy', 'air'], bombing_radius(game, 1)) >= 1)
+				count_pieces(game, {
+					space: home_base_of(n), radius: bombing_radius(game, 1),
+					types: ['army', 'navy', 'air'], nation: '美国',
+				}) >= 1)
 		},
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', home_base_of(target),
-				['army', 'navy', 'air'], bombing_radius(game, 1)) < 1)
+			if (count_pieces(game, {
+				space: home_base_of(target), radius: bombing_radius(game, 1),
+				types: ['army', 'navy', 'air'], nation: '美国',
+			}) < 1)
 				return { ok: false, reason: '<' + home_base_of(target) + '>1 地区内无美国部队' }
 			const lost = attrition_passive(game, target, 8)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1760,13 +1751,13 @@ const ECON_CARDS = {
 			/* 前置：场上有[曼哈顿计划]（17545，美国桌面状态卡） */
 			if (!table_has(game, '美国', 17545)) return []
 			return econ_enemy_nations(game, actor).filter(n =>
-				count_units_radius(game, '美国', home_base_of(n), ['air'], bombing_radius(game, 1)) >= 1)
+				count_pieces(game, { space: home_base_of(n), radius: bombing_radius(game, 1), types: ['air'], nation: '美国' }) >= 1)
 		},
 		run(game, actor, target) {
 			if (!table_has(game, '美国', 17545))
 				return { ok: false, reason: '场上没有[曼哈顿计划]' }
 			const home = home_base_of(target)
-			if (count_units_radius(game, '美国', home, ['air'], bombing_radius(game, 1)) < 1)
+			if (count_pieces(game, { space: home, radius: bombing_radius(game, 1), types: ['air'], nation: '美国' }) < 1)
 				return { ok: false, reason: '<' + home + '>相邻地区无美国空军' }
 			const lost = attrition_passive(game, target, 7)
 			/* 移除 1 支位于其大本营的陆军（优先该国自己的陆军） */
@@ -1791,10 +1782,10 @@ const ECON_CARDS = {
 		tag: '轰炸行动',
 		targets_fn(game, actor) {
 			return econ_enemy_nations(game, actor).filter(n =>
-				count_units_radius(game, '美国', home_base_of(n), ['navy'], bombing_radius(game, 2)) >= 1)
+				count_pieces(game, { space: home_base_of(n), radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) >= 1)
 		},
 		run(game, actor, target) {
-			if (count_units_radius(game, '美国', home_base_of(target), ['navy'], bombing_radius(game, 2)) < 1)
+			if (count_pieces(game, { space: home_base_of(target), radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) < 1)
 				return { ok: false, reason: '<' + home_base_of(target) + '>2 地区内无美国海军' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -1817,7 +1808,7 @@ const ECON_CARDS = {
 		targets: ['日本'],
 		run(game, actor, target) {
 			/* 中国是美国的代表团（delegate_of_nation），部队国别仍记为「中国」 */
-			const k = count_units_all(game, '中国', ['army', 'navy', 'air'])
+			const k = count_pieces(game, { types: ['army', 'navy', 'air'], nation: '中国' })
 			const n = 2 * k
 			const lost = n ? attrition_passive(game, target, n) : []
 			return {
@@ -1831,17 +1822,9 @@ const ECON_CARDS = {
 
 /* ===== 经济战通用辅助函数（2026-10-09 新增） ===== */
 
-/* 统计某国在【全场所有地区】的指定类型棋子数。
-   用于 17714「场上每有 1 支意大利海军」、17523「场上每有 1 支中国部队」。 */
-function count_units_all(game, nation, types) {
-	let n = 0
-	for (let i = 1; i < data.spaces.length; i++) {
-		if (!data.spaces[i]) continue
-		for (const p of pieces_on(game, i))
-			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
-	}
-	return n
-}
+/* 【2026-10-22 已并入】原 count_units_all(game, nation, types)
+ *   ≡ count_pieces(game, { types, nation })   // 不传 space = 全场
+ * 用于 17714/17707「场上每有 1 支意大利海军」、17523「场上每有 1 支中国部队」。 */
 
 /* 某国失去 n 分（写其所属阵营）。与 add_axis_score/add_allied_score 反向。
    注意：这里【不】走 minus_score 的 mark_play_done —— 那是出牌阶段动作，
@@ -1883,89 +1866,26 @@ function count_uncontrolled_seas_near(game, spaceName, faction) {
 	return n
 }
 
-/* 同 count_units_radius，但只统计【处于补给状态】的单位。
-   17521「<日本>3 地区内有补给状态的美国海军」。 */
-function count_units_radius_supplied(game, nation, spaceName, types, dist) {
-	const start = space_id(spaceName)
-	if (start == null) return 0
-	const sup = compute_supply(game)
-	const seen = new Set([start])
-	let frontier = [start]
-	for (let d = 0; d < dist; d++) {
-		const nxt = []
-		for (const sp of frontier)
-			for (const nb of (data.spaces[sp].connections || []))
-				if (!seen.has(nb)) { seen.add(nb); nxt.push(nb) }
-		frontier = nxt
-	}
-	let n = 0
-	for (const sp of seen)
-		for (const p of pieces_on(game, sp))
-			if (game.piece_nation[p] === nation &&
-				types.indexOf(game.piece_type[p]) >= 0 &&
-				sup.in_supply[p]) n++
-	return n
-}
+/* 【2026-10-22 已并入】原 count_units_radius_supplied(game, nation, space, types, dist)
+ *   ≡ count_pieces({ space, radius: dist, types, nation, supplied: true })
+ * 用于 17521「<日本>3 地区内有补给状态的美国海军」。 */
 
 
 /* ===== 德国卡牌：通用辅助函数（2026-09-27 新增） ===== */
-function de_units_in(game, spaceName, types, nation) {
-	const id = space_id(spaceName)
-	if (id == null) return 0
-	let n = 0
-	for (const p of pieces_on(game, id)) {
-		if (types.indexOf(game.piece_type[p]) < 0) continue
-		if (nation && game.piece_nation[p] !== nation) continue
-		n++
-	}
-	return n
-}
-/*
- * 某地区【及其相邻地区】的部队数。
- *
- * 【2026-10-22 修复·漏了归属过滤】
- * 旧实现只按"兵种"过滤，【完全不管部队归属】，于是：
- *   · 15219 强行封锁「<北海>或相邻地区每有1支【德国部队】」
- *   · 15220 袭击摩尔曼斯克「<北欧>或相邻地区每有1支【德国部队】」
- *     只要相邻格有英国/苏联部队，也会被算成"德国部队"，多损耗多得分
- *     （实测：北欧 2 支德 + 1 支英 → k=3，卡面应为 2）。
- *   · 15218 季风艇群「<印度洋>相邻地区每有1支【友方国家】陆军」同理，
- *     敌方陆军也被算了进去。
- *
- * filter（可选，缺省= 不过滤，保留旧行为给确实要数"任意部队"的调用点）：
- *   · 国名字符串   -> 只数该国部队          （15219 / 15220 传 '德国'）
- *   · { faction }  -> 只数该阵营部队        （15218 传 { faction: AXIS }，即"友方"）
- */
-function de_units_near(game, spaceName, types, filter) {
-	const id = space_id(spaceName)
-	if (id == null) return 0
-	const keep = p => {
-		if (types.indexOf(game.piece_type[p]) < 0) return false
-		if (filter == null) return true
-		if (typeof filter === 'string') return game.piece_nation[p] === filter
-		if (filter.faction) return faction_of_nation(game.piece_nation[p]) === filter.faction
-		if (filter.nations) return filter.nations.indexOf(game.piece_nation[p]) >= 0
-		return true
-	}
-	let n = 0
-	for (const p of pieces_on(game, id)) if (keep(p)) n++
-	for (const nb of (data.spaces[id].connections || []))
-		for (const p of pieces_on(game, nb)) if (keep(p)) n++
-	return n
-}
+/* 【2026-10-22 已并入】原 de_units_in(game, space, types, nation)
+ *   ≡ count_pieces(game, { space, types, nation })
+ * ⚠ 旧实现允许 nation 省略（= 数所有国），已废止 —— 正是 15223 之类 bug 的来源。 */
+/* 【2026-10-22 已并入】原 de_units_near(game, space, types, filter)
+ *   ≡ count_pieces({ space, adjacent: true, types, nation|faction|nations })
+ * 历史教训（务必保留在 has_pieces/count_pieces 的 opt 里）：
+ *   旧实现只按兵种过滤、不看归属，导致 15219/15220 把相邻的盟军部队算成
+ *   "德国部队"、15218 把敌方陆军算成"友方国家陆军"。统一原语强制要求归属条件。 */
 /* 【2026-10-22 已并入】原 de_controlled(game, spaceName, nation)
  *   ≡ has_pieces(game, { space, nation })
  * 返回"该地区有该国部队"（布尔），非补给/控制判定。 */
-function de_units_in_sea(game, nation, types) {
-	let n = 0
-	for (let i = 1; i < data.spaces.length; i++) {
-		const sp = data.spaces[i]
-		if (!sp || sp.terrain !== 'sea') continue
-		for (const p of pieces_on(game, i))
-			if (game.piece_nation[p] === nation && types.indexOf(game.piece_type[p]) >= 0) n++
-	}
-	return n
-}
+/* 【2026-10-22 已并入】原 de_units_in_sea(game, nation, types)
+ *   ≡ count_pieces(game, { terrain: 'sea', types, nation })
+ * 用于 15222「每有 1 支德国部队位于海域」。 */
 function add_axis_score(game, n) {
 	if (!n) return
 	game.score[AXIS] = (game.score[AXIS] || 0) + n
@@ -4463,8 +4383,8 @@ const STATUS_EFFECTS = {
 		auto: { phase: 'scoring', trigger_nation: '德国', kind: 'run',
 			run(game, nation) {
 				let b = 0
-				if (de_units_in(game, '波罗的海', ['navy'], '德国') >= 1) b++
-				if (de_units_in(game, '北欧', ['army'], '德国') >= 1) b++
+				if (has_pieces(game, { space: '波罗的海', types: ['navy'], nation: '德国' })) b++
+				if (has_pieces(game, { space: '北欧', types: ['army'], nation: '德国' })) b++
 				return b
 			},
 			desc: '计分阶段：<波罗的海>有德国海军+1；<北欧>有德国陆军+1' },
@@ -4506,7 +4426,7 @@ const STATUS_EFFECTS = {
 			run(game, nation) {
 				let b = 0
 				for (const sp of ['罗斯', '乌克兰', '中亚'])
-					b += de_units_in(game, sp, ['army'], '德国')
+					b += count_pieces(game, { space: sp, types: ['army'], nation: '德国' })
 				return b
 			},
 			desc: '计分阶段：<罗斯><乌克兰><中亚>每有1支德国陆军+1' },
@@ -4690,7 +4610,7 @@ const STATUS_EFFECTS = {
 		ongoing: { kind: 'marker_if_controlled', space: '德国', require: ['西欧', '德国', '东欧'], markers: 1,
 			desc: '打出时若<西欧><德国><东欧>被友方控制，<德国>增加1个计分标记' },
 		auto: { phase: 'scoring', trigger_nation: '德国', kind: 'run',
-			run(game, nation) { return de_units_in(game, '东欧', ['army'], '德国') >= 1 ? 1 : 0 },
+			run(game, nation) { return has_pieces(game, { space: '东欧', types: ['army'], nation: '德国' }) ? 1 : 0 },
 			desc: '计分阶段：若<东欧>有德国陆军+1' },
 	},
 
@@ -5162,7 +5082,9 @@ const STATUS_EFFECTS = {
 					fired.push(cid)
 					if (rc.add_attrition) { const lost = attrition_passive(game, target, rc.add_attrition); void lost }
 					if (rc.add_score) add_axis_score(game, rc.add_score)
-					if (rc.extra_if_space_army && de_units_in(game, rc.extra_if_space_army.space, ['army'], rc.extra_if_space_army.nation) >= 1) {
+					if (rc.extra_if_space_army && has_pieces(game, {
+						space: rc.extra_if_space_army.space, types: ['army'], nation: rc.extra_if_space_army.nation,
+					})) {
 						const lost = attrition_passive(game, target, rc.extra_if_space_army.add_attrition); void lost
 					}
 					game.log.push('《' + (c.name || '状态卡') + '》触发：经济战加成')
@@ -6374,19 +6296,11 @@ function nation_supply_immune(game, nation) {
  * 用于 repeat:'per_unit' 类状态卡（15348 殖民帝国 / 17548 中国人民解放军）
  * 的"发动次数上限"。0 个时上限即 0（不可发动）。
  */
-function status_unit_count(game, cb) {
-	if (!cb) return 0
-	const sps = (cb.spaces || []).map(space_id).filter(x => x != null)
-	let n = 0
-	for (const p in game.location) {
-		if (game.location[p] == null) continue
-		if (sps.indexOf(game.location[p]) < 0) continue
-		if (game.piece_nation[p] !== cb.nation) continue
-		if ((game.piece_type[p] || 'army') !== (cb.type || 'army')) continue
-		n++
-	}
-	return n
-}
+/* 【2026-10-22 已并入】原 status_unit_count(game, cb)
+ *   ≡ count_pieces({ spaces: cb.spaces, types: [cb.type || 'army'], nation: cb.nation })
+ * ⚠ 旧实现对缺 piece_type 的棋子按陆军算（`piece_type || 'army'`）；
+ *   统一原语要求 piece_type 明确。现网所有棋子都经 build_piece/new_piece_id 生成、
+ *   必带 type，故等价。 */
 
 /* 某状态卡本回合已按 per_unit 计数发动的次数（键含 freq_key，跨回合自动失效） */
 function status_repeat_used(game, card_id) {
@@ -6497,7 +6411,11 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 			 * 此处补齐服务端执行点，非新建机制。）
 			 */
 			if (tr.repeat === 'per_unit' && tr.count_by) {
-				const cap = status_unit_count(game, tr.count_by)
+				const cap = count_pieces(game, {
+			spaces: tr.count_by.spaces,
+			types: [tr.count_by.type || 'army'],
+			nation: tr.count_by.nation,
+		})
 				if (cap <= 0)
 					return { ok: false, reason: '没有' + (tr.count_by.nation || '') + '陆军，无法发动' }
 				if (status_repeat_used(game, card_id) >= cap)
@@ -11496,7 +11414,7 @@ const ECHO_EFFECTS = {
 		steps: [{
 			op: 'run',
 			run(game, nation) {
-				const k = count_units_all(game, '意大利', ['navy'])
+				const k = count_pieces(game, { types: ['navy'], nation: '意大利' })
 				if (!k) return { ok: true, desc: '场上无意大利海军，无效果' }
 				add_axis_score(game, k)
 				return { ok: true, desc: '场上每有 1 支意大利海军（' + k + ' 支），意大利获得 ' + k + ' 分' }
