@@ -4967,8 +4967,9 @@ function update_ask_box_from_view() {
 	const facLabel = (ask.faction === "allies") ? "同盟国" : (ask.faction === "axis" ? "轴心国" : ask.nation)
 	render_ask_box(
 		"【" + facLabel + "】收回部队（" + ask.pieces.length + " 支可收回）",
-		"点击地图上高亮的本方部队即可收回（可连续点，任意支数、任意兵种）；点「跳过」结束询问。",
-		[{ label: "跳过", cls: "primary", onClick: () => {
+		"点击地图上高亮的本方部队即可收回（可连续点，任意支数、任意兵种）；" +
+			"点「跳过并关闭」会结束本次询问并把开关关掉。",
+		[{ label: "跳过并关闭", cls: "primary", onClick: () => {
 			clear_piece_highlight("ask_remove")
 			send_action("clear_ask", {})
 		} }]

@@ -24532,8 +24532,21 @@ function play_status_card_impl(game, nation, card_id) {
 
 	/* 跳过当前的"是否收回部队"询问 */
 	if (action === 'clear_ask') {
+		/*
+		 * 【2026-10-22 玩家口径】点「跳过」= 本次询问到此结束，
+		 * 同时把开关【关掉】——否则下一个出牌阶段开始又会再弹一次。
+		 * （要再收回，重新点开开关即可。）
+		 */
+		if (game.pending_ask && faction_of_nation(game.pending_ask.nation) !== side) {
+			game.log.push('【收回部队】只能由本方阵营处理该询问')
+			return game
+		}
+		const had = !!game.pending_ask
 		game.pending_ask = null
-		game.log.push('【' + game.current_nation + '】跳过收回部队询问')
+		game.ask_remove = game.ask_remove || {}
+		game.ask_remove[side] = false
+		game.log.push('【' + game.current_nation + '】跳过收回部队询问' +
+			(had ? '，开关已关闭' : ''))
 		return game
 	}
 

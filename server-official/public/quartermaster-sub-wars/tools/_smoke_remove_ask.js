@@ -125,7 +125,7 @@ console.log('\n=== F. 不能收回敌方部队 ===')
 	ok('日志说明只能收回本方', (g.log || []).some(l => /只能收回本方阵营的部队/.test(l)), (g.log || []).slice(-1)[0])
 }
 
-console.log('\n=== G. 点「跳过」后可推进阶段 ===')
+console.log('\n=== G. 点「跳过」：询问清空 + 开关自动关闭 + 可推进阶段 ===')
 {
 	let g = base('德国', 'axis')
 	put(g, 'de1', '德国', 'army', I.data.id_of('东欧'))
@@ -133,9 +133,26 @@ console.log('\n=== G. 点「跳过」后可推进阶段 ===')
 	I.prepare_remove_ask(g, '德国')
 	g = rules.action(g, 'Axis', 'clear_ask', {})
 	ok('询问已清空', g.pending_ask === null)
+	ok('开关随跳过关掉（2026-10-22 口径）', (g.ask_remove || {})['axis'] === false,
+		JSON.stringify(g.ask_remove))
+	ok('日志说明开关已关闭', (g.log || []).some(l => /开关已关闭/.test(l)), (g.log || []).slice(-1)[0])
 	const before = g.turn_phase
 	g = rules.action(g, 'Axis', 'next_phase', {})
 	ok('阶段可推进', g.turn_phase !== before, before + ' -> ' + g.turn_phase)
+}
+
+console.log('\n=== H. 跳过后进入下一个出牌阶段不再自动询问 ===')
+{
+	let g = base('德国', 'axis')
+	g.turn_phase = 'play'
+	put(g, 'de1', '德国', 'army', I.data.id_of('东欧'))
+	g.ask_remove.axis = true
+	I.prepare_remove_ask(g, '德国')
+	g = rules.action(g, 'Axis', 'clear_ask', {})
+	/* 模拟下一个出牌阶段入口（phase_play 会调 prepare_remove_ask） */
+	const pa = I.prepare_remove_ask(g, '德国')
+	ok('开关已关 -> 阶段入口不再挂起', pa === null && g.pending_ask === null,
+		JSON.stringify(g.pending_ask))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS' : fail + ' FAIL'))
