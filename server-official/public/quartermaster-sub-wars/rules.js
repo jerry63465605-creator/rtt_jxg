@@ -884,6 +884,8 @@ function resolve_supply(game, nation) {
 	 * 「陆军被移除后，其所有者损耗 1 张牌」的每支一次。
 	 */
 	for (const d of deletedInfo) {
+		/* 【2026-10-23】17512《战俘》：玩家裁定"被移除"包含断补移除（陆军与空军都算） */
+		note_removed(game, d.nation, 1)
 		if (d.type === 'army')
 			total_war_attrition(game, [{ nation: d.nation, type: d.type }])
 	}
@@ -2821,6 +2823,12 @@ function econ_remove_piece(game, space, piece) {
 	const wasSupplied = !!compute_supply(game).in_supply[piece]
 	delete game.location[piece]
 	for (const air of killedAirs) delete game.location[air]
+	/*
+	 * 【2026-10-23】17512《战俘》：玩家裁定"被移除"包含经济战移除，
+	 * 连带被移除的同国空军也算（与 eliminate_piece 的连带计数一致）。
+	 */
+	note_removed(game, vNation, 1)
+	for (let i = 0; i < killedAirs.length; i++) note_removed(game, vNation, 1)
 	refresh(game)
 
 	/*
@@ -18288,7 +18296,13 @@ function seize_air(game, nation, space, air_piece) {
 
 	/* 仅移除敌方飞机；本国发起飞机留在原地（不进驻，与陆战发起单位一致） */
 	/* 【总体战】夺取制空权只移除空军 -> 不触发损耗（空军移除不掉牌） */
+	const seizedNation = game.piece_nation[enemies[0]]
 	delete game.location[enemies[0]]
+	/*
+	 * 【2026-10-23】17512《战俘》：卡面「本回合内每有 1 支敌方部队被移除」，
+	 * 玩家裁定【包含】夺取制空权消灭的敌机，故此处计数（总体战仍不触发，只管陆军）。
+	 */
+	note_removed(game, seizedNation, 1)
 	refresh(game)
 	/* 轴心协定(17749)：敌方空军被"消灭"也计分（卡面"被攻击或消灭"；
 	   与 do_battle 攻击路径一致，复用同一钩子；该函数内部有 table_has 守卫，
