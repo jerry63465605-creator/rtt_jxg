@@ -20658,6 +20658,28 @@ function ensure_markers(game) {
 }
 
 /*
+ * 【2026-10-23】向后兼容：老对局 status_aura 里的 virtual_army（15444 旧实现）
+ * 惰性迁移到 port_as（"视为港口"）。
+ *
+ * 为什么需要：迁移逻辑写在 status_aura() 里，但它只在"打出/撤销状态卡"时才被调到；
+ * 老对局（如 game 24）15444 早已在桌面、之后不再打出，于是永远停在旧字段，
+ * 新代码读 port_as 读不到 -> 该卡完全失效（玩家实测"相邻海域还是不能建海军"）。
+ *
+ * 与 ensure_markers 同款：只在检测到旧字段时才写，不每帧改 state。
+ */
+function ensure_status_aura(game) {
+	if (!game || typeof game !== 'object') return game
+	const aura = game.status_aura
+	if (!aura || !aura.virtual_army) return game
+	aura.port_as = aura.port_as || {}
+	for (const sp of Object.keys(aura.virtual_army)) {
+		if (aura.port_as[sp] == null) aura.port_as[sp] = aura.virtual_army[sp]
+	}
+	delete aura.virtual_army
+	return game
+}
+
+/*
  * 同类兼容：老对局没有 neutral 字段（参战规则是后加的）。
  * 缺失时按"开局中立"补齐 —— 与 create_empty_game_state 的初值一致。
  * 不补的话 is_neutral 会把 undefined 当作"参照初值"，
@@ -22317,6 +22339,8 @@ exports.view = function (state, current) {
 	ensure_neutral(game)
 	/* 同上：老对局缺 supply_override 时补齐（补给点动态层） */
 	ensure_supply_override(game)
+	/* 【2026-10-23】同上：15444 旧光环字段 virtual_army -> port_as 惰性迁移 */
+	ensure_status_aura(game)
 
 	/* 【2026-10-15 修复】建海军/陆军后立刻武装 after_build_navy / after_build_army 窗口，
 	 * 必须在 table_status 计算 ready 之前完成（否则本回合 view 的 ready 恒为 false，要刷新才对）。 */
@@ -24955,6 +24979,8 @@ function do_action(state, current, action, arg) {
 	ensure_markers(game)
 	ensure_neutral(game)
 	ensure_supply_override(game)
+	/* 【2026-10-23】老对局 15444 旧光环字段 virtual_army -> port_as */
+	ensure_status_aura(game)
 
 	/*
 	 * 注意【大小写口径】(2026-09-22 踩坑)：
@@ -29242,6 +29268,8 @@ exports.query = function (state, current, query, params) {
 	ensure_markers(game)
 	ensure_neutral(game)
 	ensure_supply_override(game)
+	/* 【2026-10-23】老对局 15444 旧光环字段 virtual_army -> port_as */
+	ensure_status_aura(game)
 	const snap = compute_connections(game)
 
 	if (query === 'straits') {
@@ -30274,6 +30302,7 @@ if (typeof module !== 'undefined') {
 		/* 【2026-10-23】港口光环（15444 丘克群岛）测试入口 */
 		status_aura,
 		navy_ab_check,
+		ensure_status_aura,
 		/* 【2026-10-23】航母时点修复的测试入口 */
 		arm_status_instant,
 		arm_after_battle_status,

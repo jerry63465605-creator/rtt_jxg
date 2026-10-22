@@ -144,15 +144,28 @@ console.log('\n=== G. 计分逻辑不受影响 ===')
 
 console.log('\n=== H. 老存档惰性迁移：virtual_army -> port_as ===')
 {
-	const g = mk(false)
-	g.status_aura = { supply_immune: {}, home_override: {}, virtual_army: {} }
-	g.status_aura.virtual_army[IWO] = '日本'
-	I.status_aura(g)
-	ok('迁移后 port_as 有值', String((g.status_aura.port_as || {})[IWO]) === '日本',
-		JSON.stringify(g.status_aura.port_as))
-	ok('旧字段已删除', g.status_aura.virtual_army === undefined)
-	const r = I.can_build_at(g, '日本', SEAS[0], 'navy')
-	ok('迁移后建海军同样生效', r.ok, r.reason || '')
+	/* H1：显式调用 */
+	const g1 = mk(false)
+	g1.status_aura = { supply_immune: {}, home_override: {}, virtual_army: {} }
+	g1.status_aura.virtual_army[IWO] = '日本'
+	I.ensure_status_aura(g1)
+	ok('ensure_status_aura 迁移后 port_as 有值', String((g1.status_aura.port_as || {})[IWO]) === '日本',
+		JSON.stringify(g1.status_aura.port_as))
+	ok('旧字段已删除', g1.status_aura.virtual_army === undefined)
+
+	/* H2：真实老对局场景 —— 15444 早已在桌面、之后不会再"打出"，
+	 * 只靠 view/action/query 入口的惰性迁移。这里只调 view。 */
+	const g2 = mk(false)
+	g2.table['日本'] = ['15444#1']          /* 卡在桌面 */
+	g2.status_aura = { supply_immune: {}, home_override: {}, virtual_army: {} }
+	g2.status_aura.virtual_army[IWO] = '日本'
+	const before = I.can_build_at(g2, '日本', SEAS[0], 'navy')
+	ok('迁移前（只读旧字段）不可建', !before.ok, before.reason || '')
+	rules.view(g2, 'Axis')                  /* 触发入口迁移 */
+	ok('仅调 view 就会迁移 port_as', String((g2.status_aura.port_as || {})[IWO]) === '日本',
+		JSON.stringify(g2.status_aura.port_as))
+	const after = I.can_build_at(g2, '日本', SEAS[0], 'navy')
+	ok('迁移后建海军生效', after.ok, after.reason || '')
 }
 
 console.log('\n=== I. 撤销光环后立即失效 ===')
