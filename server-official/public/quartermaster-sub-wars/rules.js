@@ -680,8 +680,15 @@ function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 	/*
 	 * 【2026-10-23】港口光环（15444 丘克群岛「<硫磺岛>视为日本港口」）。
 	 *
-	 * 只满足 B（港口 = 等同"相邻有本国陆军"），不提供 A（来源），
-	 * 也不让该格真的算"有陆军"（所以不影响"某地有陆军"类条件与补给续链）。
+	 * 港口是【补给设施】—— 同时满足海军的两条条件：
+	 *   · B（港口）：等同"相邻有本国陆军"
+	 *   · A（来源）：港口本身就是补给来源
+	 *
+	 * 为什么 A 也给：硫磺岛是荒岛（非初始补给点、无法连回本土），
+	 * 若只给 B，A 永远不成立 -> 本卡在"建海军/海军补给"上等于无效（玩家实测症状）。
+	 * "视为港口"的字面作用正是让该海域有港口可用。
+	 *
+	 * 仍不让该格真的算"有陆军"（不参与陆军补给续链、不满足"某地有陆军"类条件）。
 	 * 敌占时失效（与旧 virtual_army 实现同口径）。
 	 *
 	 * 放在本函数里而不是继续注入虚拟部队：
@@ -696,6 +703,7 @@ function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 		if (portAs[nb] != null && String(portAs[nb]) === String(nation) &&
 			!has_pieces(game, { space: Number(nb), enemyOf: nation })) {
 			hasLand = true
+			hasSrc = true
 		}
 		for (const other of pieces_on(game, nb)) {
 			const onat = game.piece_nation[other]
