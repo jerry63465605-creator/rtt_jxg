@@ -42,12 +42,30 @@ console.log('=== A. 非本方回合不能打开开关 ===')
 	ok('开关未被打开', !(g.ask_remove || {})['allies'])
 }
 
-console.log('\n=== B. 本方回合可以打开 ===')
+console.log('\n=== B. 本方回合打开 -> 【点开即弹】立即挂起询问 ===')
 {
 	const g0 = base('德国', 'axis')
+	put(g0, 'de1', '德国', 'army', I.data.id_of('东欧'))
+	put(g0, 'it1', '意大利', 'navy', I.data.id_of('地中海'))
 	const g = rules.action(g0, 'Axis', 'toggle_ask_remove', { value: true })
 	ok('开关已打开', (g.ask_remove || {})['axis'] === true)
-	ok('日志提示已开启', (g.log || []).some(l => /已开启/.test(l)), (g.log || []).slice(-1)[0])
+	ok('立即挂起询问（不必等下一个出牌阶段）', !!g.pending_ask,
+		JSON.stringify(g.pending_ask && (g.pending_ask.pieces || []).map(x => x.id)))
+	ok('候选 = 德/意 两支', (g.pending_ask.pieces || []).length === 2)
+	ok('日志提示已开启并给出可收回支数',
+		(g.log || []).some(l => /已开启（可收回 2 支）/.test(l)), (g.log || []).slice(-1)[0])
+}
+
+console.log('\n=== B2. 非出牌阶段打开同样立即挂起；关闭即清空 ===')
+{
+	const g0 = base('德国', 'axis')
+	g0.turn_phase = 'discard'
+	put(g0, 'de1', '德国', 'army', I.data.id_of('东欧'))
+	let g = rules.action(g0, 'Axis', 'toggle_ask_remove', { value: true })
+	ok('弃牌阶段打开也立即挂起', !!g.pending_ask)
+	g = rules.action(g, 'Axis', 'toggle_ask_remove', { value: false })
+	ok('关闭后询问清空', g.pending_ask === null)
+	ok('开关已关', (g.ask_remove || {})['axis'] === false)
 }
 
 console.log('\n=== C. 询问列出【本方阵营】全部部队（德/意/日），不含敌方 ===')

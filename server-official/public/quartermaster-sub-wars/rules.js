@@ -24514,9 +24514,19 @@ function play_status_card_impl(game, nation, card_id) {
 		game.ask_remove = game.ask_remove || {}
 		const v = (arg && arg.value != null) ? !!arg.value : !game.ask_remove[side]
 		game.ask_remove[side] = v
-		if (!v) game.pending_ask = null
+		if (!v) {
+			game.pending_ask = null
+		} else {
+			/*
+			 * 【2026-10-22 玩家口径】点开即弹：不等"下一个出牌阶段开始"，
+			 * 打开开关立刻按当前盘面挂起询问（可移除本方任意部队）。
+			 * 关闭则清掉未处理的询问 —— 开关本身就是本次询问的开关。
+			 */
+			prepare_remove_ask(game, game.current_nation)
+		}
 		game.log.push((side === ALLIES ? '同盟国' : '轴心国') +
-			' 的"回合开始询问收回部队"已' + (v ? '开启' : '关闭'))
+			' 的"收回部队"已' + (v ? '开启' : '关闭') +
+			(v && game.pending_ask ? '（可收回 ' + (game.pending_ask.pieces || []).length + ' 支）' : ''))
 		return game
 	}
 
