@@ -1164,18 +1164,23 @@ const ECON_CARDS = {
 		tag: '潜艇行动',
 		targets: ['英国', '美国'],
 		run(game, actor, target) {
-			const k = de_units_near(game, '印度洋', ['army'])
-			if (!k) return { ok: true, desc: '印度洋相邻地区无德国陆军，无效果' }
+			/*
+			 * 卡面「每有1支【友方国家】陆军」= 轴心阵营（德国/意大利/日本）的陆军，
+			 * 敌方陆军不算（2026-10-22 修复：旧实现把英美苏陆军也数了进去）。
+			 */
+			const k = de_units_near(game, '印度洋', ['army'], { faction: AXIS })
+			if (!k) return { ok: true, desc: '印度洋相邻地区无友方国家陆军，无效果' }
 			const lost = attrition_passive(game, target, 2 * k)
 			add_axis_score(game, 2)
-			return { ok: true, desc: '印度洋相邻有 ' + k + ' 支德国陆军，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
+			return { ok: true, desc: '印度洋相邻有 ' + k + ' 支友方国家陆军，' + target + ' 损耗 ' + lost.length + ' 张牌，德国获得 2 分' }
 		},
 	},
 	'15219': {
 		tag: '潜艇行动',
 		targets: ['英国'],
 		run(game, actor, target) {
-			const k = de_units_near(game, '北海', ['army', 'navy', 'air'])
+			/* 卡面「每有1支【德国部队】」：必须按国别过滤（2026-10-22 修复） */
+			const k = de_units_near(game, '北海', ['army', 'navy', 'air'], '德国')
 			if (!k) return { ok: true, desc: '北海及相邻地区无德国部队，无效果' }
 			const lost = attrition_passive(game, target, k)
 			add_axis_score(game, k)
@@ -1186,7 +1191,8 @@ const ECON_CARDS = {
 		tag: '潜艇行动',
 		targets: ['苏联'],
 		run(game, actor, target) {
-			const k = de_units_near(game, '北欧', ['army', 'navy', 'air'])
+			/* 卡面「每有1支【德国部队】」：必须按国别过滤（2026-10-22 修复） */
+			const k = de_units_near(game, '北欧', ['army', 'navy', 'air'], '德国')
 			if (!k) return { ok: true, desc: '北欧及相邻地区无德国部队，无效果' }
 			const lost = attrition_passive(game, target, k)
 			add_axis_score(game, k)
@@ -1792,13 +1798,37 @@ function de_units_in(game, spaceName, types, nation) {
 	}
 	return n
 }
-function de_units_near(game, spaceName, types) {
+/*
+ * 某地区【及其相邻地区】的部队数。
+ *
+ * 【2026-10-22 修复·漏了归属过滤】
+ * 旧实现只按"兵种"过滤，【完全不管部队归属】，于是：
+ *   · 15219 强行封锁「<北海>或相邻地区每有1支【德国部队】」
+ *   · 15220 袭击摩尔曼斯克「<北欧>或相邻地区每有1支【德国部队】」
+ *     只要相邻格有英国/苏联部队，也会被算成"德国部队"，多损耗多得分
+ *     （实测：北欧 2 支德 + 1 支英 → k=3，卡面应为 2）。
+ *   · 15218 季风艇群「<印度洋>相邻地区每有1支【友方国家】陆军」同理，
+ *     敌方陆军也被算了进去。
+ *
+ * filter（可选，缺省= 不过滤，保留旧行为给确实要数"任意部队"的调用点）：
+ *   · 国名字符串   -> 只数该国部队          （15219 / 15220 传 '德国'）
+ *   · { faction }  -> 只数该阵营部队        （15218 传 { faction: AXIS }，即"友方"）
+ */
+function de_units_near(game, spaceName, types, filter) {
 	const id = space_id(spaceName)
 	if (id == null) return 0
-	let n = de_units_in(game, spaceName, types)
+	const keep = p => {
+		if (types.indexOf(game.piece_type[p]) < 0) return false
+		if (filter == null) return true
+		if (typeof filter === 'string') return game.piece_nation[p] === filter
+		if (filter.faction) return faction_of_nation(game.piece_nation[p]) === filter.faction
+		if (filter.nations) return filter.nations.indexOf(game.piece_nation[p]) >= 0
+		return true
+	}
+	let n = 0
+	for (const p of pieces_on(game, id)) if (keep(p)) n++
 	for (const nb of (data.spaces[id].connections || []))
-		for (const p of pieces_on(game, nb))
-			if (types.indexOf(game.piece_type[p]) >= 0) n++
+		for (const p of pieces_on(game, nb)) if (keep(p)) n++
 	return n
 }
 function de_controlled(game, spaceName, nation) {
@@ -4995,6 +5025,18 @@ const STATUS_EFFECTS = {
 					}
 				}
 				if (rc.when === 'econ_used') {
+					/*
+					 * 【2026-10-22 修复·缺阵营守卫】
+					 * 卡面「[北方行动]/[潜艇行动]被使用时」指的是【本方（轴心）使用】，
+					 * 但旧实现只看 tag、不看使用方 —— 而 [潜艇行动] 这个 tag 并非德国专属：
+					 * 英国《马耳他潜艇群》(15314)、日本《潜艇支援太平洋诸岛》(15416) 都带它。
+					 * 若不判阵营，英国用潜艇行动反制德国时，德国反而白拿 +1 分 +1 损耗。
+					 *
+					 * 注：15314 是链式卡（走 resolve_econ），本函数不参与其结算；
+					 * 这里加守卫是为了挡住"同盟国单目标 [潜艇行动]/[北方行动]"这类将来会
+					 * 出现的卡，同时把 15416（日本= 轴心）保留在触发范围内。
+					 */
+					if (faction_of_nation(actor) !== AXIS) continue
 					const tags = Array.isArray(rc.tag) ? rc.tag : [rc.tag]
 					if (tags.indexOf(tag) < 0) continue
 					fired.push(cid)
