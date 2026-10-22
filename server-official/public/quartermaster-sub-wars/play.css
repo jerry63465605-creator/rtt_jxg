@@ -1679,3 +1679,186 @@ body.allies .score-side.allies {
 #table_status .ts-card .ts-badge.blue  { background-color: #4a6b8a; color: #fff; }
 #table_status .ts-card .ts-badge.red   { background-color: #993333; color: #fff; }
 #table_status .ts-card .ts-badge.gray  { background-color: #555; color: #eee; }
+
+/* ============================================================
+ * 【2026-10-22】行动记录抽屉 + 回退提议横幅
+ * ============================================================ */
+
+#history_panel {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(430px, 94vw);
+	z-index: 900;
+	display: flex;
+	flex-direction: column;
+	background-color: #1f2933;
+	color: #e8e8e8;
+	border-left: 1px solid #000;
+	box-shadow: -6px 0 20px #000a;
+	font-size: .84rem;
+	line-height: 1.45;
+}
+
+#history_panel.hide { display: none; }
+
+#history_head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: .5em .7em;
+	background-color: #2b3a45;
+	border-bottom: 1px solid #000;
+	font-weight: bold;
+	flex: 0 0 auto;
+}
+
+#history_head #history_close {
+	background: none;
+	border: none;
+	color: #ccc;
+	font-size: 1.3em;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 .2em;
+}
+
+#history_head #history_close:hover { color: #fff; }
+
+#rb_section {
+	flex: 0 0 auto;
+	max-height: 32vh;
+	overflow-y: auto;
+	border-bottom: 2px solid #000;
+	background-color: #24313a;
+}
+
+#hist_section {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.hist_title {
+	padding: .4em .7em;
+	font-weight: bold;
+	color: #ffd479;
+	background-color: #1b242c;
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+
+.hist_empty { padding: .6em .8em; color: #888; }
+
+.hist_rb_row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: .5em;
+	padding: .35em .7em;
+	border-bottom: 1px solid #00000040;
+}
+
+.hist_rb_label { color: #cfe3ff; }
+
+.hist_rb_btn {
+	flex: 0 0 auto;
+	font-size: .8em;
+	padding: .2em .55em;
+	background-color: #3d5a73;
+	color: #fff;
+	border: 1px solid #000;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.hist_rb_btn:hover { background-color: #4e7595; }
+
+#hist_list {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding-bottom: 1em;
+}
+
+.hist_row {
+	padding: .35em .7em;
+	border-bottom: 1px solid #ffffff12;
+	cursor: pointer;
+}
+
+.hist_row:hover { background-color: #ffffff0e; }
+.hist_row.mine { border-left: 3px solid var(--axis); }
+.hist_row:not(.mine) { border-left: 3px solid var(--allies); }
+
+.hist_step {
+	display: inline-block;
+	min-width: 2.6em;
+	color: #888;
+	font-variant-numeric: tabular-nums;
+}
+
+.hist_meta {
+	display: inline-block;
+	color: #9fb4c7;
+	margin-right: .4em;
+	font-size: .92em;
+}
+
+.hist_label { color: #f0f0f0; }
+
+.hist_detail {
+	margin: .35em 0 .2em 2.6em;
+	padding: .35em .5em;
+	background-color: #00000040;
+	border-left: 2px solid #ffffff22;
+	color: #cfd8e0;
+	font-size: .92em;
+}
+
+/* ---------- 回退提议横幅（顶部常驻） ---------- */
+
+#rollback_bar {
+	position: fixed;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 950;
+	display: flex;
+	align-items: center;
+	gap: .8em;
+	padding: .45em .9em;
+	background-color: #ffb800;
+	color: #000;
+	border-radius: 0 0 8px 8px;
+	box-shadow: 0 3px 12px #000a;
+	font-size: .85rem;
+	max-width: 94vw;
+}
+
+#rollback_bar.hide { display: none; }
+
+#rb_bar_actions { display: flex; gap: .4em; flex: 0 0 auto; }
+
+#rb_bar_actions .action {
+	font-size: .85em;
+	padding: .15em .6em;
+	border: 1px solid #00000060;
+	border-radius: 4px;
+	background-color: #fff;
+	color: #000;
+	cursor: pointer;
+}
+
+#rb_bar_actions .action.primary {
+	background-color: #2b6b2b;
+	color: #fff;
+	border-color: #000;
+}
+
+@media (max-width: 800px) {
+	#history_panel { width: 100vw; }
+	#rollback_bar { font-size: .78rem; padding: .35em .6em; }
+}

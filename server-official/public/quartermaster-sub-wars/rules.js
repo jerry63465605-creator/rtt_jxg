@@ -10,6 +10,8 @@
 
 const { data, SPACE, AXIS, ALLIES } = require('./data.js')
 const { CARDS, CARD_BY_ID, CARDS_BY_DECK, CARD_TYPE_INFO, cards_of_nation, cards_of_type } = require('./cards.js')
+/* 【2026-10-22】时间回溯检查点用 deflate 压缩（仅服务端；前端只加载 data.js/play.js，不会 require 本文件） */
+const zlib = require('zlib')
 
 const q = JSON.stringify
 
@@ -21223,6 +21225,14 @@ function advance_phase(game) {
 		 */
 		game.active = faction_role_of_nation(game.current_nation)
 
+		/*
+		 * 【2026-10-22】国家回合开始 -> 压一个回退检查点。
+		 * 位置：active 已切到新国家、参战判定已完成、尚未进入第一个阶段
+		 * —— 即"这个国家还没做任何事"的干净盘面。
+		 */
+		push_rollback_point(game, '第 ' + (game.turn || 1) + ' 轮 · ' +
+			(game.current_nation || '?') + '回合开始')
+
 		game.turn_phase = PHASES[0].key
 		run_phase_entry(game, game.turn_phase, game.current_nation)
 	} else {
@@ -21243,6 +21253,195 @@ function advance_phase(game) {
  */
 function faction_role_of_nation(nation) {
 	return faction_of_nation(nation) === AXIS ? AXIS_ROLE : ALLIES_ROLE
+}
+
+/* ============================================================
+ * 四点五、行动记录（history）与时间回溯（rollback）
+ *
+ * 【2026-10-22 玩家口径】
+ *   · 历史行动记录：全局记录"谁在哪个阶段做了什么"（出牌为主），保留最近 120 条；
+ *   · 回退（时间回溯）：可退到【本回合（整轮）开始】及之后的任一检查点，
+ *     且必须【对方同意】才生效（PoG rollback 语义）；
+ *   · 检查点 = 每个国家回合开始时压一份压缩快照（10 KB 级 -> 约 3.6 KB）。
+ *
+ * 三条实现铁律：
+ *   ① 快照必须剔除 undo/history/rollback/rollback_proposal/log/_in_action，
+ *      恢复时【先存后还】——否则一次回退把日志与检查点清光（开发指南 §11.2 真实事故）。
+ *   ② 外层 action 用 _in_action 标记：内部 resume 会再次调用 exports.action
+ *      （见 24902 / 26688 两处），若不拦截，一步动作会压出十几个检查点。
+ *   ③ 恢复快照后 rollback 数组要截断到被回退点，且 rollback_proposal 必须清空。
+ * ============================================================ */
+
+const HISTORY_MAX = 120
+const ROLLBACK_MAX = 12
+
+const SIDE_ROLE = {}
+SIDE_ROLE[AXIS] = AXIS_ROLE
+SIDE_ROLE[ALLIES] = ALLIES_ROLE
+
+function side_label(side) {
+	return side === ALLIES ? '同盟国' : '轴心国'
+}
+
+/*
+ * 快照打包：剔除不能回滚 / 不宜重复存储的字段。
+ *
+ * ⚠ history_total 必须【保留】在快照里：它跟着 history 一起回退，
+ * 否则回退后计数又从 1 开始，前端历史条目的 n 会重复。
+ */
+function rollback_pack(game) {
+	const json = JSON.stringify(game, (k, v) =>
+		(k === 'undo' || k === 'history' ||
+			k === 'rollback' || k === 'rollback_proposal' ||
+			k === 'log' || k === '_in_action') ? undefined : v)
+	return zlib.deflateSync(Buffer.from(json, 'utf8')).toString('base64')
+}
+
+function rollback_unpack(s) {
+	return JSON.parse(zlib.inflateSync(Buffer.from(String(s), 'base64')).toString('utf8'))
+}
+
+/*
+ * 压一个检查点（国家回合开始时调用）。
+ * log_len / hist_len 用于恢复时把日志与行动记录截断到该时点。
+ */
+function push_rollback_point(game, label) {
+	const arr = game.rollback || (game.rollback = [])
+	const point = {
+		turn: game.turn || 1,
+		nation: game.current_nation || null,
+		label: label,
+		log_len: game.log.length,
+		hist_len: (game.history || []).length,
+	}
+	point.snap = rollback_pack(game)
+	arr.push(point)
+	if (arr.length > ROLLBACK_MAX) arr.splice(0, arr.length - ROLLBACK_MAX)
+	return point
+}
+
+/*
+ * 记一条行动历史。
+ *
+ * 只存"日志区间索引"，不复制日志正文（view.log 本来就全量下发，
+ * 前端用 slice(from, to) 取详情）—— 120 条约 15 KB，可忽略。
+ */
+function record_action_history(game, meta) {
+	const to = game.log.length
+	const from = meta.from
+	if (to <= from) return null            /* 该动作没有产出日志：不记 */
+	const hist = game.history || (game.history = [])
+	const lines = game.log.slice(from, to)
+	let label = null
+	for (const ln of lines) {
+		if (!ln || /^【警告】/.test(ln)) continue
+		/* 去掉行首的【国家】前缀，摘要更短 */
+		label = String(ln).replace(/^【[^】]*】/, '').trim().slice(0, 90)
+		break
+	}
+	if (!label) label = String(meta.action || '')
+	game.history_total = (game.history_total || 0) + 1
+	hist.push({
+		n: game.history_total,
+		turn: game.turn || 1,
+		phase: game.turn_phase || null,
+		nation: game.current_nation || null,
+		by: meta.side,
+		action: String(meta.action || ''),
+		label: label,
+		from: from,
+		to: to,
+	})
+	if (hist.length > HISTORY_MAX) hist.splice(0, hist.length - HISTORY_MAX)
+	return hist[hist.length - 1]
+}
+
+/* 本回合（整轮）内可选的检查点 */
+function rollback_points_of(game) {
+	const arr = game.rollback || []
+	const cur = (game.turn == null) ? 1 : game.turn
+	const out = []
+	for (let i = 0; i < arr.length; i++) {
+		/* ⚠ 不能写 (arr[i].turn || 1)：turn=0 会被吞成 1，越界检查点就漏进来了 */
+		const t = (arr[i].turn == null) ? 1 : arr[i].turn
+		if (t !== cur) continue
+		out.push({ index: i, turn: t, nation: arr[i].nation, label: arr[i].label })
+	}
+	return out
+}
+
+/* 提议方：发起回退提议（操作权交给对方审阅） */
+function do_propose_rollback(game, side, arg) {
+	if (game.game_over) { game.log.push('对局已结束，不能回退'); return game }
+	if (game.rollback_proposal) { game.log.push('已有待确认的回退提议'); return game }
+	if (game.active !== SIDE_ROLE[side]) { game.log.push('只能由当前行动方提议回退'); return game }
+	const arr = game.rollback || []
+	const pts = rollback_points_of(game)
+	if (!pts.length) { game.log.push('本回合没有可回退的检查点'); return game }
+	let idx = (arg && arg.index != null) ? Number(arg.index) : pts[pts.length - 1].index
+	if (!pts.some(p => p.index === idx)) {
+		game.log.push('回退点必须在本回合（整轮）范围内')
+		return game
+	}
+	if (idx >= arr.length) { game.log.push('回退点不存在'); return game }
+	const point = arr[idx]
+	game.rollback_proposal = {
+		by_side: side,
+		index: idx,
+		turn: point.turn,
+		label: point.label,
+		saved_active: game.active,
+		log_len: point.log_len,
+		hist_len: point.hist_len,
+		snap: point.snap,
+	}
+	/* 操作权交给对方审阅（与 PoG propose_rollback 同款） */
+	game.active = SIDE_ROLE[side === AXIS ? ALLIES : AXIS]
+	game.log.push('【' + side_label(side) + '】提议回退到「' + point.label + '」，等待对方确认')
+	return game
+}
+
+/* 对方：同意 / 拒绝 */
+function do_answer_rollback(game, side, accept) {
+	const pr = game.rollback_proposal
+	if (!pr) { game.log.push('当前没有待确认的回退提议'); return game }
+	if (pr.by_side === side) { game.log.push('不能替本方确认回退提议'); return game }
+	if (!accept) {
+		game.rollback_proposal = null
+		game.active = pr.saved_active
+		game.log.push('【' + side_label(side) + '】拒绝了回退提议，对局继续')
+		return game
+	}
+	const save = rollback_unpack(pr.snap)
+	/*
+	 * 先存后还：快照里被剔除的字段（log/history/rollback）必须保住引用，
+	 * 否则 Object.assign 之后引用丢失、后续 push 写进废弃对象。
+	 */
+	const log = game.log
+	const hist = game.history || []
+	const rb = game.rollback || []
+	Object.keys(game).forEach(k => delete game[k])
+	Object.assign(game, save)
+	game.log = log
+	game.log.length = Math.min(pr.log_len, log.length)
+	game.history = hist
+	game.history.length = Math.min(pr.hist_len, hist.length)
+	/* 检查点截断到被回退的那一个（其后作废） */
+	game.rollback = rb.slice(0, pr.index + 1)
+	game.rollback_proposal = null
+	game.log.push('【' + side_label(side) + '】同意回退，对局已退回「' + pr.label + '」')
+	return game
+}
+
+/* 提议方撤回自己的提议 */
+function do_cancel_rollback(game, side) {
+	const pr = game.rollback_proposal
+	if (!pr) { game.log.push('当前没有待确认的回退提议'); return game }
+	if (pr.by_side !== side) { game.log.push('只有提议方可以撤回提议'); return game }
+	game.rollback_proposal = null
+	game.active = pr.saved_active
+	game.log.push('【' + side_label(side) + '】撤回了回退提议')
+	return game
 }
 
 /* ============================================================
@@ -21423,6 +21622,17 @@ function create_empty_game_state(seed, scenario) {
 		final_win_applied: false,
 		/* 【2026-10-21】终局标记（含和局）；和局时 winner 为 null，故不能只用 winner 判终局 */
 		game_over: false,
+		/*
+		 * 【2026-10-22】行动记录 + 时间回溯（回退）
+		 *   history            每个"有日志产出"的动作一条（只存日志区间索引，不复制正文）
+		 *   history_total      累计动作数（history 只保留最近 120 条）
+		 *   rollback           检查点（每个国家回合开始时一份，deflate 压缩）
+		 *   rollback_proposal  待对方确认的回退提议（null = 无）
+		 */
+		history: [],
+		history_total: 0,
+		rollback: [],
+		rollback_proposal: null,
 	}
 }
 
@@ -21531,6 +21741,9 @@ exports.setup = function (seed, scenario, options) {
 
 	/* 操作权与当前行动国所属阵营保持一致（start_opening_phase 已设好，这里兜底） */
 	game.active = faction_role_of_nation(game.current_nation)
+
+	/* 【2026-10-22】开局检查点：开局弃牌 / 前奏阶段也能回退到这里 */
+	push_rollback_point(game, '开局 · ' + (game.current_nation || '?') + '回合开始')
 
 	return game
 }
@@ -23078,6 +23291,23 @@ exports.view = function (state, current) {
 		actions: build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger),
 
 		/*
+		 * 【2026-10-22】行动记录 + 时间回溯（回退）
+		 *   history            最近 120 条动作（每条带日志区间 from/to，前端 slice 取详情）
+		 *   rollback_points    本回合（整轮）内可回退的检查点
+		 *   rollback_proposal  待确认的回退提议（对双方可见，但只有对方能确认）
+		 */
+		history: game.history || [],
+		history_total: game.history_total || 0,
+		rollback_points: rollback_points_of(game),
+		rollback_proposal: game.rollback_proposal ? {
+			by_side: game.rollback_proposal.by_side,
+			label: game.rollback_proposal.label,
+			turn: game.rollback_proposal.turn,
+		} : null,
+		can_propose_rollback: !game.rollback_proposal && !game.game_over &&
+			rollback_points_of(game).length > 0,
+
+		/*
 		 * 【2026-09-26】优先级的含义：
 		 *   ① 有待决事项且轮到本方表态 -> 说清楚"请你决定什么"
 		 *   ② 有待决事项但属对方      -> "等待【X】…"（见 waiting_for）
@@ -23822,6 +24052,21 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		const cd = CARD_BY_ID[String(inst_card_id(game.peek.card))]
 		if (cd && faction_of_nation(cd.nation) === side) acts.play_card = 1
 	}
+	/*
+	 * 【2026-10-22】回退（时间回溯）动作统一在【外层】追加。
+	 *
+	 * 原因：build_actions_inner 里有十几处"排他式提前 return"
+	 * （pending_econ / uranus / su_status / script / armed_offer / delegate…），
+	 * 那些分支返回的是 { xxx:1, log:1 } 小集合，若把回退动作写进内层 base，
+	 * 挂起期间就点不出回退按钮（未登记 = 客户端静默不发）。
+	 * 而回退与具体挂起无关，故在外层统一补。
+	 */
+	if (game.rollback_proposal) {
+		if (game.rollback_proposal.by_side === side) acts.cancel_rollback = 1
+		else { acts.accept_rollback = 1; acts.reject_rollback = 1 }
+	} else if (!game.game_over && is_my_turn && rollback_points_of(game).length) {
+		acts.propose_rollback = 1
+	}
 	return acts
 }
 
@@ -23924,7 +24169,12 @@ function play_status_card_impl(game, nation, card_id) {
  after_card_resolved(game, nation, card)
  }
 
- exports.action = function (state, current, action, arg) {
+ /*
+ * 【2026-10-22】原 exports.action 主体改名为 do_action。
+ * 真正对外的 exports.action 是文件末尾的 wrapper（负责行动记录 + 内部 resume 去重），
+ * 见 "四点五" 与文件末尾的 exports.action。
+ */
+function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
 
@@ -23936,6 +24186,18 @@ function play_status_card_impl(game, nation, card_id) {
 	 */
 	if (game.game_over && action !== 'log' && String(action).charAt(0) !== '.') {
 		game.log.push('对局已结束（' + (game.win_reason || '') + '），不再接受动作')
+		return game
+	}
+
+	/*
+	 * 【2026-10-22】回退提议待对方确认期间，除"同意/拒绝/撤回"外的动作一律不接。
+	 * 提议时 active 已切给对方，若不在这里拦，对方直接打一张牌就把提议冲掉了。
+	 */
+	if (game.rollback_proposal &&
+		action !== 'accept_rollback' && action !== 'reject_rollback' &&
+		action !== 'cancel_rollback' && action !== 'log' &&
+		String(action).charAt(0) !== '.') {
+		game.log.push('回退提议待确认：请先「同意」或「拒绝」')
 		return game
 	}
 
@@ -28191,6 +28453,51 @@ function phase_zh(key) {
  *   q      = 查询名（字符串）
  *   params = send_query(q, param) 的第二个参数（任意类型，可选）
  */
+/* ============================================================
+ * 对外 action：行动记录（history）+ 内部 resume 去重 + 回退入口
+ *
+ * 【为什么要有这一层】军需官很多流程会在 do_action 内部再次调用
+ * exports.action 做"续跑"（resume，见原 24902 / 26688 两处）。
+ * 若直接在 do_action 里记录，一步动作会被记成十几条历史。
+ * 故用 game._in_action 标记：内层调用直通，只有最外层才记一条。
+ * ============================================================ */
+exports.action = function (state, current, action, arg) {
+	const game = state
+	if (!game) return game
+
+	/* 内层（resume）直通：不记录、不重复处理 */
+	if (game._in_action) return do_action(state, current, action, arg)
+
+	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+	const from = game.log.length
+
+	/* 回退四动作：自成一体（不压检查点，但要记一条历史便于追溯） */
+	if (action === 'propose_rollback' || action === 'accept_rollback' ||
+		action === 'reject_rollback' || action === 'cancel_rollback') {
+		let r = game
+		if (action === 'propose_rollback') r = do_propose_rollback(game, side, arg)
+		else if (action === 'accept_rollback') r = do_answer_rollback(game, side, true)
+		else if (action === 'reject_rollback') r = do_answer_rollback(game, side, false)
+		else r = do_cancel_rollback(game, side)
+		try { record_action_history(game, { action: action, side: side, from: from }) } catch (e) {}
+		return r
+	}
+
+	/* 不记历史的动作：客户端日志、引擎内部动作（.undo/.resign…）、调试动作 */
+	if (action === 'log' || String(action).charAt(0) === '.' ||
+		String(action).startsWith('debug_'))
+		return do_action(state, current, action, arg)
+
+	game._in_action = true
+	try {
+		return do_action(state, current, action, arg)
+	} finally {
+		/* 必须清：否则 _in_action 会被写进存档，之后所有动作都不再记录 */
+		delete game._in_action
+		try { record_action_history(game, { action: action, side: side, from: from }) } catch (e) {}
+	}
+}
+
 exports.query = function (state, current, query, params) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
@@ -28788,9 +29095,13 @@ exports.query = function (state, current, query, params) {
 }
 
 /* ---- dont_snap ---- */
-/* 有部队在移动/战斗时才禁止快照，本阶段始终允许 */
+/*
+ * 【2026-10-22】回退提议挂起期间不存回放快照：
+ * 提议会把 active 切给对方审阅，若照常存快照，回放里会多出
+ * "提议 / 拒绝"这类与棋局无关的跳点，回放前后跳会莫名多两格。
+ */
 exports.dont_snap = function (state) {
-	return false
+	return !!(state && state.rollback_proposal)
 }
 
 /* ============================================================
@@ -28799,6 +29110,17 @@ exports.dont_snap = function (state) {
 
 if (typeof module !== 'undefined') {
 	module.exports._internal = {
+		/* 【2026-10-22】行动记录 / 时间回溯（测试用） */
+		HISTORY_MAX,
+		ROLLBACK_MAX,
+		push_rollback_point,
+		rollback_points_of,
+		record_action_history,
+		do_propose_rollback,
+		do_answer_rollback,
+		do_cancel_rollback,
+		rollback_pack,
+		rollback_unpack,
 		/*
 		 * 【2026-10-17】命令式实现登记表（供 event-cards-preview.html 自动同步"已实现"状态）。
 		 *

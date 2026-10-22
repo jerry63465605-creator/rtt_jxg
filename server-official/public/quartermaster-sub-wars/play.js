@@ -163,6 +163,10 @@ function update_map() {
 	/* 【2026-10-20】卡牌"部分成功"的失败清单 -> toast（服务端下发，客户端只负责显示） */
 	update_card_fail_toast()
 
+	/* 【2026-10-22】行动记录抽屉 + 回退提议横幅 */
+	update_history_ui()
+	update_rollback_bar()
+
 	/* 计分：分数面板 + 地图上的计分标记 */
 	update_score_panel()
 	update_markers()
@@ -5092,6 +5096,172 @@ function update_reserve_panel() {
 		listEl.textContent = "（暂无数据）"
 	else
 		listEl.innerHTML = rows.join("")
+}
+
+/* ============================================================
+ * 【2026-10-22】行动记录（history）与回退 / 时间回溯（rollback）
+ *
+ * 服务端契约：
+ *   view.history            最近 120 条动作，每条带 from/to（对应 view.log 区间）
+ *   view.history_total      累计动作数
+ *   view.rollback_points    本回合（整轮）内可回退的检查点 [{index,turn,nation,label}]
+ *   view.rollback_proposal  { by_side, label, turn } 或 null
+ *   view.actions.propose_rollback / accept_rollback / reject_rollback / cancel_rollback
+ *
+ * 交互：
+ *   顶栏「回退」-> 打开抽屉并定位到检查点区；点「回退到此处」发起提议（需对方同意）
+ *   顶栏「记录」-> 打开抽屉看全局出牌流水
+ *   提议挂起时：#rollback_bar 横幅给「同意 / 拒绝」（对方）或「撤回」（本方）
+ * ============================================================ */
+
+let hist_open = false
+const hist_expanded = {}      /* 历史条目 n -> 是否展开该步日志 */
+
+function my_side_key() {
+	if (view && view.my_faction) return view.my_faction
+	return (typeof player === 'string' && player === 'Axis') ? 'axis' : 'allies'
+}
+
+function toggle_history(focus_rb) {
+	const panel = document.getElementById('history_panel')
+	if (!panel)
+		return
+	const want = (focus_rb === true) ? true : !hist_open
+	hist_open = want
+	panel.classList.toggle('hide', !want)
+	if (!want)
+		return
+	update_history_ui(true)
+	if (focus_rb) {
+		const sec = document.getElementById('rb_section')
+		if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' })
+	}
+}
+
+/* 回放模式下禁止发起回退（view 来自历史快照，提交会打乱真实对局） */
+function in_replay_mode() {
+	return !!(typeof params !== 'undefined' && params && params.mode === 'replay')
+}
+
+function can_propose_rollback() {
+	if (in_replay_mode())
+		return false
+	return !!(view && view.actions && view.actions.propose_rollback)
+}
+
+function propose_rollback_to(index) {
+	if (!view || !view.actions || !view.actions.propose_rollback) {
+		toast('现在不能提议回退（须轮到你行动、且本回合有检查点）')
+		return
+	}
+	const pts = view.rollback_points || []
+	let p = null
+	for (const x of pts)
+		if (x.index === index) { p = x; break }
+	if (!p)
+		return
+	if (!confirm('回退到「' + p.label + '」需要对方同意。\n确认发起提议？'))
+		return
+	send_action('propose_rollback', { index: index })
+}
+
+function answer_rollback(accept) {
+	send_action(accept ? 'accept_rollback' : 'reject_rollback', {})
+}
+
+function cancel_rollback() {
+	send_action('cancel_rollback', {})
+}
+
+function toggle_hist_item(n) {
+	hist_expanded[n] = !hist_expanded[n]
+	update_history_ui(true)
+}
+
+function update_history_ui(force) {
+	const panel = document.getElementById('history_panel')
+	if (!panel || !view)
+		return
+	/* 抽屉关着就不重建（每步 view 都会调到这里，省开销） */
+	if (!hist_open && !force)
+		return
+
+	/* ---------- ① 可回退检查点 ---------- */
+	const rbList = document.getElementById('rb_list')
+	if (rbList) {
+		const pts = (view.rollback_points || []).slice().reverse()
+		const pr = view.rollback_proposal
+		const can = can_propose_rollback()
+		if (!pts.length) {
+			rbList.innerHTML = '<div class="hist_empty">本回合没有可回退的检查点</div>'
+		} else {
+			rbList.innerHTML = pts.map(function (p) {
+				const btn = (can && !pr)
+					? '<button class="hist_rb_btn" type="button" onclick="propose_rollback_to(' + p.index + ')">回退到此处</button>'
+					: ''
+				return '<div class="hist_rb_row"><span class="hist_rb_label">' + esc(p.label || '') +
+					'</span>' + btn + '</div>'
+			}).join('')
+		}
+	}
+
+	/* ---------- ② 出牌流水 ---------- */
+	const cnt = document.getElementById('hist_count')
+	const arr = (view.history || []).slice().reverse()
+	if (cnt)
+		cnt.textContent = '（共 ' + (view.history_total || 0) + ' 步，显示最近 ' + arr.length + ' 条）'
+
+	const list = document.getElementById('hist_list')
+	if (list) {
+		if (!arr.length) {
+			list.innerHTML = '<div class="hist_empty">暂无行动记录</div>'
+		} else {
+			const mine = my_side_key()
+			list.innerHTML = arr.map(function (h) {
+				const cls = 'hist_row' + (h.by === mine ? ' mine' : '')
+				let detail = ''
+				if (hist_expanded[h.n]) {
+					const lines = (view.log || []).slice(h.from, h.to)
+					detail = '<div class="hist_detail">' +
+						lines.map(function (l) { return '<div>' + esc(l) + '</div>' }).join('') +
+						'</div>'
+				}
+				return '<div class="' + cls + '" onclick="toggle_hist_item(' + h.n + ')">' +
+					'<span class="hist_step">#' + h.n + '</span>' +
+					'<span class="hist_meta">T' + h.turn + ' · ' + esc(h.nation || '') + ' · ' +
+					esc(PHASE_ZH[h.phase] || h.phase || '') + '</span>' +
+					'<span class="hist_label">' + esc(h.label || '') + '</span>' +
+					detail +
+					'</div>'
+			}).join('')
+		}
+	}
+}
+
+function update_rollback_bar() {
+	const bar = document.getElementById('rollback_bar')
+	if (!bar)
+		return
+	const pr = view && view.rollback_proposal
+	if (!pr) {
+		bar.classList.add('hide')
+		return
+	}
+	const mine = (pr.by_side === my_side_key())
+	const txt = document.getElementById('rb_bar_text')
+	const acts = document.getElementById('rb_bar_actions')
+	if (txt) {
+		txt.textContent = mine
+			? '你提议回退到「' + (pr.label || '') + '」，等待对方确认…'
+			: '对方提议回退到「' + (pr.label || '') + '」——同意后对局将退回该时点'
+	}
+	if (acts) {
+		acts.innerHTML = mine
+			? '<button class="action" type="button" onclick="cancel_rollback()">撤回提议</button>'
+			: '<button class="action" type="button" onclick="answer_rollback(false)">拒绝</button>' +
+			'<button class="action primary" type="button" onclick="answer_rollback(true)">同意回退</button>'
+	}
+	bar.classList.remove('hide')
 }
 
 /* 开关：友方出牌回合开始时是否询问（默认关闭 = 跳过） */

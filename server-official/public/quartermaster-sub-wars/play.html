@@ -22,6 +22,9 @@
 			<menu>
 				<li><a href="about.html" target="_blank">关于</a>
 				<li><a href="info/rules.html" target="_blank">规则</a>
+				<li class="separator">
+				<!-- 【2026-10-22】调试面板从顶栏按钮移进本菜单，顶栏位置让给「回退」 -->
+				<li onclick="toggle_debug()">调试面板</li>
 			</menu>
 		</details>
 		<details id="info_menu">
@@ -33,7 +36,14 @@
 				<li onclick="send_query('adjacency')"> 查询本方相邻关系</li>
 			</menu>
 		</details>
-		<button id="debug_button" onclick="toggle_debug()" title="调试面板"><img src="/images/stack.svg"></button>
+		<!-- 【2026-10-22】回退（时间回溯，需对方同意） -->
+		<button id="btn_rollback" onclick="toggle_history(true)" title="回退（需对方同意）">
+			<img src="/images/cycle.svg">
+		</button>
+		<!-- 【2026-10-22】行动记录（全局出牌流水） -->
+		<button id="btn_history" onclick="toggle_history(false)" title="行动记录">
+			<img src="/images/scroll-quill.svg">
+		</button>
 	</div>
 </header>
 
@@ -485,6 +495,39 @@
 		</div>
 	</div>
 </main>
+
+<!--
+	【2026-10-22】行动记录抽屉
+	  · 上半：本回合可回退的检查点（点「回退到此处」发起提议，需对方同意）
+	  · 下半：全局出牌流水（最近 120 条，点条目展开该步日志）
+	放在 </main> 之后、不在 aside 内：aside 是 grid + overflow:clip，
+	抽屉用 position:fixed 才不会被裁切/撑开侧栏。
+-->
+<div id="history_panel" class="hide">
+	<div id="history_head">
+		<span>行动记录</span>
+		<button id="history_close" type="button" onclick="toggle_history(false)">×</button>
+	</div>
+	<div id="rb_section">
+		<div class="hist_title">可回退的检查点（需对方同意）</div>
+		<div id="rb_list"></div>
+	</div>
+	<div id="hist_section">
+		<div class="hist_title">出牌流水 <span id="hist_count"></span></div>
+		<div id="hist_list"></div>
+	</div>
+</div>
+
+<!--
+	【2026-10-22】回退提议横幅
+	  有 pending proposal 时常驻显示：
+	    · 对方发起的 -> 给「同意」「拒绝」按钮（只有对方能确认）
+	    · 本方发起的 -> 提示"等待对方确认" + 「撤回」
+-->
+<div id="rollback_bar" class="hide">
+	<span id="rb_bar_text"></span>
+	<span id="rb_bar_actions"></span>
+</div>
 
 <footer id="status"></footer>
 
