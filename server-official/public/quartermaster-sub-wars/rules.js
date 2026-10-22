@@ -21226,12 +21226,9 @@ function advance_phase(game) {
 		game.active = faction_role_of_nation(game.current_nation)
 
 		/*
-		 * 【2026-10-22】国家回合开始 -> 压一个回退检查点。
-		 * 位置：active 已切到新国家、参战判定已完成、尚未进入第一个阶段
-		 * —— 即"这个国家还没做任何事"的干净盘面。
+		 * 【2026-10-22】检查点已改为"每一步一个"（见 exports.action 的 finally），
+		 * 这里不再额外压点 —— 否则国家轮转也会多出一个重复点。
 		 */
-		push_rollback_point(game, '第 ' + (game.turn || 1) + ' 轮 · ' +
-			(game.current_nation || '?') + '回合开始')
 
 		game.turn_phase = PHASES[0].key
 		run_phase_entry(game, game.turn_phase, game.current_nation)
@@ -21273,7 +21270,8 @@ function faction_role_of_nation(nation) {
  * ============================================================ */
 
 const HISTORY_MAX = 120
-const ROLLBACK_MAX = 12
+/* 【2026-10-22 玩家口径】检查点上限 60（每步一个，约 0.20 MB/存档） */
+const ROLLBACK_MAX = 60
 
 const SIDE_ROLE = {}
 SIDE_ROLE[AXIS] = AXIS_ROLE
@@ -21284,16 +21282,21 @@ function side_label(side) {
 }
 
 /*
- * 快照打包：剔除不能回滚 / 不宜重复存储的字段。
+ * 快照打包：剔除不能回滚 / 不宜重复存储 / 可由 refresh 重算的字段。
  *
  * ⚠ history_total 必须【保留】在快照里：它跟着 history 一起回退，
  * 否则回退后计数又从 1 开始，前端历史条目的 n 会重复。
+ *
+ * 【2026-10-22 玩家口径·剔除 limited_connections】
+ * 它是 compute_connections() 的缓存（1.2 KB 原始 / 约 0.38 KB 压缩），
+ * 恢复时用 refresh(game) 重算即可 —— 省体积，且不会与盘面不一致。
  */
 function rollback_pack(game) {
 	const json = JSON.stringify(game, (k, v) =>
 		(k === 'undo' || k === 'history' ||
 			k === 'rollback' || k === 'rollback_proposal' ||
-			k === 'log' || k === '_in_action') ? undefined : v)
+			k === 'log' || k === '_in_action' ||
+			k === 'limited_connections') ? undefined : v)
 	return zlib.deflateSync(Buffer.from(json, 'utf8')).toString('base64')
 }
 
@@ -21302,15 +21305,22 @@ function rollback_unpack(s) {
 }
 
 /*
- * 压一个检查点（国家回合开始时调用）。
+ * 压一个检查点。
+ *
+ * 【2026-10-22 玩家口径 · 对齐上层 admin rewind 的粒度】
+ *   粒度 = 【每一步】（与行动记录一一对应，n = history.n）；
+ *   上限 ROLLBACK_MAX = 60；setup 另压一个 n=0 的"开局"点，用于退回开局。
  * log_len / hist_len 用于恢复时把日志与行动记录截断到该时点。
  */
-function push_rollback_point(game, label) {
+function push_rollback_point(game, meta) {
+	meta = meta || {}
 	const arr = game.rollback || (game.rollback = [])
 	const point = {
-		turn: game.turn || 1,
-		nation: game.current_nation || null,
-		label: label,
+		n: (meta.n == null) ? 0 : meta.n,
+		turn: (meta.turn == null) ? (game.turn || 1) : meta.turn,
+		nation: meta.nation || game.current_nation || null,
+		phase: meta.phase || game.turn_phase || null,
+		label: meta.label || '',
 		log_len: game.log.length,
 		hist_len: (game.history || []).length,
 	}
@@ -21356,37 +21366,51 @@ function record_action_history(game, meta) {
 	return hist[hist.length - 1]
 }
 
-/* 本回合（整轮）内可选的检查点 */
+/*
+ * 可回退的检查点（每步一个，按时间正序）。
+ * n = 行动记录编号（0 = 开局），前端据此在历史条目上标"可回退"。
+ *
+ * ⚠ 上一版按"本回合（整轮）"过滤，现改为全量下发 —— 粒度对齐 admin rewind，
+ * 不再限制只能退回本回合开始时。
+ */
 function rollback_points_of(game) {
 	const arr = game.rollback || []
-	const cur = (game.turn == null) ? 1 : game.turn
 	const out = []
-	for (let i = 0; i < arr.length; i++) {
-		/* ⚠ 不能写 (arr[i].turn || 1)：turn=0 会被吞成 1，越界检查点就漏进来了 */
-		const t = (arr[i].turn == null) ? 1 : arr[i].turn
-		if (t !== cur) continue
-		out.push({ index: i, turn: t, nation: arr[i].nation, label: arr[i].label })
-	}
+	for (let i = 0; i < arr.length; i++)
+		out.push({
+			index: i,
+			n: arr[i].n,
+			turn: arr[i].turn,
+			nation: arr[i].nation,
+			label: arr[i].label,
+		})
 	return out
 }
 
-/* 提议方：发起回退提议（操作权交给对方审阅） */
+/*
+ * 提议方：发起回退提议（操作权交给对方审阅）。
+ *
+ * arg.n = 目标步号（= 行动记录编号；0 = 开局）。省略则默认最近一步。
+ */
 function do_propose_rollback(game, side, arg) {
 	if (game.game_over) { game.log.push('对局已结束，不能回退'); return game }
 	if (game.rollback_proposal) { game.log.push('已有待确认的回退提议'); return game }
 	if (game.active !== SIDE_ROLE[side]) { game.log.push('只能由当前行动方提议回退'); return game }
 	const arr = game.rollback || []
-	const pts = rollback_points_of(game)
-	if (!pts.length) { game.log.push('本回合没有可回退的检查点'); return game }
-	let idx = (arg && arg.index != null) ? Number(arg.index) : pts[pts.length - 1].index
-	if (!pts.some(p => p.index === idx)) {
-		game.log.push('回退点必须在本回合（整轮）范围内')
+	if (!arr.length) { game.log.push('暂无回退检查点'); return game }
+	const want_n = (arg && arg.n != null) ? Number(arg.n) : arr[arr.length - 1].n
+	/* 从后往前找（同 n 不会重复，但保险） */
+	let idx = -1
+	for (let i = arr.length - 1; i >= 0; i--)
+		if (arr[i].n === want_n) { idx = i; break }
+	if (idx < 0) {
+		game.log.push('回退点不存在（该步已超出 ' + ROLLBACK_MAX + ' 步保留范围）')
 		return game
 	}
-	if (idx >= arr.length) { game.log.push('回退点不存在'); return game }
 	const point = arr[idx]
 	game.rollback_proposal = {
 		by_side: side,
+		n: point.n,
 		index: idx,
 		turn: point.turn,
 		label: point.label,
@@ -21397,7 +21421,8 @@ function do_propose_rollback(game, side, arg) {
 	}
 	/* 操作权交给对方审阅（与 PoG propose_rollback 同款） */
 	game.active = SIDE_ROLE[side === AXIS ? ALLIES : AXIS]
-	game.log.push('【' + side_label(side) + '】提议回退到「' + point.label + '」，等待对方确认')
+	game.log.push('【' + side_label(side) + '】提议回退到「' +
+		(point.label || ('第 ' + point.n + ' 步')) + '」，等待对方确认')
 	return game
 }
 
@@ -21429,7 +21454,13 @@ function do_answer_rollback(game, side, accept) {
 	/* 检查点截断到被回退的那一个（其后作废） */
 	game.rollback = rb.slice(0, pr.index + 1)
 	game.rollback_proposal = null
-	game.log.push('【' + side_label(side) + '】同意回退，对局已退回「' + pr.label + '」')
+	/*
+	 * limited_connections 在快照里被剔除（省约 0.38 KB/点），
+	 * 这里按恢复后的盘面重算，避免沿用回退前的连通缓存。
+	 */
+	refresh(game)
+	game.log.push('【' + side_label(side) + '】同意回退，对局已退回「' +
+		(pr.label || ('第 ' + pr.n + ' 步')) + '」')
 	return game
 }
 
@@ -21742,8 +21773,8 @@ exports.setup = function (seed, scenario, options) {
 	/* 操作权与当前行动国所属阵营保持一致（start_opening_phase 已设好，这里兜底） */
 	game.active = faction_role_of_nation(game.current_nation)
 
-	/* 【2026-10-22】开局检查点：开局弃牌 / 前奏阶段也能回退到这里 */
-	push_rollback_point(game, '开局 · ' + (game.current_nation || '?') + '回合开始')
+	/* 【2026-10-22】开局检查点（n=0）：退到"一步都没走"的盘面 */
+	push_rollback_point(game, { n: 0, label: '开局' })
 
 	return game
 }
@@ -23296,7 +23327,23 @@ exports.view = function (state, current) {
 		 *   rollback_points    本回合（整轮）内可回退的检查点
 		 *   rollback_proposal  待确认的回退提议（对双方可见，但只有对方能确认）
 		 */
-		history: game.history || [],
+		history: (() => {
+			/* 给每条历史标注"是否有对应检查点"，前端据此决定是否显示「回退」 */
+			const rbSet = {}
+			for (const p of (game.rollback || [])) rbSet[p.n] = 1
+			return (game.history || []).map(h => ({
+				n: h.n,
+				turn: h.turn,
+				phase: h.phase,
+				nation: h.nation,
+				by: h.by,
+				action: h.action,
+				label: h.label,
+				from: h.from,
+				to: h.to,
+				can_rollback: !!rbSet[h.n],
+			}))
+		})(),
 		history_total: game.history_total || 0,
 		rollback_points: rollback_points_of(game),
 		rollback_proposal: game.rollback_proposal ? {
@@ -28494,7 +28541,15 @@ exports.action = function (state, current, action, arg) {
 	} finally {
 		/* 必须清：否则 _in_action 会被写进存档，之后所有动作都不再记录 */
 		delete game._in_action
-		try { record_action_history(game, { action: action, side: side, from: from }) } catch (e) {}
+		try {
+			const h = record_action_history(game, { action: action, side: side, from: from })
+			/*
+			 * 【2026-10-22 玩家口径】每步一个检查点（对齐上层 admin rewind 的粒度），
+			 * 编号与行动记录一致（n = history.n），上限 ROLLBACK_MAX=60。
+			 * 没有日志产出的动作不记历史、也不压点。
+			 */
+			if (h) push_rollback_point(game, h)
+		} catch (e) {}
 	}
 }
 

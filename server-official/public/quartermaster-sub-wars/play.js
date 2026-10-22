@@ -5149,20 +5149,19 @@ function can_propose_rollback() {
 	return !!(view && view.actions && view.actions.propose_rollback)
 }
 
-function propose_rollback_to(index) {
-	if (!view || !view.actions || !view.actions.propose_rollback) {
-		toast('现在不能提议回退（须轮到你行动、且本回合有检查点）')
+/* n = 行动记录编号（= 服务端检查点编号，0 = 开局） */
+function propose_rollback_to(n) {
+	if (!can_propose_rollback()) {
+		toast('现在不能提议回退（须轮到你行动、且存在检查点）')
 		return
 	}
-	const pts = view.rollback_points || []
-	let p = null
-	for (const x of pts)
-		if (x.index === index) { p = x; break }
-	if (!p)
+	let h = null
+	for (const x of (view.history || []))
+		if (x.n === n) { h = x; break }
+	const label = '第 ' + n + ' 步' + (h && h.label ? ' · ' + h.label : '')
+	if (!confirm('回退到「' + label + '」需要对方同意。\n确认发起提议？'))
 		return
-	if (!confirm('回退到「' + p.label + '」需要对方同意。\n确认发起提议？'))
-		return
-	send_action('propose_rollback', { index: index })
+	send_action('propose_rollback', { n: n })
 }
 
 function answer_rollback(accept) {
@@ -5186,26 +5185,25 @@ function update_history_ui(force) {
 	if (!hist_open && !force)
 		return
 
-	/* ---------- ① 可回退检查点 ---------- */
+	/* ---------- ① 状态提示（检查点已并入下方流水，每条右侧有「回退」） ---------- */
 	const rbList = document.getElementById('rb_list')
 	if (rbList) {
-		const pts = (view.rollback_points || []).slice().reverse()
+		const n = (view.rollback_points || []).length
 		const pr = view.rollback_proposal
-		const can = can_propose_rollback()
-		if (!pts.length) {
-			rbList.innerHTML = '<div class="hist_empty">本回合没有可回退的检查点</div>'
+		let html = ''
+		if (pr) {
+			html = '<div class="hist_empty">回退提议待确认：' + esc(pr.label || ('第 ' + pr.turn + ' 步')) +
+				'（等对方在顶部横幅里同意/拒绝）</div>'
+		} else if (!can_propose_rollback()) {
+			html = '<div class="hist_empty">现在不能提议回退（需轮到你行动且存在检查点）</div>'
 		} else {
-			rbList.innerHTML = pts.map(function (p) {
-				const btn = (can && !pr)
-					? '<button class="hist_rb_btn" type="button" onclick="propose_rollback_to(' + p.index + ')">回退到此处</button>'
-					: ''
-				return '<div class="hist_rb_row"><span class="hist_rb_label">' + esc(p.label || '') +
-					'</span>' + btn + '</div>'
-			}).join('')
+			html = '<div class="hist_empty">点记录右侧「↺ 回退」发起时光回溯（需对方同意）；' +
+				'当前保留 ' + n + ' 个检查点</div>'
 		}
+		rbList.innerHTML = html
 	}
 
-	/* ---------- ② 出牌流水 ---------- */
+	/* ---------- ② 出牌流水（每条可展开日志；有检查点的可发起回退） ---------- */
 	const cnt = document.getElementById('hist_count')
 	const arr = (view.history || []).slice().reverse()
 	if (cnt)
@@ -5217,6 +5215,7 @@ function update_history_ui(force) {
 			list.innerHTML = '<div class="hist_empty">暂无行动记录</div>'
 		} else {
 			const mine = my_side_key()
+			const allow = can_propose_rollback() && !view.rollback_proposal
 			list.innerHTML = arr.map(function (h) {
 				const cls = 'hist_row' + (h.by === mine ? ' mine' : '')
 				let detail = ''
@@ -5226,11 +5225,16 @@ function update_history_ui(force) {
 						lines.map(function (l) { return '<div>' + esc(l) + '</div>' }).join('') +
 						'</div>'
 				}
+				const btn = (allow && h.can_rollback)
+					? '<button class="hist_rb_btn" type="button" ' +
+						'onclick="event.stopPropagation();propose_rollback_to(' + h.n + ')">↺ 回退</button>'
+					: ''
 				return '<div class="' + cls + '" onclick="toggle_hist_item(' + h.n + ')">' +
 					'<span class="hist_step">#' + h.n + '</span>' +
 					'<span class="hist_meta">T' + h.turn + ' · ' + esc(h.nation || '') + ' · ' +
 					esc(PHASE_ZH[h.phase] || h.phase || '') + '</span>' +
 					'<span class="hist_label">' + esc(h.label || '') + '</span>' +
+					btn +
 					detail +
 					'</div>'
 			}).join('')

@@ -260,10 +260,10 @@ view.undo_reason = can_undo ? null : '对方已行动 / 无可回退步骤'
 | 位置 | 内容 |
 |---|---|
 | 顶部 | `require('zlib')`（检查点压缩；rules.js 仅服务端加载） |
-| 「四点五」新节 | `HISTORY_MAX=120`、`ROLLBACK_MAX=12`、`rollback_pack/unpack`、`push_rollback_point`、`record_action_history`、`rollback_points_of`、`do_propose_rollback`、`do_answer_rollback`、`do_cancel_rollback` |
+| 「四点五」新节 | `HISTORY_MAX=120`、`ROLLBACK_MAX=60`、`rollback_pack/unpack`、`push_rollback_point`、`record_action_history`、`rollback_points_of`、`do_propose_rollback`、`do_answer_rollback`、`do_cancel_rollback` |
 | `create_empty_game_state` | 新增 `history: []`、`history_total: 0`、`rollback: []`、`rollback_proposal: null` |
-| `advance_nation`（国家轮转处） | `push_rollback_point('第 N 轮 · X回合开始')` |
-| `setup` 末尾 | 压开局检查点（`开局 · 德国回合开始`） |
+| `exports.action` 的 `finally` | **每步一个检查点**（`n = history.n`，与行动记录一一对应；无日志产出的动作不压点） |
+| `setup` 末尾 | 压开局检查点（`n=0` / `开局`） |
 | `do_action`（原 `exports.action` 主体） | 改名；入口新增「提议待确认期间只放行同意/拒绝/撤回/log」守卫 |
 | `exports.action`（新 wrapper，文件末尾） | `_in_action` 去重内部 resume；`from=log.length`；`finally` 里 `record_action_history`；四个回退动作分派 |
 | `build_actions` 外层 | 追加 `propose_rollback` / `accept_rollback` / `reject_rollback` / `cancel_rollback`（内层有十几处排他式提前 return，写在内层会漏） |
@@ -280,13 +280,18 @@ view.undo_reason = can_undo ? null : '对方已行动 / 无可回退步骤'
 
 ### 7.3 实测数据
 
+> 【2026-10-22 二次对齐】玩家要求对齐上层 admin rewind 的粒度（截图里 `REWIND 130/129/128…`），
+> 即**每一步都可退**，并确认参数：**60 个检查点 + 剔除 `limited_connections`**。
+> 下表为二次对齐后的实测值。
+
 | 指标 | 值 |
 |---|---|
-| 单个检查点（deflate+base64） | **3.5 KB** |
-| 检查点上限 | 12 个（约 42 KB） |
-| 整局存档（120 步、120 条历史、1 检查点） | 32.2 KB（改前 11.7 KB） |
-| `view` 体积（含 120 条历史） | 47.2 KB |
-| 历史条目上限 | 120（服务端保留；`history_total` 累计） |
+| 单个检查点（deflate+base64，已剔除 `limited_connections`） | **3.27 KB** |
+| 检查点上限 | **60 个**（约 196 KB） |
+| 整局存档（140 步、120 条历史、60 检查点） | **232.8 KB**（其中 rollback 196 KB、history 16.9 KB） |
+| `view` 体积 | **54.7 KB** |
+| 历史条目上限 | 120（`history_total` 累计） |
+| 检查点编号 | `n` = 行动记录编号（`0` = 开局），前端在历史条目右侧直接「↺ 回退」 |
 
 ### 7.4 测试
 
@@ -294,7 +299,21 @@ view.undo_reason = can_undo ? null : '对方已行动 / 无可回退步骤'
 
 回归：模块 40 个 `_smoke_*.js` 中 19 个既有失败名单与本轮改动前**完全一致**；仓库 75 个 `tools/_smoke_*.js` 逐项 PASS/FAIL 行数差异 **0**。
 
-### 7.5 仍待办
+### 7.5 与上层 admin rewind 的差异（2026-10-22 二次对齐后）
+
+| 维度 | admin rewind（上层 `/join` 页） | 本模块（玩家版） |
+|---|---|---|
+| 快照来源 | `game_snap` 表（DB） | `game.rollback`（随 state 落库，deflate 压缩） |
+| 粒度 | 每 move 一份 | **每步一份**（`n` = 行动记录编号） |
+| 保留量 | 全部历史 | 最近 **60** 步 |
+| 谁能发起 | `user_id===1` / moderator | 当前行动方（`view.actions.propose_rollback`） |
+| 需对方同意 | 否 | **是**（`accept_rollback` / `reject_rollback` / `cancel_rollback`） |
+| 恢复实现 | 直接写 DB + 重推 state（不经过 rules） | 模块内覆盖 state（`Object.assign` + `refresh`） |
+| 回放快照 | 主动 `delete_snaps_after_rollback` | 由上层 `is_rollback`（`state.log.length` 变短）自动删 |
+| `games.moves` | 减到 `snap_id-1` | **不减**（上层字段，模块无权限） |
+| `undo` 栈 | 清空 | 保留（可连续回退） |
+
+### 7.6 仍待办
 
 - [ ] `play.html` 补 `?v=` 版本串（否则测试服更新后玩家看到旧前端）。
 - [ ] 测试服打包（含 `cards/`，约 177 MB）。

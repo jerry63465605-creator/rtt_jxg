@@ -1728,8 +1728,6 @@ body.allies .score-side.allies {
 
 #rb_section {
 	flex: 0 0 auto;
-	max-height: 32vh;
-	overflow-y: auto;
 	border-bottom: 2px solid #000;
 	background-color: #24313a;
 }
@@ -1775,6 +1773,13 @@ body.allies .score-side.allies {
 	cursor: pointer;
 }
 
+/* 历史行内嵌的回退按钮：贴右侧，点击时不要触发展开日志 */
+.hist_row > .hist_rb_btn {
+	position: absolute;
+	right: .5em;
+	top: .3em;
+}
+
 .hist_rb_btn:hover { background-color: #4e7595; }
 
 #hist_list {
@@ -1784,7 +1789,8 @@ body.allies .score-side.allies {
 }
 
 .hist_row {
-	padding: .35em .7em;
+	position: relative;
+	padding: .35em 5.4em .35em .7em;
 	border-bottom: 1px solid #ffffff12;
 	cursor: pointer;
 }

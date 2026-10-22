@@ -76,7 +76,7 @@ console.log('\n=== A. setup 初始字段 ===')
 		(g.rollback[0] || {}).label)
 	ok('检查点有压缩快照', !!(g.rollback[0] || {}).snap)
 	ok('HISTORY_MAX = 120', I.HISTORY_MAX === 120, String(I.HISTORY_MAX))
-	ok('ROLLBACK_MAX = 12', I.ROLLBACK_MAX === 12, String(I.ROLLBACK_MAX))
+	ok('ROLLBACK_MAX = 60', I.ROLLBACK_MAX === 60, String(I.ROLLBACK_MAX))
 }
 
 console.log('\n=== B. 行动记录：有日志的动作才记，且索引可 slice ===')
@@ -119,7 +119,7 @@ console.log('\n=== D. 提议回退：操作权交给对方，普通动作被拦 
 	const proposer = g.active
 	const other = proposer === 'Axis' ? 'Allies' : 'Axis'
 
-	rules.action(g, proposer, 'propose_rollback', { index: pts[0].index })
+	rules.action(g, proposer, 'propose_rollback', { n: pts[0].n })
 	ok('产生待确认提议', !!g.rollback_proposal, JSON.stringify(g.rollback_proposal && {
 		by: g.rollback_proposal.by_side, label: g.rollback_proposal.label,
 	}))
@@ -149,7 +149,7 @@ console.log('\n=== E. 拒绝：提议作废、盘面不变、操作权归还 ===
 	const pts = rules.view(g, g.active).rollback_points
 	const proposer = g.active
 	const other = proposer === 'Axis' ? 'Allies' : 'Axis'
-	rules.action(g, proposer, 'propose_rollback', { index: pts[0].index })
+	rules.action(g, proposer, 'propose_rollback', { n: pts[0].n })
 	const fpNow = fp(g)
 	rules.action(g, other, 'reject_rollback', {})
 	ok('提议已清空', g.rollback_proposal === null)
@@ -173,7 +173,7 @@ console.log('\n=== F. 同意：退回检查点盘面 / 日志与历史同步截�
 	const pts = rules.view(g, g.active).rollback_points
 	const proposer = g.active
 	const other = proposer === 'Axis' ? 'Allies' : 'Axis'
-	rules.action(g, proposer, 'propose_rollback', { index: pts[0].index })
+	rules.action(g, proposer, 'propose_rollback', { n: pts[0].n })
 	rules.action(g, other, 'accept_rollback', {})
 
 	ok('盘面退回检查点', fp(g) === fp0, 'fp equal=' + (fp(g) === fp0))
@@ -207,12 +207,12 @@ console.log('\n=== G. 权限守卫 ===')
 
 	/* 非 active 方提议 */
 	const logLen = g.log.length
-	rules.action(g, other, 'propose_rollback', { index: pts[0].index })
+	rules.action(g, other, 'propose_rollback', { n: pts[0].n })
 	ok('非当前行动方不能提议', !g.rollback_proposal && g.log.length > logLen,
 		(g.log || []).slice(-1)[0])
 
 	/* 提议方自己同意 */
-	rules.action(g, proposer, 'propose_rollback', { index: pts[0].index })
+	rules.action(g, proposer, 'propose_rollback', { n: pts[0].n })
 	ok('前提：提议已产生', !!g.rollback_proposal)
 	const fpNow = fp(g)
 	rules.action(g, proposer, 'accept_rollback', {})
@@ -225,18 +225,52 @@ console.log('\n=== G. 权限守卫 ===')
 		(g.log || []).slice(-1)[0])
 }
 
-console.log('\n=== H. 检查点范围：只能退到本回合（整轮）内的点 ===')
+console.log('\n=== H. 粒度：每步一个检查点 + 60 点保留上限 ===')
 {
 	const g = rules.setup(42, rules.default_scenario, {})
-	/* 伪造一个"上一轮"的检查点，验证拒绝 */
-	g.rollback.unshift({ turn: 0, nation: '德国', label: '上一轮', log_len: 0, hist_len: 0, snap: g.rollback[0].snap })
-	const pts = rules.view(g, g.active).rollback_points
-	ok('view 只下发本回合检查点', pts.every(p => p.turn === (g.turn || 1)),
-		JSON.stringify(pts.map(p => p.turn)))
+	ok('上限 60', I.ROLLBACK_MAX === 60, String(I.ROLLBACK_MAX))
+	play_steps(g, 25)
+	ok('开局点 n=0 存在', (g.rollback || []).length > 0 && g.rollback[0].n === 0,
+		JSON.stringify((g.rollback || []).map(p => p.n).slice(0, 4)))
+	ok('每步都有检查点（数量 ≈ 历史条数 + 1）',
+		Math.abs((g.rollback || []).length - ((g.history || []).length + 1)) <= 1,
+		'rb=' + (g.rollback || []).length + ' hist=' + (g.history || []).length)
+	ok('检查点 n 与历史 n 一一对应',
+		(g.history || []).every(h => (g.rollback || []).some(p => p.n === h.n)),
+		JSON.stringify((g.history || []).map(h => h.n).slice(-3)))
+	ok('view.history 带 can_rollback 标记',
+		(rules.view(g, g.active).history || []).every(h => typeof h.can_rollback === 'boolean'))
+
+	/* 灌 80 个点，验证裁剪到 60 */
+	for (let i = 1; i <= 80; i++) I.push_rollback_point(g, { n: 1000 + i, label: 'x' + i })
+	ok('检查点被裁到 60', (g.rollback || []).length === 60, String((g.rollback || []).length))
+	ok('保留的是最新 60 个',
+		g.rollback[g.rollback.length - 1].n === 1080, String(g.rollback[g.rollback.length - 1].n))
+
+	/* 已被裁掉的步号再提议 -> 拒绝 */
 	const logLen = g.log.length
-	rules.action(g, g.active, 'propose_rollback', { index: 0 })
-	ok('越界检查点被拒', !g.rollback_proposal && g.log.length > logLen,
+	rules.action(g, g.active, 'propose_rollback', { n: 1 })
+	ok('已淘汰的步号被拒', !g.rollback_proposal && g.log.length > logLen,
 		(g.log || []).slice(-1)[0])
+}
+
+console.log('\n=== H2. 快照剔除 limited_connections，回退后重算 ===')
+{
+	const g = rules.setup(42, rules.default_scenario, {})
+	const raw = I.rollback_unpack(g.rollback[0].snap)
+	ok('快照内不含 limited_connections',
+		!Object.prototype.hasOwnProperty.call(raw, 'limited_connections'),
+		JSON.stringify(Object.keys(raw).filter(k => /connect/i.test(k))))
+	play_steps(g, 10)
+	delete g.limited_connections      /* 模拟快照恢复后该字段缺失 */
+	const pts = rules.view(g, g.active).rollback_points
+	const proposer = g.active
+	const other = proposer === 'Axis' ? 'Allies' : 'Axis'
+	rules.action(g, proposer, 'propose_rollback', { n: pts[0].n })
+	rules.action(g, other, 'accept_rollback', {})
+	ok('回退后 limited_connections 已重算',
+		!!g.limited_connections && typeof g.limited_connections === 'object',
+		typeof g.limited_connections)
 }
 
 console.log('\n=== I. 存档往返（JSON 序列化后行为一致）===')
@@ -252,7 +286,7 @@ console.log('\n=== I. 存档往返（JSON 序列化后行为一致）===')
 	const pts = rules.view(g2, g2.active).rollback_points
 	const proposer = g2.active
 	const other = proposer === 'Axis' ? 'Allies' : 'Axis'
-	rules.action(g2, proposer, 'propose_rollback', { index: pts[0].index })
+	rules.action(g2, proposer, 'propose_rollback', { n: pts[0].n })
 	rules.action(g2, other, 'accept_rollback', {})
 	ok('序列化后回退成功', g2.rollback_proposal === null && (g2.log || []).some(l => /同意回退/.test(l)),
 		(g2.log || []).slice(-1)[0])
