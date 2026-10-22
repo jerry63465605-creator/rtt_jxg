@@ -315,6 +315,7 @@ view.undo_reason = can_undo ? null : '对方已行动 / 无可回退步骤'
 
 ### 7.6 仍待办
 
-- [ ] `play.html` 补 `?v=` 版本串（否则测试服更新后玩家看到旧前端）。
-- [ ] 测试服打包（含 `cards/`，约 177 MB）。
+- [x] `play.html` 补 `?v=20261022` 版本串（`play.css` / `data.js` / `layout.js` / `play.js`）。
+- [x] 测试服打包（含 `cards/`）：`quartermaster-sub-wars-testserver-20261022.zip`
+      469 文件 / 177.1 MB / SHA256 `B0A7D8941ECDF7900C3DB3FD585DE053948B85561B375A7EF00960DA5EFA26D3`
 - [ ] 可选优化：`view.history` 只下发最近 60 条（当前 120 条占 view 约 17 KB）。
