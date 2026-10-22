@@ -23488,6 +23488,22 @@ exports.view = function (state, current) {
 						ready_space: (ready && ready.space) || null,
 						once_per_turn: !!(trig && trig.once_per_turn),
 						used_this_turn: (game.status_used || {})[cid] === freq_key(game),
+						/*
+						 * 【2026-10-23】把触发代价的张数一并下发。
+						 *
+						 * 客户端 STATUS_UI 是【手写表】，新增带弃牌代价的状态卡若漏登记，
+						 * 点击会退化到"通用确认框"——点确认时 send_action 不带 discard，
+						 * 服务端判"请先选择要弃置的 N 张手牌"直接 return，而客户端
+						 * 没有任何反馈，表现为【点了弹窗、确认后无反应】（15356 现场症状）。
+						 * 下发后客户端以服务端为准，静态表只用来补充 filter / battle 等类型信息。
+						 */
+						cost_discard: (function () {
+							const cd = trig && trig.cost && trig.cost.discard
+							if (typeof cd === 'function') {
+								try { return Number(cd(game)) || 0 } catch (e) { return 0 }
+							}
+							return Number(cd) || 0
+						})(),
 						desc: (cfg.ongoing && cfg.ongoing.desc) ||
 							(trig && trig.desc) || '',
 						attrition_log: (() => {

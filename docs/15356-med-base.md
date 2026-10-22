@@ -145,9 +145,48 @@ if (tr.effect && tr.effect.kind === 'build') {
 
 ---
 
-## 六、测试
+## 六、缺陷 ⑤：客户端弹窗后点了没反应（2026-10-23 玩家反馈）
 
-`tools/_smoke_15356_med_base.js`（24 项，ALL PASS）
+### 症状
+
+点桌面《地中海基地》→ 弹出「确认发动《地中海基地》？」→ 点【确认发动】→ **什么也没发生**。
+
+### 根因链（5 步）
+
+| 步 | 发生什么 |
+|---|---|
+| ① | 客户端 `STATUS_UI` 是**手写表**，里面**没有 15356** → `status_ui_of('15356#1')` 返回 `{}` |
+| ② | `ui.discard === undefined` → 跳过弃牌框，落到最后的「通用确认框」 |
+| ③ | 点【确认发动】→ `send_action('activate_status', { card })`，**不带 `discard`** |
+| ④ | 服务端 `cost.discard` 校验失败 → `log('请先选择要弃置的 2 张手牌')` → `return` |
+| ⑤ | 客户端没有任何 UI 反馈 → 表现为「弹窗后点了没反应」 |
+
+### 修法（三道）
+
+1. **补登记** `STATUS_UI['15356'] = { discard: 2 }`
+2. **服务端下发权威值**：`view.table_status` 每项新增 `cost_discard`
+3. **客户端以服务端为准兜底**：
+
+```js
+const discNeed = ui.discard || c.cost_discard || 0
+if (discNeed) { start_status_discard(cardId, ui, discNeed); return }
+```
+
+静态表只用来补充 `filter` / `battle` / `sbuild` 等**类型信息**，张数一律以服务端为准 —— 以后新增带弃牌代价的状态卡，即使忘登记也不会再静默失败。
+
+### 顺带核对
+
+全库「有 `trigger.cost.discard` 的状态卡」共 **10 张**，逐张核对客户端登记：
+
+15338(2) 15339(2) **15356(2)** 17539(1) 17841(2) 17842(1) 17843(1) 17846(1) 17848(2) 15242(1)
+
+只有 15356 漏登记，其余 9 张本来就对。
+
+---
+
+## 七、测试
+
+### `tools/_smoke_15356_med_base.js`（24 项，ALL PASS）
 
 | 段 | 覆盖 |
 |---|---|
@@ -157,11 +196,22 @@ if (tr.effect && tr.effect.kind === 'build') {
 | D | 不带 `discard` 发动 → **`skip_play_done` 未置位**；重试可成功 |
 | E | 其余 6 张 recruit 卡配置未变；15242 弃错牌 → 不跳阶段 + 日志正确（不再崩） |
 
+### `tools/_smoke_status_discard_ui.js`（22 项，ALL PASS）
+
+服务端/客户端弃牌代价一致性：
+
+| 段 | 覆盖 |
+|---|---|
+| A | 扫描服务端所有「`trigger.cost.discard > 0`」的状态卡（10 张），逐张断言客户端 `STATUS_UI` 登记了相同张数 |
+| B | `view.table_status` 的 `cost_discard` 与配置一致（15356 = 2）；同时带 `ongoing`/`trigger` 标记 |
+| C | 客户端仍保留 `ui.discard \|\| c.cost_discard` 兜底（防回退成只靠手写表） |
+| D | 15356 的 `effect.kind` 仍是 `build`；`cost.discard=2`、`cost.skip_play=true` |
+
 **全量回归**：55 个 smoke，失败 19 个，**名单与改动前完全一致**（新增 0，且不再有任何 `ReferenceError`）。
 
 ---
 
-## 七、回修入口
+## 八、回修入口
 
 | 症状 | 先看 |
 |---|---|
@@ -171,3 +221,4 @@ if (tr.effect && tr.effect.kind === 'build') {
 | 状态卡"点了直接跳阶段却什么都没发生" | `activate_status` 的 `skip_play` 是否仍在代价校验之前 |
 | 状态卡"点了报错/闪退" | 跑 `node tools/undef_scan.js` 查未定义调用 |
 | 15242 弃错牌行为异常 | `hand_has_matching_card`（requires 闸门）与 `discard_is` 分支的 `cName` |
+| 状态卡"弹窗后点了没反应" | 先看 `view.table_status[i].cost_discard`，再看客户端是否走 `start_status_discard`（不是通用确认框）；新增带弃牌代价的状态卡记得补 `STATUS_UI`，并跑 `_smoke_status_discard_ui.js` |

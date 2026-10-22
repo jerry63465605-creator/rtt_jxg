@@ -6678,6 +6678,13 @@ const STATUS_UI = {
 	'17849': { recruit: 'army' },
 	/* 17539 常设联合国防委员会：弃1张[建设陆军]，在加拿大征召英国陆军（纯弃牌） */
 	'17539': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' } },
+	/*
+	 * 【2026-10-23】15356 地中海基地：跳过出牌阶段 + 弃 2 张手牌
+	 * -> 在<地中海>建设海军。
+	 * 建设地区由服务端 effect.space 写死，客户端无需选地，故不配 sbuild；
+	 * 弃牌走通用 status_discard 框（无 filter = 任意手牌）。
+	 */
+	'15356': { discard: 2 },
 }
 
 /*
@@ -6831,9 +6838,17 @@ function on_click_table_status(cardId) {
 			])
 		return
 	}
-	/* 需弃牌代价：先进入手牌弃置选择（弃牌后可链式进入 battle / sbuild） */
-	if (ui.discard) {
-		start_status_discard(cardId, ui, ui.discard)
+	/*
+	 * 需弃牌代价：先进入手牌弃置选择（弃牌后可链式进入 battle / sbuild）。
+	 *
+	 * 【2026-10-23】张数取 `ui.discard || c.cost_discard`：以服务端下发的
+	 * `c.cost_discard` 兜底。STATUS_UI 是手写表，漏登记过的卡（15356 地中海基地）
+	 * 会退化成下面的"通用确认框"——点确认不带 discard，服务端拒绝、
+	 * 客户端又没有任何提示，表现就是【弹窗后点了没反应】。
+	 */
+	const discNeed = ui.discard || c.cost_discard || 0
+	if (discNeed) {
+		start_status_discard(cardId, ui, discNeed)
 		return
 	}
 	/* 建设预算：玩家手动点选相邻空格（不自动兜底） */
