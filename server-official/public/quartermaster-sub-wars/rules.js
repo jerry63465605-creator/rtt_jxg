@@ -1075,6 +1075,52 @@ function discard_card(game, nation, card_id) {
 	return true
 }
 
+/* ============================================================
+ * 【2026-10-23 D5】手牌增删的三个原语
+ *
+ * 背景：全库有 85 处手牌写操作散在 26 个函数里，其中"取牌/放回"没有原语，
+ * 各写各的 splice。已经出过真实事故（见 push_discard_direct 的注释：
+ * 先 splice 再挂起 → 结算失败时牌既不在手牌也不在弃牌堆，"卡打出去凭空消失"）。
+ *
+ * 流向与对应原语（谁负责哪一段，别混）：
+ *   牌堆 → 手牌      draw_cards
+ *   手牌 → 弃牌堆    discard_card（要求牌在手）
+ *   手牌 → 挂起流程  take_from_hand            ← 本组
+ *   挂起 → 手牌      put_back_to_hand          ← 本组（失败回滚）
+ *   牌堆外 → 手牌    give_to_hand              ← 本组
+ *   牌堆 → 弃牌堆    attrition_cards
+ *   手外 → 弃牌堆    push_discard_direct
+ *
+ * ⚠ 手牌顺序【无规则与显示意义】（玩家 2026-10-23 确认），
+ *   因此 put_back_to_hand 一律追加到末尾，不用"旧索引插回"——
+ *   中途又取过牌时旧索引会错位，这是本组要消灭的主要隐患。
+ * ============================================================ */
+
+/* 取牌：手牌 → 调用方。返回 { card, index } 或 null（不在手牌）。 */
+function take_from_hand(game, nation, card) {
+	if (!game.hands[nation]) game.hands[nation] = []
+	const i = game.hands[nation].indexOf(card)
+	if (i < 0) return null
+	game.hands[nation].splice(i, 1)
+	return { card: card, index: i }
+}
+
+/* 放回：失败回滚用。幂等（已在手牌则不重复加），一律追加到末尾。 */
+function put_back_to_hand(game, nation, card) {
+	if (!game.hands[nation]) game.hands[nation] = []
+	if (game.hands[nation].indexOf(card) >= 0) return false
+	game.hands[nation].push(card)
+	return true
+}
+
+/* 给牌：牌堆【之外】的牌进入手牌（区别于 draw_cards：那里从牌堆 shift）。 */
+function give_to_hand(game, nation, card) {
+	if (!game.hands[nation]) game.hands[nation] = []
+	if (game.hands[nation].indexOf(card) >= 0) return false
+	game.hands[nation].push(card)
+	return true
+}
+
 /*
  * 【2026-10-20】牌已在【手牌之外】时，直接把它放进弃牌堆。
  *
@@ -6026,8 +6072,16 @@ function resolve_us_lend_lease_play(game, arg) {
 		return game
 	}
 	const c = inst_card(card)
-	const hi = game.hands[nat].indexOf(card)
-	game.hands[nat].splice(hi, 1)
+	/*
+	 * 【2026-10-23 D5】取牌走原语。手牌顺序无规则/显示意义（玩家确认），
+	 * 所以下面所有失败回滚都调 put_back_to_hand（追加到末尾），
+	 * 不再用"旧索引 hi 插回"——中途又取过牌时那会错位。
+	 */
+	const taken = take_from_hand(game, nat, card)
+	if (!taken) {
+		game.log.push('【' + nat + '】手牌中没有该牌')
+		return game
+	}
 	/* 与 play_card 同口径结算该牌效果（注意：resolve_event_card / run_effect_tactics
 	   返回的是 {ok,...} 结果对象而非 game，绝不能把 game 重赋值成它，否则会丢失
 	   hands/decks 等，导致后续 draw_cards 崩溃——这正是"英国打牌卡住"的根因）。
@@ -6038,7 +6092,7 @@ function resolve_us_lend_lease_play(game, arg) {
 		   · 结算完成：弃牌 + 触发响应/国家技能后走统一收尾，避免"点了没反应 / 卡被吞"。 */
 		const r0 = resolve_event_card(game, nat, card, arg || {})
 		if (!r0 || r0.ok === false) {
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》结算失败：' + ((r0 && r0.reason) || '条件不满足'))
 			return game
 		}
@@ -6057,7 +6111,7 @@ function resolve_us_lend_lease_play(game, arg) {
 		}
 		if (r0.pending && !r0.armedPause) {
 			/* 待玩家补选目标 / 多步：保留委托，卡放回手牌，等客户端重提 */
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.delegate = {
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
@@ -6068,7 +6122,7 @@ function resolve_us_lend_lease_play(game, arg) {
 			return game
 		}
 		if (r0.armedPause) {
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.delegate = {
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
@@ -6086,7 +6140,7 @@ function resolve_us_lend_lease_play(game, arg) {
 	} else if (c.type === 'STATUS') {
 		/* 状态卡：照 play_card「其余卡牌」分支，置本桌面 + 触发持续效果 + 响应 + 国家技能。
 		   play_status_card_impl 内部会自己从手牌移出并置桌，故先把本函数开头已移除的牌放回手牌。 */
-		game.hands[nat].splice(hi, 0, card)
+		put_back_to_hand(game, nat, card)
 		const r2 = play_status_card_impl(game, nat, card)
 		if (!r2 || !r2.ok) {
 			game.log.push('【' + nat + '】《' + c.name + '》打出失败：' + ((r2 && r2.reason) || '条件不满足'))
@@ -6097,7 +6151,7 @@ function resolve_us_lend_lease_play(game, arg) {
 	} else if (c.type === 'EFFECT') {
 		const r1 = run_effect_tactics(game, { nation: nat, actor: nat, card_id: card, arg: arg || {} })
 		if (r1 && r1.ok === false) {
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》结算失败：' + (r1.reason || '条件不满足'))
 			return game
 		}
@@ -6106,13 +6160,13 @@ function resolve_us_lend_lease_play(game, arg) {
 		   照 play_card 的 BASIC 分支结算，复用 has_legal_target / resolve_basic_card 原子 */
 		const pre = has_legal_target(game, nat, c, arg || {})
 		if (!pre.ok) {
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》无法执行：' + pre.reason)
 			return game
 		}
 		const r = resolve_basic_card(game, nat, card, arg || {})
 		if (!r.ok) {
-			game.hands[nat].splice(hi, 0, card)
+			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》无法执行：' + r.reason)
 			return game
 		}
@@ -29351,6 +29405,12 @@ if (typeof module !== 'undefined') {
 		/* 【2026-10-23 D3】移除部队的两条路径与《总体战》结算（供回归测试） */
 		econ_remove_piece,
 		total_war_attrition,
+		/* 【2026-10-23 D5】手牌增删原语 */
+		take_from_hand,
+		put_back_to_hand,
+		give_to_hand,
+		discard_card,
+		push_discard_direct,
 		/* 建设与战斗 */
 		can_build_at,
 		unit_slot_free,
