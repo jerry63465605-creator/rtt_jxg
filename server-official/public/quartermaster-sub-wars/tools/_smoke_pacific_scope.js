@@ -177,6 +177,48 @@ console.log('\n=== F. 端到端：太平洋建海军 -> 对相邻陆地陆战 ==
 		(g2.table['美国'] || []).indexOf('17544#1') >= 0)
 }
 
+console.log('\n=== G. 空打：目标无守军时只带 from 也能发起（2026-10-23 现场修复） ===')
+{
+	/* 现场（game 24）：东太平洋建海军 -> 目标=夏威夷（空地）-> 客户端只提交 {card, space, from}
+	 * 旧实现在 status_launch_battle 里硬要 victim，一律回"请选择发起单位与攻击目标"，
+	 * 且代价（损耗 1 张）已先付、窗口保留 -> 玩家反复点、反复白亏 3 张牌。 */
+	const g = mk()
+	const pac = data.id_of('东太平洋')
+	const b = I.build_piece(g, '美国', 'navy', pac)
+	ok('前置：东太平洋建海军成功', b.ok, b.reason || '')
+	rules.view(g, 'Allies')
+
+	const navyPid = Object.keys(g.location).find(p => g.location[p] === pac && g.piece_nation[p] === '美国')
+	const target = data.id_of('夏威夷')
+	ok('目标=夏威夷（陆地）', target != null && (data.spaces[target] || {}).terrain === 'land')
+	ok('目标格无守军', I.count_pieces(g, { space: target }) === 0, I.count_pieces(g, { space: target }))
+
+	const deckBefore = (g.decks['美国'] || []).length
+	const g2 = rules.action(g, 'Allies', 'activate_status', {
+		card: '17544#1', space: target, from: navyPid,   /* 不带 victim */
+	})
+	const joined = (g2.log || []).join('\n')
+	ok('空打成功（日志：发起陆战）', /发起陆战：夏威夷/.test(joined), (g2.log || []).slice(-1)[0])
+	ok('不再出现"效果未能执行"', !/《美国海军陆战队》效果未能执行/.test(joined))
+	ok('代价正常损耗 1 张', (g2.decks['美国'] || []).length === deckBefore - 1,
+		deckBefore + ' -> ' + (g2.decks['美国'] || []).length)
+	ok('窗口已消耗（不会反复触发）',
+		!((g2.status_instant || []).some(e => e.card_id === '17544#1')),
+		JSON.stringify(g2.status_instant))
+
+	/* 有守军却不给 victim -> 仍要拒（不能误空打） */
+	const g3 = mk()
+	const b3 = I.build_piece(g3, '美国', 'navy', pac)
+	rules.view(g3, 'Allies')
+	const navy3 = Object.keys(g3.location).find(p => g3.location[p] === pac && g3.piece_nation[p] === '美国')
+	const vp = I.new_piece_id(g3)
+	g3.location[vp] = target; g3.piece_nation[vp] = '德国'; g3.piece_type[vp] = 'army'
+	const g4 = rules.action(g3, 'Allies', 'activate_status', { card: '17544#1', space: target, from: navy3 })
+	ok('有守军不给 victim -> 拒绝', /请选择攻击目标/.test((g4.log || []).join('\n')),
+		(g4.log || []).slice(-1)[0])
+	ok('有守军时德国陆军仍在', I.count_pieces(g4, { space: target, nation: '德国', types: ['army'] }) === 1)
+}
+
 console.log('\n----------------------------------------')
 if (fail) {
 	console.log('SOME ' + fail + ' FAILED')

@@ -167,6 +167,59 @@ else cancel_basic_card()
 
 ---
 
+## 六·补：真正的主因 —— 空打被拒（2026-10-23 读 game 24 现场后追加）
+
+### 现场证据
+
+`game=24` 的操作记录（replay #652/#653）与日志：
+
+```
+#652 [Allies] activate_status {"card":"17544#30","space":50,"from":"p66"}
+#653 [Allies] activate_status {"card":"17544#30","space":50,"from":"p66"}
+
+【美国】损耗 1 张牌
+《美国海军陆战队》效果未能执行：请选择发起单位与攻击目标     ← 连报 3 次
+```
+
+读盘面：
+
+| 项 | 值 |
+|---|---|
+| `space: 50` | **夏威夷（陆地，空无守军）** |
+| `from: p66` | 美国海军 @ 东太平洋，**在补给中** ✓ |
+| `victim` | **缺失** —— 因为目标无敌军，客户端按【空打】提交 |
+
+### 根因
+
+`status_launch_battle` 硬性要求 `arg.victim != null`：
+
+```js
+if (arg.from == null || arg.victim == null)
+    return { ok: false, reason: '请选择发起单位与攻击目标' }
+```
+
+而空打是**合法目标**（见 `basic_targets` 注释「空地也是合法目标」、15245 的同一实现）。
+三连后果：**打不起来 + 代价已先付白亏 + 窗口保留可反复点**（3 次共白损耗 3 张牌）。
+
+### 修法
+
+```js
+if (arg.from == null) return { ok: false, reason: '请选择发起单位' }
+const hasEnemy = has_pieces(game, { space: sp, enemyOf: nation })
+if (hasEnemy && !arg.victim)
+    return { ok: false, reason: '该地区有敌方部队，请选择攻击目标' }
+const r = do_battle(game, nation, sp, arg.victim || 0, kind, { from: arg.from })
+```
+
+- 无守军 → 按空打（`victim = 0`）发起，与 15245 同口径
+- 有守军却不给目标 → 仍拒绝（防止误空打）
+- 用 `has_pieces({space, enemyOf})` 原语，不手写遍历（保持 D7 基线 5/5）
+
+影响面：`status_launch_battle` 的 6 个调用点（17544 / 15338 / 15339 / 15346 等）现在都支持空打 ——
+这是把"合法操��被拒"改成正确行为，已有成功路径不变。
+
+---
+
 ## 七、回修入口
 
 | 症状 | 先看 |

@@ -7013,9 +7013,26 @@ function status_launch_battle(game, nation, battleSpace, arg, kind, allowed) {
 	if (sp == null) return { ok: false, reason: '请指定战斗地区' }
 	if (allowed && allowed.length && allowed.indexOf(sp) < 0)
 		return { ok: false, reason: '只能对允许的战斗地区发起' }
-	if (arg.from == null || arg.victim == null)
-		return { ok: false, reason: '请选择发起单位与攻击目标' }
-	const r = do_battle(game, nation, sp, arg.victim, kind, { from: arg.from })
+	if (arg.from == null) return { ok: false, reason: '请选择发起单位' }
+	/*
+	 * 【2026-10-23 修复】无守军时按【空打】处理（victim=0）。
+	 *
+	 * 原先硬性要求 arg.victim != null：玩家对【空地】发起陆战时，客户端按空打
+	 * 只提交 {card, space, from}（不带 victim），服务端一律回
+	 * "请选择发起单位与攻击目标" —— 于是：
+	 *   ① 战斗打不起来；
+	 *   ② 代价（如 17544 的损耗 1 张）在 activate_status 里【已先付】，白亏；
+	 *   ③ r.ok=false 时瞬间窗口被保留，玩家能反复点、反复白亏。
+	 * 实测现场（game 24）：17544 打【夏威夷】空地，连续 3 次各损耗 1 张牌。
+	 *
+	 * 空打本身是合法目标（见 basic_targets "空地也是合法目标"、15245 的同一实现）。
+	 * 有守军却不给 victim 仍然拒绝，避免误空打。
+	 */
+	/* 用原语判"该格有敌对阵营部队"（enemyOf 口径 = 与 nation 阵营不同），别手写遍历 */
+	const hasEnemy = has_pieces(game, { space: sp, enemyOf: nation })
+	if (hasEnemy && !arg.victim)
+		return { ok: false, reason: '该地区有敌方部队，请选择攻击目标' }
+	const r = do_battle(game, nation, sp, arg.victim || 0, kind, { from: arg.from })
 	if (!r.ok) return { ok: false, reason: r.reason }
 	refresh(game)
 	return { ok: true, desc: nation + ' 发起' + (kind === 'sea' ? '海战' : '陆战') + '：' + (r.desc || data.name_of(sp)) }
