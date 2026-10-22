@@ -13032,14 +13032,20 @@ function do_land_battle_at(game, space, nat) {
 
 /*
  * 选【敌方陆军】-> 消灭（15433/15434/7905）。
- * opt.near 非空时，只考虑与该地区相邻的敌方陆军。
+ *
+ * opt.near       非空时，只考虑该地区【及相邻地区】的敌方陆军（卡面写"或相邻"时用）
+ * opt.only       非空时，只考虑该【本格】（卡面写"在<X>"时用；15434/7905 属此类）
+ * opt.onlyNation 非空时，只考虑该【国】的陆军（15433「消灭1支中国陆军」）
  */
 function pick_enemy_army_then_eliminate(game, ctx, choice, opt) {
 	const nat = opt.nation || '日本'
 	const myFaction = faction_of_nation(nat)
 	const near = opt.near
+	const only = opt.only
 	let pool = {}
-	if (near != null) {
+	if (only != null) {
+		pool[Number(only)] = true
+	} else if (near != null) {
 		pool[Number(near)] = true
 		for (const nb of get_connections(game, Number(near), myFaction).map(Number))
 			pool[nb] = true
@@ -13050,7 +13056,8 @@ function pick_enemy_army_then_eliminate(game, ctx, choice, opt) {
 		if (game.piece_type[p] !== 'army') continue
 		const pn = game.piece_nation[p]
 		if (faction_of_nation(pn) === myFaction) continue   /* 敌方 */
-		if (near != null && !pool[Number(game.location[p])]) continue
+		if (opt.onlyNation && pn !== opt.onlyNation) continue
+		if ((near != null || only != null) && !pool[Number(game.location[p])]) continue
 		cands.push({ id: p, name: data.name_of(game.location[p]) + ' 的' + pn + '陆军' })
 	}
 	if (choice === undefined) {
@@ -14549,23 +14556,46 @@ const RESPONSE_EFFECT_IMPL = {
 
 	/* ---- 需要选【敌方陆军】消灭：15433 / 15434 / 7905 ---- */
 	'15433': (game, side, ctx, choice) => {
-		/* 出牌阶段开始时：消灭 1 支敌方陆军 */
+		/* 卡面：「消灭1支【中国】陆军」（不限地区）。2026-10-22 校准：旧实现可杀任意敌方陆军 */
 		return pick_enemy_army_then_eliminate(game, ctx, choice, {
-			prompt: '选择要消灭的 1 支敌方陆军',
+			onlyNation: '中国',
+			prompt: '选择要消灭的 1 支中国陆军',
 		})
 	},
 	'15434': (game, side, ctx, choice) => {
-		/* 出牌阶段开始时：消灭与<中国东北>相邻的 1 支敌方陆军 */
-		return pick_enemy_army_then_eliminate(game, ctx, choice, {
-			near: space_id_of('中国东北'),
-			prompt: '选择要消灭的 1 支敌方陆军（与<中国东北>相邻）',
+		/*
+		 * 卡面：「出牌阶段开始时：在<中国东北>消灭1支敌方国家陆军。在<中国东北>征召陆军。」
+		 *
+		 * 【2026-10-22 修复】
+		 *   ① 消灭范围 = 【仅本格】（旧实现用 near = 本格+相邻，会多杀相邻地区的陆军）；
+		 *   ② 补上第二步【征召陆军】—— 旧实现只做了前半句。
+		 *   ③ 两句用「。」分隔 = 各自独立：前半没杀到也照常征召；
+		 *      征召条件不满足（格内仍有敌方部队 / 无本国部队等）时，
+		 *      照常尝试并把原因写进日志，而不是整卡判非法。
+		 */
+		const cn = space_id_of('中国东北')
+		if (cn == null) return { ok: false, desc: '（<中国东北> 不存在）' }
+		const r = pick_enemy_army_then_eliminate(game, ctx, choice, {
+			only: cn,
+			prompt: '选择要在<中国东北>消灭的敌方陆军',
 		})
+		if (r && r.pending) return r
+		const parts = [ (r && r.ok) ? r.desc : ((r && r.desc) || '未消灭敌方陆军') ]
+		const rc = recruit_piece(game, '日本', 'army', cn)
+		parts.push(rc.ok ? '在<中国东北>征召陆军' : '未征召：' + (rc.reason || '条件不满足'))
+		return { ok: true, desc: parts.join('；') }
 	},
 	'7905': (game, side, ctx, choice) => {
-		/* 出牌阶段开始时：消灭与<中国东北>相邻的 1 支敌方陆军（同 15434） */
+		/*
+		 * 卡面：「在<中国东部>消灭1支敌方国家陆军」。
+		 * 【2026-10-22 修复】旧实现整段抄了 15434 的 near:<中国东北>，
+		 * 地区完全错位（<中国东部> id=22 vs <中国东北> id=21）。
+		 */
+		const ce = space_id_of('中国东部')
+		if (ce == null) return { ok: false, desc: '（<中国东部> 不存在）' }
 		return pick_enemy_army_then_eliminate(game, ctx, choice, {
-			near: space_id_of('中国东北'),
-			prompt: '选择要消灭的 1 支敌方陆军（与<中国东北>相邻）',
+			only: ce,
+			prompt: '选择要在<中国东部>消灭的敌方陆军',
 		})
 	},
 
