@@ -6539,15 +6539,29 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 			}
 			return { ok: true }
 
-		case 'after_naval': {
-			if (game.turn_phase !== PH.PLAY)
-				return { ok: false, reason: '只能在出牌阶段发动' }
-			const lb = game.last_battle
-			if (!lb || lb.turn !== game.turn || lb.kind !== 'sea' ||
-				faction_of_nation(lb.attacker) !== faction_of_nation(nation))
-				return { ok: false, reason: '本回合尚未发起过海战' }
-			return { ok: true }
-		}
+		case 'after_naval':
+			/*
+			 * 【2026-10-23 航母时点修复（玩家口径 1A / 2A）】
+			 *
+			 * 旧实现用 game.last_battle 判定"本回合发起过海战"，而 last_battle
+			 * 持久到整回合（全局无清空点）→ 三个后果：
+			 *   ① 整回合任意时刻可点（卡面"发起海战后"应为【立刻】）；
+			 *   ② 之后又打一场陆战就把 last_battle 覆盖 → 窗口反而消失；
+			 *   ③ 只要同阵营任一国发起海战就放行（英国发起 → 美国 17540 也能发动）。
+			 *
+			 * 改为与 after_land（6591）同款：查 arm_status_instant 武装的瞬间窗口，
+			 * 并校验 entry.by（发起国）就是本卡桌面归属国（玩家口径 1A：本国发起）。
+			 */
+			{
+				if (game.turn_phase !== PH.PLAY)
+					return { ok: false, reason: '只能在出牌阶段发动' }
+				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_naval')
+				if (!e)
+					return { ok: false, reason: '仅能在「发起海战后立刻」手动发动，此刻已不可发动' }
+				if (e.by && e.by !== nation)
+					return { ok: false, reason: '只有发起海战的国家才能发动本卡（本场海战由【' + e.by + '】发起）' }
+				return { ok: true, space: e.space }
+			}
 
 		case 'build_army':
 			/*
@@ -6737,8 +6751,14 @@ function arm_status_instant(game, window, nation, space) {
 			 * 会因该卡仍在 beforeKeys 中而把 15253 一并清掉，导致"15245 无法触发 15253"。
 			 * 改为：更新其 space 为最新战斗地区，并打 rearmed 标记，使过滤器予以保留。 */
 			const exist = game.status_instant.find(e => e.card_id === cid)
-			if (exist) { exist.space = space; exist.rearmed = true; continue }
-			game.status_instant.push({ card_id: cid, nation: own, window: window, space: space })
+			/*
+			 * 【2026-10-23】entry 增加 by = 事件发起国。
+			 * 用途：after_naval 的卡面主语是「本国发起海战」（玩家口径 1A），
+			 * 而本函数按【同阵营】武装所有持有国的卡（6706 注释），
+			 * 于是英国发起海战也会武装美国 17540 —— 由 after_naval 分支按 by 拦掉。
+			 */
+			if (exist) { exist.space = space; exist.by = nation; exist.rearmed = true; continue }
+			game.status_instant.push({ card_id: cid, nation: own, window: window, space: space, by: nation })
 		}
 	}
 }
@@ -6760,7 +6780,22 @@ function arm_after_battle_status(game, nation, kind, space, opt) {
 		 */
 		try { arm_status_instant(game, 'after_land', nation, space) } catch (e) { game.log.push('arm after_land 错误：' + e.message) }
 	}
-	else if (kind === 'sea' && nation === '德国') { try { auto_fire_status(game, 'after_naval', {}) } catch (e) { game.log.push('auto_fire after_naval 错误：' + e.message) } }
+	else if (kind === 'sea') {
+		/*
+		 * 【2026-10-23 航母时点修复（玩家口径 2A：与闪电战对齐为"立刻"）】
+		 *
+		 * 原实现只对德国 auto_fire，美国 17540《航空母舰》/ 英国 15339《英国皇家海军》
+		 * 发起海战时【不武装任何窗口】，于是只能靠 status_window_ready 里的
+		 * game.last_battle 兜底判定 —— 而 last_battle 持久到整回合，
+		 * 表现为「整回合任意时刻都能点」（卡面要求"发起海战后"= 立刻）。
+		 *
+		 * 改为与 after_land 同款：武装瞬间窗口进 game.status_instant，
+		 * 下一个独立动作即清空（见 exports.action 顶部的 hasSuspended 判定）。
+		 * 德国原有的 auto_fire 保留（幂等，且无德国 after_naval 卡时为空转）。
+		 */
+		try { arm_status_instant(game, 'after_naval', nation, space) } catch (e) { game.log.push('arm after_naval 错误：' + e.message) }
+		if (nation === '德国') { try { auto_fire_status(game, 'after_naval', {}) } catch (e) { game.log.push('auto_fire after_naval 错误：' + e.message) } }
+	}
 	/* 同阵营（同盟）状态卡：英/美/苏 发起战斗后，把本阵营 after_ally_battle 卡武装进 status_instant。 */
 	if (faction_of_nation(nation) === 'allies')
 		try { arm_status_instant(game, 'after_ally_battle', nation, space) } catch (e) { game.log.push('arm after_ally_battle 错误：' + e.message) }
@@ -6847,9 +6882,14 @@ function run_status_effect(game, nation, card_id, tr, arg, ctxSpace) {
 		 * 重定向到"上次的战斗地区"而非玩家点的意大利 —— 若上次地区不在
 		 * ['西欧','意大利'] 就被"不在可攻击范围内"拒掉（不移除、不武装 15346）；
 		 * 若在范围内则打到错误地区，意大利敌军原封不动。表现为"已触发但不消灭"。 */
+		/*
+		 * 【2026-10-23】改为：任何"武装瞬间"窗口都优先用 ctxSpace
+		 * （arm_status_instant 记下的事件地区），不再只限 after_ally_battle。
+		 * 否则 after_naval（15339 英国皇家海军）会退回 last_battle，
+		 * 被后续战斗覆盖后打到错误地区（与上方 2026-10-16 记录的 15338 踩坑同形态）。
+		 */
 		const sp = (arg.space != null) ? arg.space
-			: (tr.window === 'after_ally_battle')
-				? ctxSpace
+			: (ctxSpace != null) ? ctxSpace
 				: (game.last_battle ? game.last_battle.space : null)
 		if (sp == null) {
 			const cand = (ef.spaces || []).map(space_id).filter(x => x != null)
@@ -29755,5 +29795,8 @@ if (typeof module !== 'undefined') {
 		revert_status_ongoing,
 		status_window_ready,
 		run_status_effect,
+		/* 【2026-10-23】航母时点修复的测试入口 */
+		arm_status_instant,
+		arm_after_battle_status,
 		}
 		}
