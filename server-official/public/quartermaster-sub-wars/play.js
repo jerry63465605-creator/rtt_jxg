@@ -817,7 +817,25 @@ function build_card_elt(c) {
  *   再按 view.table_responses_opponent_count 画对应数量的背面卡（对方暗置）。
  *   与 build_card_elt 不同：这些卡【只展示】，不挂“打出”点击。
  */
-function build_response_card_elt(c, faceUp) {
+/*
+ * 【2026-10-22 卡背分国家颜色·方案 B】
+ * 国名 -> CSS 后缀（.card.back-de / -uk / -jp / -su / -it / -us / -fr / -cn）。
+ * 拿不到国名时回落阵营色（back-axis / back-allies），再不行就是默认深蓝。
+ */
+const NATION_BACK_KEY = {
+	"德国": "de", "英国": "uk", "日本": "jp", "苏联": "su",
+	"意大利": "it", "美国": "us", "法国": "fr", "中国": "cn",
+}
+function response_back_class(meta) {
+	if (!meta) return ""
+	const k = NATION_BACK_KEY[meta.nation]
+	if (k) return " back-" + k
+	if (meta.owner_side === "axis") return " back-axis"
+	if (meta.owner_side === "allies") return " back-allies"
+	return ""
+}
+
+function build_response_card_elt(c, faceUp, meta) {
 	const d = document.createElement("div")
 	if (faceUp && c) {
 		d.className = "card t-" + (c.type || "RESPONSE")
@@ -845,8 +863,10 @@ function build_response_card_elt(c, faceUp) {
 		d.addEventListener("mouseenter", () => on_focus_card(c))
 		d.addEventListener("mouseleave", on_blur_card)
 	} else {
-		d.className = "card back"
-		d.title = "对方响应卡（背面向上）"
+		d.className = "card back" + response_back_class(meta)
+		d.title = (meta && meta.nation)
+			? ("对方响应卡（背面向上 · " + meta.nation + "）")
+			: "对方响应卡（背面向上）"
 	}
 	return d
 }
@@ -859,17 +879,22 @@ function update_response_panel() {
 	box.innerHTML = ""
 
 	const own = (view.table_responses || [])
-	const opp = (view.table_responses_opponent_count || 0)
+	/*
+	 * 【2026-10-22】对手背面逐张带 nation（服务端只给元数据）；
+	 * 旧服务端没有该字段时，按数量退回"无国籍"的统一样式。
+	 */
+	const opp = view.table_responses_opponent
+		|| new Array(view.table_responses_opponent_count || 0).fill(null)
 
 	for (const c of own)
 		box.appendChild(build_response_card_elt(c, true))
-	for (let i = 0; i < opp; i++)
-		box.appendChild(build_response_card_elt(null, false))
+	for (const o of opp)
+		box.appendChild(build_response_card_elt(null, false, o))
 
 	if (note)
-		note.textContent = "（本方 " + own.length + " · 对方 " + opp + "）"
+		note.textContent = "（本方 " + own.length + " · 对方 " + opp.length + "）"
 
-	if (!own.length && opp === 0)
+	if (!own.length && !opp.length)
 		box.innerHTML = '<div class="hand_empty">（桌面暂无响应卡）</div>'
 }
 

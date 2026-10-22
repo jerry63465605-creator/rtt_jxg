@@ -713,11 +713,22 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	padding: 8px 0;
 }
 
-/* 对方暗置的响应卡：牌背 */
+/*
+ * 对方暗置的响应卡：牌背
+ *
+ * 【2026-10-22 卡背分国家颜色·方案 B】
+ *   底色取 --bk-tint，左侧条与"响应"字样取 --bk-edge。
+ *   服务端 view.table_responses_opponent 逐张下发 nation，
+ *   客户端按 back-de / -uk / -jp / -su / -it / -us / -fr / -cn 上色；
+ *   拿不到国名时回落 back-axis / back-allies，再不然就是下面这组默认深蓝。
+ *   ⚠ 仍在 CSS 里画（不新增图片素材）：渐变只是同色系的明暗，不影响辨识。
+ */
 .card.back {
-	background-color: #2b2f4a;
-	background-image: none !important;
-	border-left: 5px solid #555;
+	--bk-tint: #2b2f4a;
+	--bk-edge: #7d86b8;
+	background-color: var(--bk-tint) !important;
+	background-image: linear-gradient(160deg, rgba(255,255,255,.07), rgba(0,0,0,.45)) !important;
+	border-left: 5px solid var(--bk-edge);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -725,12 +736,26 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 
 .card.back::after {
 	content: "响应";
-	color: #cdd3ff;
+	color: var(--bk-edge);
 	font-size: 16px;
 	font-weight: bold;
 	letter-spacing: 6px;
 	writing-mode: vertical-rl;
 }
+
+/* ---- 八国配色（底 / 边条·文字）---- */
+.card.back-de { --bk-tint: #3b4048; --bk-edge: #9aa7bb; }  /* 德国 铁灰 */
+.card.back-uk { --bk-tint: #263349; --bk-edge: #3d5bb5; }  /* 英国 皇家深蓝 */
+.card.back-jp { --bk-tint: #3a2b1f; --bk-edge: #c08a3e; }  /* 日本 赭金 */
+.card.back-su { --bk-tint: #4a2426; --bk-edge: #d32f2f; }  /* 苏联 正红 */
+.card.back-it { --bk-tint: #2c4237; --bk-edge: #3f9d6b; }  /* 意大利 墨绿 */
+.card.back-us { --bk-tint: #23303f; --bk-edge: #4a90b8; }  /* 美国 钢青 */
+.card.back-fr { --bk-tint: #2b3550; --bk-edge: #6aa6e0; }  /* 法国 浅蓝 */
+.card.back-cn { --bk-tint: #4a3c24; --bk-edge: #c9a227; }  /* 中国 土黄 */
+
+/* ---- 兜底：只知道阵营时 ---- */
+.card.back-axis   { --bk-tint: #3a2a2c; --bk-edge: #8a5a5a; }
+.card.back-allies { --bk-tint: #263346; --bk-edge: #5a7a9e; }
 
 /*
  * 卡牌：使用真实卡图（cards/<img>）。

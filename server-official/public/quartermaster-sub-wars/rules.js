@@ -22961,6 +22961,8 @@ exports.view = function (state, current) {
 		 *   客户端据此在桌面区显示本方已打出的响应卡（卡面可见）。
 		 *   2026-09-25 补充：每条额外带 type/img/text，便于客户端直接画卡面；
 		 *   另给出对方响应卡数量（仅数量、不含任何卡面信息），供客户端画牌背。
+		 *   2026-10-22 补充：本方条目带 nation；对方改走 table_responses_opponent
+		 *   （逐张只给 nation/owner_side，卡背按国家上色，牌面仍保密）。
 		 */
 		table_responses: (() => {
 			const all = game.table_responses || []
@@ -22973,12 +22975,25 @@ exports.view = function (state, current) {
 						instance_id: r.card_id,
 						name: inst_card_name(r.card_id),
 						owner_side: r.owner_side,
+						/* 【2026-10-22】国别：客户端据此给卡背/角标上色 */
+						nation: r.nation || (c && c.nation) || null,
 						type: c ? c.type : 'RESPONSE',
 						img: c ? c.img : null,
 						text: c ? (c.text || '') : '',
 					}
 				})
 		})(),
+		/*
+		 * 【2026-10-22 卡背分国家颜色·方案 B】对手暗置响应卡：逐张下发【元数据】，
+		 * 只含 nation / owner_side（供客户端把卡背按国家上色）。
+		 * ⚠ 不含 card_id / instance_id / name / img / text —— 牌面信息仍对对手保密。
+		 */
+		table_responses_opponent: ((game.table_responses || [])
+			.filter(r => r.owner_side !== side)
+			.map(r => ({
+				nation: r.nation || (inst_card(r.card_id) || {}).nation || null,
+				owner_side: r.owner_side,
+			}))),
 		table_responses_opponent_count: ((game.table_responses || [])
 			.filter(r => r.owner_side !== side)).length,
 		card_types: CARD_TYPE_INFO,
