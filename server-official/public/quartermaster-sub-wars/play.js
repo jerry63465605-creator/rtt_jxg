@@ -5667,12 +5667,25 @@ function show_initiator_choices(list) {
 	battle_flow.initiators = list
 
 	if (!list.length) {
-		/* 理论上服务端已挡掉，这里兜底 */
+		/*
+		 * 【2026-10-23 修复】没有可用发起单位时的清理，必须按【来源】分流。
+		 *
+		 * 原实现无条件调 cancel_basic_card()（基础卡的取消函数）：
+		 * 对状态卡战斗（17544 美国海军陆战队 / 15338 / 15339 / 15346）不起作用 ——
+		 * status_act_phase 仍停在 'battle'、battle_flow 仍在、ask_state 仍是上一轮的
+		 * 'battle_from'，于是【点地图没有任何反应】；而状态卡的瞬间窗口在服务端
+		 * 因 r.ok=false 被保留，玩家又能在桌面上【反复点击同一张卡】重新进来。
+		 * 两个症状同源，就是这里。
+		 */
 		render_ask_box(null)
+		const isStatus = !!(battle_flow && battle_flow.origin === 'status')
 		toast(pending_mode === 'seize'
 			? "没有可发起空战的本国补给飞机（须与目标相邻且处于补给状态）"
-			: "没有可发起战斗的本国陆军或海军（空军不能发起战斗）")
-		cancel_basic_card()
+			: (isStatus
+				? "该地区周边没有可发起战斗的本国陆军/海军（须相邻且处于补给状态），请重新点击状态卡并选择其它地区"
+				: "没有可发起战斗的本国陆军或海军（空军不能发起战斗）"))
+		if (isStatus) cancel_status_act()
+		else cancel_basic_card()
 		return
 	}
 

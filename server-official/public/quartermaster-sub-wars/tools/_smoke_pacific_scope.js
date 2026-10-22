@@ -109,6 +109,16 @@ console.log('\n=== D. 客户端：17544 用窗口动态候选（相邻陆地） 
 		/'17544': \{ battle: 'land', attacker_owner: true, spaces_from_window: true \}/.test(PLAY_SRC))
 	ok('点击时按 status_battle_cands 拦截非候选',
 		/status_battle_cands\.length && status_battle_cands\.indexOf\(Number\(s\)\) < 0/.test(PLAY_SRC))
+
+	/*
+	 * 【2026-10-23】无可用发起单位时，状态卡战斗必须走 cancel_status_act()
+	 * 而不是 cancel_basic_card() —— 否则 status_act_phase 停在 'battle'、battle_flow 不清理，
+	 * 表现为"点了地区没反应"，且服务端窗口在 r.ok=false 时保留 -> 可反复点同一张卡。
+	 */
+	ok('无发起单位分支按 origin 分流',
+		/if \(isStatus\) cancel_status_act\(\)/.test(PLAY_SRC))
+	ok('分流前用 battle_flow.origin === \'status\' 判定',
+		/const isStatus = !!\(battle_flow && battle_flow\.origin === 'status'\)/.test(PLAY_SRC))
 }
 
 console.log('\n=== E. 其它"太平洋"卡的地区解析 ===')
