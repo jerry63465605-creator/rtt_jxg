@@ -23288,6 +23288,17 @@ exports.view = function (state, current) {
 				italy_borrow: (function () {
 				if (!game.italy_borrow) return null
 				const ib = game.italy_borrow
+				/*
+				 * 【2026-10-23 修复】只发给【借用方所在阵营】。
+				 *
+				 * 原先不判 side：对手也会收到 view.italy_borrow，客户端
+				 * update_italy_borrow_box 于是在对手界面渲染
+				 * 「德国军事顾问：已借用《闪电战》」的框 —— 而该函数在
+				 * update_pending_trigger_box 之后调用，会直接覆盖掉
+				 * 「是否发动《破译恩尼格码》」的发动/不发动按钮，
+				 * 表现为顶部横幅写着"请决定是否发动"、界面上却无处可点。
+				 */
+				if (faction_of_nation(ib.nation) !== side) return null
 				if (ib.pending) {
 					return {
 						pending: true,

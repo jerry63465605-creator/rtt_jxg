@@ -224,6 +224,19 @@ function update_map() {
 	 * 高亮活不过一帧（点击判定读内存变量故仍正确，于是"点击正确、高亮不正确"）。
 	 */
 	reapply_all_highlights()
+
+	/*
+	 * 【2026-10-23 兜底】响应卡决策框（发动 / 不发动）必须【最后】渲染。
+	 *
+	 * 它是阻塞式询问：玩家不表态，对局无法推进。而 update_map 里各
+	 * update_*_box 共享同一个 #ask_box、且都无条件 render_ask_box ——
+	 * 谁最后调用谁赢。同类事故已出现两次：
+	 *   ① 服务端把"待发动"帧也下发给 view.response_choice，导致本框早退（已修）；
+	 *   ② 17732 德国军事顾问的常驻提示框在它之后调用，把按钮整个盖掉（本次）。
+	 * 故在渲染末尾再补一次，保证它永远在最上层。
+	 * 本函数幂等：pending_trigger 为空时只清理自己的 ask_state。
+	 */
+	update_pending_trigger_box()
 }
 
 /*
@@ -1953,6 +1966,16 @@ function update_italy_borrow_box() {
 		}
 		return
 	}
+	/*
+	 * 【2026-10-23 修复】让位守卫：响应卡决策 / 响应效果选目标 是【阻塞式】询问，
+	 * 优先级高于本框（本框只是"本回合可激活"的常驻提示）。
+	 *
+	 * 本函数在 update_pending_trigger_box 之后调用，若无条件 render_ask_box，
+	 * 会把「是否发动《破译恩尼格码》」的发动/不发动按钮直接盖掉 ——
+	 * 顶部横幅要求决定、界面上却无处可点，对局卡死。
+	 * 服务端已按阵营裁剪 view.italy_borrow，这里再兜一层同阵营并发的情况。
+	 */
+	if (view.pending_trigger || view.response_choice) return
 	if (ib.pending) {
 		const opt = (ib.options || []).map(o => ({
 			label: '借用《' + o.name + '》', cls: 'primary',
