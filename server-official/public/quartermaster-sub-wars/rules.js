@@ -9237,6 +9237,8 @@ const EVENT_EFFECTS = {
 			[{ op: 'eliminate', spaces: space_ids_of(['中国东部', '中国西部']), pick: 1, type: 'army', enemyOnly: true }],
 			[{ op: 'recruit', type: 'army', as: '中国', spaces: space_ids_of(['中国东部', '中国西部']), pick: 1, grantSupply: true }],
 		],
+		/* 【2026-10-23】补选项标签（原来落到"选项 1/选项 2"） */
+		choiceLabels: ['消灭 1 支敌方陆军', '中国征召 1 支陆军'],
 	},
 
 	'15319': {
@@ -9272,6 +9274,7 @@ const EVENT_EFFECTS = {
 			[{ op: 'recruit', type: 'army', spaces: space_ids_of(['西欧']) }],
 			[{ op: 'battle', kind: 'land', spaces: space_ids_of(['西欧']) }],
 		],
+		choiceLabels: ['法国在〈西欧〉征召陆军', '对〈西欧〉发起陆战'],
 	},
 	'15322': {
 		name: '法国海军',
@@ -9280,6 +9283,7 @@ const EVENT_EFFECTS = {
 			[{ op: 'build', type: 'navy' }],           /* 地区由玩家在合法海域内选 */
 			[{ op: 'battle', kind: 'sea' }],
 		],
+		choiceLabels: ['法国建设海军', '法国发起海战'],
 	},
 	'15323': {
 		name: '法国陆军',
@@ -9288,6 +9292,7 @@ const EVENT_EFFECTS = {
 			[{ op: 'build', type: 'army' }],
 			[{ op: 'battle', kind: 'land' }],
 		],
+		choiceLabels: ['法国建设陆军', '法国发起陆战'],
 	},
 	'12502': {
 		name: '告法国人民书',
@@ -9298,6 +9303,7 @@ const EVENT_EFFECTS = {
 			[{ op: 'build', type: 'navy' }],
 			[{ op: 'battle', kind: 'sea' }],
 		],
+		choiceLabels: ['法国建设陆军', '法国发动陆战', '法国建设海军', '法国发动海战'],
 	},
 
 	/* ---- 法国：多步骤 ---- */
@@ -9552,6 +9558,7 @@ const EVENT_EFFECTS = {
 			[{ op: 'build', type: 'navy' }],   // 建设海军
 			[{ op: 'battle', kind: 'sea' }],   // 发起海战（不含[空军力量]）
 		],
+		choiceLabels: ['建设陆军', '发动陆战', '建设海军', '发动海战'],
 	},
 	'15235': {
 		name: '强制征兵',
@@ -9813,6 +9820,7 @@ const EVENT_EFFECTS = {
 				{ op: 'build', type: 'army', spaces: space_ids_of(['非洲东部']) },
 			],
 		],
+		choiceLabels: ['〈北非〉建陆军 + 〈东非〉陆战', '〈北非〉建陆军 + 〈东非〉建陆军'],
 		notes: '在<非洲北部>建设陆军；对<非洲东部>发起陆战 或 在<非洲东部>建设陆军',
 	},
 
