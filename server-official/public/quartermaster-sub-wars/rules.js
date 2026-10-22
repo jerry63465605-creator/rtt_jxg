@@ -25812,6 +25812,29 @@ function do_action(state, current, action, arg) {
 				game.log.push('请选择：弃置 4 张手牌（discard）或 该陆军本次战斗不被移除（protect）')
 				return game
 			}
+			/*
+			 * 【2026-10-23 修复】弃置 4 张手牌必须【玩家自选】（arg.drop）。
+			 *
+			 * 原实现直接 `discard_card(game, attacker, hand[0])` 循环 4 次，
+			 * 等于服务端替玩家挑了"手牌最前面的 4 张"——与《一步也不许后退!》(17853)
+			 * 和 guard 保护卡代价的口径不一致（那两处都要求 drop）。
+			 *
+			 * 校验必须放在【消耗响应卡之前】：否则 drop 不足时返回，
+			 * 卡已被 splice 出桌面 + 进弃牌堆，玩家既没弃成牌也失去了响应卡。
+			 */
+			let kv2Drop = []
+			let kv2Need = 0
+			if (pick === 'discard') {
+				const hand = game.hands[pb.attacker] || []
+				kv2Need = Math.min(4, hand.length)
+				kv2Drop = ((arg && arg.drop) || []).map(String)
+					.filter(id => hand.indexOf(id) >= 0)
+				if (kv2Drop.length < kv2Need) {
+					game.log.push('《KV-2 重型坦克》需弃置 ' + kv2Need +
+						' 张手牌（当前指定 ' + kv2Drop.length + ' 张）')
+					return game      /* 不消耗卡、不推进战斗 */
+				}
+			}
 			/* 消耗这张暗置的响应卡（无论选哪个分支，卡都算用掉） */
 			const list = game.table_responses || []
 			const idx = list.findIndex(t => t.card_id === pb.kv2_card)
@@ -25830,10 +25853,8 @@ function do_action(state, current, action, arg) {
 				game.log.push('【' + pb.attacker + '】选择：该《' + pb.victim_nation +
 					'》陆军在本次战斗中不会被移除')
 			} else {
-				const hand = game.hands[pb.attacker] || []
-				const n = Math.min(4, hand.length)
-				for (let i = 0; i < n; i++) discard_card(game, pb.attacker, hand[0])
-				game.log.push('【' + pb.attacker + '】选择：弃置 ' + n + ' 张手牌')
+				for (const id of kv2Drop.slice(0, kv2Need)) discard_card(game, pb.attacker, id)
+				game.log.push('【' + pb.attacker + '】选择：弃置 ' + kv2Need + ' 张手牌')
 			}
 			game.pending_battle = null
 			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', {

@@ -4288,18 +4288,30 @@ function confirm_echo_discard() {
  * 复用 echo_discard_modal（与 ECHO 卡代价同款 modal + card-grid），
  * 差别只在提交目标：resolve_battle{guard, drop} 而不是 play_card。
  * ============================================================ */
-let pending_guard_sel = null   /* { card_id, name, cost, cost_filter, drop:[] } */
+let pending_guard_sel = null   /* { card_id, name, cost, cost_filter, drop:[], submit_target } */
 
+/*
+ * 【战斗内"选 N 张牌作代价"的唯一入口】（复用 echo_discard_modal，不另建 UI）
+ *
+ * 三种提交目标由 g.submit_target 区分：
+ *   缺省 / null  -> resolve_battle{ guard, drop }            15410 武士道等保护卡
+ *   'step_back'  -> resolve_battle{ step_back:true, drop }   17853 一步也不许后退!
+ *   'kv2'        -> resolve_battle{ kv2:'discard', drop }    17837 KV-2 重型坦克
+ */
 function start_guard_discard(g) {
+	const target = g.submit_target || null
 	if (!g.cost) {
-		/* 无代价的保护卡：直接提交 */
-		send_action("resolve_battle", { guard: g.card_id })
+		/* 无代价（或手牌为 0 张）：直接提交，按目标区分 action */
+		if (target === 'kv2') send_action("resolve_battle", { kv2: 'discard', drop: [] })
+		else if (target === 'step_back') send_action("resolve_battle", { step_back: true, drop: [] })
+		else send_action("resolve_battle", { guard: g.card_id })
 		return
 	}
 	pending_guard_sel = {
 		card_id: g.card_id, name: g.name,
 		cost: g.cost, cost_filter: g.cost_filter || null,
 		drop: [],
+		submit_target: target,
 	}
 	/* 让出 ask_box，避免两个弹框叠在一起 */
 	ask_state = null
@@ -4308,24 +4320,14 @@ function start_guard_discard(g) {
 	update_hand_panel()
 }
 
-/*
- * 【2026-10-18】苏联 17853《一步也不许后退!》发动：复用 echo_discard_modal
- * （与保护卡 15410 武士道弃牌代价同款 modal + card-grid），选 4 张手牌作代价，
- * 提交目标改为 resolve_battle{step_back:true, drop} 而非 {guard, drop}。
- */
+/* 【2026-10-18】苏联 17853《一步也不许后退!》：薄封装，走上面同一个入口 */
 function start_step_back_discard(pb) {
-	pending_guard_sel = {
+	start_guard_discard({
 		card_id: pb.su_card,
 		name: '一步也不许后退!',
 		cost: 4,
-		cost_filter: null,
-		drop: [],
 		submit_target: 'step_back',
-	}
-	ask_state = null
-	render_ask_box(null, null, null)
-	update_echo_discard_box()
-	update_hand_panel()
+	})
 }
 
 function render_guard_discard_box() {
@@ -4392,8 +4394,11 @@ function confirm_guard_discard() {
 	const cardId = gs.card_id
 	pending_guard_sel = null
 	/* 【2026-10-18】17853《一步也不许后退!》复用本弹框选 4 张手牌，提交目标改为 step_back */
+	/* 【2026-10-23】17837《KV-2 重型坦克》攻击方弃牌同样复用，提交 kv2:'discard' + drop */
 	if (gs.submit_target === 'step_back') {
 		send_action("resolve_battle", { step_back: true, drop: drop })
+	} else if (gs.submit_target === 'kv2') {
+		send_action("resolve_battle", { kv2: 'discard', drop: drop })
 	} else {
 		send_action("resolve_battle", { guard: cardId, drop: drop })
 	}
@@ -5939,7 +5944,14 @@ function update_pending_battle_box() {
 				"　（两个选项都对防守方有利，你只是选代价较小的那个）",
 			[{
 				label: "弃置 4 张手牌（该陆军照常被移除）",
-				onClick: () => send_action("resolve_battle", { kv2: "discard" }),
+				/* 【2026-10-23】复用战斗内通用的"选 N 张牌"入口，不另建 UI。
+				 * 手牌不足 4 张时按现有张数选（与服务端 Math.min(4, hand.length) 同口径）。 */
+				onClick: () => start_guard_discard({
+					card_id: pb.kv2_card,
+					name: 'KV-2 重型坦克',
+					cost: Math.min(4, ((view.hands[view.my_nation] || {}).cards || []).length),
+					submit_target: 'kv2',
+				}),
 			}, {
 				label: "使该陆军在本次战斗中不被移除",
 				cls: "primary",
