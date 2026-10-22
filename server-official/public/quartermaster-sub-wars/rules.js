@@ -11830,7 +11830,14 @@ const ECHO_EFFECTS = {
 					title: '亚洲人力储备：选 1 张[建设陆军]置入手牌',
 					candidates: builds.map(id => obj_of(id)),
 				}
-				return { pending: true, need: 'su_pick' }
+				/*
+				 * 卡已打出：这里自行进弃牌堆。
+				 * 本卡走 run 多步（pending），play_card 因 r.pending 提前 return、
+				 * 不再代它弃牌（旧实现靠"run 没写 ok"才被当成已结算，属巧合）。
+				 */
+				discard_card(game, me, ctx.card_id)
+				/* ok:true 必须带上：resolve_effect 先判 !r.ok，缺了会误记"无法结算" */
+				return { ok: true, pending: true, need: 'su_pick' }
 			}
 			if (pe.step === 'hand') {
 				const pick = arg.pick
@@ -11851,7 +11858,7 @@ const ECHO_EFFECTS = {
 					title: '亚洲人力储备：选 1 张[建设陆军]洗入牌堆',
 					candidates: remain.map(id => obj_of(id)),
 				}
-				return { pending: true, need: 'su_pick' }
+				return { ok: true, pending: true, need: 'su_pick' }
 			}
 			if (pe.step === 'deck') {
 				const pick = arg.pick
@@ -11859,7 +11866,16 @@ const ECHO_EFFECTS = {
 					return { ok: false, reason: '所选卡不在候选[建设陆军]内' }
 				const i = game.discard[me].indexOf(pick)
 				game.discard[me].splice(i, 1)
-				game.deck[me].push(pick)
+				/*
+				 * 【2026-10-22 修复·亚洲人力储备 使用时卡死】
+				 * 原写 game.deck[me]（单数）—— 存档里只有 game.decks[国]，
+				 * 于是第二步选牌时抛 TypeError: Cannot read properties of undefined
+				 * (reading '苏联')，异常前已经把选中的[建设陆军]从弃牌堆 splice 掉，
+				 * 状态停在 pending_echo.step='deck'，玩家无法继续 → 表现为"卡死"。
+				 * 卡面「洗入牌堆」按置底处理（与既有约定一致）。
+				 */
+				if (!game.decks[me]) game.decks[me] = []
+				game.decks[me].push(pick)
 				refresh(game)
 				game.pending_echo = null
 				discard_card(game, me, ctx.card_id)
@@ -11897,7 +11913,9 @@ const ECHO_EFFECTS = {
 					title: '重建要塞：选 1 张[响应卡]打出',
 					candidates: resps.map(id => obj_of(id)),
 				}
-				return { pending: true, need: 'su_pick' }
+				/* 同 17812：多步挂起时 play_card 不代弃牌，这里自行进弃牌堆 */
+				discard_card(game, me, ctx.card_id)
+				return { ok: true, pending: true, need: 'su_pick' }
 			}
 			if (pe.step === 'play') {
 				const pick = arg.pick

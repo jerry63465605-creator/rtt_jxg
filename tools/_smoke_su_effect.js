@@ -17,10 +17,13 @@ function fresh() {
 	g.active = 'Allies'
 	g.hands = g.hands || {}
 	g.discard = g.discard || {}
-	g.deck = g.deck || {}
+	/* 【2026-10-22】原写 g.deck（单数）—— 与 17812 里同一个笔误，
+	 * 导致"生产代码写 phantom 对象、测试也断言 phantom"，把真 bug 掩盖了。
+	 * 正式字段是 game.decks[国]。 */
+	g.decks = g.decks || {}
 	g.hands[me] = g.hands[me] || []
 	g.discard[me] = g.discard[me] || []
-	g.deck[me] = g.deck[me] || []
+	g.decks[me] = g.decks[me] || []
 	return g
 }
 let g = null
@@ -72,7 +75,7 @@ g = fresh()
 g.turn_phase = 'discard'
 g.hands[me] = ['17812#1']
 g.discard[me] = ['15300#1', '15300#2'] // 两张[建设陆军]
-g.deck[me] = ['99999#1']
+g.decks[me] = ['99999#1']
 A('play_card', { card: '17812#1' })
 ok('建立挂起（pending_echo, kind=su, step=hand）',
 	!!g.pending_echo && g.pending_echo.kind === 'su' && g.pending_echo.step === 'hand',
@@ -85,7 +88,7 @@ ok('15300#1 已置入手牌', (g.hands[me] || []).indexOf('15300#1') >= 0)
 ok('deck 步候选=剩余[建设陆军]', g.pending_echo.candidates.map(c => c.id).indexOf('15300#2') >= 0)
 A('resolve_effect', { pick: '15300#2' })
 ok('挂起已清空', !g.pending_echo)
-ok('15300#2 已洗入牌堆', (g.deck[me] || []).indexOf('15300#2') >= 0, 'deck=' + JSON.stringify(g.deck[me]))
+ok('15300#2 已洗入牌堆', (g.decks[me] || []).indexOf('15300#2') >= 0, 'deck=' + JSON.stringify(g.decks[me]))
 ok('17812#1 已离手', (g.hands[me] || []).indexOf('17812#1') < 0)
 ok('弃牌堆已清空[建设陆军]', (g.discard[me] || []).indexOf('15300#1') < 0 && (g.discard[me] || []).indexOf('17804#1') < 0)
 
@@ -94,7 +97,7 @@ g = fresh()
 g.turn_phase = 'discard'
 g.hands[me] = ['17813#1', '15300#1'] // 17813 + 代价[建设陆军]
 g.discard[me] = ['17830#1', '15300#2'] // 苏联响应卡《保卫祖国》+ 多余牌（代价已先付 15300#1）
-g.deck[me] = ['99998#1']
+g.decks[me] = ['99998#1']
 A('play_card', { card: '17813#1', cards: ['15300#1'] })
 ok('代价已付（15300#1 进弃牌堆）', (g.discard[me] || []).indexOf('15300#1') >= 0)
 ok('建立挂起（step=play，候选=响应卡）',
