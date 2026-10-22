@@ -480,12 +480,12 @@ console.log('\n=== 8. 15413 诸岛要塞 / 15408 山本五十六：候选地区(
 		ok('15408 space 步【不再】带代价（代价已在 choice 步收）',
 			ndD && (!ndD.cost || ndD.cost.discard !== 1))
 
-		const before = I.my_air_pieces(g, '日本').length
+		const before = I.list_pieces(g, { types: ['air'], nation: '日本' }).length
 		const rD = I.resolve_event_card(g, '日本', '15408#1', { choice: 0, space: SPACE[S1], cards: [RES] })
 		ok('15408 部署成功', rD && rD.ok, JSON.stringify(rD))
 		ok('15408 部署后日本空军+1',
-			I.my_air_pieces(g, '日本').length === before + 1,
-			'before=' + before + ' after=' + I.my_air_pieces(g, '日本').length)
+			I.list_pieces(g, { types: ['air'], nation: '日本' }).length === before + 1,
+			'before=' + before + ' after=' + I.list_pieces(g, { types: ['air'], nation: '日本' }).length)
 	}
 
 	/* 调度：再搭一个补给海域 S2，把 S1 上的日本空军调度到 S2 */

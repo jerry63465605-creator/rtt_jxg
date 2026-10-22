@@ -135,6 +135,7 @@ function pieces_on(game, space) {
  * opt.radius    n = 含半径 n（几何邻接 BFS；0 等价于仅本格）
  * opt.terrain   'sea' | 'land' 地形过滤
  * opt.side      'axis' | 'allies'：用阵营视角邻接（含海峡/受限连接），仅单跳
+ * opt.excludeSelf true = 把起点本身排除（卡面写"相邻地区"而非"X 或相邻"时用）
  */
 function region_spaces(game, opt) {
 	opt = opt || {}
@@ -180,6 +181,7 @@ function region_spaces(game, opt) {
 	} else if (opt.adjacent) {
 		for (const nb of (data.spaces[start].connections || [])) seen.add(nb)
 	}
+	if (opt.excludeSelf) seen.delete(start)
 	return [...seen].filter(keep)
 }
 
@@ -622,7 +624,7 @@ function compute_supply(game, conn_snap) {
 		 * 虚拟陆军光环不生效（15444 丘克群岛在<硫磺岛>被占时即如此）。
 		 * 动态判定放在这里，可同时覆盖"打出时已被占"与"打出后被夺回"两种情况。
 		 */
-		if (space_enemy_occupied(game, Number(sp), auraArmy[sp])) continue
+		if (has_pieces(game, { space: Number(sp), enemyOf: auraArmy[sp] })) continue
 		const pid = '__varmy_' + sp
 		game.location[pid] = Number(sp)
 		game.piece_nation[pid] = auraArmy[sp]
@@ -1194,14 +1196,9 @@ function can_attrite(game, nation, n) {
  *   ≡ count_pieces(game, { types: ['air'], nation })
  * 15313 轰炸机军团口径不变：只看 Board 上属于该国的存活空军。 */
 
-/*
- * 某国在某地区的海军棋子列表（15314 判断"移除"选项是否可用）。
- * 无 place/无海军时返回空数组。
- */
-function navies_in_space(game, nation, space) {
-	return pieces_on(game, space).filter(p =>
-		game.piece_type[p] === 'navy' && game.piece_nation[p] === nation)
-}
+/* 【2026-10-22 已并入】原 navies_in_space(game, nation, space)
+ *   ≡ list_pieces(game, { space, types: ['navy'], nation })
+ * 15314 用它判断"移除海军"选项是否可用。 */
 
 /* ============================================================
  * 【2026-09-26】ECON 经济战卡
@@ -1370,7 +1367,8 @@ const ECON_CARDS = {
 		tag: '北方行动',
 		targets: ['苏联'],
 		run(game, actor, target) {
-			const ok = de_controlled(game, '北欧', '德国') && de_controlled(game, '罗斯', '德国')
+			const ok = has_pieces(game, { space: '北欧', nation: '德国' }) &&
+				has_pieces(game, { space: '罗斯', nation: '德国' })
 			if (!ok) return { ok: true, desc: '北欧或罗斯未被德国控制，无效果' }
 			const lost = attrition_passive(game, target, 4)
 			add_axis_score(game, 2)
@@ -1381,7 +1379,8 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['苏联'],
 		run(game, actor, target) {
-			const ok = de_controlled(game, '乌克兰', '德国') && de_controlled(game, '中亚', '德国')
+			const ok = has_pieces(game, { space: '乌克兰', nation: '德国' }) &&
+				has_pieces(game, { space: '中亚', nation: '德国' })
 			if (!ok) return { ok: true, desc: '乌克兰或中亚未被德国控制，无效果' }
 			const lost = attrition_passive(game, target, 4)
 			add_axis_score(game, 2)
@@ -1421,7 +1420,7 @@ const ECON_CARDS = {
 		 * remove 项在该国无地中海海军时 enabled=false（UI 变灰）。
 		 */
 		options_for(game, nation) {
-			const navies = navies_in_space(game, nation, MEDITERRANEAN_SPACE)
+			const navies = list_pieces(game, { space: MEDITERRANEAN_SPACE, types: ['navy'], nation: nation })
 			return [
 				{ id: 'attrite', label: '损耗 3 张牌', enabled: true },
 				{
@@ -1449,7 +1448,7 @@ const ECON_CARDS = {
 			if (answer.choice !== 'remove')
 				return { ok: false, reason: '未知的选择' }
 
-			const navies = navies_in_space(game, nation, MEDITERRANEAN_SPACE)
+			const navies = list_pieces(game, { space: MEDITERRANEAN_SPACE, types: ['navy'], nation: nation })
 			if (!navies.length)
 				return { ok: false, reason: nation + ' 在地中海没有可移除的海军' }
 			const piece = answer.piece
@@ -1612,8 +1611,8 @@ const ECON_CARDS = {
 		targets: ['英国'],
 		run(game, actor, target) {
 			/* 「友方控制」= 轴心任意国（与 17743/17748 同一口径） */
-			const ok = controlled_by_faction(game, '非洲北部', AXIS) &&
-				controlled_by_faction(game, '中东', AXIS)
+			const ok = has_pieces(game, { space: '非洲北部', faction: AXIS }) &&
+				has_pieces(game, { space: '中东', faction: AXIS })
 			if (!ok) return { ok: true, desc: '<非洲北部><中东>未都被友方控制，无效果' }
 			const lost = attrition_passive(game, target, 3)
 			add_axis_score(game, 3)
@@ -1716,7 +1715,7 @@ const ECON_CARDS = {
 		tag: '',
 		chain_fn(game, actor) { return econ_enemy_nations(game, actor) },
 		options_for(game, nation) {
-			const ps = own_pieces_on_board(game, nation)
+			const ps = list_pieces(game, { nation: nation })
 			return [
 				{ id: 'attrite', label: '损耗 2 张牌', enabled: true },
 				{
@@ -1737,7 +1736,7 @@ const ECON_CARDS = {
 			}
 			if (answer.choice !== 'remove')
 				return { ok: false, reason: '未知的选择' }
-			const ps = own_pieces_on_board(game, nation)
+			const ps = list_pieces(game, { nation: nation })
 			if (!ps.length)
 				return { ok: false, reason: nation + ' 场上没有可移除的部队' }
 			const piece = answer.piece
@@ -1853,13 +1852,9 @@ function lose_score(game, nation, n) {
 	game.score[f] = (game.score[f] || 0) - n
 }
 
-/* 某地区是否被指定【阵营】控制（场上存在该阵营任意国部队）。
-   「友方控制」口径：友方 = 同阵营任意国（与 17743/17748 一致）。 */
-function controlled_by_faction(game, spaceName, faction) {
-	const id = space_id(spaceName)
-	if (id == null) return false
-	return pieces_on(game, id).some(p => faction_of_nation(game.piece_nation[p]) === faction)
-}
+/* 【2026-10-22 已并入】原 controlled_by_faction(game, spaceName, faction)
+ *   ≡ has_pieces(game, { space, faction })
+ * 「友方控制」口径不变：同阵营任意国部队在场即算控制（与 17743/17748 一致）。 */
 
 /* 统计【某海域及其相邻海域】中，未被指定阵营控制的海域个数。
    17713「<地中海>或相邻海域每有 1 个未被同盟国控制」。
@@ -1958,11 +1953,9 @@ function de_units_near(game, spaceName, types, filter) {
 		for (const p of pieces_on(game, nb)) if (keep(p)) n++
 	return n
 }
-function de_controlled(game, spaceName, nation) {
-	const id = space_id(spaceName)
-	if (id == null) return false
-	return pieces_on(game, id).some(p => game.piece_nation[p] === nation)
-}
+/* 【2026-10-22 已并入】原 de_controlled(game, spaceName, nation)
+ *   ≡ has_pieces(game, { space, nation })
+ * 返回"该地区有该国部队"（布尔），非补给/控制判定。 */
 function de_units_in_sea(game, nation, types) {
 	let n = 0
 	for (let i = 1; i < data.spaces.length; i++) {
@@ -3771,7 +3764,7 @@ const STATUS_EFFECTS = {
 				/* 计分阶段：东欧/中亚/罗斯/乌克兰 每有 1 个被苏联控制，得 1 分 */
 				let b = 0
 				for (const sp of ['东欧', '中亚', '罗斯', '乌克兰'])
-					if (de_controlled(game, sp, '苏联')) b++
+					if (has_pieces(game, { space: sp, nation: '苏联' })) b++
 				return b
 			},
 			desc: '计分阶段：东欧/中亚/罗斯/乌克兰 每有 1 个被苏联控制，获得 1 分',
@@ -3789,7 +3782,7 @@ const STATUS_EFFECTS = {
 		auto: {
 			phase: 'scoring', trigger_nation: '苏联', kind: 'run',
 			run(game) {
-				return de_controlled(game, '乌克兰', '苏联') ? 0 : -1
+				return has_pieces(game, { space: '乌克兰', nation: '苏联' }) ? 0 : -1
 			},
 			desc: '苏联的计分阶段：若<乌克兰>未被苏联控制，其失去 1 分',
 		},
@@ -4807,7 +4800,7 @@ const STATUS_EFFECTS = {
 				run(game) {
 					const id = space_id('夏威夷')
 					if (id == null) return 0
-					return space_enemy_occupied(game, id, '日本') ? 0 : 1
+					return has_pieces(game, { space: id, enemyOf: '日本' }) ? 0 : 1
 				},
 				desc: '计分阶段：<夏威夷>无敌方陆军+1' },
 			},
@@ -6878,15 +6871,11 @@ function run_status_effect(game, nation, card_id, tr, arg, ctxSpace) {
 /*
  * 【A4①】地区被敌方占领（15344 的成立条件）。
  * 卡面："若<西欧>被敌方国家控制" —— 该地区有敌方阵营部队。
- */
-function space_enemy_occupied(game, space, nation) {
-	const myF = faction_of_nation(nation)
-	if (!myF) return false
-	return pieces_on(game, space).some(p => {
-		const f = faction_of_nation(game.piece_nation[p])
-		return f && f !== myF
-	})
-}
+ *
+ * 【2026-10-22 已并入】原 space_enemy_occupied(game, space, nation)
+ *   ≡ has_pieces(game, { space, enemyOf: nation })
+ * ⚠ 它不区分兵种（任意敌方部队都算"被占领"），与 15445 卡面"无敌方陆军"
+ *   存在口径差异，见审计报告 §四.2；如需按兵种收紧请在调用点显式加 types。
 
 /*
  * 打出状态卡时应用【持续效果】。返回人话描述（进 game.log）。
@@ -7020,7 +7009,7 @@ function apply_status_ongoing(game, card_id, nation) {
 	if (og.kind === 'marker_if_controlled') {
 		const sp = space_id(og.space)
 		if (sp != null) {
-			const okAll = (og.require || []).every(s => de_controlled(game, s, '德国'))
+			const okAll = (og.require || []).every(s => has_pieces(game, { space: s, nation: '德国' }))
 			if (okAll) {
 				add_marker(game, sp, og.markers || 1, '德国', 'axis')
 				lines.push(data.name_of(sp) + ' 增加 ' + (og.markers || 1) + ' 个计分标记（大德意志帝国）')
@@ -7327,13 +7316,9 @@ function is_bombing_card(card_id) {
 	return !!ec && ec.tag === '轰炸行动'
 }
 
-/* 该国【场上全部部队】（供 17520 石油禁运的"移除 1 支其的部队"选择） */
-function own_pieces_on_board(game, nation) {
-	const out = []
-	for (const p in game.location)
-		if (game.piece_nation[p] === nation) out.push(p)
-	return out
-}
+/* 【2026-10-22 已并入】原 own_pieces_on_board(game, nation)
+ *   ≡ list_pieces(game, { nation })
+ * 供 17520 石油禁运的"移除 1 支其的部队"选择（不限兵种）。 */
 
 /* ============================================================
  * 四、回合状态机
@@ -7415,9 +7400,8 @@ function effective_home_base(game, nation) {
 				/* 条件：指定地区被敌/友方控制 */
 				const condSpace = space_id(ho.cond.space)
 				if (condSpace == null) continue
-				const condOk = ho.cond.enemy
-					? space_enemy_occupied(game, condSpace, nation)
-					: !space_enemy_occupied(game, condSpace, nation)
+				const enemyThere = has_pieces(game, { space: condSpace, enemyOf: nation })
+				const condOk = ho.cond.enemy ? enemyThere : !enemyThere
 				if (condOk) return space_id(ho.to)
 			} else {
 				/* 无条件改判（如 17845 苏联→西伯利亚） */
@@ -9806,7 +9790,8 @@ const EVENT_EFFECTS = {
 	 * 战斗 step 照抄 15225《阿登闪击战》（固定格陆战，无 pick，框架建战斗预算、玩家选发起单位）；
 	 * 征召 step 照抄 15312《华沙起义》（固定格征召，无 pick，候选唯一自动执行）；
 	 * 条件门控复用 step 级 cond（resolve_event_card L15185 支持），判定走既有原子
-	 * adjacent_has_piece（与 15436/15433/12732 同口径，查 get_connections 邻格的该国部队）。
+	 * has_pieces + side/excludeSelf（与 15436/15433/12732 同口径：查 get_connections
+	 * 邻格的该国部队，不含本格）。
 	 * 不手搓遍历。
 	 */
 	'15349': {
@@ -9818,9 +9803,12 @@ const EVENT_EFFECTS = {
 				cond(game) {
 					const mid = space_id_of('中东')
 					if (mid == null) return { ok: false, reason: '中东 不存在' }
-					const hasGerman = adjacent_has_piece(game, mid, '德国', 'army') ||
-						adjacent_has_piece(game, mid, '德国', 'navy') ||
-						adjacent_has_piece(game, mid, '德国', 'air')
+					/* 卡面「若<中东>相邻地区没有德国部队」——仅相邻（不含本格），
+					 * 且走德国的阵营视角连通（含海峡/受限连接）。 */
+					const hasGerman = has_pieces(game, {
+						space: mid, side: faction_of_nation('德国'), excludeSelf: true,
+						types: ['army', 'navy', 'air'], nation: '德国',
+					})
 					return hasGerman
 						? { ok: false, reason: '中东相邻地区有德国部队' }
 						: { ok: true }
@@ -13299,7 +13287,7 @@ function run_sea_air_deploy(game, ctx, nat) {
 
 	if (arg.choice === 1) {
 		/* 调度：把 1 支本国空军移入该海域 */
-		const airs = my_air_pieces(game, nat)
+		const airs = list_pieces(game, { types: ['air'], nation: nat })
 		const air = airs.find(a => Number(game.location[a]) !== space) || airs[0]
 		if (!air) return { ok: false, reason: '没有可调度的' + nat + '空军' }
 		const from = game.location[air]
@@ -13314,18 +13302,10 @@ function run_sea_air_deploy(game, ctx, nat) {
 	return { ok: true, desc: '在 ' + data.name_of(space) + ' 部署 1 支空军（' + (r.reason || '') + '）' }
 }
 
-/* space 的相邻地区里是否有 nation 的 type 部队 */
-function adjacent_has_piece(game, space, nation, type) {
-	if (space == null) return false
-	const myFaction = faction_of_nation(nation)
-	const nbrs = get_connections(game, Number(space), myFaction).map(Number)
-	for (const nb of nbrs) {
-		for (const p of pieces_on(game, nb)) {
-			if (game.piece_nation[p] === nation && game.piece_type[p] === type) return true
-		}
-	}
-	return false
-}
+/* 【2026-10-22 已并入】原 adjacent_has_piece(game, space, nation, type)
+ *   ≡ has_pieces(game, { space, side: faction_of_nation(nation), excludeSelf: true,
+ *                         types: [type], nation })
+ * 口径要点：走【阵营视角连通】（含海峡/受限连接），且【不含本格】。 */
 
 const RESPONSE_EFFECTS = {
 	/*
@@ -13657,7 +13637,10 @@ const RESPONSE_EFFECTS = {
 				const builderFaction = faction_of_nation(ctx.nation)
 				/* 敌方国家建设海军，且该地区相邻日本海军 */
 				return builderFaction && builderFaction !== owner_side &&
-					adjacent_has_piece(game, ctx.space, '日本', 'navy')
+					has_pieces(game, {
+						space: ctx.space, side: faction_of_nation('日本'), excludeSelf: true,
+						types: ['navy'], nation: '日本',
+					})
 			},
 		},
 	},
@@ -13833,8 +13816,10 @@ const RESPONSE_EFFECTS = {
 			on: 'build',
 			filter: (g, ct) =>
 				ct.type === 'army' && ct.nation === '苏联' &&
-				(adjacent_has_piece(g, ct.space, '英国', 'army') ||
-					adjacent_has_piece(g, ct.space, '美国', 'army')),
+				has_pieces(g, {
+					space: ct.space, side: faction_of_nation('英国'), excludeSelf: true,
+					types: ['army'], nations: ['英国', '美国'],
+				}),
 		},
 		optional: true,
 	},
@@ -15603,7 +15588,7 @@ function event_card_needs(game, nation, card_id, arg) {
 		const nat = eff.actor || '日本'
 		/* 候选复用共享 helper（与 run 同一口径，避免漂移） */
 		const seaAirCands = () => sea_air_deploy_candidates(game, nat)
-		const myAir = my_air_pieces(game, nat)
+		const myAir = list_pieces(game, { types: ['air'], nation: nat })
 		/*
 		 * 【选项 A · 2026-10-06】代价（弃 1 张[响应卡]）先收，再让玩家选部署/调度。
 		 * 两个选项【始终都给】，不合法的用 disabled+reason 在客户端【暗置】（而非隐藏），
@@ -18325,11 +18310,9 @@ function seize_air(game, nation, space, air_piece) {
 	return { ok: true, removed: enemies[0], space: space, initiator: initiator }
 }
 
-/* 本国全部空军（供 UI 列出可选算子） */
-function my_air_pieces(game, nation) {
-	return Object.keys(game.location).filter(p =>
-		game.piece_nation[p] === nation && game.piece_type[p] === 'air' && game.location[p] != null)
-}
+/* 【2026-10-22 已并入】原 my_air_pieces(game, nation)
+ *   ≡ list_pieces(game, { types: ['air'], nation })
+ * 供 UI 列出可选空军算子。 */
 
 /* ============================================================
  * 5 张基本卡的效果实现
@@ -18408,7 +18391,7 @@ function has_legal_target(game, nation, c, arg) {
 	const myFaction = faction_of_nation(nation)
 
 	/* 本国空军是否存在（seize / move 都需要） */
-	const ownAir = my_air_pieces(game, nation)
+	const ownAir = list_pieces(game, { types: ['air'], nation: nation })
 
 	if (mode === 'deploy') {
 		/*
@@ -18630,7 +18613,7 @@ function resolve_basic_card(game, nation, card_id, arg) {
 
 			if (mode === 'move') {
 				if (space == null) return { ok: false, reason: '未指定调度目标' }
-				const air = arg.piece || my_air_pieces(game, nation)[0]
+				const air = arg.piece || list_pieces(game, { types: ['air'], nation: nation })[0]
 				if (!air) return { ok: false, reason: '本国没有空军可调度' }
 				if (game.location[air] == null || game.piece_nation[air] !== nation)
 					return { ok: false, reason: '指定的算子不是本国空军' }
@@ -18954,7 +18937,7 @@ function battle_initiators(game, nation, space) {
 				game.piece_nation[p] === nation && game.piece_type[p] === 'air')
 			if (hasAN && !hasAir) pushSpace(i, '有本国陆/海军')
 		}
-		for (const a of my_air_pieces(game, nation))
+		for (const a of list_pieces(game, { types: ['air'], nation: nation }))
 			pieces.push({
 				id: a, name: '空军', nation: nation, type: 'air',
 				space: game.location[a], space_name: data.name_of(game.location[a]),
@@ -28748,7 +28731,7 @@ exports.query = function (state, current, query, params) {
 	if (query === 'air_options') {
 		const my = nation_of_player(game, current)
 		if (!my) return null
-		const airs = my_air_pieces(game, my)
+		const airs = list_pieces(game, { types: ['air'], nation: my })
 		const targets = []
 		for (let i = 1; i < data.spaces.length; i++) {
 			if (!data.spaces[i]) continue
@@ -29086,7 +29069,6 @@ if (typeof module !== 'undefined') {
 		auto_fire_status,
 		do_battle,
 		seize_air,
-		my_air_pieces,
 		resolve_basic_card,
 		basic_targets,
 		piece_type_zh,

@@ -59,10 +59,10 @@ if (S1) {
 	console.log('[deploy] nd0.need:', nd0 && nd0.need)
 	const ndD = I.event_card_needs(g, '日本', '15408#1', { choice: 0 })
 	console.log('[deploy] ndD cand include S1?', ndD.candidates.indexOf(SPACE[S1]) >= 0, 'cands=', JSON.stringify(ndD.candidates))
-	const before = I.my_air_pieces(g, '日本').length
+	const before = I.list_pieces(g, { types: ['air'], nation: '日本' }).length
 	const rD = I.resolve_event_card(g, '日本', '15408#1', { choice: 0, space: SPACE[S1], cards: [RES] })
 	console.log('[deploy] resolve ok?', rD.ok, rD.reason)
-	console.log('[deploy] air count:', before, '->', I.my_air_pieces(g, '日本').length)
+	console.log('[deploy] air count:', before, '->', I.list_pieces(g, { types: ['air'], nation: '日本' }).length)
 }
 
 // 调度：造第二个补给海域 S2（forward army）

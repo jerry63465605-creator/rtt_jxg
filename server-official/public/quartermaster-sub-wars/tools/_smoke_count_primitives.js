@@ -179,5 +179,31 @@ console.log('\n=== L. 只数【在版图上】的棋子 ===')
 		'n=' + I.count_pieces(g, { types: ['army'], nation: '德国' }))
 }
 
+console.log('\n=== M. excludeSelf（卡面"相邻地区"不含本格） ===')
+{
+	const g = base()
+	put(g, 'm1', '德国', 'army', NORTH)                 /* 本格 */
+	ok('含本格时 adjacent=true 命中',
+		I.has_pieces(g, { space: '北欧', adjacent: true, nation: '德国' }) === true)
+	ok('excludeSelf=true 时本格不算',
+		I.has_pieces(g, { space: '北欧', adjacent: true, excludeSelf: true, nation: '德国' }) === false)
+	const nb = (I.data.spaces[NORTH].connections || [])[0]
+	put(g, 'm2', '德国', 'army', nb)                    /* 相邻格 */
+	ok('相邻格有部队 -> excludeSelf 仍命中',
+		I.has_pieces(g, { space: '北欧', adjacent: true, excludeSelf: true, nation: '德国' }) === true)
+	ok('excludeSelf 不影响集合去重',
+		I.region_spaces(g, { space: '北欧', adjacent: true, excludeSelf: true }).indexOf(NORTH) < 0)
+}
+
+console.log('\n=== N. side（阵营视角连通，含海峡） ===')
+{
+	const g = base()
+	const sps = I.region_spaces(g, { space: '地中海', side: 'axis' })
+	ok('side 结果含本格', sps.indexOf(id('地中海')) >= 0)
+	ok('side + excludeSelf 排除本格',
+		I.region_spaces(g, { space: '地中海', side: 'axis', excludeSelf: true }).indexOf(id('地中海')) < 0)
+	ok('side 结果非空（轴心视角有邻接）', sps.length > 1, JSON.stringify(sps.map(x => I.data.name_of(x))))
+}
+
 console.log('\n' + (fail === 0 ? 'ALL PASS' : fail + ' FAIL'))
 process.exitCode = fail ? 1 : 0
