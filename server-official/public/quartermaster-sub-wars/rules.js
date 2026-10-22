@@ -19519,16 +19519,24 @@ function ask_remove_on(game, nation) {
 }
 
 function prepare_remove_ask(game, nation) {
+	/*
+	 * 【2026-10-22 玩家口径】询问打开后，可以移除【本方阵营任意部队】
+	 * —— 不限于当前行动国（旧实现只列 game.piece_nation === nation）。
+	 */
+	const myF = faction_of_nation(nation)
 	const list = Object.keys(game.location)
-		.filter(p => game.location[p] != null && game.piece_nation[p] === nation)
+		.filter(p => game.location[p] != null &&
+			faction_of_nation(game.piece_nation[p]) === myF)
 	if (!ask_remove_on(game, nation) || !list.length) {
 		game.pending_ask = null
 		return null
 	}
 	game.pending_ask = {
 		nation: nation,
+		faction: myF,
 		pieces: list.map(p => ({
 			id: p,
+			nation: game.piece_nation[p],
 			type: game.piece_type[p],
 			loc: game.location[p],
 			loc_name: data.name_of(game.location[p]),
@@ -22893,8 +22901,11 @@ exports.view = function (state, current) {
 
 		/* ---- 收回本国部队（easy_rule 五.1）---- */
 		ask_remove: !!(game.ask_remove || {})[side],
+		/* 【2026-10-22】询问范围已扩到【本方阵营任意部队】，
+		 * 可见性也按阵营判定（不再要求 nation 完全相同，否则盟国看不到、无法移除）。 */
 		pending_ask: (my_nation && game.pending_ask &&
-			game.pending_ask.nation === my_nation) ? game.pending_ask : null,
+			faction_of_nation(game.pending_ask.nation) === faction_of_nation(my_nation))
+			? game.pending_ask : null,
 
 		/* ---- 手牌 ---- */
 		my_nation: my_nation,
@@ -23748,7 +23759,8 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 */
 	const base = {
 		/* 回合状态机 */
-		next_phase: 1,
+		/* 【2026-10-22】"收回部队"询问挂起时不许推进阶段（与 action 入口守卫同源） */
+		next_phase: game.pending_ask ? 0 : 1,
 		resource_swap: 1,       /* 资源再分配：弃 3 张牌挑 1 张基本卡 */
 		play_card: game.pending_event_step ? 0 : 1,  /* 阶段限定打牌（见 check_phase_for_card） */
 		discard_one: 1,         /* 出牌阶段②：弃置 1 张手牌 */
@@ -24320,6 +24332,14 @@ function play_status_card_impl(game, nation, card_id) {
 			game.log.push('【出牌阶段】请先弃置《大萧条的余波》要求的 1 张手牌，再结束阶段')
 			return game
 		}
+		/*
+		 * 【2026-10-22 玩家口径】"收回部队"询问挂起时不能推进阶段 ——
+		 * 必须先处理（移除任意本国单位）或点「跳过」。
+		 */
+		if (game.pending_ask) {
+			game.log.push('【收回部队】请先选择要收回的部队，或点「跳过」，再结束阶段')
+			return game
+		}
 		const nation = game.current_nation || ORDER_OF_NATIONS[0]
 		const from = game.turn_phase || PHASES[0].key
 		/*
@@ -24449,19 +24469,33 @@ function play_status_card_impl(game, nation, card_id) {
 
 	/* 收回版图上 1 支本国部队（本国回合内任意时刻，easy_rule 五.1） */
 	if (action === 'remove_piece') {
-		const nation = game.current_nation
+		/*
+		 * 【2026-10-22 玩家口径】询问打开后可移除【本方阵营任意部队】：
+		 * 校验改为"阵营一致"（不再用 game.current_nation 卡国别），
+		 * 实际移除时按【该部队自己的国名】调用原子 remove_piece。
+		 */
 		const piece = arg && arg.piece
-		const r = remove_piece(game, nation, piece)
-		if (!r.ok) { game.log.push('【' + nation + '】无法收回：' + r.reason); return game }
+		const owner = (piece != null && game.piece_nation[piece]) ? game.piece_nation[piece] : null
+		if (!owner || faction_of_nation(owner) !== side) {
+			game.log.push('【收回部队】只能收回本方阵营的部队')
+			return game
+		}
+		const r = remove_piece(game, owner, piece)
+		if (!r.ok) { game.log.push('【' + owner + '】无法收回：' + r.reason); return game }
 		if (game.pending_ask) game.pending_ask.pieces = (game.pending_ask.pieces || [])
 			.filter(x => x.id !== piece)
 		if (!game.pending_ask || !(game.pending_ask.pieces || []).length) game.pending_ask = null
-		game.log.push('【' + nation + '】收回部队：' + r.desc)
+		game.log.push('【' + owner + '】收回部队：' + r.desc)
 		return game
 	}
 
 	/* 开关：友方出牌回合开始时是否询问收回部队（默认关闭 = 跳过） */
 	if (action === 'toggle_ask_remove') {
+		/* 【2026-10-22 玩家口径】只能在本方回合内打开/关闭该询问 */
+		if (faction_of_nation(game.current_nation) !== side) {
+			game.log.push('只能在【本方回合】内打开/关闭"询问收回部队"')
+			return game
+		}
 		game.ask_remove = game.ask_remove || {}
 		const v = (arg && arg.value != null) ? !!arg.value : !game.ask_remove[side]
 		game.ask_remove[side] = v

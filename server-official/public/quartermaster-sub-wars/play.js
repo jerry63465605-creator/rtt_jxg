@@ -394,8 +394,12 @@ function update_phase_panel() {
 	/* 按钮只在轮到自己、且没有待决事项时可点（含 17510 挂起给英国期间禁用） */
 	const btn = document.getElementById("btn_next_phase")
 	if (btn) {
-		btn.disabled = !can_act_in_turn() || !!(view && view.us_political)
-		if (btn.disabled && view && view.us_political)
+		/* 【2026-10-22】"收回部队"询问挂起期间也不能推进（须先移除或点「跳过」） */
+		const askPending = !!(view && view.pending_ask)
+		btn.disabled = !can_act_in_turn() || !!(view && view.us_political) || askPending
+		if (btn.disabled && askPending)
+			btn.title = "请先处理「收回部队」询问（选择要收回的部队，或点「跳过」）"
+		else if (btn.disabled && view && view.us_political)
 			btn.title = "等待【英国】选择《我们的政治哲学》的[响应卡]，期间不可推进阶段"
 		else
 			btn.title = ""
@@ -4917,11 +4921,17 @@ function update_ask_box_from_view() {
 		return
 	}
 	ask_state = { kind: "remove" }
+	/*
+	 * 【2026-10-22】询问范围已扩到【本方阵营任意部队】：
+	 * 标题按阵营显示，列表项带上国名（否则多国混在一起分不清谁是谁）。
+	 */
+	const facLabel = (ask.faction === "allies") ? "同盟国" : (ask.faction === "axis" ? "轴心国" : ask.nation)
 	render_ask_box(
-		"【" + ask.nation + "】是否收回部队？",
-		"点击要收回的部队（本国回合内任意时刻也可点算子旁边的按钮收回）",
+		"【" + facLabel + "】是否收回部队？",
+		"可收回本方阵营的任意部队（点一次收回 1 支，可连续点）；也可点「跳过」结束询问",
 		ask.pieces.map(p => ({
-			label: (TYPE_LABEL[p.type] || p.type) + " @ " + p.loc_name,
+			label: (TYPE_LABEL[p.type] || p.type) + " @ " + p.loc_name +
+				(p.nation ? "（" + p.nation + "）" : ""),
 			onClick: () => send_action("remove_piece", { piece: p.id }),
 		})).concat([{ label: "跳过", cls: "primary", onClick: () => send_action("clear_ask", {}) }])
 	)
