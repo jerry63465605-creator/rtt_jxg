@@ -4293,6 +4293,12 @@ const STATUS_EFFECTS = {
 	'17544': {
 		trigger: {
 			window: 'after_build_navy', cost: { attrition: 1 },
+			/*
+			 * 【2026-10-23】地区组限定：只有"建设海军发生在<太平洋>"才开窗/可点。
+			 * status_window_ready 的 after_build_navy 分支按此字段置灰，
+			 * 与下方 run 内的 is_pacific_space 判定同源（都由 REGION_GROUPS['太平洋'] 展开）。
+			 */
+			space_group: '太平洋',
 			desc: '在<太平洋>建设海军后，损耗1张：对相邻地区发起1次陆战',
 			run(game, ctx) {
 				const sp = ctx.ctx.space
@@ -6763,6 +6769,20 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 					const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'after_build_navy')
 					if (!e)
 						return { ok: false, reason: '仅能在「建设海军后立刻」手动发动，此刻已不可发动' }
+					/*
+					 * 【2026-10-23 修复】地区组限定（卡面"在<X>建设海军后"）。
+					 *
+					 * 17544《美国海军陆战队》卡面限定<太平洋>，但原先这里只看窗口是否存在 ——
+					 * 在<北大西洋>建海军后也会 ready=true（可点），点了才被 run 内的
+					 * is_pacific_space 拒掉 → 典型的"能点的 ≠ 能成功的"。
+					 * 现按 trigger.space_group 在【同源】位置拦掉，置灰并给出原因。
+					 */
+					if (tr.space_group && !space_in_group(e.space, tr.space_group))
+						return {
+							ok: false,
+							reason: '仅当在<' + tr.space_group + '>建设海军后发动（本次建在 ' +
+								(data.name_of(e.space) || e.space) + '）',
+						}
 					return { ok: true, space: e.space }
 				}
 
@@ -15252,13 +15272,23 @@ function us_can_launch_battle(game, kind) {
 	return us_launch_battle_spaces(game, kind).length > 0
 }
 
-/* 17506/17544：卡面写的<太平洋>在地图上【不存在】——
- * 实际海域是 中太平洋(28)/南太平洋(43)/北太平洋(49)/东太平洋(52)。
- * 故用"名字含『太平洋』"判定，避免猜错具体哪一个。 */
+/*
+ * 【2026-10-23】地区组判定：sp 是否属于 REGION_GROUPS[group]。
+ *
+ * 卡面泛称（<太平洋>/<中国>/<非洲>）在地图上【不存在】单一地区，
+ * 统一走 REGION_GROUPS 展开 —— 单一来源，别再按名字子串猜
+ * （名字猜法在"新增一个名字含太平洋的具体海域但不在组里"时会静默错）。
+ */
+function space_in_group(sp, group) {
+	if (sp == null || !group) return false
+	const list = space_ids_expand([group])
+	return list.indexOf(Number(sp)) >= 0
+}
+
+/* 17506/17544：卡面写的<太平洋> = REGION_GROUPS['太平洋']
+ * （中太平洋 28 / 南太平洋 43 / 北太平洋 49 / 东太平洋 52）。 */
 function is_pacific_space(sp) {
-	if (sp == null) return false
-	const nm = data.name_of(sp)
-	return typeof nm === 'string' && nm.indexOf('太平洋') >= 0
+	return space_in_group(sp, '太平洋')
 }
 
 /* 16800/16803："再建设 1 支 X"的可建地区候选。
@@ -30124,6 +30154,9 @@ if (typeof module !== 'undefined') {
 		space_ids_of,
 		REGION_GROUPS,
 		space_ids_expand,
+		/* 【2026-10-23】地区组判定（卡面泛称 <太平洋>/<中国>/<非洲>） */
+		space_in_group,
+		is_pacific_space,
 		EVENT_EFFECTS,
 		ECHO_EFFECTS,
 		/* 时点接口（2026-09-25） */

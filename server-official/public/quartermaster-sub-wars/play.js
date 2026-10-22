@@ -6676,7 +6676,14 @@ const STATUS_UI = {
 	'15248': { sbuild: 'army' },
 	'15242': { discard: 1, filter: { type: 'BASIC', name: '发起陆战' } },
 	/* 战斗状态卡：服务端已正确读 ctx.arg（含 space/from/victim），仅需客户端补选目标流程 */
-	'17544': { battle: 'land', attacker_owner: true },
+	/*
+	 * 【2026-10-23】17544 美国海军陆战队：卡面"对【相邻地区】发起1次陆战"，
+	 * 相邻 = 建设海军那个海域的相邻【陆地】。
+	 * 必须 spaces_from_window：候选由服务端 status_battle_spaces 按窗口地区动态算
+	 * （内建地形过滤，kind='land' 只留陆地）。原先三个字段都没有 → 客户端不设高亮、
+	 * 玩家可点任意地区，点了才被服务端"只能对相邻地区"拒掉。
+	 */
+	'17544': { battle: 'land', attacker_owner: true, spaces_from_window: true },
 	/*
 	 * 【2026-10-15】15247 贵在行动：对【建设地点的相邻地区】发起陆战。
 	 * 与同形卡 17544 同款走 battle 流程（选地区 -> 选发起单位 -> 选目标）。
