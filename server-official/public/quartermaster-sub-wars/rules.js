@@ -5403,8 +5403,19 @@ function offer_us_japan_delegate(game, reason) {
 	if (game.us_japan_delegate) return
 	const jpHand = (game.hands['日本'] || []).length
 	const jpDeck = (game.decks['日本'] || []).length
-	/* 无牌可弃则跳过（服务端不替玩家做无意义的挂起） */
-	if (jpHand === 0) return
+	/*
+	 * 【2026-10-23 玩家口径】日本没手牌可弃 -> 跳过"弃手牌"，但【仍要损耗 1 张】。
+	 *
+	 * 原实现直接 return（既不挂起也不损耗）—— 日本空手时这张卡等于白触发，
+	 * 卡面「日本弃置1张手牌，损耗1张牌」的后半句被整段吞掉。
+	 */
+	if (jpHand === 0) {
+		const lost0 = attrition_passive(game, '日本', 1)
+		game.log.push('【抗日义勇军】' + (reason || '中国行动') +
+			'：日本无手牌可弃，跳过弃牌，仅损耗 ' + lost0.length + ' 张牌' +
+			(lost0.attrition_short ? '，牌库不足扣 ' + lost0.attrition_short + ' 分' : ''))
+		return
+	}
 	game.us_japan_delegate = {
 		return_nation: game.current_nation,
 		return_active: game.active,
@@ -5421,18 +5432,27 @@ function resolve_us_japan_delegate(game, arg) {
 	const dg = game.us_japan_delegate
 	if (!dg) return
 	const card = arg && arg.card
-	if (card) {
-		const hi = (game.hands['日本'] || []).indexOf(card)
+	const hand = game.hands['日本'] || []
+	/*
+	 * 【2026-10-23 玩家口径】有手牌就必须弃（不能靠"不传 card"白嫖代价）；
+	 * 没手牌才允许跳过弃牌，只损耗。
+	 */
+	if (hand.length > 0) {
+		if (!card) {
+			game.log.push('【日本】必须先选择要弃置的 1 张手牌（抗日义勇军）')
+			return
+		}
+		const hi = hand.indexOf(card)
 		if (hi < 0) {
 			game.log.push('【日本】手牌中没有该牌')
 			return
 		}
-		game.hands['日本'].splice(hi, 1)
+		hand.splice(hi, 1)
 		game.discard['日本'] = game.discard['日本'] || []
 		game.discard['日本'].push(card)
 		game.log.push('【日本】弃置 1 张手牌（抗日义勇军）')
 	} else {
-		game.log.push('【日本】未弃牌（无牌可弃）')
+		game.log.push('【日本】无手牌可弃，跳过弃牌，只损耗 1 张')
 	}
 	/* 损耗 1 张（牌堆顶直接进弃牌堆）。
 	 * 必须用【被动损耗】attrition_passive：牌库不足时差额每张扣被损耗国所属
@@ -27259,6 +27279,24 @@ function do_action(state, current, action, arg) {
 		if (arg && arg.pick != null) _sel.pick = arg.pick
 		const gathered = Object.assign({}, off.arg || {}, _sel)
 		off.arg = gathered
+		/*
+		 * 【2026-10-23 玩家口径】弃牌代价必须【玩家指定】，且必须在 run 之前拦。
+		 *
+		 * 本函数既有结构是"先 run 后付代价"（好处：条件不满足时不白亏牌）。
+		 * 但代价不再自动兜底后，若仍等到 run 之后才校验，玩家不选牌点发动会
+		 * 【先吃到卡牌效果】（如 15405 当场建出海军），再被代价校验拒绝 ——
+		 * 效果白嫖、卡还没消耗。故把"张数够不够"前置到 run 之前。
+		 */
+		const _discNeed0 = (ar.cost && ar.cost.discard) || 0
+		if (_discNeed0 > 0) {
+			const _picked = (gathered.drop || []).filter(id =>
+				(game.hands[owner] || []).indexOf(id) >= 0 && id !== cardId)
+			if (_picked.length < _discNeed0) {
+				game.log.push('《' + nm + '》需先选择弃置 ' + _discNeed0 +
+					' 张手牌作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
+				return game
+			}
+		}
 		/* 先执行；条件不满足就保留手牌、不付代价 */
 		const r = ar.run(game, Object.assign({ nation: owner, card_id: cardId }, off.ctx || {}), gathered)
 		if (!r || r.skip) {
@@ -27359,15 +27397,22 @@ function do_action(state, current, action, arg) {
 				return is_card_type(String(inst_card_id(id)), wantType)
 			}
 			const pool = handNow.filter(id => id !== cardId && matchType(id))
-			/* 改用 gathered.drop：多步交互里玩家在第一步选的弃牌已持久化进 off.arg，
-			 * 最终结算时当前 arg.drop 已无，必须读 gathered.drop 才不丢选择。 */
-			const want = (gathered.drop && gathered.drop.length)
-				? gathered.drop.filter(id =>
-					handNow.indexOf(id) >= 0 && id !== cardId && matchType(id))
-				: pool.slice(0, discNeed)
+			/*
+			 * 【2026-10-23 玩家口径】不再"替玩家挑牌"。
+			 *
+			 * 原实现 gathered.drop 为空时退回 `pool.slice(0, discNeed)` ——
+			 * 等于玩家不选就自动弃手牌最前面 N 张（与 17837 KV-2 同一类问题）。
+			 * 改为与 17837 相同口径：只认玩家指定的 drop（含多步交互里
+			 * 持久化进 off.arg 的 gathered.drop），不足则拒绝并【保留窗口】让玩家重选。
+			 *
+			 * 客户端已有自选 UI：pending_echo_discard.armed -> use_armed_offer{card, drop}。
+			 */
+			const want = (gathered.drop || []).filter(id =>
+				handNow.indexOf(id) >= 0 && id !== cardId && matchType(id))
 			if (want.length < discNeed) {
 				game.log.push('《' + nm + '》需弃置 ' + discNeed + ' 张' + typeName +
-					'（当前可用 ' + want.length + ' 张）')
+					'（已指定 ' + want.length + ' 张，可用 ' + pool.length +
+					' 张），请在选牌框中选择后再发动')
 				return game
 			}
 			for (const id of want.slice(0, discNeed)) discard_card(game, owner, id)
