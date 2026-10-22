@@ -625,9 +625,67 @@ function supply_group_partner(game, nat, onat) {
 }
 
 /*
+ * 【2026-10-23】海军 A/B 判定的**唯一实现**（补给结算与建设海军共用）。
+ *
+ *   A（来源 / 连回源）：相邻格有【can_source】的补给部队 —— 不限兵种
+ *        · 补给结算（build_mode = false）：本国 / 17549 组内
+ *        · 建设海军（build_mode = true ）：**仅本国**（玩家 2026-10-23 定稿）
+ *   B（港口）：相邻格有【陆军】—— 本国 / 17549 组内，**两处一致**
+ *
+ * 为什么建设和补给的 A 不一样（玩家给出的两例）：
+ *   · 北海已有美国海军时，它可靠 17549 借「北大西洋的英国海军」拿到补给；
+ *   · 但「在北海新建」美国海军时，A 必须是本国部队（北大西洋的美国海军）——
+ *     仅凭英国海军不能建。
+ *
+ * A 只认 can_source（★ 或从源头链下来），临时补给（光环 / 卡牌授予）不算来源。
+ */
+/*
+ * 【2026-10-23】该 (国, 兵种, 地区) 是否被"总是处于补给状态"的光环覆盖。
+ *
+ * 用途：建设时的**免 A**。
+ *   · 15346 自由法国（整国、无 scope）-> 法国新建的海军也应视为已连回源
+ *   · 15356 地中海基地（scope: navy + 指定海域）-> 只对该兵种/该海域生效
+ * 玩家口径：「全补给的法国、苏联，不要求连补给点」。
+ */
+function supply_aura_covers(game, nation, type, space) {
+	const imm = (game.status_aura && game.status_aura.supply_immune) || {}
+	if (imm[nation]) {
+		const sc = (game.status_aura.supply_immune_scope || {})[nation] || null
+		if (!sc) return true
+		const typeOk = !sc.type || sc.type === type
+		const spaceOk = sc.space == null || Number(sc.space) === Number(space)
+		if (typeOk && spaceOk) return true
+	}
+	const spImm = (game.status_aura && game.status_aura.space_immune) || {}
+	if (spImm[space] != null && spImm[space] === nation) return true
+	return false
+}
+
+function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
+	const list = nbrs || (get_connections(game, space, faction_of_nation(nation)) || [])
+	const canSrc = (pid) => sup.can_source ? !!sup.can_source[pid] : !!sup.in_supply[pid]
+	let hasLand = false
+	let hasSrc = false
+	for (const nb of list) {
+		for (const other of pieces_on(game, nb)) {
+			const onat = game.piece_nation[other]
+			/* B：港口 —— 相邻陆军，本国 / 17549 组内（不要求它自身补给） */
+			if (game.piece_type[other] === 'army' && supply_group_partner(game, nation, onat))
+				hasLand = true
+			/* A：来源 —— 必须是"真连回源"的补给部队；国籍范围见 build_mode */
+			const nationOk = build_mode ? (onat === nation) : supply_group_partner(game, nation, onat)
+			if (nationOk && canSrc(other)) hasSrc = true
+		}
+		if (hasLand && hasSrc) break
+	}
+	return { ok: hasLand && hasSrc, hasLand: hasLand, hasSrc: hasSrc }
+}
+
+/*
  * 计算全部部队的补给状态（纯函数，不改 state）
  *
- * 返回 { in_supply: {piece_id: true}, sources: {piece_id: 'base'|'chain'} }
+ * 返回 { in_supply: {piece_id: true}, sources: {piece_id: 'base'|'chain'|'granted'|'aura'|'echo'},
+ *        can_source: {piece_id: true} }
  */
 function compute_supply(game, conn_snap) {
 	const snap = conn_snap || compute_connections(game)
@@ -667,6 +725,16 @@ function compute_supply(game, conn_snap) {
 
 	const in_supply = {}
 	const sources = {}
+	/*
+	 * 【2026-10-23 玩家口径】can_source = 这支部队能否作为别人"连回源"的依据。
+	 *
+	 * 「补给状态」≠「补给源」：
+	 *   · ★ 上的部队（base）与从源头链下来的部队（chain）-> can_source = true
+	 *   · 卡牌授予 / 光环 / echo 只是"对某单位临时补给状态" -> can_source = false
+	 *     （玩家原话：这些提供的是临时补给状态，不是补给源）
+	 * 传播（陆军续链 / 海军 A 条）只认 can_source，不认 in_supply。
+	 */
+	const can_source = {}
 
 	/*
 	 * 2. 种子：站在★补给点上的部队（不需驻守）
@@ -684,6 +752,7 @@ function compute_supply(game, conn_snap) {
 			if (!is_supply_point(game, Number(loc), f, game.piece_nation[pid])) continue
 			in_supply[pid] = true
 			sources[pid] = 'base'
+			can_source[pid] = true          /* ★ = 唯一真正的源头 */
 		}
 	}
 
@@ -707,6 +776,8 @@ function compute_supply(game, conn_snap) {
 			if (game.location[pid] == null) continue
 			in_supply[pid] = true
 			sources[pid] = 'granted'
+			/* 临时补给：只照顾这一支，不是源。但【不降级】已连回源的（★ 上的部队） */
+			if (!can_source[pid]) can_source[pid] = false
 		}
 	}
 
@@ -733,6 +804,8 @@ function compute_supply(game, conn_snap) {
 			}
 			in_supply[pid] = true
 			sources[pid] = 'aura'
+			/* 光环补给：不是源（15346/17838 等）；已在★上的不降级 */
+			if (!can_source[pid]) can_source[pid] = false
 		}
 	}
 
@@ -748,6 +821,8 @@ function compute_supply(game, conn_snap) {
 			if (game.piece_nation[pid] !== nat) continue
 			in_supply[pid] = true
 			sources[pid] = 'aura'
+			/* 空间免疫光环：不是源；已在★上的不降级 */
+			if (!can_source[pid]) can_source[pid] = false
 		}
 	}
 
@@ -760,7 +835,9 @@ function compute_supply(game, conn_snap) {
 			if (game.location[pid] == null) continue
 			if (game.piece_nation[pid] === '德国') {
 				in_supply[pid] = true
+				if (can_source[pid]) continue      /* 已连回源的不降级 */
 				if (!sources[pid]) sources[pid] = 'echo'
+				can_source[pid] = false            /* 空投补给：不是源 */
 			}
 		}
 	}
@@ -813,36 +890,30 @@ function compute_supply(game, conn_snap) {
 				 *   也被判无补给。按玩家口径，B 只要"相邻有补给中的部队"即可，
 				 *   不必是陆军、更不必是 A 那一支。
 				 */
-				let hasOwnArmy = false      /* A */
-				let hasSuppliedNb = false   /* B */
-				for (const nb of nbrs) {
-					for (const other of (bySpace[nb] || [])) {
-						const onat = game.piece_nation[other]
-						const otype = game.piece_type[other]
-						/* 仅【本国 / 组内盟国】的部队参与判定 */
-						if (!supply_group_partner(game, nat, onat)) continue
-						if (otype === 'army') hasOwnArmy = true
-						if (in_supply[other]) hasSuppliedNb = true
-					}
-					if (hasOwnArmy && hasSuppliedNb) break
-				}
-				if (hasOwnArmy && hasSuppliedNb) {
+				/* 【2026-10-23】统一走 navy_ab_check（build_mode=false：A 允许 17549 组内） */
+				const ab = navy_ab_check(game, nat, loc, { in_supply: in_supply, can_source: can_source }, false, nbrs)
+				if (ab.ok) {
 					in_supply[pid] = true
 					sources[pid] = 'chain'
+					can_source[pid] = true      /* 从源链下来的，可继续向下传 */
 					changed = true
 				}
 			} else {
-				/* 陆军（及大本营/预备役）：与处于补给状态的【本国 / 共享补给组盟国】部队相邻（17549） */
+				/*
+				 * 陆军：与【can_source 且补给中】的【本国 / 共享补给组盟国】部队相邻（17549）
+				 * 【2026-10-23】只认 can_source —— 临时补给（光环/授予）不能给陆军续链。
+				 */
 				let ok = false
 				for (const nb of nbrs) {
 					for (const other of (bySpace[nb] || [])) {
-						if (supply_group_partner(game, game.piece_nation[other], nat) && in_supply[other]) { ok = true; break }
+						if (supply_group_partner(game, game.piece_nation[other], nat) && can_source[other]) { ok = true; break }
 					}
 					if (ok) break
 				}
 				if (ok) {
 					in_supply[pid] = true
 					sources[pid] = 'chain'
+					can_source[pid] = true
 					changed = true
 				}
 			}
@@ -856,7 +927,7 @@ function compute_supply(game, conn_snap) {
 		delete game.piece_type[pid]
 	}
 
-	return { in_supply, sources }
+	return { in_supply, sources, can_source }
 }
 
 /* 某个部队是否处于补给状态 */
@@ -7669,21 +7740,32 @@ function can_build_at(game, nation, space, type) {
 	 */
 	if (type === 'navy') {
 		const supply = compute_supply(game)
-		let hasLandNeighbor = false     /* B：相邻有本国/组内【陆军】（不要求补给） */
-		let hasSuppliedNb = false       /* A：相邻有补给中的本国/组内【任意兵种】 */
-		for (const nb of nbrs) {
-			for (const other of pieces_on(game, nb)) {
-				if (!supply_group_partner(game, nation, game.piece_nation[other])) continue
-				if (game.piece_type[other] === 'army') hasLandNeighbor = true
-				if (supply.in_supply[other]) hasSuppliedNb = true
-			}
-			if (hasLandNeighbor && hasSuppliedNb) break
-		}
-		if (hasLandNeighbor && hasSuppliedNb)
-			return { ok: true, reason: '邻接本国（或组内盟国）陆地部队，且相邻有处于补给状态的部队' }
-		if (!hasLandNeighbor)
+		/*
+		 * 【2026-10-23 玩家口径·定稿】与补给结算共用 navy_ab_check，差别只在 A 的国籍：
+		 *   · 补给结算：A 允许 17549 组内（build_mode = false）
+		 *   · 建设海军：A **仅本国**（build_mode = true）
+		 * B（港口/相邻陆军）两处一致，都允许 17549 组内。
+		 *
+		 * 判据（玩家两例）：
+		 *   · 北海已有美国海军 -> 可靠 17549 借英国海军获得补给；
+		 *   · 但北海新建美国海军 -> A 必须是本国部队（北大西洋的美国海军），
+		 *     仅凭英国海军不可建；B 仍可用西欧的英国陆军当港口。
+		 */
+		const ab = navy_ab_check(game, nation, space, supply, true, nbrs)
+		/*
+		 * 免 A：本国拥有"总是补给"光环（15346 自由法国 / 17838 苏联 / 15356 按 scope）
+		 * —— 玩家口径「全补给的国家不要求连补给点」。
+		 * 注意只免 A，B（相邻陆军）仍要满足。
+		 */
+		const auraOk = supply_aura_covers(game, nation, 'navy', space)
+		if (ab.hasLand && (ab.hasSrc || auraOk))
+			return { ok: true, reason: '邻接陆地部队，且连回补给源（或该国全补给）' }
+		if (!ab.hasLand)
 			return { ok: false, reason: '海域须邻接本国（或组内盟国）的陆地部队（陆军）' }
-		return { ok: false, reason: '海域相邻还须有处于补给状态的部队（本国或组内盟国）' }
+		return {
+			ok: false,
+			reason: '海域相邻还须有【本国】且连回补给源的部队（17549 不放宽此项）',
+		}
 	}
 
 	/*
@@ -16364,7 +16446,16 @@ function build_candidate_spaces(game, nation, type, opt) {
 	const pool = []
 	for (let i = 1; i < data.spaces.length; i++) {
 		if (!data.spaces[i]) continue
-		if (data.spaces[i].terrain === 'sea') continue
+		/*
+		 * ⚠ 【2026-10-23】本函数当前只服务"陆军候选"（唯一调用方：11421 苏联 army），
+		 * 因此无条件跳过海域。**不要拿它算海军候选**（会恒空）。
+		 * 海军/通用建设候选应使用 can_build_at 遍历，或 status_build_candidates。
+		 */
+		if (type === 'navy') {
+			if (data.spaces[i].terrain !== 'sea') continue    /* 海军只算海域 */
+		} else if (type !== 'air') {
+			if (data.spaces[i].terrain === 'sea') continue    /* 陆军只算陆地；空军两者皆可，交给 air_host_check */
+		}
 		if (!can_build_at(game, nation, i, type).ok) continue
 		pool.push(i)
 	}
@@ -28333,6 +28424,9 @@ function do_action(state, current, action, arg) {
 		if (!inst) return null
 		const i = t.indexOf(inst)
 		if (i >= 0) t.splice(i, 1)
+		/* 【2026-10-23】与 discard_status_instance 成对：撤掉该卡的 ongoing 光环，
+		 * 否则弃掉带光环的状态卡会留下"幽灵光环"（如 17549 共享补给线）。 */
+		try { revert_status_ongoing(game, inst, nation) } catch (e) { /* 无光环时无副作用 */ }
 		game.discard[nation] = game.discard[nation] || []
 		game.discard[nation].push(inst)
 		return inst
