@@ -2569,6 +2569,20 @@ function card_matches_filter(card, filter) {
 }
 
 /*
+ * 【2026-10-23 修复】手牌中是否有 1 张满足 filter 的牌。
+ *
+ * status_window_ready 的 tr.requires 分支（rules.js:6639）一直在调本函数，
+ * 但【从未定义过】—— 任何带 requires 的状态卡（当前只有 15242 人民冲锋队）
+ * 一发动就抛 `ReferenceError: hand_has_matching_card is not defined`，
+ * 表现为"点了直接崩、什么也没发生"。此处按 card_matches_filter 同源口径补实现。
+ */
+function hand_has_matching_card(game, nation, filter) {
+	if (!filter) return true
+	const hand = game.hands[nation] || []
+	return hand.some(id => card_matches_filter(inst_card(String(inst_card_id(id))), filter))
+}
+
+/*
  * 这张卡是否符合该国技能"授予"的打出范围。
  *
  * filterOverride：显式指定 filter（代价与效果的牌类型可能不同，
@@ -3907,7 +3921,12 @@ const STATUS_EFFECTS = {
 		trigger: {
 			window: 'play_start',
 			cost: { skip_play: true, discard: 2 },
-			effect: { kind: 'recruit', nation: '英国', type: 'navy', space: '地中海' },
+			/*
+			 * 【2026-10-23 修复】卡面是"在<地中海>**建设**海军"，原配置误用 recruit（征召）：
+			 * 征召要求"该地没有本国部队"，于是地中海有英国陆军（正是能建海军的前提）时被拒，
+			 * 没有陆军时反而能建。改为 kind:'build'（run_status_effect 已补该通道）。
+			 */
+			effect: { kind: 'build', nation: '英国', type: 'navy', space: '地中海' },
 			desc: '跳过出牌阶段行动，弃置2张手牌：在<地中海>建设海军',
 		},
 		desc: '地中海基地',
@@ -6641,6 +6660,18 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 				const hasBuildArmy = pile.some(id => filter_matches_card(id, 'build'))
 				if (!hasBuildArmy) return { ok: false, reason: '弃牌堆中没有[建设陆军]' }
 			}
+			/*
+			 * 【2026-10-23】effect.kind='build' 的状态卡（15356 地中海基地）：
+			 * 目标地区当下建不了就【置灰】，避免"点了 -> 代价已付（弃牌+跳过出牌阶段）
+			 * -> 效果失败"的白亏。与 17841 上面那条"前置闸门"同一口径。
+			 */
+			if (tr.effect && tr.effect.kind === 'build') {
+				const bsp = space_id(tr.effect.space)
+				const bnat = tr.effect.nation || nation
+				if (bsp == null) return { ok: false, reason: '地区未配置' }
+				const cb = can_build_at(game, bnat, bsp, tr.effect.type || 'army')
+				if (!cb.ok) return { ok: false, reason: cb.reason }
+			}
 			return { ok: true }
 
 		case 'after_naval':
@@ -6961,6 +6992,28 @@ function run_status_effect(game, nation, card_id, tr, arg, ctxSpace) {
 		if (!r.ok) return { ok: false, reason: r.reason }
 		refresh(game)
 		return { ok: true, desc: n + ' 在' + data.name_of(sp) + ' 征召' +
+			(ef.type === 'navy' ? '海军' : (ef.type === 'air' ? '空军' : '陆军')) }
+	}
+
+	/* ---------- 建设 ---------- */
+	/*
+	 * 【2026-10-23】新增 build 通道。
+	 *
+	 * 卡面区分"建设"与"征召"：建设要满足建设条件（陆军需连回补给源、
+	 * 海军需相邻港口陆军 + 连回源的来源），征召只要求"该地没有本国部队"。
+	 * 15356《地中海基地》卡面是"在<地中海>**建设**海军"，原先误配成 recruit：
+	 *   · 地中海【有】英国陆军（正是能建海军的前提）-> can_recruit_at 判"已有本国部队"拒绝
+	 *   · 地中海【没有】任何陆军（根本不能建海军）-> 反而成功建出海军
+	 * 与卡面语义完全相反，故补 build 通道并改配置。
+	 */
+	if (ef.kind === 'build') {
+		const sp = space_id(ef.space)
+		const n = ef.nation || nation
+		if (sp == null) return { ok: false, reason: '地区未配置' }
+		const r = build_piece(game, n, ef.type || 'army', sp)
+		if (!r.ok) return { ok: false, reason: r.reason }
+		refresh(game)
+		return { ok: true, desc: n + ' 在' + data.name_of(sp) + ' 建设' +
 			(ef.type === 'navy' ? '海军' : (ef.type === 'air' ? '空军' : '陆军')) }
 	}
 
@@ -26734,11 +26787,12 @@ function do_action(state, current, action, arg) {
 		 */
 		const costPayer = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
 		const cost = tr.cost || {}
-		if (cost.skip_play) {
-			game.skip_play_done = game.skip_play_done || {}
-			game.skip_play_done[costPayer] = game.turn
-			game.log.push('【' + costPayer + '】跳过本回合出牌阶段')
-		}
+		/*
+		 * 【2026-10-23 修复】"跳过出牌阶段"原本在这里就置位，早于 cost.discard /
+		 * cost.attrition 的校验。玩家不带 discard 点发动时：skip_play_done 被永久置位、
+		 * 代价一分没付、效果也没结算，且 status_window_ready 会以"本回合已跳过出牌阶段"
+		 * 拒绝重试 —— 白丢整个出牌阶段。现移到所有代价校验通过之后（见下方"执行效果"前）。
+		 */
 		if (cost.discard) {
 			const picked = (arg && arg.discard) || []
 			if (picked.length < cost.discard) {
@@ -26753,7 +26807,12 @@ function do_action(state, current, action, arg) {
 						/* 【2026-10-20】discard_is.name 可能是数组（"或"关系），文案须展开为"A或B" */
 						const nm = cost.discard_is.name
 						const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '')
-						game.log.push('《' + status_name(cardId) + '》的代价必须是指定的牌（' + nmTxt + '）')
+						/*
+						 * 【2026-10-23 修复】这里原调用 status_name(cardId)，但该函数
+						 * 【从未定义】—— 15242 人民冲锋队弃错牌时会抛 ReferenceError。
+						 * 直接复用上文已算好的 cName（同一状态卡名）。
+						 */
+						game.log.push('《' + cName + '》的代价必须是指定的牌（' + nmTxt + '）')
 						return game
 					}
 				}
@@ -26835,6 +26894,16 @@ function do_action(state, current, action, arg) {
 			}
 			attrition_cards(game, costPayer, cost.attrition)
 			game.log.push('【' + costPayer + '】损耗 ' + cost.attrition + ' 张牌')
+		}
+		/*
+		 * 【2026-10-23】"跳过出牌阶段"放在这里：所有代价（discard / attrition）
+		 * 的校验都已通过。放在效果之前，是为了让"跳过"在本阶段结束的自动推进
+		 * （maybe_advance_after_skip_play）里生效。
+		 */
+		if (cost.skip_play) {
+			game.skip_play_done = game.skip_play_done || {}
+			game.skip_play_done[costPayer] = game.turn
+			game.log.push('【' + costPayer + '】跳过本回合出牌阶段')
 		}
 
 		/* ---------------- 执行效果 ---------------- */
