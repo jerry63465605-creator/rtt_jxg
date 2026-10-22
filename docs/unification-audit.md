@@ -376,6 +376,43 @@ put_back_to_hand(game, nation, card, index)   // 索引失效时 append
 - Q6.1 是否接受"只加包装+注释，不改语义"？（推荐：零行为变化的可读性改造）
 - Q6.2 国名比较 127 处是否同批分类（哪些该改 `faction_of_nation`，哪些是合法数据）？
 
+### D6 取证与实施（2026-10-23）
+
+**实测**：`.connections` 直读 **24 处 / 12 个函数**，`get_connections` 66 处；
+其中 **3 个函数在内部混用两种口径**：`region_spaces`（有意区分）、`get_connections`（本体回退）、
+`step_space_candidates`（**业务逻辑，可疑**）。
+
+**口径差异是真实存在的**（初始局面实测，几何 vs 阵营共 **9 处 格×阵营 不同**）：
+
+| 格 | 差异 |
+|---|---|
+| 东太平洋 (52) | 同盟视角多出**北大西洋**（拉丁美洲海峡默认归同盟） |
+| 北大西洋 (53) | 同盟视角多出东太平洋 |
+| 波罗的海 (8) | 轴心视角多出**北海**（北欧海峡默认归轴心） |
+| 北海 (17) | 轴心多出波罗的海；同盟多出地中海 |
+| 地中海 (46) | 同盟多出北海/阿拉伯海 |
+| 阿拉伯海 (34) | 同盟多出地中海 |
+| 西欧 (6) / 非洲北部 (15) | 轴心视角互相多出 |
+
+**已修 2 处"同函数内口径不一致"**（都有规则依据：easy_rule 八、海峡"对控制方相邻，对另一方不相邻"）：
+
+| 位置 | 原来 | 改为 |
+|---|---|---|
+| `step_space_candidates` 的 `st.around` 分支 | 几何邻接（而同函数 `useNewPiece` 用阵营视角） | `neighbors_of(game, center, faction_of_nation(effActor))` |
+| `build_candidate_spaces` 的 `opt.near` 分支 | 几何邻接（而同函数末尾注释写着"必须带阵营"却用 get_connections） | `neighbors_of(game, center, faction_of_nation(nation))` |
+
+**行为影响面**：
+
+- `around` 分支 → **9 张卡**的候选地区变化（8672/8697 莫斯科、8809 西伯利亚、8937 非洲北部、
+  9009/9010 东太平洋、9019 夏威夷、9031 新西兰、9385 大本营相邻）
+- `opt.near` 分支 → **死代码**（`build_candidate_spaces` 全库只有 1 处调用且不传 near），零影响
+
+**新增**：`neighbors_of(game, space, side)` 作为邻接查询唯一入口（省略 side = 几何，给出 side = 阵营视角），
+注释里写明两种语义、规则依据与实测差异格。
+
+**新增测试**：`_smoke_adjacency_view.js`（12 项）
+东太平洋/波罗的海两组正反例、差异格基线（9）、around 分支源码断言、返回类型稳定。
+
 ---
 
 ### D7 · 棋子计数迁移 —— 71 + 78 处
@@ -461,7 +498,7 @@ put_back_to_hand(game, nation, card, index)   // 索引失效时 append
 | D3 移除部队 | **阶段 A（补洞）已做，阶段 B（结构合并）延后** | 2026-10-23 | 已实施：`resolve_supply` / `eliminate_piece` / `econ_remove_piece` 三条路径补 15216《总体战》；`_smoke_total_war_paths.js` 14 项。阶段 B 见 §8。17512《战俘》口径（Q3.5）仍未裁定 |
 | D4 阶段 key | **已做** | 2026-10-23 | 实测 231 → 真正阶段语境仅 **30 处**（其余 124+7 处是 reason/choice/step 等非阶段语义）。新增 `PH` 常量 + 替换 30 处 + `_smoke_phase_keys.js` 18 项（含源码约定检查，禁止新增字面量） |
 | D5 手牌原语 | **部分实施（批 1）+ 基线冻结** | 2026-10-23 | 3 个原语 + 7 处旧索引放回迁移 + 守恒检查器 19 项；批 2/3（23+9 处）因"都有校验、功能正确"改为源码基线冻结 |
-| D6 连通性标注 | 待定 | | |
+| D6 连通性标注 | **已做（并修 2 处口径不一致）** | 2026-10-23 | 实测 9 处 格×阵营 差异；新增 `neighbors_of` 唯一入口；修 `step_space_candidates.around`（影响 9 张卡）与 `build_candidate_spaces.near`（死代码）；`_smoke_adjacency_view.js` 12 项 |
 | D7 计数迁移 | 待定 | | |
 | D8 挂起清理 | 待定 | | |
 

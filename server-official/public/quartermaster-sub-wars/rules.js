@@ -368,6 +368,34 @@ function get_neighbors(s) {
 	return sp ? sp.connections : []
 }
 
+/*
+ * ============================================================
+ * 【2026-10-23 D6】邻接查询的唯一入口
+ * ============================================================
+ *
+ * 本作有【两种】邻接，语义不同，绝不能混用：
+ *
+ *   neighbors_of(game, space)            几何邻接（data.spaces[].connections）
+ *      只看地图上画得挨不挨着。用于"纯地图统计"（某地区挨着几个海域/陆地）。
+ *
+ *   neighbors_of(game, space, side)      阵营视角（get_connections）
+ *      在几何之上叠加：海峡按控制者决定通不通、15254/17823/17744 等卡牌改写的邻接。
+ *
+ * 规则依据（easy_rule 八、海峡）：
+ *   「海峡所连接的两个海域，对于占据此海峡的阵营视为相邻，对于另一阵营视为不相邻。」
+ *   => 凡是"玩家能去哪儿 / 能在哪儿做事"的判定，都必须用带 side 的版本。
+ *
+ * 实测（初始局面）：几何与阵营视角在【8 个格】上不同，例如
+ *   东太平洋 ↔ 北大西洋（同盟视角相邻，因拉丁美洲海峡默认归同盟）
+ *   波罗的海 ↔ 北海（轴心视角相邻，因北欧海峡默认归轴心）
+ * 所以用错口径不是"理论问题"，而是会直接少算/多算合法地区。
+ */
+function neighbors_of(game, space, side, snap) {
+	if (side) return get_connections(game, space, side, snap)
+	const sp = data.spaces[space]
+	return sp ? (sp.connections || []) : []
+}
+
 /* 两格位在某方视角下是否相邻 */
 function is_adjacent(game, a, b, side, snap) {
 	return get_connections(game, a, side, snap).indexOf(b) >= 0
@@ -16289,7 +16317,15 @@ function build_candidate_spaces(game, nation, type, opt) {
 	let out = pool
 	if (opt.near != null) {
 		const center = (typeof opt.near === 'number') ? opt.near : data.id_of(opt.near)
-		out = pool.filter(i => i === center || (data.spaces[center].connections || []).indexOf(i) >= 0)
+		/*
+		 * 【2026-10-23 D6 修复·同函数内口径不一致】
+		 * 本函数末尾那段用的是 get_connections(…, faction_of_nation(nation))，
+		 * 注释还写着"连通性唯一枢纽，且必须带阵营"；这里却直读几何邻接。
+		 * 「<X>及相邻地区建设」应含海峡带来的通行（easy_rule 八），故统一为阵营视角。
+		 */
+		const nearSide = faction_of_nation(nation)
+		const nearAll = [center].concat(neighbors_of(game, center, nearSide))
+		out = pool.filter(i => nearAll.indexOf(i) >= 0)
 	}
 	if (opt.slotFree !== false) {
 		out = out.filter(i => !pieces_on(game, i).some(p => game.piece_nation[p] === nation && game.piece_type[p] === type))
@@ -16352,7 +16388,16 @@ function step_space_candidates(game, actor, st, arg, prevSpaces, budget) {
 		else center = (typeof st.around === 'number') ? st.around : data.id_of(st.around)
 		if (center != null) {
 			const set = new Set([center])
-			for (const nb of (data.spaces[center].connections || [])) set.add(nb)
+			/*
+			 * 【2026-10-23 D6 修复·同函数内口径不一致】
+			 * 原来这里用【几何邻接】，而本函数下方 useNewPiece 的 adjPrev 用的是
+			 * get_connections（阵营视角）—— 同一个候选集里两种口径并存。
+			 * 按 easy_rule「海峡…对占据此海峡的阵营视为相邻，对另一阵营视为不相邻」，
+			 * 卡面「X 及相邻地区」应包含"海峡带来的通行"，故统一为阵营视角（执行方阵营）。
+			 * 实测差异格 8 个（初始局面）：东太平洋↔北大西洋、波罗的海↔北海、北海↔地中海 等，
+			 * 受影响的 around 卡：9009/9010（东太平洋）、8937（非洲北部）等。
+			 */
+			for (const nb of neighbors_of(game, center, faction_of_nation(effActor))) set.add(nb)
 			if (st.op === 'recruit' || st.op === 'build') {
 				/*
 				 * 【2026-10-07 修复】空军必须复用【空军力量】的部署原子：
@@ -29398,6 +29443,7 @@ if (typeof module !== 'undefined') {
 		list_supply_points,
 		ensure_supply_override,
 		strait_controller,
+		neighbors_of,
 		compute_connections,
 		compute_supply,
 		piece_in_supply,
