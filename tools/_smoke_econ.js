@@ -45,8 +45,11 @@ g = rules.action(g, 'Allies', 'play_card', { card: '15313#1' })
 ok('缺 target 时不结算（卡留在手上）',
 	(g.hands['英国'] || []).indexOf('15313#1') >= 0, lastLogs(1)[0])
 
-/* 版图上放 2 支英国空军 -> N = 2 + 2*2 = 6 */
-put('uk_air1', '英国', 'air', '日耳曼')
+/* 版图上放 2 支英国空军 -> N = 2 + 2*2 = 6
+ * 【2026-10-22】原写 '日耳曼'（data.js 无此地区，id_of 返回 undefined），
+ * 旧 air_piece_count 不判位置，把这枚"幽灵棋子"也数了进去；统一原语
+ * count_pieces 只数在版图上的棋子后暴露出来。改为真实地区 '德国'。 */
+put('uk_air1', '英国', 'air', '德国')
 put('uk_air2', '英国', 'air', '西欧')
 console.log('  英国版图空军数 = 2 -> 期望损耗 6 张')
 

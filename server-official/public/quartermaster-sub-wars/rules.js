@@ -105,6 +105,136 @@ function pieces_on(game, space) {
 	return out
 }
 
+/* ============================================================
+ * 1.5 棋子查询（区域 × 归属 × 形态）
+ *
+ * 【2026-10-22 新增】把散落的 20 个计数/存在性/列表函数收敛成一套：
+ *
+ *   区域（Where）    region_spaces(game, opt)        —— 只返回地区 id 数组
+ *   归属/属性        opt.nation / nations / faction / enemyOf + types / supplied
+ *   形态（Return）   list_pieces / count_pieces / has_pieces
+ *
+ * 三条铁律（违反即出 bug，见 2026-10-22 的 15218/15219/15220/15223 修复）：
+ *   ① 归属必须显式四选一（nation / nations / faction / enemyOf）。
+ *      缺省【不再】静默放宽为"数所有国"——那正是上述 4 个 bug 的根因。
+ *   ② side（阵营视角连通，含海峡/受限连接）只走单跳，不能与 radius 同用：
+ *      side 走 get_connections()（轴心/同盟各自的邻接表），
+ *      radius 走 data.spaces 的几何邻接。二者混用会改变 15219/15220 等计数。
+ *   ③ 只统计【在版图上】的棋子（game.location 非空），手牌/桌面卡不算。
+ *
+ * 选型见 docs 或 skill：要"哪几支"→ list_pieces；"几个"→ count_pieces；
+ * "有没有"→ has_pieces。
+ * ============================================================ */
+
+/*
+ * 区域展开：返回地区 id 数组（去重）。
+ *
+ * opt.space     起点（省略 = 全场）
+ * opt.spaces    显式多格（如 status_unit_count 的 cb.spaces）
+ * opt.adjacent  true = 含相邻（几何邻接）
+ * opt.radius    n = 含半径 n（几何邻接 BFS；0 等价于仅本格）
+ * opt.terrain   'sea' | 'land' 地形过滤
+ * opt.side      'axis' | 'allies'：用阵营视角邻接（含海峡/受限连接），仅单跳
+ */
+function region_spaces(game, opt) {
+	opt = opt || {}
+	const keep = (sp) => {
+		if (sp == null || !data.spaces[sp]) return false
+		if (opt.terrain && data.spaces[sp].terrain !== opt.terrain) return false
+		return true
+	}
+	/* ① 显式多格 */
+	if (opt.spaces) {
+		const out = []
+		for (const s of opt.spaces) {
+			const id = space_id(s)
+			if (id != null && keep(id) && out.indexOf(id) < 0) out.push(id)
+		}
+		return out
+	}
+	/* ② 全场 */
+	if (opt.space == null) {
+		const out = []
+		for (let i = 1; i < data.spaces.length; i++) if (keep(i)) out.push(i)
+		return out
+	}
+	/* ③ 以某格为中心 */
+	const start = space_id(opt.space)
+	if (start == null) return []
+	if (opt.side && opt.radius) {
+		throw new Error('region_spaces: side 与 radius 不能同时使用' +
+			'（前者用阵营视角连通，后者用几何邻接，混用会改变计数口径）')
+	}
+	const seen = new Set([start])
+	if (opt.side) {
+		for (const nb of (get_connections(game, start, opt.side) || [])) seen.add(Number(nb))
+	} else if (opt.radius) {
+		let frontier = [start]
+		for (let d = 0; d < opt.radius; d++) {
+			const nxt = []
+			for (const sp of frontier)
+				for (const nb of (data.spaces[sp].connections || []))
+					if (!seen.has(nb)) { seen.add(nb); nxt.push(nb) }
+			frontier = nxt
+		}
+	} else if (opt.adjacent) {
+		for (const nb of (data.spaces[start].connections || [])) seen.add(nb)
+	}
+	return [...seen].filter(keep)
+}
+
+/* 归属四选一是否缺失（铁律①） */
+function _pieces_owner_missing(opt) {
+	return !opt.nation && !opt.nations && !opt.faction && !opt.enemyOf
+}
+
+/*
+ * 棋子列表（唯一实现；count/has 都是它的薄封装）。
+ * 返回算子 id 数组，顺序 = game.location 的遍历顺序（客户端候选展示用）。
+ */
+function list_pieces(game, opt) {
+	opt = opt || {}
+	if (_pieces_owner_missing(opt)) {
+		try {
+			game.log.push('【警告】棋子查询缺少归属条件（nation/nations/faction/enemyOf），已返回空' +
+				'；如需"任意国家"请显式写出条件')
+		} catch (e) { /* log 不可用时静默 */ }
+		return []
+	}
+	const set = new Set(region_spaces(game, opt).map(Number))
+	if (!set.size) return []
+	const types = opt.types || null
+	const sup = opt.supplied ? compute_supply(game) : null
+	const out = []
+	for (const p in game.location) {
+		const loc = game.location[p]
+		if (loc == null) continue
+		if (!set.has(Number(loc))) continue
+		if (types && types.indexOf(game.piece_type[p]) < 0) continue
+		if (opt.nation && game.piece_nation[p] !== opt.nation) continue
+		if (opt.nations && opt.nations.indexOf(game.piece_nation[p]) < 0) continue
+		const f = faction_of_nation(game.piece_nation[p])
+		if (opt.faction && f !== opt.faction) continue
+		if (opt.enemyOf) {
+			const my = faction_of_nation(opt.enemyOf)
+			if (!f || !my || f === my) continue
+		}
+		if (sup && !sup.in_supply[p]) continue
+		out.push(p)
+	}
+	return out
+}
+
+/* 数量（"每有 1 支…"类） */
+function count_pieces(game, opt) {
+	return list_pieces(game, opt).length
+}
+
+/* 是否存在（"若…有…"/"若…没有…"类） */
+function has_pieces(game, opt) {
+	return list_pieces(game, opt).length > 0
+}
+
 /*
  * 海峡控制者
  *   1. 该陆地格位上有部队 -> 该部队所属阵营
@@ -1060,18 +1190,9 @@ function can_attrite(game, nation, n) {
 	return (game.decks[nation] || []).length >= n
 }
 
-/*
- * 版图上某国部署的空军棋子数。
- *
- * 15313 轰炸机军团按此计数（玩家 2026-09-26 口径 A：
- * 只看 Board 上 type==='air' 且属于该国的存活棋子，不含手牌/桌面上的卡）。
- */
-function air_piece_count(game, nation) {
-	let n = 0
-	for (const p in game.location)
-		if (game.piece_type[p] === 'air' && game.piece_nation[p] === nation) n++
-	return n
-}
+/* 【2026-10-22 已并入】原 air_piece_count(game, nation)
+ *   ≡ count_pieces(game, { types: ['air'], nation })
+ * 15313 轰炸机军团口径不变：只看 Board 上属于该国的存活空军。 */
 
 /*
  * 某国在某地区的海军棋子列表（15314 判断"移除"选项是否可用）。
@@ -1277,7 +1398,8 @@ const ECON_CARDS = {
 		 * 返回 {ok, desc}；desc 直接进 game.log。
 		 */
 		run(game, actor_nation, target) {
-			const k = air_piece_count(game, actor_nation)
+			/* 卡面「每有 1 个英国空军」：全场空军计数（原 air_piece_count） */
+			const k = count_pieces(game, { types: ['air'], nation: actor_nation })
 			const n = 2 + 2 * k
 			const lost = attrition_passive(game, target, n)
 			const short = lost.length < n
@@ -7556,14 +7678,9 @@ const NATION_UNIT_CAPS = {
   '美国':   { army: 6, navy: 5, air: 3 },
   '中国':   { army: 2, navy: 0, air: 1 },  // 开局 2；17537 +1 → 3；17829《毛泽东》+1 → 4
 }
-function nation_unit_count(game, nation, type) {
-  let n = 0
-  for (const id in game.location) {
-    if (game.location[id] == null) continue
-    if (game.piece_nation[id] === nation && game.piece_type[id] === type) n++
-  }
-  return n
-}
+/* 【2026-10-22 已并入】原 nation_unit_count(game, nation, type)
+ *   ≡ count_pieces(game, { types: [type], nation })
+ * 口径不变：只数【在版图上】的棋子（game.location 非空）。 */
 /* 【2026-10-18】陆军「后备」= 打出特定牌才 +1 的上限加成，按国封顶。
  *   中国   2 →（17537）3 →（17829）4，封顶 +2
  *   意大利 4 →（17750）5，封顶 +1
@@ -7587,7 +7704,7 @@ function unit_cap_ok(game, nation, type) {
   let cap = (NATION_UNIT_CAPS[nation] && NATION_UNIT_CAPS[nation][type]) || 0
   /* 陆军「后备」加成（打牌 +1，按国封顶，见 add_army_bonus） */
   if (type === 'army') cap += army_bonus_of(game, nation)
-  if (nation_unit_count(game, nation, type) >= cap)
+  if (count_pieces(game, { types: [type], nation: nation }) >= cap)
     return { ok: false, reason: nation + ' 的' + ({ army: '陆军', navy: '海军', air: '空军' }[type] || type) + '已达上限（' + cap + '）' }
   return { ok: true }
 }
@@ -10174,7 +10291,7 @@ const ECHO_EFFECTS = {
 		name: 'JU-52 空投补给', actor: '德国',
 		armed: {
 			when: 'turn_start', actor: '德国', cost: { attrition: 1 },
-			cond: (game) => has_piece(game, '德国', 'air'),
+			cond: (game) => has_pieces(game, { types: ['air'], nation: '德国' }),
 			desc: '回合开始时若场上有德国空军：本回合内所有德国部队处于补给状态',
 			run(game, ctx) {
 				game.modifiers = game.modifiers || []
@@ -11176,13 +11293,13 @@ const ECHO_EFFECTS = {
 			desc: '出牌阶段开始时：弃置1张[建设陆军]，移除场上1支苏联陆军，然后建设1支陆军',
 			ready(game, ctx) {
 				/* 场上至少有 1 支苏联陆军才给窗口 */
-				return su_army_pieces(game).length > 0
+				return has_pieces(game, { types: ['army'], nation: '苏联' })
 			},
 			run(game, ctx, arg) {
 				arg = arg || {}
 				/* 第一步：选要移除的己方苏联陆军 */
 				if (arg.piece == null) {
-					const cands = su_army_pieces(game)
+					const cands = list_pieces(game, { types: ['army'], nation: '苏联' })
 					if (!cands.length) return { ok: true, skip: true, desc: '场上没有苏联陆军' }
 					return { need: 'piece', candidates: cands, pick: 1, pickMin: 1 }
 				}
@@ -11195,7 +11312,7 @@ const ECHO_EFFECTS = {
 				 */
 				const slot = (game.su_cavalry_step = game.su_cavalry_step || {})
 				if (slot.piece !== pick) {
-					if (su_army_pieces(game).indexOf(pick) < 0)
+					if (list_pieces(game, { types: ['army'], nation: '苏联' }).indexOf(pick) < 0)
 						return { ok: false, reason: '所选部队不是场上的苏联陆军' }
 					slot.fromSpace = game.location[pick]
 					remove_piece(game, '苏联', pick)
@@ -11630,11 +11747,11 @@ const ECHO_EFFECTS = {
 				const lost = (ctx && ctx.attrited && ctx.attrited['意大利']) || 0
 				if (lost <= 0) return false
 				/* 无空军时不能打出（玩家口径） */
-				return it_air_pieces(game).length > 0
+				return has_pieces(game, { types: ['air'], nation: '意大利' })
 			},
 			run(game, ctx, arg) {
 				arg = arg || {}
-				const airs = it_air_pieces(game)
+				const airs = list_pieces(game, { types: ['air'], nation: '意大利' })
 				if (!airs.length) return { ok: true, skip: true, desc: '场上无意大利空军，无法发动' }
 				/* ① 还没选 -> 让意大利选移除哪支空军（armed need 协议） */
 				if (arg.piece == null)
@@ -12101,14 +12218,8 @@ function find_battle_target(game, nation, kind, opts) {
 	return null
 }
 
-/* 场上是否存在某国某类棋子 */
-function has_piece(game, nation, type) {
-	for (const p of Object.keys(game.location)) {
-		if (game.location[p] == null) continue
-		if (game.piece_nation[p] === nation && game.piece_type[p] === type) return true
-	}
-	return false
-}
+/* 【2026-10-22 已并入】原 has_piece(game, nation, type)
+ *   ≡ has_pieces(game, { types: [type], nation }) */
 
 /*
  * 【2026-10-01】已删除 de_adj_navy_in_supply：
@@ -13145,10 +13256,9 @@ function rollback_attrition(game, nation, n) {
 	return k
 }
 
-/* 意大利所有在版图上的空军（供 17708 选择） */
-function it_air_pieces(game) {
-	return my_air_pieces(game, '意大利')
-}
+/* 【2026-10-22 已并入】原 it_air_pieces(game)
+ *   ≡ list_pieces(game, { types: ['air'], nation: '意大利' })
+ * （17708 意大利皇家空军的选择候选） */
 
 /*
  * 【2026-10-09】可【部署或调度】空军的海域候选。
@@ -14759,11 +14869,8 @@ const RESPONSE_EFFECT_IMPL = {
  * 全部走"通用原子"，不自己重写遍历（见 rtt-atomic-operations 铁律）。
  * ============================================================ */
 
-/* 场上全部苏联陆军（算子 id） */
-function su_army_pieces(game) {
-	return Object.keys(game.location || {}).filter(p =>
-		game.location[p] != null && game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army')
-}
+/* 【2026-10-22 已并入】原 su_army_pieces(game)
+ *   ≡ list_pieces(game, { types: ['army'], nation: '苏联' }) */
 
 /* 17806：某地区（空军所在）的相邻、且可建设苏联陆军的地区
  * 必须额外检查【单位槽空闲】—— can_build_at 不排除"已有本国部队"的格子，
@@ -22859,7 +22966,7 @@ exports.view = function (state, current) {
 		})(),
 		/* 【2026-10-18】各国"陆/海/空 后备"与"剩余可建容量"：全部实时取自真实数据，绝不硬编码。
 		 *   cap      = NATION_UNIT_CAPS[国][兵种] + (陆军 ? army_bonus_of : 0)  （含陆军后备加成）
-		 *   deployed = nation_unit_count(game, 国, 兵种)                        （场上真实已部署）
+		 *   deployed = count_pieces({ types:[兵种], nation:国 })               （场上真实已部署）
 		 *   remaining= cap - deployed                                          （真实剩余可建容量，按陆/海/空区分）
 		 *   total    = 三兵种 remaining 之和                                   （明确标注"总数"） */
 		reserve_info: (() => {
@@ -22876,7 +22983,7 @@ exports.view = function (state, current) {
 				for (const t of BRANCHES) {
 					const base = (NATION_UNIT_CAPS[n] && NATION_UNIT_CAPS[n][t]) || 0
 					const eff = base + (t === 'army' ? army_bonus_of(game, n) : 0)
-					const dep = nation_unit_count(game, n, t)
+					const dep = count_pieces(game, { types: [t], nation: n })
 					cap[t] = eff
 					deployed[t] = dep
 					remaining[t] = Math.max(0, eff - dep)
@@ -28845,7 +28952,6 @@ if (typeof module !== 'undefined') {
 		econ_discard_snapshot,
 		econ_attrited_count,
 		rollback_attrition,
-		it_air_pieces,
 		can_initiate_battle_at,
 		find_battle_target,
 		event_battle_targets,
@@ -28866,7 +28972,6 @@ if (typeof module !== 'undefined') {
 		removed_this_turn_of_faction,
 		/* 【2026-10-18】各国兵力总数上限校验（测试用） */
 		unit_cap_ok,
-		nation_unit_count,
 		add_army_bonus,
 		army_bonus_of,
 		RESPONSE_EFFECT_IMPL,
@@ -28968,6 +29073,12 @@ if (typeof module !== 'undefined') {
 		advance_phase,
 		on_turn_start,
 		phase_zh,
+		/* 【2026-10-22】棋子查询（区域 × 归属 × 形态）：卡牌效果与本表的唯一入口 */
+		pieces_on,
+		region_spaces,
+		list_pieces,
+		count_pieces,
+		has_pieces,
 		/* 建设 / 战斗 / 空军 */
 		new_piece_id,
 		can_build_at,
