@@ -677,9 +677,26 @@ function supply_aura_covers(game, nation, type, space) {
 function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 	const list = nbrs || (get_connections(game, space, faction_of_nation(nation)) || [])
 	const canSrc = (pid) => sup.can_source ? !!sup.can_source[pid] : !!sup.in_supply[pid]
+	/*
+	 * 【2026-10-23】港口光环（15444 丘克群岛「<硫磺岛>视为日本港口」）。
+	 *
+	 * 只满足 B（港口 = 等同"相邻有本国陆军"），不提供 A（来源），
+	 * 也不让该格真的算"有陆军"（所以不影响"某地有陆军"类条件与补给续链）。
+	 * 敌占时失效（与旧 virtual_army 实现同口径）。
+	 *
+	 * 放在本函数里而不是继续注入虚拟部队：
+	 * 本函数是【建海军】与【海军补给】的唯一 A/B 判定点，
+	 * 改一处两条路径同时生效；虚拟部队只在 compute_supply 内部存在，
+	 * 建海军时早已被清理 —— 那正是本卡原先"补给生效、建海军不生效"的根因。
+	 */
+	const portAs = (game.status_aura && game.status_aura.port_as) || {}
 	let hasLand = false
 	let hasSrc = false
 	for (const nb of list) {
+		if (portAs[nb] != null && String(portAs[nb]) === String(nation) &&
+			!has_pieces(game, { space: Number(nb), enemyOf: nation })) {
+			hasLand = true
+		}
 		for (const other of pieces_on(game, nb)) {
 			const onat = game.piece_nation[other]
 			/* B：港口 —— 相邻陆军，本国 / 17549 组内（不要求它自身补给） */
@@ -711,30 +728,17 @@ function compute_supply(game, conn_snap) {
 	}
 
 	/*
-	 * 1b. 注入【虚拟陆军】光环（15444 等"视为有陆军"）。
-	 *     仅作为普通部队参与补给传播，【不】提供补给源——
-	 *     补给需从相邻海上的本国海军（再连回本土基地）传递过来。
-	 *     临时写入 game.location / piece_nation / piece_type，
-	 *     函数返回前（见末尾 vArmyPids 清理）统一删除，
-	 *     避免被 resolve_supply 当成真实部队误删。
+	 * 【2026-10-23 已移除】原 1b 段"注入虚拟陆军光环"（15444 丘克群岛）。
+	 *
+	 * 移除原因（实测）：
+	 *   · 建海军时【不生效】—— 注入只在本函数生命周期内有效，返回即清理，
+	 *     而建海军是在 compute_supply 之后才调 navy_ab_check，看不到虚拟部队；
+	 *   · 副作用超标 —— 虚拟陆军会作为普通陆军参与补给续链，
+	 *     还可能被评为补给源（sources 里出现 __varmy_48 = 'base'）。
+	 * 现在卡面语义（"视为日本港口"）由 status_aura.port_as + navy_ab_check 的
+	 * 港口判定承担：只满足 B 条件，不注入部队、不污染补给链。
+	 * 旧存档的 virtual_army 字段在 status_aura() 里惰性迁移到 port_as。
 	 */
-	const auraArmy = (game.status_aura && game.status_aura.virtual_army) || {}
-	const vArmyPids = []
-	for (const sp of Object.keys(auraArmy)) {
-		/*
-		 * 【2026-10-06 修正】若该地区被其他国家（敌方阵营）占领，
-		 * 虚拟陆军光环不生效（15444 丘克群岛在<硫磺岛>被占时即如此）。
-		 * 动态判定放在这里，可同时覆盖"打出时已被占"与"打出后被夺回"两种情况。
-		 */
-		if (has_pieces(game, { space: Number(sp), enemyOf: auraArmy[sp] })) continue
-		const pid = '__varmy_' + sp
-		game.location[pid] = Number(sp)
-		game.piece_nation[pid] = auraArmy[sp]
-		game.piece_type[pid] = 'army'
-		bySpace[Number(sp)] = bySpace[Number(sp)] || []
-		bySpace[Number(sp)].push(pid)
-		vArmyPids.push(pid)
-	}
 
 	const in_supply = {}
 	const sources = {}
@@ -933,12 +937,7 @@ function compute_supply(game, conn_snap) {
 		}
 	}
 
-	/* 清理注入的虚拟陆军（不污染 game.location，防止被 resolve_supply 误删） */
-	for (const pid of vArmyPids) {
-		delete game.location[pid]
-		delete game.piece_nation[pid]
-		delete game.piece_type[pid]
-	}
+	/* 【2026-10-23】原"清理注入的虚拟陆军"随 1b 段一起移除（不再注入任何虚拟部队） */
 
 	return { in_supply, sources, can_source }
 }
@@ -4823,8 +4822,14 @@ const STATUS_EFFECTS = {
 
 	/* ---- 15444 丘克群岛（日本 STATUS，2026-10-06）---- */
 	'15444': {
-		ongoing: { kind: 'virtual_army', space: '硫磺岛', nation: '日本',
-			desc: '<硫磺岛>视为有日本陆军（非补给源，补给经邻海传递）' },
+		/*
+		 * 【2026-10-23 修正】卡面是"<硫磺岛>视为日本【港口】"，不是"视为有陆军"。
+		 * port 光环 = 该陆地格等同"有本国陆军"，只用于海军 B 条件
+		 * （建海军 / 海军补给共用 navy_ab_check 判定），
+		 * 不提供补给、不作为补给源、也不让该格算作"有陆军"。
+		 */
+		ongoing: { kind: 'port', space: '硫磺岛', nation: '日本',
+			desc: '<硫磺岛>视为日本港口（供建海军 / 海军补给的港口条件）' },
 		auto: { phase: 'scoring', trigger_nation: '日本', kind: 'run',
 			run(game, nation) {
 				const id = space_id('硫磺岛')
@@ -5314,11 +5319,28 @@ function space_id(name) {
 }
 
 function status_aura(game) {
-	if (!game.status_aura) game.status_aura = { supply_immune: {}, home_override: {}, virtual_army: {}, space_immune: {} }
+	if (!game.status_aura) game.status_aura = { supply_immune: {}, home_override: {}, port_as: {}, space_immune: {} }
 	if (!game.status_aura.supply_immune) game.status_aura.supply_immune = {}
 	if (!game.status_aura.home_override) game.status_aura.home_override = {}
-	if (!game.status_aura.virtual_army) game.status_aura.virtual_army = {}
+	/*
+	 * 【2026-10-23】port_as：<spaceId> 视为 <国> 的港口（15444 丘克群岛）。
+	 * 语义 = 该陆地格等同"有本国陆军"，只用于海军 B 条件
+	 * （建海军 / 海军补给共用 navy_ab_check），
+	 * 不提供补给、不作为补给源、也不让该格算作"有陆军"。
+	 */
+	if (!game.status_aura.port_as) game.status_aura.port_as = {}
 	if (!game.status_aura.space_immune) game.status_aura.space_immune = {}
+	/*
+	 * 【2026-10-23 惰性迁移】旧字段 virtual_army（15444 曾用"视为有陆军"实现）
+	 * -> port_as（"视为港口"）。老对局不会重跑 setup，这里补一次。
+	 */
+	const va = game.status_aura.virtual_army
+	if (va) {
+		for (const sp of Object.keys(va)) {
+			if (game.status_aura.port_as[sp] == null) game.status_aura.port_as[sp] = va[sp]
+		}
+		delete game.status_aura.virtual_army
+	}
 	return game.status_aura
 }
 
@@ -7271,12 +7293,19 @@ function apply_status_ongoing(game, card_id, nation) {
 		lines.push('北海/波罗的海仅对轴心国相邻（战争海军）')
 	}
 
-	/* ---- 光环：15444 视为有日本陆军（虚拟陆军，非补给源）---- */
-	if (og.kind === 'virtual_army' && og.space && og.nation) {
+	/* ---- 光环：15444 <硫磺岛>视为日本港口 ---- */
+	/*
+	 * 【2026-10-23 重做】原实现是 virtual_army（"视为有日本陆军"，临时注入 game.location）：
+	 *   · 建海军时【不生效】—— 虚拟陆军只在 compute_supply 内部存在，
+	 *     函数返回时已清理，而建海军是在其后才调 navy_ab_check；
+	 *   · 副作用超标 —— 会给相邻陆军续链补给、还可能被评为补给源（sources 里冒出 __varmy_*）。
+	 * 改为 port_as：由 navy_ab_check 显式识别为"港口"，两条路径同时生效，且不污染补给链。
+	 */
+	if (og.kind === 'port' && og.space && og.nation) {
 		const sp = space_id(og.space)
 		if (sp != null) {
-			aura.virtual_army[sp] = og.nation
-			lines.push(data.name_of(sp) + ' 视为有' + og.nation + '陆军（非补给源，补给经邻海传递）')
+			aura.port_as[sp] = og.nation
+			lines.push(data.name_of(sp) + ' 视为' + og.nation + '港口')
 		}
 	}
 
@@ -7423,11 +7452,11 @@ function revert_status_ongoing(game, card_id, nation) {
 			lines.push(n + ' 的大本营恢复为原值')
 		}
 	}
-	if (og.kind === 'virtual_army' && og.space) {
+	if (og.kind === 'port' && og.space) {
 		const sp = space_id(og.space)
-		if (sp != null && aura.virtual_army[sp] != null) {
-			delete aura.virtual_army[sp]
-			lines.push(data.name_of(sp) + ' 的虚拟陆军光环消失')
+		if (sp != null && aura.port_as[sp] != null) {
+			delete aura.port_as[sp]
+			lines.push(data.name_of(sp) + ' 的港口光环消失')
 		}
 	}
 	if (og.kind === 'space_immune' && og.space) {
@@ -30234,6 +30263,9 @@ if (typeof module !== 'undefined') {
 		revert_status_ongoing,
 		status_window_ready,
 		run_status_effect,
+		/* 【2026-10-23】港口光环（15444 丘克群岛）测试入口 */
+		status_aura,
+		navy_ab_check,
 		/* 【2026-10-23】航母时点修复的测试入口 */
 		arm_status_instant,
 		arm_after_battle_status,
