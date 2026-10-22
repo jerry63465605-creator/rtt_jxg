@@ -7643,32 +7643,47 @@ function can_build_at(game, nation, space, type) {
 	const nbrs = get_connections(game, space, myFaction) || []
 
 	/*
-	 * ---------- 海军（2026-09-22 easy_rule 第五章 + 2026-10-19 强化）----------
-	 * 海军建设 ⇔ 该海域邻接一支【处于补给状态】的本国（或共享补给组 17549）陆军。
+	 * ---------- 海军建设（2026-10-23 玩家口径：与"海军补给"完全一致）----------
 	 *
-	 * 必须【直接】检查"相邻本国陆军是否在补给"，而【不能】用旧的
-	 * "模拟放置海军后跑 compute_supply" 做法：15346《自由法国》的
-	 * always_supplied 光环会对【法国海军本身】直接判为补给，从而把
-	 * "相邻本国陆军"的硬性要求架空。这里只读真实盘面的补给结果
-	 * （光环只对陆军本身生效，不喂给海军预检），以保留该约束。
-	 * 17549 盟军远征部队最高司令部：组内盟国（英/法/美）陆军可充当本国陆军角色。
+	 * 玩家 2026-10-23：「建设要求和补给一致，但是与**本国的陆地部队**相邻」
+	 *
+	 * 即：建设海军 = 海军补给的两条判定（见 compute_supply 海军分支 816~833），
+	 * 两条【分别】满足即可，不要压在同一支部队上：
+	 *   A. 该海域相邻有【处于补给状态的】【本国 / 组内盟国(17549)】部队 —— 不限兵种
+	 *   B. 该海域相邻有【本国 / 组内盟国(17549)】的【陆地部队（陆军）】—— 不要求它自身补给
+	 *
+	 * ⚠ 与此前实现的差别（旧实现过严）：
+	 *   旧写法是「邻接一支【同时满足】本国陆军 + 该陆军自身在补给中」，
+	 *   把 A、B 压在同一支陆军上。于是：
+	 *     · 相邻有"补给中的海军"（A 满足）+ "断补的陆军"（B 满足）时，旧写法判不可建；
+	 *     · 相邻陆军自身断补、但另有补给源时，旧写法也判不可建。
+	 *   按玩家口径，这两种情况都应【可以建】。
+	 *
+	 * ⚠ 仍然【不】使用"模拟放置该海军后跑 compute_supply"的做法：
+	 *   15346《自由法国》的 always_supplied 光环会直接把这支【新海军本身】判为补给，
+	 *   从而把 A、B 两条邻居条件整体架空（2026-10-19 记录的坑）。
+	 *   这里只读【真实盘面】邻居的补给状态，与 B 段的"相邻"判定同源。
+	 *
+	 * 17549：组内盟国（英/法/美）的陆军可充当"本国陆地部队"（B），
+	 *        其补给中部队也可充当 A 的来源 —— 两者都走 supply_group_partner。
 	 */
 	if (type === 'navy') {
 		const supply = compute_supply(game)
-		let ok = false
+		let hasLandNeighbor = false     /* B：相邻有本国/组内【陆军】（不要求补给） */
+		let hasSuppliedNb = false       /* A：相邻有补给中的本国/组内【任意兵种】 */
 		for (const nb of nbrs) {
 			for (const other of pieces_on(game, nb)) {
-				if (game.piece_type[other] !== 'army') continue
 				if (!supply_group_partner(game, nation, game.piece_nation[other])) continue
-				if (supply.in_supply[other]) { ok = true; break }
+				if (game.piece_type[other] === 'army') hasLandNeighbor = true
+				if (supply.in_supply[other]) hasSuppliedNb = true
 			}
-			if (ok) break
+			if (hasLandNeighbor && hasSuppliedNb) break
 		}
-		if (ok) return { ok: true, reason: '邻接处于补给状态的本国（或组内盟国）陆军' }
-		return {
-			ok: false,
-			reason: '海域须邻接处于补给状态的本国（或组内盟国）陆军',
-		}
+		if (hasLandNeighbor && hasSuppliedNb)
+			return { ok: true, reason: '邻接本国（或组内盟国）陆地部队，且相邻有处于补给状态的部队' }
+		if (!hasLandNeighbor)
+			return { ok: false, reason: '海域须邻接本国（或组内盟国）的陆地部队（陆军）' }
+		return { ok: false, reason: '海域相邻还须有处于补给状态的部队（本国或组内盟国）' }
 	}
 
 	/*
