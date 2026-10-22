@@ -126,6 +126,32 @@ console.log('\n=== A4. 15218 季风艇群：只数【友方（轴心）】陆军
 	ok('轴心 +3 分（15218 固定 2 + 狼群 1）', (r.score.axis - ax0) === 3, 'd=' + (r.score.axis - ax0))
 }
 
+console.log('\n=== A5. 15223 V2 飞弹：前提「<西欧>有德国陆军」也只数德国 ===')
+{
+	const g = base('德国', '15223#1')
+	for (const p in g.location) if (g.location[p] === WEST) delete g.location[p]
+	put(g, 'p1', '英国', 'army', WEST)          /* 只有英国陆军 */
+	const uk0 = g.decks['英国'].length
+	const ax0 = g.score.axis || 0
+	const r = rules.action(g, 'Axis', 'play_card', { card: '15223#1', target: '英国' })
+	ok('只有英国陆军 -> 无效果', r.log.some(l => /西欧无德国陆军/.test(l)),
+		JSON.stringify(r.log.slice(-1)))
+	ok('英国未损牌', uk0 - r.decks['英国'].length === 0, 'lost=' + (uk0 - r.decks['英国'].length))
+	ok('轴心未加分', (r.score.axis - ax0) === 0, 'd=' + (r.score.axis - ax0))
+}
+{
+	const g = base('德国', '15223#1')
+	for (const p in g.location) if (g.location[p] === WEST) delete g.location[p]
+	put(g, 'p1', '德国', 'army', WEST)          /* 有德国陆军 */
+	const uk0 = g.decks['英国'].length
+	const ax0 = g.score.axis || 0
+	const r = rules.action(g, 'Axis', 'play_card', { card: '15223#1', target: '英国' })
+	ok('有德国陆军 -> 生效', r.log.some(l => /西欧有德国陆军/.test(l)),
+		JSON.stringify(r.log.slice(-1)))
+	ok('英国损 1 张', uk0 - r.decks['英国'].length === 1, 'lost=' + (uk0 - r.decks['英国'].length))
+	ok('轴心 +3 分', (r.score.axis - ax0) === 3, 'd=' + (r.score.axis - ax0))
+}
+
 console.log('\n=== B1. 阵营守卫：英国 15314《马耳他潜艇群》（链式）不触发狼群 ===')
 {
 	const g = base('英国', '15314#1')

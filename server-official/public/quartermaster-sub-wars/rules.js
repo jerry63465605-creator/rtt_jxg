@@ -1233,7 +1233,12 @@ const ECON_CARDS = {
 		tag: '',
 		targets: ['英国'],
 		run(game, actor, target) {
-			if (de_units_in(game, '西欧', ['army']) < 1)
+			/*
+			 * 卡面「若<西欧>有【德国】陆军」—— 必须按国别过滤。
+			 * 2026-10-22 修复：旧实现漏传 '德国'，西欧只有英国陆军时也会生效
+			 * （实测：西欧仅 1 支英国陆军 → 英国损 1 张 + 德国白拿 3 分）。
+			 */
+			if (de_units_in(game, '西欧', ['army'], '德国') < 1)
 				return { ok: true, desc: '西欧无德国陆军，无效果' }
 			const lost = attrition_passive(game, target, 1)
 			add_axis_score(game, 3)
