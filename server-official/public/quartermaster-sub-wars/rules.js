@@ -22117,6 +22117,22 @@ function init_markers() {
 			{ owner: null, faction: null, value: 1 },
 		]
 	}
+	/*
+	 * 【2026-10-23 玩家口径】初设额外计分标记：<中国东北> / <东欧> / <巴尔干> 各 +1。
+	 *
+	 * 归属与初始补给点的标记同款 —— owner / faction 均为 null（无主），
+	 * 即任何占领该地的国家（任一阵营）都能拿这 1 分。
+	 *
+	 * 三地都【不是】初始补给点（原本 0 个标记），所以加完各为 1 个。
+	 * 计分仍走 score_of_space：要求该地块上有本国/本集团的部队才结算，
+	 * 故它们等于开局摆下的三处争夺点 —— 开局无人得分，谁打进去谁拿。
+	 */
+	for (const nm of ['中国东北', '东欧', '巴尔干']) {
+		const sp = space_id(nm)
+		if (sp == null) continue
+		m[sp] = m[sp] || []
+		m[sp].push({ owner: null, faction: null, value: 1 })
+	}
 	return m
 }
 
