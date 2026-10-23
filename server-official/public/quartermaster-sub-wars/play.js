@@ -1038,12 +1038,12 @@ function update_response_panel() {
 }
 
 /*
- * 【2026-10-24 玩家口径】敌方状态卡栏 —— **永远暗置**。
+ * 【2026-10-24 玩家口径】敌方状态卡栏 —— **卡面可见、永远不可操作**。
  *
- * 数据只有 view.table_status_opponent = [{ nation, owner_side }]（逐张，无卡面），
- * 所以这里只能画牌背：按国着色复用 .card.back 的八国配色，
- * 玩家能看出"是谁的、共几张"，但看不到是什么卡。
- * 服务端不下发 card_id / name / img，改前端也看不穿（真正的暗置靠数据层保证）。
+ * 与"桌面状态卡"同款渲染（复用 build_response_card_elt，正面卡图 + 悬停放大），
+ * 但一律套 .ts-disabled 灰置（灰度 + 降亮度），并且【不绑 onclick】：
+ * 服务端 table_status_opponent 也不下发 ready / ready_reason / cost_*，
+ * 所以不存在"点了能发动"的路径 —— 与手牌在非本方回合的灰置体验一致。
  */
 function update_enemy_status() {
 	const box = document.getElementById("enemy_status_cards")
@@ -1052,16 +1052,31 @@ function update_enemy_status() {
 		return
 	const opp = view.table_status_opponent || []
 	box.innerHTML = ""
-	for (const o of opp) {
-		const d = document.createElement("div")
-		d.className = "card back status-back" + response_back_class(o)
-		d.title = (o && o.nation)
-			? ("敌方状态卡（暗置 · " + o.nation + "）")
-			: "敌方状态卡（暗置）"
-		box.appendChild(d)
+	for (const c of opp) {
+		const el = build_response_card_elt({
+			id: c.card,
+			name: c.name,
+			img: c.img,
+			text: c.text || c.desc || '',
+			type: 'STATUS',
+		}, true)
+		el.classList.add('es-card', 'ts-disabled')
+		el.setAttribute('data-card', c.card)
+
+		/* 角标：明确这是敌方的、且不可操作 */
+		const b = document.createElement('div')
+		b.className = 'ts-badge gray'
+		b.textContent = '敌方'
+		el.appendChild(b)
+
+		el.title = c.name +
+			'\n' + (c.text || c.desc || '') +
+			'\n（敌方 · ' + (c.nation || '') + '，不可操作）'
+		/* 刻意不绑 onclick：敌方状态卡不能由本方发动 */
+		box.appendChild(el)
 	}
 	if (note)
-		note.textContent = opp.length ? ("（对方 " + opp.length + " 张 · 暗置）") : ""
+		note.textContent = opp.length ? ("（对方 " + opp.length + " 张）") : ""
 	if (!opp.length)
 		box.innerHTML = '<div class="hand_empty">（对方桌面暂无状态卡）</div>'
 }

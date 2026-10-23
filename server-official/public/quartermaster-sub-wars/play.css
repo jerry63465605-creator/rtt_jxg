@@ -758,31 +758,34 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 .card.back-allies { --bk-tint: #263346; --bk-edge: #5a7a9e; }
 
 /*
- * 敌方状态卡栏（2026-10-24）：紧跟在桌面响应卡下方，**永远暗置**。
- * 与响应卡面板同尺寸、同牌背配色，只把竖排文字从「响应」换成「状态」，
- * 让玩家一眼分清是哪一排；卡面数据服务端根本不下发，暗置由数据层保证。
+ * 敌方状态卡栏（2026-10-24）：紧跟在桌面响应卡下方。
+ *
+ * 卡面【可见】，但一律灰置、不可操作 —— 与"桌面状态卡"里不可发动的那几张同款视觉
+ * （灰度 + 降亮度），玩家一眼就能看出"这是对方的、点不了"。
+ * 服务端也不下发 ready，双端同源，不存在"点了能发动"。
  */
 #enemy_status_cards {
 	min-height: 190px;
 }
 
-#enemy_status_cards .card {
+#enemy_status_cards .es-card {
 	position: relative;
 	z-index: 1;
+	flex: 0 0 auto;
+	filter: grayscale(.7) brightness(.75);
+	cursor: default;
 }
 
-/* 纯展示，不参与任何点击（避免误触被当成可发动状态卡） */
-#enemy_status_cards .card { pointer-events: none; cursor: default; }
+/* 悬停稍微提亮，方便看清卡面（但仍不暗示可点击） */
+#enemy_status_cards .es-card:hover {
+	filter: grayscale(.35) brightness(.9);
+}
 
 #enemy_status_cards .hand_empty {
 	width: 100%;
 	color: #aaa;
 	font-style: italic;
 	padding: 8px 0;
-}
-
-.card.back.status-back::after {
-	content: "状态";
 }
 
 /*

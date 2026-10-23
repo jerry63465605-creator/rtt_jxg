@@ -1,60 +1,67 @@
-# 敌方状态卡栏（永远暗置）— 2026-10-24
+# 敌方状态卡栏（卡面可见 · 永远不可操作）— 2026-10-24
 
-## 一、需求
+## 一、需求（玩家口径）
 
-在**桌面响应卡栏下面**加一栏「敌方状态卡」，并且**永远为暗置**（看不到卡面）。
+在**桌面响应卡栏下面**加一栏「敌方状态卡」：
 
-## 二、实现
+- **卡面可见**（桌面状态卡本来就是明置信息，不需要藏）；
+- **永远不可操作**，表现为类似"非本方回合的手牌"那种**灰置**。
 
-### 数据层（暗置的真正保证）
+> 早期版本做成"永远背面朝上"，玩家否掉了：他要的是"看得到、点不了"，
+> 不是"看不到是什么卡"。已改为正面卡面 + `.ts-disabled` 灰置 + 不绑点击。
 
-`rules.js` 的 `exports.view` 新增字段：
+## 二、数据层
+
+`rules.js` 的 `exports.view` 新增：
 
 ```js
-table_status_opponent: [{ nation, owner_side }, ...]
+table_status_opponent: [{
+	card, name, img, text,          // ← 卡面可见所必需
+	nation, owner_side,
+	ongoing, trigger, desc,
+}]
 ```
 
-| 设计决定 | 原因 |
+| 设计 | 原因 |
 |---|---|
-| **只下发 `nation` / `owner_side`**，不含 `card_id` / `name` / `img` / `text` | 需求是"永远暗置"。若把卡面数据发下去，改前端就能看穿，等于没暗置。**暗置必须由数据层保证** |
-| 逐张一条（而非 `{nation, count}`） | 与 `view.table_responses_opponent` 同款，客户端可直接按条画牌背、按国着色 |
-| 口径与 `table_status` 一致：只统计 `status_config_of()` 有配置的 | 桌上可能挂着非状态类卡（如 17901 工业心脏的 ongoing 位），那些不该进"状态卡"计数 |
-| 过滤 `faction_of_nation(nat) !== side` | 与 `table_status`（只给本方）互为补集 |
+| **下发卡面**（name / img / text） | 桌面状态卡是明置信息；玩家要"看得到" |
+| **不下发** `ready` / `ready_reason` / `ready_space` / `cost_discard` / `used_this_turn` / `forgo_build` | 这几个是"能不能发动"的判据。一个都不给 → 客户端无法也无需渲染可点状态，**双端同源地保证"永不可操作"** |
+| 口径同 `table_status` | 只统计 `status_config_of()` 有配置的真状态卡；桌上的非状态挂载位不计 |
+| 按 `faction_of_nation(nat) !== side` 过滤 | 与 `table_status`（只给本方）互为补集 |
 
-### 视图层
+## 三、视图层
 
 | 文件 | 改动 |
 |---|---|
-| `play.html` | 在 `#response_wrap` 之后加 `#enemy_status_wrap`（同 `.panel` / `.panel-head` / `.panel-body` 结构） |
-| `play.js` | 新增 `update_enemy_status()`：读 `view.table_status_opponent`，逐张画 `<div class="card back status-back back-xx">`；在状态刷新流程里紧跟 `update_response_panel()` 调用 |
-| `play.css` | `#enemy_status_cards` 与响应卡面板同尺寸（`min-height:190px`）；牌背复用 `.card.back` 的八国配色；`.status-back::after { content:"状态" }` 与响应卡的「响应」区分；**`pointer-events:none`**（纯展示，避免被误当成可发动状态卡） |
+| `play.html` | `#response_wrap` 之后新增 `#enemy_status_wrap`（同 `.panel` / `.panel-head` / `.panel-body` 结构），标题「敌方状态卡」 |
+| `play.js` | `update_enemy_status()`：复用 **`build_response_card_elt(..., true)`** 画正面卡（自带卡图、文字回落、悬停放大到 `#tooltip`）；加 `es-card ts-disabled` 类与「敌方」角标；**刻意不绑 `onclick`**；在状态刷新流程里紧跟 `update_response_panel()` 调用 |
+| `play.css` | `#enemy_status_cards .es-card { filter: grayscale(.7) brightness(.75); cursor: default; }`；`:hover` 轻微提亮到 `grayscale(.35) brightness(.9)`，只为看清卡面，不暗示可点 |
 
-### 视觉约定
+视觉上与「桌面状态卡」里不可发动的那几张完全一致，玩家不会误以为能点。
 
-- 牌背按国家着色（`back-de` 铁灰 / `back-jp` 赭金 / …），玩家能看出"谁的、几张"，但看不到是什么卡
-- 竖排文字为「状态」（响应卡是「响应」），两栏一眼可分
-- 悬停 `title` 提示：`敌方状态卡（暗置 · 德国）`
-- 标题旁计数：`（对方 3 张 · 暗置）`；空时显示 `（对方桌面暂无状态卡）`
+## 四、验证
 
-## 三、验证
-
-`tools/_smoke_enemy_status_view.js`（19 项，ALL PASS）
+`tools/_smoke_enemy_status_view.js`（21 项，ALL PASS）
 
 | 段 | 覆盖 |
 |---|---|
 | A | 口径：`status_config_of` 认出的才算；BASIC 卡（15401）不计入 |
 | B | 双方视角互为补集：本方 3 + 敌方 2 = 5 = 敌方 2 + 3 |
-| C | **字段恰好只有 `nation` / `owner_side`**；不含 `card_id` / `name` / `img` / `text` / `card`；不含 `#`（实例 id 形态） |
+| C | **卡面可见**（有 `name` / `img` / `text\|desc`）且**不含任何可操作字段**（`ready` / `ready_reason` / `ready_space` / `cost_discard` / `used_this_turn` / `forgo_build` 逐个断言 `in` 为 false） |
 | D | 空桌面返回 `[]` 而不是 `undefined` |
 
-全量 67 个 smoke：失败 19 个，名单与改动前一致。
+真机数据（game 25，Allies 视角）：
 
-## 四、回修入口
+```
+[{ name: '丰富的资源', nation: '德国', hasImg: true, hasReady: false }]
+```
+
+## 五、回修入口
 
 | 症状 | 先看 |
 |---|---|
-| 敌方栏空白但对方明明有状态卡 | `view.table_status_opponent` 是否有值；`status_config_of` 是否认该卡 |
-| 敌方栏显示成正面卡 / 能看到名字 | **数据层泄露**：检查 view 是否不小心下发了 `card_id`/`name`/`img`（这是唯一真正的"暗置"入口） |
-| 两栏长得一样分不清 | `.status-back::after` 的 `content:"状态"` 是否被覆盖 |
-| 点敌方牌背弹出状态卡面板 | `#enemy_status_cards .card` 的 `pointer-events:none` 是否被别处覆盖 |
-| 布局太高压到地图 | `#enemy_status_cards { min-height }` 调小（当前与响应卡同为 190px） |
+| 敌方栏空白但对方有状态卡 | `view.table_status_opponent` 是否有值；`status_config_of` 是否认该卡 |
+| 敌方卡看起来能点 / 点了有反应 | ① `update_enemy_status` 是否被误加了 `onclick`；② `view` 是否又下发了 `ready`（有 ready 就可能被别的渲染逻辑当可点） |
+| 和本方状态卡分不清 | 灰置滤镜（`grayscale(.7) brightness(.75)`）是否被别处 CSS 覆盖；「敌方」角标是否渲染 |
+| 布局太高压到地图 | `#enemy_status_cards { min-height }`（当前 190px，与响应卡一致） |
+| 悬停看不到大图 | `build_response_card_elt` 的 `on_focus_card` 绑定是否被替换 |

@@ -75,21 +75,22 @@ console.log('\n=== B. 双方视角互为补集 ===')
 	})(), '总数 5')
 }
 
-console.log('\n=== C. 敌方条目只含 nation / owner_side（暗置的数据层保证） ===')
+console.log('\n=== C. 敌方条目：卡面【可见】，但不含任何"可操作"字段 ===')
 {
 	const g = mk()
 	const opp = rules.view(g, 'Allies').table_status_opponent || []
 	ok('C1 非空', opp.length > 0, opp.length)
-	const keys = Object.keys(opp[0] || {}).sort().join(',')
-	ok('C2 字段恰好是 nation,owner_side', keys === 'nation,owner_side', keys)
-	const dump = JSON.stringify(opp)
-	for (const k of ['card_id', 'name', 'img', 'text', 'card'])
-		ok('C3 不含 ' + k, dump.indexOf('"' + k + '"') < 0, dump.slice(0, 120))
-	ok('C4 不含实例 id 形态（#号）', dump.indexOf('#') < 0, dump.slice(0, 120))
-	ok('C5 nation 是国名', opp.every(x => typeof x.nation === 'string' && x.nation.length > 0),
-		JSON.stringify(opp))
-	ok('C6 owner_side 是 axis/allies', opp.every(x => x.owner_side === 'axis' || x.owner_side === 'allies'),
-		JSON.stringify(opp))
+	const o = opp[0] || {}
+	ok('C2 nation 是国名', typeof o.nation === 'string' && o.nation.length > 0, o.nation)
+	ok('C3 owner_side 是 axis/allies',
+		o.owner_side === 'axis' || o.owner_side === 'allies', o.owner_side)
+	/* 卡面可见：这三项是"看得见"的前提 */
+	ok('C4 有 name（卡面可见）', typeof o.name === 'string' && o.name.length > 0, o.name)
+	ok('C5 有 img（卡面可见）', typeof o.img === 'string' && o.img.length > 0, o.img)
+	ok('C6 有 text 或 desc', typeof (o.text || o.desc) === 'string', (o.text || o.desc || '').slice(0, 20))
+	/* 关键：永远不可操作 —— 这些字段一个都不能有 */
+	for (const k of ['ready', 'ready_reason', 'ready_space', 'cost_discard', 'used_this_turn', 'forgo_build'])
+		ok('C7 不含可操作字段 ' + k, !(k in o), Object.keys(o).join(','))
 }
 
 console.log('\n=== D. 空桌面的表现 ===')

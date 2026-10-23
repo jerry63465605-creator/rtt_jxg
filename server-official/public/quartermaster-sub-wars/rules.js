@@ -23799,23 +23799,37 @@ exports.view = function (state, current) {
 			return out
 		})(),
 		/*
-		 * 【2026-10-24 玩家口径】敌方桌面状态卡 —— 客户端据此画"永远暗置"的敌方状态栏。
+		 * 【2026-10-24 玩家口径】敌方桌面状态卡 —— 客户端据此画"敌方状态卡"栏。
 		 *
-		 * 只下发【逐张的 nation / owner_side】，**不含** card_id / name / img / text：
-		 * 需求是"永远暗置"，那就连卡面数据都不该到客户端手里
-		 * （否则改改前端就能看穿，等于没暗置）。
-		 * 客户端按国着色画牌背（复用 .card.back 的八国配色）。
+		 * 口径：**卡面可见**（桌面状态卡本来就是明置信息），但【永远不可操作】：
+		 *   · 不下发 ready / ready_reason / cost_* / used_this_turn
+		 *     —— 客户端据此一律灰置，不存在"点了能发动"的可能；
+		 *   · 只给展示卡面必需的 name / img / text / desc + nation / owner_side。
+		 * 与 table_status 相反：本方那栏带 ready 供点击，本方这栏永不带。
 		 *
-		 * 口径与 table_status 完全一致：只统计 status_config_of() 有配置的真"状态卡"，
-		 * 数量 = 敌方各国桌面上状态卡之和。
+		 * 统计口径与 table_status 一致：只算 status_config_of() 有配置的真"状态卡"
+		 * （桌上可能还挂着非状态类卡，那些不计入）。
 		 */
 		table_status_opponent: (() => {
 			const out = []
 			for (const nat of Object.keys(game.table || {})) {
 				if (faction_of_nation(nat) === side) continue
 				for (const cid of (game.table[nat] || [])) {
-					if (!status_config_of(cid)) continue
-					out.push({ nation: nat, owner_side: faction_of_nation(nat) })
+					const cfg = status_config_of(cid)
+					if (!cfg) continue
+					const face = inst_card(cid) || {}
+					const trig = cfg.trigger
+					out.push({
+						card: cid,
+						name: face.name || '',
+						img: face.img || null,
+						text: face.text || '',
+						nation: nat,
+						owner_side: faction_of_nation(nat),
+						ongoing: !!cfg.ongoing,
+						trigger: !!trig,
+						desc: (cfg.ongoing && cfg.ongoing.desc) || (trig && trig.desc) || '',
+					})
 				}
 			}
 			return out
