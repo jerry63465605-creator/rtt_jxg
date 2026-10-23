@@ -350,6 +350,20 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	margin-left: 1px;
 }
 
+/*
+ * 「行动国：」标签 —— 与下面原有配色规则合并成一条，避免同一选择器写两处。
+ *
+ * 【2026-10-24 玩家口径】另起一行（display:block）。
+ * 原先它和六国补给挤在一行里，窄侧栏折行后会把「行动国：日本」拆成
+ * 「行动」/「国：日本」两截，很难读。
+ */
+#supply_line .cur_nation {
+	display: block;
+	margin-top: 1px;
+	color: #06c;
+	font-weight: bold;
+}
+
 #supply_line .sn.cur {
 	background-color: #ffee88;
 	border-radius: 3px;
@@ -362,11 +376,6 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	font-weight: bold;
 	font-style: normal;
 	margin-left: 1px;
-}
-
-#supply_line .cur_nation {
-	color: #06c;
-	font-weight: bold;
 }
 
 /* ---- 参战状态行（苏联 / 美国中立规则） ---- */

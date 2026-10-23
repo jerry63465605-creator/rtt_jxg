@@ -8212,9 +8212,13 @@ function update_supply_line() {
 	el.innerHTML = parts.length
 		? "补给：" + parts.join(" ")
 		: "补给：场上无部队"
+	/*
+	 * 【2026-10-24】「行动国：」单独一行（CSS 里 .cur_nation 设为 block），
+	 * 顺带去掉原先用于拼同一行的前导空格。
+	 */
 	if (view.current_nation)
 		el.insertAdjacentHTML("beforeend",
-			' <span class="cur_nation">行动国：' + view.current_nation + "</span>")
+			'<span class="cur_nation">行动国：' + view.current_nation + "</span>")
 }
 
 /*
