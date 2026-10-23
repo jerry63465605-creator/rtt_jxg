@@ -4523,6 +4523,31 @@ const STATUS_EFFECTS = {
 			window: 'after_build_army',
 			cost: { discard: 1, discard_is: { type: 'BASIC', name: ['建设陆军', '发起陆战'] } },
 			desc: '建设陆军后，弃置1张[建设陆军]或[发起陆战]：以此陆军发起1次陆战',
+			/*
+			 * 【2026-10-23】付代价【之前】先校验发起单位。
+			 *
+			 * game 24 现场：西伯利亚大铁路在 德国 建成 p80（status_instant.space=44），
+			 * 玩家（客户端通用 battle_initiators 只按"相邻的本国补给陆军"给候选）
+			 * 点了 巴尔干 的 p79、目标选 东欧 → 提交 {space:5, from:'p79'}。
+			 * 校验失败，但代价（弃 1 张 [建设陆军]/[发起陆战]）早已在 activate_status
+			 * 里扣掉 → "建设期间坦克运输失效"且白亏一张牌。
+			 *
+			 * precheck 与 run 同源校验，失败时不付代价、窗口保留，玩家可改选刚建成的那支。
+			 */
+			precheck(game, nation, arg, ctxSpace) {
+				const sp = Number(ctxSpace)
+				const pid = (arg && arg.from != null) ? arg.from : null
+				if (pid == null)
+					return { ok: false, reason: '请选择发起单位（必须是刚建成的这支陆军）' }
+				if (!Number.isFinite(sp) || Number(game.location[pid]) !== sp ||
+					game.piece_nation[pid] !== nation || game.piece_type[pid] !== 'army')
+					return {
+						ok: false,
+						reason: '只能以刚刚建成的这支陆军发起陆战（刚建成于 ' +
+							(Number.isFinite(sp) ? data.name_of(sp) : '?') + '）',
+					}
+				return { ok: true }
+			},
 			run(game, ctx) {
 				const sp = ctx.ctx.space
 				/*
@@ -27011,6 +27036,26 @@ function do_action(state, current, action, arg) {
 		const costPayer = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
 		const cost = tr.cost || {}
 		/*
+		 * 【2026-10-23】效果【参数】预检 —— 必须在付代价之前。
+		 *
+		 * 起因：17846《坦克运输》要求"以此陆军发起陆战"，即发起单位必须是刚建成的那支。
+		 * 但客户端 battle_initiators 是通用口径（相邻的本国补给陆/海军），玩家点了另一支
+		 * 也能提交；服务端直到 run 里才校验 → 代价（弃 1 张牌）已扣、效果失败。
+		 * game 24 实测："建设期间坦克运输失效"，手牌白亏 1 张。
+		 *
+		 * 由卡配置提供 precheck(game, nation, arg, ctxSpace)，返回 {ok, reason}。
+		 * 没有 precheck 的卡行为完全不变。
+		 */
+		if (typeof tr.precheck === 'function') {
+			const _pcSpace = ((game.status_instant || []).find(x => x.card_id === cardId) || {}).space
+			const _pc = tr.precheck(game, costPayer, arg || {}, _pcSpace)
+			if (!_pc || _pc.ok === false) {
+				game.log.push('《' + cName + '》' + ((_pc && _pc.reason) || '参数不合法') +
+					'（未支付代价）')
+				return game
+			}
+		}
+		/*
 		 * 【2026-10-23 修复】"跳过出牌阶段"原本在这里就置位，早于 cost.discard /
 		 * cost.attrition 的校验。玩家不带 discard 点发动时：skip_play_done 被永久置位、
 		 * 代价一分没付、效果也没结算，且 status_window_ready 会以"本回合已跳过出牌阶段"
@@ -27178,7 +27223,29 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		if (!r.ok) {
-			/* 效果没成立：代价已付的不回滚（玩家确认过才点的），只记日志 */
+			/*
+			 * 【2026-10-23】效果没成立 -> 退回【弃牌类】代价。
+			 *
+			 * 旧口径是"代价已付的不回滚（玩家确认过才点的）"，但实测玩家往往是被
+			 * 客户端通用候选引导选了非法单位（17846 只能以刚建成的那支陆军发起），
+			 * 白亏一张牌不可接受。牌退回手牌 + 窗口保留，玩家可改选后重试。
+			 *
+			 * 只回滚 discard：损耗已进牌库底部、失分/放弃建设卡已改变盘面，
+			 * 无法精确还原（各自在日志里已写明）。
+			 */
+			const _pk = (arg && arg.discard) || []
+			if (cost.discard && _pk.length) {
+				let back = 0
+				for (const cid of _pk.slice(0, cost.discard)) {
+					const pile = game.discard[costPayer] || []
+					const di = pile.indexOf(cid)
+					if (di < 0) continue
+					pile.splice(di, 1)
+					put_back_to_hand(game, costPayer, cid)
+					back++
+				}
+				if (back) game.log.push('【' + costPayer + '】已退回 ' + back + ' 张代价手牌（效果未成立）')
+			}
 			game.log.push('《' + cName + '》效果未能执行：' + r.reason)
 			return game
 		}
