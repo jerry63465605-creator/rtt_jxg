@@ -645,6 +645,28 @@ let discard_mode = false
  */
 let discard_pick = []
 
+/*
+ * 【2026-10-24】提交前确认服务端真的授权了该动作。
+ *
+ * 平台 common/client.js 的 send_action 会先查 view.actions[verb]：
+ * 没有登记就【静默 return false】——不发请求、也不报错。
+ * 旧代码在这之后照样 toast「已提交」并把选择清空，于是线上表现为
+ * "开局选了 3 张、点确认、界面毫无变化、一直卡在初始阶段"，
+ * 而本地（role 恰好正确、actions 有登记）完全正常。
+ *
+ * 这里显式拦下并给出 actions / block_reason，把静默失败变成看得见的原因。
+ */
+function action_allowed(name) {
+	const a = view && view.actions
+	return !!(a && a[name])
+}
+function action_reject_text(name) {
+	const a = (view && view.actions) || null
+	const keys = a ? Object.keys(a).join(",") : "null"
+	return "服务端未授权 " + name + "（actions=" + keys + "）；原因：" +
+		((view && view.block_reason) || "未知")
+}
+
 /* 确认弃掉当前选中的所有手牌 */
 function confirm_discard() {
 	if (view.opening) {
@@ -654,6 +676,10 @@ function confirm_discard() {
 		}
 		if (discard_pick.length !== 3) {
 			toast("初始阶段：必须恰好选 3 张弃牌")
+			return
+		}
+		if (!action_allowed("opening_discard")) {
+			toast(action_reject_text("opening_discard"))
 			return
 		}
 		send_action("opening_discard", { cards: discard_pick.slice() })
@@ -669,6 +695,10 @@ function confirm_discard() {
 	}
 	if (!discard_pick.length) {
 		toast("请先点手牌选择要弃置的牌")
+		return
+	}
+	if (!action_allowed("discard_in_discard_phase")) {
+		toast(action_reject_text("discard_in_discard_phase"))
 		return
 	}
 	send_action("discard_in_discard_phase", { cards: discard_pick.slice() })

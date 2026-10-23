@@ -21650,10 +21650,26 @@ function start_opening_phase(game) {
  */
 function do_opening_discard(game, current, arg) {
 	if (!game.opening) return game
-	const idx = game.opening.index
+	/*
+	 * 【2026-10-24】索引防御：老存档 / 外部写入的 opening 可能缺 index（或越界）。
+	 * 缺了就退回 0（= 第一个国家重新弃），越界视为已结束，避免被算成
+	 * ORDER_OF_NATIONS[undefined] 而永远拒绝。
+	 */
+	let idx = Number(game.opening.index)
+	if (!Number.isFinite(idx) || idx < 0) {
+		idx = 0
+		game.opening.index = 0
+	}
+	if (idx >= ORDER_OF_NATIONS.length) {
+		game.opening = null
+		game.log.push('初始阶段：弃牌索引越界，已结束初始阶段')
+		return game
+	}
 	const nation = ORDER_OF_NATIONS[idx]
 	if (faction_role_of_nation(nation) !== current) {
-		game.log.push('【' + nation + '】不是当前操作国，无法弃牌')
+		/* 日志带出双方 role，线上排查时能一眼看出是不是 role 传值问题 */
+		game.log.push('【' + nation + '】不是当前操作国，无法弃牌（提交方：' + current +
+			'，应为：' + faction_role_of_nation(nation) + '）')
 		return game
 	}
 	const cards = (arg && arg.cards) || []
@@ -21882,6 +21898,37 @@ function advance_phase(game) {
  */
 function faction_role_of_nation(nation) {
 	return faction_of_nation(nation) === AXIS ? AXIS_ROLE : ALLIES_ROLE
+}
+
+/*
+ * 【2026-10-24】把调用方传来的 role 归一化成 'Axis' / 'Allies'。
+ *
+ * 起因：线上（别人部署的包）反馈"开局选中 3 张后点确认，什么也没发生、一直卡在初始阶段"，
+ * 而本地一切正常。整条链路上 role 只做过【精确字符串比较】：
+ *     const side = current === ALLIES_ROLE ? ALLIES : AXIS
+ *     const is_my_turn = (current === game.active)
+ *     if (faction_role_of_nation(nation) !== current) 拒绝
+ * 于是只要外面传进来的不是【恰好】'Axis'/'Allies'（大小写不同、首尾空格、
+ * URL 编码残留、按国家模式传了'德国'…），就会被当成【轴心】处理：
+ *   · 盟军玩家拿到轴心的 actions（该有的没有、不该有的有）；
+ *   · do_opening_discard 里 current 与期望 role 不符 -> 直接拒绝。
+ * 这两种表现都正是"点了没反应"。
+ *
+ * 归一化放在 exports.action / view / query 三个入口，下游所有比较保持不变。
+ * 认不出来的原样返回（不改旧行为）。
+ */
+function norm_role(role) {
+	if (role == null) return role
+	const s = String(role).trim()
+	if (!s) return role
+	if (/^allies?$/i.test(s)) return ALLIES_ROLE
+	if (/^axis$/i.test(s)) return AXIS_ROLE
+	if (s === ALLIES || s === AXIS)
+		return s === ALLIES ? ALLIES_ROLE : AXIS_ROLE
+	const f = faction_of_nation(s)
+	if (f === ALLIES) return ALLIES_ROLE
+	if (f === AXIS) return AXIS_ROLE
+	return role
 }
 
 /* ============================================================
@@ -22437,6 +22484,9 @@ exports.setup = function (seed, scenario, options) {
  */
 exports.view = function (state, current) {
 	const game = state
+
+	/* 【2026-10-24】role 容错：view 与 action 必须同口径，否则会出现"看得见但点了无效"（见 norm_role） */
+	current = norm_role(current)
 
 	/*
 	 * 【向后兼容】老对局没有 markers 字段 -> 在这里补上。
@@ -23384,8 +23434,15 @@ exports.view = function (state, current) {
 		/* 【2026-10-22】响应窗口是否在等表态（双方可见，仅含持有方 + 卡名） */
 		response_pending: responsePending,
 
-		/* 【2026-10-07 诊断】当前是哪种挂起在拦常规动作（play_card 不在白名单时看这个） */
-		block_reason: game.block_reason || null,
+		/*
+		 * 【2026-10-07 诊断】当前是哪种挂起在拦常规动作（play_card 不在白名单时看这个）。
+		 *
+		 * 【2026-10-24 修复】字段求值顺序 = 书写顺序，而 game.block_reason 是由
+		 * build_actions 在下面 `actions:` 处才写入的 —— 原先放在这里（早于 actions）
+		 * 读到的是【上一帧】的值，首帧恒为 null。于是"首次进入某挂起态"时
+		 * 客户端拿不到原因，正好是最需要它的时候。
+		 * 现改为紧跟 actions 之后（见下方同名注释）。
+		 */
 
 		/* 【2026-10-20 诊断】卡牌"部分成功"的失败清单（数据由服务端算好，
 		 * 客户端不二次判断，只负责 toast）：{ token, name, fails[] }。 */
@@ -24005,6 +24062,13 @@ exports.view = function (state, current) {
 		 * 若 actions 为 null，防守方连这个动作都发不出去。
 		 */
 		actions: build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger),
+
+		/*
+		 * 【2026-10-24】必须【紧跟】actions 之后：block_reason 由 build_actions 写入，
+		 * 放到它前面会读到上一帧的值（首帧为 null）。
+		 * 客户端据此提示"服务端为何没授权这个动作"，是把静默失败变可见的关键。
+		 */
+		block_reason: game.block_reason || null,
 
 		/*
 		 * 【2026-10-22】行动记录 + 时间回溯（回退）
@@ -29374,6 +29438,9 @@ exports.action = function (state, current, action, arg) {
 	const game = state
 	if (!game) return game
 
+	/* 【2026-10-24】role 容错：外部传 'allies' / 'AXIS' / 中文国名 也能判对阵营（见 norm_role） */
+	current = norm_role(current)
+
 	/* 内层（resume）直通：不记录、不重复处理 */
 	if (game._in_action) return do_action(state, current, action, arg)
 
@@ -29417,6 +29484,8 @@ exports.action = function (state, current, action, arg) {
 
 exports.query = function (state, current, query, params) {
 	const game = state
+	/* 【2026-10-24】role 容错（见 norm_role）：query 的 side 与 view/action 必须同源 */
+	current = norm_role(current)
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
 	/* 【向后兼容】老对局缺 markers 字段时补齐 */
 	ensure_markers(game)
