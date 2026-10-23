@@ -1,0 +1,139 @@
+<!-- 线上已注入的 SITE_PREFIX 脚本（子路径 /pre 部署用）。换新包后必须重新注入到 play.html 的 <head> 内首行，否则 /pre 下所有相对请求 404。抓取来源: https://test.genie-rttcn.top/pre/quartermaster-sub-wars/play.html -->
+<script data-site-prefix="1">window.SITE_PREFIX="/pre";(function(){
+var P=window.SITE_PREFIX||"";
+if(!P)return;
+function fix(u){
+  if(typeof u!=="string"||u.charAt(0)!=="/")return u;
+  if(u.charAt(1)==="/")return u;
+  if(u===P||u.indexOf(P+"/")===0)return u;
+  return P+u;
+}
+var _f=window.fetch;
+if(_f)window.fetch=function(i,init){
+  try{
+    if(typeof i==="string")i=fix(i);
+    else if(i&&typeof i.url==="string"&&fix(i.url)!==i.url)i=new Request(fix(i.url),i);
+  }catch(e){}
+  return _f.call(this,i,init);
+};
+// 注意：location.replace/assign/href 在浏览器里是 LegacyUnforgeable，
+// 无法被页面脚本包装（实测 writable:false, configurable:false），
+// 因此这类跳转只能在其源码处保证带前缀（如 pug_ai_waiting.js）。
+var _o=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(){
+  try{arguments[1]=fix(arguments[1]);}catch(e){}
+  return _o.apply(this,arguments);
+};
+if(window.WebSocket){
+  var W=window.WebSocket;
+  var NW=function(u,p){return p===undefined?new W(fix(u)):new W(fix(u),p);};
+  NW.prototype=W.prototype;
+  window.WebSocket=NW;
+}
+if(window.EventSource){
+  var E=window.EventSource;
+  var NE=function(u,c){return new E(fix(u),c);};
+  NE.prototype=E.prototype;
+  window.EventSource=NE;
+}
+function fixlist(v){
+  if(typeof v!=="string")return v;
+  var parts=v.split(",");var dirty=false;
+  for(var i=0;i<parts.length;i++){
+    var t=parts[i].trim();
+    var sp=t.split(" ").filter(function(z){return z!=="";});
+    if(!sp.length)continue;
+    var n=fix(sp[0]);
+    if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
+  }
+  return dirty?parts.join(", "):v;
+}
+var _sa=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){
+  var name=n;
+  try{
+    // 只对**比较**用一个小写副本，绝不能改动真正的属性名：
+    //   SVG 属性名大小写敏感，setAttribute("viewBox", ...) 一旦被写成 "viewbox"
+    //   就会被渲染器忽略 → SVG 失去坐标系缩放 → 手机上只见地图左上角、
+    //   底图正常但叠加的文字被整体拉糊（Hannibal-Rome-vs-Carthage 实测）。
+    //   原生 setAttribute 本身对 HTML 属性名不区分大小写，所以这里也不需要小写化。
+    var k=String(n).toLowerCase();
+    if(k==="src"||k==="href"||k==="action"||k==="poster"||k==="data")v=fix(v);
+    else if(k==="srcset")v=fixlist(v);
+  }catch(e){}
+  return _sa.call(this,name,v);
+};
+function patchProp(proto,prop,isList){
+  try{
+    if(!proto)return;
+    var d=Object.getOwnPropertyDescriptor(proto,prop);
+    if(!d||!d.set)return;
+    var st=d.set,gt=d.get;
+    Object.defineProperty(proto,prop,{configurable:true,enumerable:d.enumerable,
+      get:gt,set:function(v){return st.call(this,isList?fixlist(v):fix(v));}});
+  }catch(e){}
+}
+patchProp(window.HTMLScriptElement&&HTMLScriptElement.prototype,"src");
+patchProp(window.HTMLLinkElement&&HTMLLinkElement.prototype,"href");
+patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"src");
+patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"srcset",true);
+patchProp(window.HTMLIFrameElement&&HTMLIFrameElement.prototype,"src");
+patchProp(window.HTMLFormElement&&HTMLFormElement.prototype,"action");
+patchProp(window.HTMLAnchorElement&&HTMLAnchorElement.prototype,"href");
+patchProp(window.HTMLAreaElement&&HTMLAreaElement.prototype,"href");
+patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"src");
+patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"srcset",true);
+patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"src");
+patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"poster");
+patchProp(window.HTMLAudioElement&&HTMLAudioElement.prototype,"src");
+patchProp(window.HTMLEmbedElement&&HTMLEmbedElement.prototype,"src");
+patchProp(window.HTMLTrackElement&&HTMLTrackElement.prototype,"src");
+patchProp(window.HTMLObjectElement&&HTMLObjectElement.prototype,"data");
+var T={A:"href",AREA:"href",LINK:"href",IMG:"src",SCRIPT:"src",IFRAME:"src",SOURCE:"src",TRACK:"src",EMBED:"src",AUDIO:"src",VIDEO:"src",FORM:"action",USE:"href"};
+function fixel(el){
+  if(!el||el.nodeType!==1)return;
+  var a=T[el.tagName];
+  if(a){
+    var v=el.getAttribute(a);
+    if(v){var n=fix(v);if(n!==v)el.setAttribute(a,n);}
+  }
+  var ss=el.getAttribute&&el.getAttribute("srcset");
+  if(ss){
+    var parts=ss.split(",");var dirty=false;
+    for(var i=0;i<parts.length;i++){
+      var t=parts[i].trim();
+      var sp=t.split(" ").filter(function(z){return z!=="";});
+      if(!sp.length)continue;
+      var n=fix(sp[0]);
+      if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
+    }
+    if(dirty)el.setAttribute("srcset",parts.join(", "));
+  }
+}
+function scan(root){
+  if(!root||root.nodeType!==1)return;
+  fixel(root);
+  if(root.querySelectorAll){
+    var list=root.querySelectorAll("*");
+    for(var i=0;i<list.length;i++)fixel(list[i]);
+  }
+}
+function start(){
+  scan(document.documentElement);
+  try{
+    new MutationObserver(function(ms){
+      for(var i=0;i<ms.length;i++){
+        var m=ms[i];
+        if(m.type==="attributes"){fixel(m.target);}
+        else{
+          for(var j=0;j<m.addedNodes.length;j++){
+            var n=m.addedNodes[j];
+            if(n&&n.nodeType===1)scan(n);
+          }
+        }
+      }
+    }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["href","src","action","srcset"]});
+  }catch(e){}
+}
+start();
+})();</script>

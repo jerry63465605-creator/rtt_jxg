@@ -1,6 +1,6 @@
 "use strict"
 
-/* globals data layout view player send_action send_query */
+/* globals data layout view player send_action send_query send_message game_cookie toast */
 
 /*
  * 军需官 · 次要战场 —— 客户端
@@ -11,6 +11,64 @@
  *
  * 注意：view 是 client.js 提供的全局变量，本文件不要重新声明。
  */
+
+/*
+ * ===== BEGIN send_action shim =====
+ * 【2026-10-24】兼容"定制部署的 client.js 把 simple action 当数组"的 bug。
+ *
+ * 官方约定（见 /common/client.js）：
+ *   view.actions[verb] === 1 / true / 字符串  ->  该动作可提交，参数任意（object/undefined）
+ *   Array.isArray(view.actions[verb])         ->  才是"参数必须在候选列表里"
+ *
+ * 但某些定制部署把 send_action 简化成了无条件比较：
+ *   if (view.actions[verb].includes(realnoun)) { ... }
+ * 于是对值为 1 的动作（本模块绝大多数动作都是 1）会抛
+ *   TypeError: view.actions[verb].includes is not a function
+ * 异常发生在 send_message 之前 -> 请求根本发不出去 -> 表现为"点了没反应、
+ * 一直卡在当前阶段"（实测：线上测试服开局弃牌，actions 全是 1，点确认即崩）。
+ *
+ * 本 shim：先走平台实现；若抛异常，按官方语义自行发送。
+ * 在官方 client.js 上 try 分支直接成功，零副作用；本文件所有 send_action(...)
+ * 调用（以及 client.js 内按名查找 send_action 的按钮处理器）都会经过这里。
+ * ===== END send_action shim =====
+ */
+;(function () {
+	if (typeof send_action !== 'function') return
+	const _orig = send_action
+	const _patched = function (verb, noun) {
+		try {
+			return _orig(verb, noun)
+		} catch (e) {
+			/* 落到下面的官方语义实现 */
+		}
+		try {
+			const va = view && view.actions && view.actions[verb]
+			if (!va) return false
+			if (typeof send_message !== 'function') return false
+			const arg = (noun === undefined) ? null : noun
+			if (va === 1 || va === true || typeof va === 'string') {
+				if (noun === undefined || noun === null || typeof noun === 'object') {
+					view.actions = null
+					send_message('action', [verb, arg, game_cookie])
+					return true
+				}
+				return false
+			}
+			if (Array.isArray(va)) {
+				const real = Array.isArray(noun) ? noun[0] : noun
+				if (va.indexOf(real) < 0) return false
+				view.actions = null
+				send_message('action', [verb, arg, game_cookie])
+				return true
+			}
+			return false
+		} catch (e2) {
+			try { toast('动作发送失败：' + (e2 && e2.message)) } catch (e3) {}
+			return false
+		}
+	}
+	try { window.send_action = _patched } catch (e) {}
+})()
 
 const MAP_W = 4835
 const MAP_H = 1612
