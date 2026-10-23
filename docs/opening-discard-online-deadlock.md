@@ -108,6 +108,26 @@ actions: build_actions(...)                   // 第 24064 行，才在这里写
 | 症状 | 先看 |
 |---|---|
 | 点了按钮毫无反应 | 该动作是否在 `view.actions`；客户端是否还在"假报成功" |
-| 本地正常、线上不动 | role 是否精确 `Axis`/`Allies`；是否命中了旧 `play.js` 缓存（版本串） |
+| 本地正常、线上不动 | **先看 Console 是否 `includes is not a function`**（见 `docs/send-action-shim.md`）；再看 role / 缓存 |
 | 日志说"不是当前操作国" | `do_opening_discard` 的 current 与期望 role；`norm_role` 是否被绕过 |
 | `block_reason` 为空但确实被拦 | 字段是否又被挪到 `actions:` 之前 |
+
+---
+
+## 七、事后复盘：本轮改动的真实效力（2026-10-24 补）
+
+根因最终定在**平台 `send_action` 的 `.includes` bug**（见 `docs/send-action-shim.md`），
+本文描述的 role 方向改动并不是本次故障的原因。逐条结论：
+
+| 改动 | 对本次 bug 必需 | 独立价值 | 最终处置 |
+|---|---|---|---|
+| `play.js` 的 `send_action` shim | ✅ 唯一修复 | — | 保留（另一提交） |
+| `view.block_reason` 移到 `actions:` 之后 | ❌ | ✅ 真 bug（原先滞后一帧） | **保留** |
+| `do_opening_discard` 拒绝日志带「提交方 / 应为」 | ❌ | ✅ 零成本诊断 | **保留** |
+| `confirm_discard` 提交前查 `view.actions` | ❌ | ✅ 把静默失败变可见 | **保留** |
+| `do_opening_discard` 的 `opening.index` 缺失/越界防御 | ❌ | ⚠️ 场景几乎不存在 | **已删除** |
+| `norm_role()` 中文国名 → 阵营 映射 | ❌ 基于错误假设 | ⚠️ 会把 `'德国'` 压成 `'Axis'`，危及将来的 6 人按国家模式 | **已收窄**：只做去空格 + 大小写归一，认不出的原样返回 |
+
+收窄后的行为：`'Axis'` / `'axis'` / `'AXIS'` / `' Axis '` 等价；
+`'德国'` **不再**被猜成阵营（原样传入 → 与 `'Axis'` 不匹配 → 拒绝，与收窄前一致）。
+测试 `_smoke_opening_discard.js` 的 B 段已同步改为「B5 中文国名不被猜成阵营」。

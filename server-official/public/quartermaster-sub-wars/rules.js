@@ -21650,21 +21650,7 @@ function start_opening_phase(game) {
  */
 function do_opening_discard(game, current, arg) {
 	if (!game.opening) return game
-	/*
-	 * 【2026-10-24】索引防御：老存档 / 外部写入的 opening 可能缺 index（或越界）。
-	 * 缺了就退回 0（= 第一个国家重新弃），越界视为已结束，避免被算成
-	 * ORDER_OF_NATIONS[undefined] 而永远拒绝。
-	 */
-	let idx = Number(game.opening.index)
-	if (!Number.isFinite(idx) || idx < 0) {
-		idx = 0
-		game.opening.index = 0
-	}
-	if (idx >= ORDER_OF_NATIONS.length) {
-		game.opening = null
-		game.log.push('初始阶段：弃牌索引越界，已结束初始阶段')
-		return game
-	}
+	const idx = game.opening.index
 	const nation = ORDER_OF_NATIONS[idx]
 	if (faction_role_of_nation(nation) !== current) {
 		/* 日志带出双方 role，线上排查时能一眼看出是不是 role 传值问题 */
@@ -21925,9 +21911,14 @@ function norm_role(role) {
 	if (/^axis$/i.test(s)) return AXIS_ROLE
 	if (s === ALLIES || s === AXIS)
 		return s === ALLIES ? ALLIES_ROLE : AXIS_ROLE
-	const f = faction_of_nation(s)
-	if (f === ALLIES) return ALLIES_ROLE
-	if (f === AXIS) return AXIS_ROLE
+	/*
+	 * 【2026-10-24 收窄】不把中文国名映射成阵营。
+	 *
+	 * 曾写过 faction_of_nation(s) -> role，但那是基于"平台可能按国家传 role"的猜测，
+	 * 实证并不成立（线上诊断 player === 'Axis'）。更麻烦的是它会把 '德国' 压成 'Axis'，
+	 * 而 view 里 `is_my_turn = (current === game.active)`，一旦将来真的做 6 人按国家模式，
+	 * 每个国家玩家都会把自己算成"当前行动方"。认不出的原样返回，绝不猜。
+	 */
 	return role
 }
 

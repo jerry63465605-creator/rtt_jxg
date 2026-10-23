@@ -48,15 +48,25 @@ console.log('=== A. 正常流程：轴心（德国）弃 3 张 ===')
 	ok('A5 日志写明弃 3 张', /【德国】初始阶段弃 3 张/.test((r.log || []).join('\n')))
 }
 
-console.log('\n=== B. role 容错：大小写 / 空格 / 中文国名 都应等价 ===')
+console.log('\n=== B. role 容错：大小写 / 首尾空格 归一；中文国名【不猜测】 ===')
 {
-	for (const role of ['Axis', 'axis', 'AXIS', ' Axis ', '德国']) {
+	for (const role of ['Axis', 'axis', 'AXIS', ' Axis ']) {
 		const g = fresh()
 		const hand = g.hands['德国'].slice(0, 3)
 		const r = rules.action(g, role, 'opening_discard', { cards: hand })
 		ok('B role=' + JSON.stringify(role) + ' 弃牌成功', r.opening && r.opening.index === 1,
 			JSON.stringify(r.opening))
 	}
+	/*
+	 * 收窄后：中文国名不再被猜成阵营（否则 6 人按国家模式下
+	 * `current === game.active` 会把每个国家都算成当前行动方）。
+	 * 原样传入 -> 与 'Axis' 不匹配 -> 拒绝，保持旧行为。
+	 */
+	const g = fresh()
+	const r = rules.action(g, '德国', 'opening_discard', { cards: g.hands['德国'].slice(0, 3) })
+	ok('B5 中文国名不被猜成阵营（拒绝）', r.opening && r.opening.index === 0, JSON.stringify(r.opening))
+	ok('B6 日志里提交方原样是德国', /提交方：德国/.test((r.log || []).join('\n')),
+		(r.log || []).slice(-1)[0])
 }
 
 console.log('\n=== C. 盟军提交德国回合的弃牌 -> 拒绝，日志带双方 role ===')
@@ -124,20 +134,6 @@ console.log('\n=== G. view.actions：只有当前弃牌国的阵营才有 openin
 	const vL = rules.view(g, 'allies')
 	ok('G4 role 小写 allies 也判为盟军（无该动作）', !(vL.actions && vL.actions.opening_discard),
 		JSON.stringify(vL.actions))
-}
-
-console.log('\n=== H. opening.index 缺省/越界防御 ===')
-{
-	const g = fresh()
-	g.opening = {}   /* 老存档/外部写入缺 index */
-	const r = rules.action(g, 'Axis', 'opening_discard', { cards: (g.hands['德国'] || []).slice(0, 3) })
-	ok('H1 缺 index 时按 0 处理并成功', r.opening && r.opening.index === 1, JSON.stringify(r.opening))
-
-	const g2 = fresh()
-	g2.opening = { index: 99 }
-	const r2 = rules.action(g2, 'Axis', 'opening_discard', { cards: (g2.hands['德国'] || []).slice(0, 3) })
-	ok('H2 越界时结束初始阶段而不是永久拒绝', !r2.opening, JSON.stringify(r2.opening))
-	ok('H3 日志说明越界', /弃牌索引越界/.test((r2.log || []).join('\n')))
 }
 
 console.log('\n----------------------------------------')
