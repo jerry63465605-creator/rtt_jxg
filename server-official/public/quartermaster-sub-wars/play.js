@@ -192,7 +192,7 @@ function update_map() {
 	update_side_info()
 	update_phase_panel()
 	update_pieces()
-	update_strait_line()
+	/* 【2026-10-24】update_strait_line() 已移除：侧栏「海峡：」行删除（见该函数位置的注释） */
 	update_supply_line()
 	update_neutral_line()
 	/* 补给点可被卡牌改变，class 要跟着刷新 */
@@ -7992,23 +7992,29 @@ function clear_piece_highlight(kind) {
 	piece_highlight[kind] = []
 }
 
-function update_strait_line() {
-	const el = document.getElementById("strait_line")
-	if (!el)
-		return
-	if (!view.straits || !view.strait_control) {
-		el.textContent = ""
-		return
-	}
-	const parts = []
-	for (const s of view.straits) {
-		const c = view.strait_control[s.name]
-		const cls = c === "axis" ? "st-axis" : "st-allies"
-		const label = c === "axis" ? "轴" : "同"
-		parts.push(s.name + '<span class="' + cls + '">' + label + "</span>")
-	}
-	el.innerHTML = "海峡：" + parts.join(" ")
-}
+/*
+ * 【2026-10-24 玩家口径】侧栏「海峡：」这一行已删除，其下方内容整体上移。
+ *
+ * 原实现（保留在这里以便随时恢复，恢复时同时把 play.html 里被注释掉的
+ * <div id="strait_line"> 还原，并在 on_update 里补回 update_strait_line() 调用）：
+ *
+ *   function update_strait_line() {
+ *       const el = document.getElementById("strait_line")
+ *       if (!el) return
+ *       if (!view.straits || !view.strait_control) { el.textContent = ""; return }
+ *       const parts = []
+ *       for (const s of view.straits) {
+ *           const c = view.strait_control[s.name]
+ *           const cls = c === "axis" ? "st-axis" : "st-allies"
+ *           const label = c === "axis" ? "轴" : "同"
+ *           parts.push(s.name + '<span class="' + cls + '">' + label + "</span>")
+ *       }
+ *       el.innerHTML = "海峡：" + parts.join(" ")
+ *   }
+ *
+ * 注意：view.straits / view.strait_control 仍在服务端下发，
+ * 地图上的海峡高亮等其它功能（本文件 9190 附近）照旧使用，未受影响。
+ */
 
 /* ============================================================
  * 分数面板（2026-09-22）

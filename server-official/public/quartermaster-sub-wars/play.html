@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261024i">
+	<link rel="stylesheet" href="play.css?v=20261024j">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261024i"></script>
-	<script defer src="layout.js?v=20261024i"></script>
-	<script defer src="play.js?v=20261024i"></script>
+	<script defer src="data.js?v=20261024j"></script>
+	<script defer src="layout.js?v=20261024j"></script>
+	<script defer src="play.js?v=20261024j"></script>
 </head>
 <body>
 
@@ -123,7 +123,12 @@
 		<div id="turn_line"></div>
 		<div id="supply_line"></div>
 		<div id="neutral_line"></div>
-		<div id="strait_line"></div>
+		<!--
+			【2026-10-24 玩家口径】「海峡：」这一行已删除，下方内容整体上移。
+			恢复方式：把下面这行还原回去，并恢复 play.js 里的 update_strait_line()
+			调用与函数体（见该位置的注释）。
+			<div id="strait_line"></div>
+		-->
 		<div id="violations"></div>
 	</div>
 
