@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261024k">
+	<link rel="stylesheet" href="play.css?v=20261024l">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261024k"></script>
-	<script defer src="layout.js?v=20261024k"></script>
-	<script defer src="play.js?v=20261024k"></script>
+	<script defer src="data.js?v=20261024l"></script>
+	<script defer src="layout.js?v=20261024l"></script>
+	<script defer src="play.js?v=20261024l"></script>
 </head>
 <body>
 
@@ -37,12 +37,13 @@
 				<li onclick="send_query('adjacency')"> 查询本方相邻关系</li>
 			</menu>
 		</details>
-		<!-- 【2026-10-22】回退（时间回溯，需对方同意） -->
-		<button id="btn_rollback" onclick="toggle_history(true)" title="回退（需对方同意）">
-			<img src="/images/cycle.svg">
-		</button>
-		<!-- 【2026-10-22】行动记录（全局出牌流水） -->
-		<button id="btn_history" onclick="toggle_history(false)" title="行动记录">
+		<!--
+			【2026-10-24 玩家口径】顶部只保留「行动记录」一个入口。
+			原先后退/行动记录两个按钮打开的是同一个抽屉（回退只是滚到
+			#rb_section），容易被误认为两个独立功能；#btn_rollback 已删除，
+			回退区作为抽屉内的一个分区保留（点「回退到此处」仍需对方同意）。
+		-->
+		<button id="btn_history" onclick="toggle_history()" title="行动记录（含可回退的检查点）">
 			<img src="/images/scroll-quill.svg">
 		</button>
 	</div>
@@ -536,7 +537,7 @@
 <div id="history_panel" class="hide">
 	<div id="history_head">
 		<span>行动记录</span>
-		<button id="history_close" type="button" onclick="toggle_history(false)">×</button>
+		<button id="history_close" type="button" onclick="toggle_history()">×</button>
 	</div>
 	<div id="rb_section">
 		<div class="hist_title">可回退的检查点（需对方同意）</div>

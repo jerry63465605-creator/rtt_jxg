@@ -5356,20 +5356,22 @@ function my_side_key() {
 	return (typeof player === 'string' && player === 'Axis') ? 'axis' : 'allies'
 }
 
-function toggle_history(focus_rb) {
+/*
+ * 【2026-10-24 玩家口径】顶部只保留「行动记录」一个入口。
+ *
+ * 原先顶部有「回退」和「行动记录」两个按钮，但它们打开的是【同一个抽屉】
+ * （toggle_history(true) 只是打开后滚到 #rb_section），容易被误认为两个功能。
+ * #btn_rollback 已删除，这里退化为纯粹的"开/关抽屉"；
+ * 回退区作为抽屉内的一个分区保留，点「回退到此处」仍需对方同意。
+ */
+function toggle_history() {
 	const panel = document.getElementById('history_panel')
 	if (!panel)
 		return
-	const want = (focus_rb === true) ? true : !hist_open
-	hist_open = want
-	panel.classList.toggle('hide', !want)
-	if (!want)
-		return
-	update_history_ui(true)
-	if (focus_rb) {
-		const sec = document.getElementById('rb_section')
-		if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' })
-	}
+	hist_open = !hist_open
+	panel.classList.toggle('hide', !hist_open)
+	if (hist_open)
+		update_history_ui(true)
 }
 
 /* 回放模式下禁止发起回退（view 来自历史快照，提交会打乱真实对局） */
