@@ -8258,28 +8258,28 @@ function update_neutral_line() {
 		const d = detail[n]
 		if (d && d.reason)
 			tip += "\n参战原因：" + d.reason
+		/*
+		 * 【2026-10-24 玩家口径】「参战」行与「海峡」行之间【不要任何间隔】。
+		 *
+		 * 原先中立国的"参战条件进度"会另起一个 .cond_list 插在下方：
+		 * 窄侧栏里长文案折行，视觉上只剩一排空圆圈，还把两行撑开一大段空白。
+		 * （另：那里误写成 esc(d.zh)，`d` 是国家级详情、没有 zh 字段，
+		 *  所以连文字都被吞了 —— 真正该取的是 c.zh。）
+		 * 现改为并进每个国家标签的 title：悬停即可看到条件与进度，
+		 * DOM 上不再多一行 —— 信息不丢，间隔消失。
+		 */
+		if (d && d.conditions && d.conditions.length) {
+			tip += "\n参战条件："
+			for (const c of d.conditions)
+				tip += "\n" + (c.done ? "✓ " : "○ ") + (c.zh || "")
+		}
 		parts.push(
 			'<span class="nt ' + cls + '" title="' + esc_attr(tip) + '">' +
 			n + "<b>" + label + "</b></span>"
 		)
 	}
 	el.innerHTML = "参战：" + parts.join(" ")
-
-	/* 有中立国时，把它的条件进度也列出来（一行一条） */
-	const lines = []
-	for (const n of names) {
-		const d = detail[n]
-		if (!d || !d.neutral) continue
-		for (const c of (d.conditions || [])) {
-			lines.push(
-				'<span class="cond' + (c.done ? " done" : "") + '">' +
-				(c.done ? "✓ " : "○ ") + esc(d.zh || "") + "</span>"
-			)
-		}
-	}
-	if (lines.length)
-		el.insertAdjacentHTML("beforeend",
-			'<div class="cond_list">' + lines.join("") + "</div>")
+	/* 条件进度已并入上面每个国家标签的 title，这里不再生成 .cond_list */
 }
 
 /* HTML 文本转义（条件文案里有 <> 等字符） */
