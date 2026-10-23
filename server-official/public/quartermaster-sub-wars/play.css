@@ -515,22 +515,26 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
  * 所以这里也做成固定浮层（贴右侧中部），保证一定可见。
  * ============================================================ */
 #deck_panel {
-	position: fixed;
-	right: 10px;
 	/*
-	 * 【2026-10-24 玩家口径】原先 top:96px，正好压在侧栏顶部的
-	 * "轴心国 X 分 / 用户名" 与右侧分数上（窄屏更明显）。
-	 * 改用视口比例定位到侧栏中段的空白带：任何窗口高度下都跟着走，
-	 * 不会固定压住某一处文字。
+	 * 【2026-10-24 二次修正】回到文档流。
+	 *
+	 * 历史：原先 position:fixed + top:96px（贴顶）压住角色分数；改成
+	 * top:42vh 后，在矮窗口（实测视口 ~500px）仍会压住「参战」那几行。
+	 * 只要还是浮层，就必然在某个体型下遮住文字。
+	 *
+	 * 之所以当初做成浮层，是因为 aside 当时是 overflow:clip，
+	 * 放回流里会"落到可视区外、按钮消失"。现在 aside 已改为
+	 * overflow-y:auto（见文件末尾「阶段面板」那条修复），
+	 * 放回流里就能随侧栏滚动，且永不遮挡任何内容。
 	 */
-	top: 42vh;
-	z-index: 620;
+	position: static;
+	margin: 6px 12px 4px;
 	background: #fff;
 	border: 1px solid #bbb;
 	border-radius: 4px;
 	padding: 4px 6px;
-	box-shadow: 0 2px 8px #0003;
-	min-width: 190px;
+	min-width: 170px;
+	width: fit-content;
 }
 
 #deck_toggle {
@@ -1921,4 +1925,35 @@ body.allies .score-side.allies {
 
 #log.collapsed {
 	display: none;
+}
+
+/* ============================================================
+ * 【2026-10-24】修复「阶段面板的框没包住按钮」
+ * 按钮跑到框外、还被分数面板压住
+ *
+ * agent-browser 实测（1440x900）：
+ *   #phase_panel    top=369 bottom=383 height=14   ← 行高被压扁到只剩边框
+ *   #phase_actions  top=446 bottom=530            ← 内容溢出到框外
+ *   #score_panel    top=377 bottom=511            ← 与上面两者重叠
+ *
+ * 根因：平台 common/client.css 给了
+ *   aside { display:grid; grid-template-rows: auto auto minmax(0,1fr);
+ *           overflow: clip }
+ * 但本模块侧栏有 6 个非隐藏子元素，而 #log 又被显式定位 grid-row:3，
+ * 自动放置顺序错位、且 minmax(0,1fr) 把 auto 行压扁 ——
+ * #phase_panel 只剩 14px，子元素全部溢出到框外与 #score_panel 重叠。
+ *
+ * 修法：取消三行模板，改回"自然堆叠"；#log 取消强制行号并限高；
+ * aside 允许纵向滚动（内容多时不再被 clip 掉）。
+ * ============================================================ */
+aside {
+	grid-template-rows: none;
+	grid-auto-rows: auto;
+	overflow-y: auto;
+}
+
+#log {
+	grid-row: auto;
+	max-height: 40vh;
+	overflow-y: auto;
 }
