@@ -531,11 +531,16 @@ function update_phase_buttons() {
 		const canSwap = inResource && view.can_resource_swap
 		res.classList.toggle("hide", !inResource)
 		res.disabled = !canSwap
+		/*
+		 * 【2026-10-24】文案去重：括号说明与 #phase_note 里那句
+		 * 「英国 资源再分配阶段（可弃 3 张换 1 张基本卡，每回合一次）」完全重复，
+		 * 侧栏窄、原文案还会折成两行，这里只留按钮名。
+		 */
 		res.textContent = view.rs_disabled_reason
 			? view.rs_disabled_reason
 			: (view.my_swap_count
 				? "资源再分配：本回合已用"
-				: "资源再分配…（弃 3 张换 1 张基本卡）")
+				: "资源再分配…")
 	}
 
 	/*

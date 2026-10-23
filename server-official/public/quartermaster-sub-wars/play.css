@@ -1275,6 +1275,14 @@ button.primary {
 	align-items: center;
 	justify-content: space-between;
 	gap: 6px;
+	/*
+	 * 【2026-10-24】侧栏宽只有 213px，原先 nowrap + 子元素可收缩，
+	 * 中间的 #score_gap 被压成 0、两侧 .score-side 各只剩 54px，
+	 * 「2 轴心」「轴心领先 2」这些字溢出到互相重叠。
+	 * 允许换行 + 两侧不收缩，空间不够时上下两行而不是叠字。
+	 */
+	flex-wrap: wrap;
+	row-gap: 4px;
 }
 
 .score-side {
@@ -1284,6 +1292,9 @@ button.primary {
 	padding: 2px 8px;
 	border-radius: 4px;
 	background-color: #2b2b2b;
+	/* 不参与收缩，避免文字被压到溢出重叠 */
+	flex: 0 0 auto;
+	white-space: nowrap;
 }
 
 .score-side b { font-size: 18px; }
@@ -1303,6 +1314,10 @@ body.allies .score-side.allies {
 	font-size: 11px;
 	color: #bbb;
 	white-space: nowrap;
+	/* 中间的分差文字：允许被压缩但不小于 8px，且居中显示 */
+	flex: 1 1 8px;
+	min-width: 8px;
+	text-align: center;
 }
 
 /* 计分明细：每个地块一行 */
@@ -1964,6 +1979,31 @@ aside {
 	grid-template-rows: none;
 	grid-auto-rows: auto;
 	overflow-y: auto;
+	/*
+	 * 【2026-10-24】让"还能往下滚"这件事看得见。
+	 * 默认 overlay 滚动条在浅色侧栏上几乎不可见，内容一多就让人以为"显示不全、
+	 * 内容丢了"。这里显式给细滚动条（Firefox/W3C 用 scrollbar-*，
+	 * Chromium 走 ::-webkit-scrollbar）。
+	 */
+	scrollbar-width: thin;
+	scrollbar-color: #8a8a8a #e8e8e8;
+}
+
+aside::-webkit-scrollbar {
+	width: 8px;
+}
+
+aside::-webkit-scrollbar-track {
+	background: #e8e8e8;
+}
+
+aside::-webkit-scrollbar-thumb {
+	background: #8a8a8a;
+	border-radius: 4px;
+}
+
+aside::-webkit-scrollbar-thumb:hover {
+	background: #6a6a6a;
 }
 
 #log {
