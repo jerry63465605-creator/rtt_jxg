@@ -758,6 +758,34 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 .card.back-allies { --bk-tint: #263346; --bk-edge: #5a7a9e; }
 
 /*
+ * 敌方状态卡栏（2026-10-24）：紧跟在桌面响应卡下方，**永远暗置**。
+ * 与响应卡面板同尺寸、同牌背配色，只把竖排文字从「响应」换成「状态」，
+ * 让玩家一眼分清是哪一排；卡面数据服务端根本不下发，暗置由数据层保证。
+ */
+#enemy_status_cards {
+	min-height: 190px;
+}
+
+#enemy_status_cards .card {
+	position: relative;
+	z-index: 1;
+}
+
+/* 纯展示，不参与任何点击（避免误触被当成可发动状态卡） */
+#enemy_status_cards .card { pointer-events: none; cursor: default; }
+
+#enemy_status_cards .hand_empty {
+	width: 100%;
+	color: #aaa;
+	font-style: italic;
+	padding: 8px 0;
+}
+
+.card.back.status-back::after {
+	content: "状态";
+}
+
+/*
  * 卡牌：使用真实卡图（cards/<img>）。
  * 素材原始 384x576（2:3），这里按 120x180 显示，
  * 悬停时用 #tooltip 放大到 250x375 查看细节（仿 PoG）。

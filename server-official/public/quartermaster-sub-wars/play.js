@@ -208,6 +208,8 @@ function update_map() {
 	 */
 	update_hand_panel()
 	update_response_panel()
+	/* 【2026-10-24】敌方状态卡栏（永远暗置），紧跟响应卡栏刷新 */
+	update_enemy_status()
 	/* 【2026-10-04】响应卡效果需要玩家选择时的窗口（日本响应牌第二批） */
 	update_response_choice_box()
 	update_resource_box()
@@ -1033,6 +1035,35 @@ function update_response_panel() {
 
 	if (!own.length && !opp.length)
 		box.innerHTML = '<div class="hand_empty">（桌面暂无响应卡）</div>'
+}
+
+/*
+ * 【2026-10-24 玩家口径】敌方状态卡栏 —— **永远暗置**。
+ *
+ * 数据只有 view.table_status_opponent = [{ nation, owner_side }]（逐张，无卡面），
+ * 所以这里只能画牌背：按国着色复用 .card.back 的八国配色，
+ * 玩家能看出"是谁的、共几张"，但看不到是什么卡。
+ * 服务端不下发 card_id / name / img，改前端也看不穿（真正的暗置靠数据层保证）。
+ */
+function update_enemy_status() {
+	const box = document.getElementById("enemy_status_cards")
+	const note = document.getElementById("enemy_status_note")
+	if (!box)
+		return
+	const opp = view.table_status_opponent || []
+	box.innerHTML = ""
+	for (const o of opp) {
+		const d = document.createElement("div")
+		d.className = "card back status-back" + response_back_class(o)
+		d.title = (o && o.nation)
+			? ("敌方状态卡（暗置 · " + o.nation + "）")
+			: "敌方状态卡（暗置）"
+		box.appendChild(d)
+	}
+	if (note)
+		note.textContent = opp.length ? ("（对方 " + opp.length + " 张 · 暗置）") : ""
+	if (!opp.length)
+		box.innerHTML = '<div class="hand_empty">（对方桌面暂无状态卡）</div>'
 }
 
 /*

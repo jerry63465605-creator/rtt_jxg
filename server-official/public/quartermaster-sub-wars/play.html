@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261024b">
+	<link rel="stylesheet" href="play.css?v=20261024d">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261024b"></script>
-	<script defer src="layout.js?v=20261024b"></script>
-	<script defer src="play.js?v=20261024b"></script>
+	<script defer src="data.js?v=20261024d"></script>
+	<script defer src="layout.js?v=20261024d"></script>
+	<script defer src="play.js?v=20261024d"></script>
 </head>
 <body>
 
@@ -457,6 +457,18 @@
 				桌面响应卡 <span id="response_note"></span>
 			</div>
 			<div class="panel-body" id="response_cards"></div>
+		</div>
+
+		<!--
+			【2026-10-24】敌方状态卡栏：紧跟在响应卡栏下方，【永远暗置】。
+			数据只来自 view.table_status_opponent（仅数量 + 国家，不含卡面），
+			所以即使改了前端也看不到内容。
+		-->
+		<div class="panel" id="enemy_status_wrap">
+			<div class="panel-head">
+				敌方状态卡 <span id="enemy_status_note"></span>
+			</div>
+			<div class="panel-body" id="enemy_status_cards"></div>
 		</div>
 	</div>
 

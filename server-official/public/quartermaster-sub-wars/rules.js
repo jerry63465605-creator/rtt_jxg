@@ -23799,6 +23799,28 @@ exports.view = function (state, current) {
 			return out
 		})(),
 		/*
+		 * 【2026-10-24 玩家口径】敌方桌面状态卡 —— 客户端据此画"永远暗置"的敌方状态栏。
+		 *
+		 * 只下发【逐张的 nation / owner_side】，**不含** card_id / name / img / text：
+		 * 需求是"永远暗置"，那就连卡面数据都不该到客户端手里
+		 * （否则改改前端就能看穿，等于没暗置）。
+		 * 客户端按国着色画牌背（复用 .card.back 的八国配色）。
+		 *
+		 * 口径与 table_status 完全一致：只统计 status_config_of() 有配置的真"状态卡"，
+		 * 数量 = 敌方各国桌面上状态卡之和。
+		 */
+		table_status_opponent: (() => {
+			const out = []
+			for (const nat of Object.keys(game.table || {})) {
+				if (faction_of_nation(nat) === side) continue
+				for (const cid of (game.table[nat] || [])) {
+					if (!status_config_of(cid)) continue
+					out.push({ nation: nat, owner_side: faction_of_nation(nat) })
+				}
+			}
+			return out
+		})(),
+		/*
 		 * 【2026-09-26】"现在在等谁" —— 只发给【非决策方】。
 		 *
 		 * 决策方自己有 pending_battle / pending_trigger 面板；
