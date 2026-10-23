@@ -308,7 +308,21 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 body.Axis   header.your_turn { background-color: #e8b0b0; }
 body.Allies header.your_turn { background-color: #b0c8e8; }
 
-#turn_info { font-size: 13px; }
+#turn_info {
+	font-size: 13px;
+	/*
+	 * 【2026-10-24】「参战」到「阶段框」之间那块空白的真正来源。
+	 *
+	 * white-space 是可继承属性，而平台 common/client.css 给顶部标题设了
+	 * white-space: pre-line。于是本容器里的 HTML 缩进（div 之间的换行+制表符）
+	 * 被当成【真实换行】渲染，每个空行占一整行高度（18px）。
+	 * 实测：#turn_info 高 129px，而它里面的 4 个 div 全是 4px 的空壳、
+	 * 真正文字只有 4 行 —— 剩下的 100+px 全是这些"空气行"。
+	 *
+	 * 本模块这几行都用单行 set_text / innerHTML 写入，不需要保留换行。
+	 */
+	white-space: normal;
+}
 #turn_line { padding: 2px 0; }
 #strait_line { font-size: 11px; color: #444; padding: 2px 0; }
 
