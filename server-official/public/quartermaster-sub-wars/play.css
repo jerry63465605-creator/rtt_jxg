@@ -1980,6 +1980,15 @@ aside {
 	grid-auto-rows: auto;
 	overflow-y: auto;
 	/*
+	 * 【2026-10-24】底部留出页脚高度。
+	 *
+	 * 平台 common/client.css 的 footer 是 position:fixed; bottom:0; 白底
+	 * （里面是 ↑ ← → ▶ 那排导航按钮），会盖住侧栏滚动到底时的最后一行。
+	 * 现象就是「日志 ▴ 下面还有半行被切掉的文字」—— 那其实是日志自己的末行。
+	 * 给 aside 加底部内边距，滚到底时内容能完整露出来。
+	 */
+	padding-bottom: 48px;
+	/*
 	 * 【2026-10-24】让"还能往下滚"这件事看得见。
 	 * 默认 overlay 滚动条在浅色侧栏上几乎不可见，内容一多就让人以为"显示不全、
 	 * 内容丢了"。这里显式给细滚动条（Firefox/W3C 用 scrollbar-*，
