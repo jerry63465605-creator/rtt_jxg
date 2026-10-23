@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261024f">
+	<link rel="stylesheet" href="play.css?v=20261024g">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261024f"></script>
-	<script defer src="layout.js?v=20261024f"></script>
-	<script defer src="play.js?v=20261024f"></script>
+	<script defer src="data.js?v=20261024g"></script>
+	<script defer src="layout.js?v=20261024g"></script>
+	<script defer src="play.js?v=20261024g"></script>
 </head>
 <body>
 
@@ -144,13 +144,18 @@
 		<div id="score_detail"></div>
 	</div>
 
-	<!-- 手牌摘要（卡图在地图下方的 Hand 面板） -->
+	<!--
+		手牌摘要（卡图在地图下方的 Hand 面板）
+		【2026-10-24 玩家口径】删掉原本的两行：
+		  · "XX 的手牌"  -> 与下方 Hand 面板的标题重复
+		  · "牌堆 N · 弃牌 N" -> 与"各国牌库"浮层里的六国数据重复
+		只保留阶段提示（hand_ap）：它含"因《XX》可额外打出 1 张"，而服务端
+		phase_note 里没有这条，删了就丢失提示。
+	-->
 	<div id="hand_panel">
 		<div id="hand_head">
-			<span id="hand_nation">—</span>
 			<span id="hand_ap"></span>
 		</div>
-		<div id="hand_counts"></div>
 		<!-- 《空军力量》三选一 -->
 		<div id="mode_chooser" class="hide"></div>
 	</div>
@@ -164,7 +169,14 @@
 		<div id="reserve_list" class="hide"></div>
 	</div>
 
-	<div id="log"></div>
+	<!--
+		【2026-10-24】日志可折叠：默认收起，标题点开。
+		注意 #log 元素【不能删】—— 平台 common/client.js 的 update_log() 会
+		document.getElementById("log") 后直接读 children/lastChild，
+		元素缺失就抛 TypeError、日志渲染直接断。这里只加折叠 class。
+	-->
+	<button id="log_toggle" type="button">日志 ▾</button>
+	<div id="log" class="collapsed"></div>
 </aside>
 
 <div id="tooltip" hidden></div>

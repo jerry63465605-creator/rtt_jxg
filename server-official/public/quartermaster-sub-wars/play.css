@@ -1893,3 +1893,32 @@ body.allies .score-side.allies {
 	#history_panel { width: 100vw; }
 	#rollback_bar { font-size: .78rem; padding: .35em .6em; }
 }
+
+/* ============================================================
+ * 日志折叠（2026-10-24）
+ *
+ * 平台 client.css 把 #log 显式定位在 aside 的 grid-row:3（剩余高度），
+ * 所以【不能删 #log 元素】也不能把它挪出 grid。
+ * 这里只加一个折叠按钮（auto 放置，自然落在分数面板下方），
+ * 折叠时给 #log 加 .collapsed -> display:none，row3 变空，上方内容更宽松。
+ * ============================================================ */
+#log_toggle {
+	justify-self: start;
+	align-self: start;
+	margin: 6px 12px 8px;
+	padding: 3px 10px;
+	font-size: 11px;
+	cursor: pointer;
+	background: #f0f0f0;
+	border: 1px solid #bbb;
+	border-radius: 3px;
+	color: #333;
+}
+
+#log_toggle:hover {
+	background: #e2e2e2;
+}
+
+#log.collapsed {
+	display: none;
+}

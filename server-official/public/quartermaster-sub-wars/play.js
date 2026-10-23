@@ -210,6 +210,8 @@ function update_map() {
 	update_response_panel()
 	/* 【2026-10-24】敌方状态卡栏（永远暗置），紧跟响应卡栏刷新 */
 	update_enemy_status()
+	/* 【2026-10-24】日志面板折叠状态 + "N 条新"（平台先 update_log 再 on_update，顺序安全） */
+	update_log_toggle()
 	/* 【2026-10-04】响应卡效果需要玩家选择时的窗口（日本响应牌第二批） */
 	update_response_choice_box()
 	update_resource_box()
@@ -3682,7 +3684,7 @@ function update_hand_panel() {
 	 */
 	const openingMine = !!(view.opening && is_my_turn())
 
-	set_text("hand_nation", n ? n + " 的手牌" : "（非本方回合，手牌不可见）")
+	/* 【2026-10-24】原 "XX 的手牌" 一行已删（与下方 Hand 面板标题重复） */
 	set_text("hand_ap", n
 		? (view.extra_play && view.extra_play.phase === view.turn_phase
 			/* 【2026-10-11】额外打出权提示覆盖【任何生效阶段】（出牌/摸牌…），
@@ -3714,15 +3716,10 @@ function update_hand_panel() {
 							: (discard_mode ? "弃牌模式" : ""))))))
 		: "")
 
-	/* 牌堆/弃牌统计（侧栏，全场可见） */
-	const cntEl = document.getElementById("hand_counts")
-	if (cntEl) {
-		const d = view.deck_counts || {}
-		const c = view.discard_counts || {}
-		cntEl.textContent = n
-			? "牌堆 " + (d[n] || 0) + " · 弃牌 " + (c[n] || 0)
-			: ""
-	}
+	/*
+	 * 【2026-10-24】原 "牌堆 N · 弃牌 N" 一行已删：
+	 * "各国牌库"浮层里已有六国的牌堆/弃牌/后备数据，这里纯重复。
+	 */
 
 	/* 【2026-09-29】各国牌库面板：服务端已在 view.deck_counts / discard_counts
 	 * 里给出【全部六国】数据（以前只显示本国），这里展开显示。 */
@@ -8292,6 +8289,61 @@ function esc(s) {
 function esc_attr(s) {
 	return esc(s).replace(/"/g, "&quot;").replace(/\n/g, "&#10;")
 }
+
+/*
+ * 【2026-10-24 玩家口径】日志面板可折叠（默认收起）。
+ *
+ * ⚠ #log 元素【不能删】：平台 common/client.js 的 update_log() 会
+ * `document.getElementById("log")` 后直接读 children/lastChild，
+ * 元素缺失就抛 TypeError、日志渲染整条链断掉。
+ * 所以"折叠"只切 class（display:none），元素始终在。
+ *
+ * 收起时标题显示"N 条新"，避免错过关键日志；折叠状态存 localStorage
+ * （跟着浏览器走，不跟着对局）。
+ */
+let log_collapsed = true
+let log_seen = 0
+let log_ready = false
+
+function update_log_toggle() {
+	const btn = document.getElementById("log_toggle")
+	const box = document.getElementById("log")
+	if (!btn || !box) return
+
+	if (!log_ready) {
+		log_ready = true
+		try {
+			const v = window.localStorage.getItem("qm_log_collapsed")
+			if (v === "0") log_collapsed = false
+		} catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
+		/* 首次进来把已有日志视为已读，否则会显示"800 条新" */
+		log_seen = box.children.length
+		box.classList.toggle("collapsed", log_collapsed)
+	}
+
+	const n = box.children.length
+	const unread = log_collapsed ? Math.max(0, n - log_seen) : 0
+	btn.textContent = (log_collapsed ? "日志 ▾" : "日志 ▴") +
+		(unread ? "　" + unread + " 条新" : "")
+	if (!log_collapsed) log_seen = n
+}
+
+function toggle_log() {
+	const box = document.getElementById("log")
+	if (!box) return
+	log_collapsed = !log_collapsed
+	try {
+		window.localStorage.setItem("qm_log_collapsed", log_collapsed ? "1" : "0")
+	} catch (e) {}
+	log_seen = box.children.length
+	update_log_toggle()
+}
+
+/* 绑定折叠按钮（本文件以 defer 加载，执行时 DOM 已解析完） */
+;(function () {
+	const b = document.getElementById("log_toggle")
+	if (b) b.onclick = toggle_log
+})()
 
 function update_violations() {
 	/* 留空，后续规则检查接入 */
