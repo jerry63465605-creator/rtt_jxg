@@ -3102,7 +3102,23 @@ function autobahn_resolve(game, nation, arg) {
 		game.log.push('当前没有进行中的高速公路')
 		return game
 	}
-	if (nation !== pa.actor) {
+	/*
+	 * 【2026-10-23 死锁修复】判定改用【阵营】，不再要求国家严格相等。
+	 *
+	 * build_actions（见 "if (game.pending_autobahn)" 分支）是按 faction 放行
+	 * resolve_autobahn 的，而这里原先用 `nation !== pa.actor` —— 于是"同阵营代操作"
+	 * 时白名单放行、动作却被拒：点建设位只得到"只有【苏联】能选择建设位置"，
+	 * 永远推不动（典型"看得见点不中"死锁）。
+	 *
+	 * 现场（game 24）：美国打 17535《租借法案》→ 委托苏联打出 17827《西伯利亚大铁路》
+	 *   → 建 pending_autobahn{actor:'苏联', remaining:5}
+	 *   → 17535 立刻 finish_delegate 归还操作权，current_nation 变回美国
+	 *   → 之后 nation(美国) !== pa.actor(苏联) → 每次提交都被拒 → 卡死。
+	 *
+	 * 本模块是"一名玩家控制整个阵营"，同阵营代操作是常态；建设目标仍用 pa.actor，
+	 * 与 autobahn_targets 的候选口径（29800 附近）一致。
+	 */
+	if (nation !== pa.actor && faction_of_nation(nation) !== faction_of_nation(pa.actor)) {
 		game.log.push('只有【' + pa.actor + '】能选择建设位置')
 		return game
 	}
@@ -3149,7 +3165,16 @@ function autobahn_resolve(game, nation, arg) {
 			'可发动本国状态卡，或点「结束预算」收尾')
 	} else {
 		game.pending_autobahn = null
-		game.log.push('高速公路：全部 ' + pa.total + ' 支陆军已重建完成')
+		/* 原文写死"高速公路"，17827《西伯利亚大铁路》也走这里，按 actor 区分 */
+		game.log.push((pa.actor === '苏联' ? '西伯利亚大铁路：全部 ' : '高速公路：全部 ') +
+			pa.total + ' 支陆军已重建完成')
+		/*
+		 * 【2026-10-23】《租借法案》(17535) 委托期间打出的多步卡（17827）：
+		 * 收尾被推迟到这里 —— 建设全部完成、挂起真正清空后再
+		 * 「摸 1 张 + 归还美国 + 触发★卡窗口」。见 resolve_us_lend_lease_play 同款注释。
+		 */
+		const _dg = game.delegate
+		if (_dg && !_dg.done && _dg.nat) finish_us_lend_lease(game, _dg, _dg.nat)
 	}
 	return game
 }
@@ -6325,6 +6350,27 @@ function resolve_us_lend_lease_play(game, arg) {
 		game.log.push('【' + nat + '】《' + c.name + '》—— ' + (r0.desc || ''))
 		request_responses(game, 'play_card', { nation: nat, card: card, card_obj: c }, false)
 		after_card_resolved(game, nat, card)
+		/*
+		 * 【2026-10-23】"卡已结算"不等于"委托可以收尾"。
+		 *
+		 * 17827《西伯利亚大铁路》的 run 建立 pending_autobahn（remaining=5）后
+		 * 返回 {ok:true, desc}，没带 pending 标记 —— 于是原代码直接走到
+		 * finish_us_lend_lease 归还操作权，而苏联还要点 5 次建设位。
+		 * 现场（game 24）由此死锁：current_nation 变回美国，
+		 * 挂起 actor 仍是苏联，点建设位只得到"只有【苏联】能选择建设位置"。
+		 *
+		 * 保留委托，由 autobahn_resolve 全部建完时（见该函数 else 分支）补收尾。
+		 */
+		if (game.pending_autobahn) {
+			game.delegate = {
+				nation: null, done: false,
+				return_nation: dg.return_nation, return_active: dg.return_active,
+				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat,
+			}
+			game.log.push('【' + nat + '】《' + c.name + '》还需逐次选建设位置，委托待挂起完成后收尾')
+			refresh(game)
+			return game
+		}
 	} else if (c.type === 'STATUS') {
 		/* 状态卡：照 play_card「其余卡牌」分支，置本桌面 + 触发持续效果 + 响应 + 国家技能。
 		   play_status_card_impl 内部会自己从手牌移出并置桌，故先把本函数开头已移除的牌放回手牌。 */
