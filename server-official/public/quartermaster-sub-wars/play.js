@@ -1529,31 +1529,46 @@ function update_uk_build_box() {
 	if (!dg) { window.__ukSelType = null; return }
 	if (dg.waiting_for) {
 		render_ask_box('民主兵工厂：等待【' + dg.waiting_for + '】建设',
-			'美国打出《民主兵工厂》，让权【' + dg.waiting_for + '】按任意顺序建设1支海军与1支陆军。', [])
+			'美国打出《民主兵工厂》，让权【' + dg.waiting_for + '】按所选顺序建设1支海军与1支陆军。', [])
 		return
 	}
+	/*
+	 * 【2026-10-26 重做·参考 17532 战区移动】两阶段：
+	 *   ① stage='order'  —— 先选建造顺序（先海军 / 先陆军）
+	 *   ② stage='build'  —— 按所选顺序逐个建；当前这一支无处可建时给「放弃」按钮
+	 * 不再让服务端按"建立时的盘面"静默删掉某个兵种（旧实现会导致玩家永久少建一支）。
+	 */
+	if (dg.stage === 'order') {
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		render_ask_box('民主兵工厂：选择建造顺序',
+			'美国打出《民主兵工厂》，让权【英国】按任意顺序建设1支海军与1支陆军。' +
+			'请先选择【先建哪一支】—— 之后会严格按你选的顺序依次建造（先建的兵种可能让另一支变得可建）。',
+			[
+				{ label: '先建海军', cls: 'primary', onClick: () => send_action('resolve_uk_build_delegate', { first: 'navy' }) },
+				{ label: '先建陆军', cls: 'primary', onClick: () => send_action('resolve_uk_build_delegate', { first: 'army' }) },
+			])
+		return
+	}
+	const cur = dg.current
+	if (!cur) return
+	const zh = cur === 'navy' ? '海军' : '陆军'
 	const cands = dg.candidates || []
-	const remaining = dg.remaining || []
-	/* 已选兵种若已建完则清空，退回重选 */
-	if (window.__ukSelType && !remaining.some(r => r.type === window.__ukSelType)) window.__ukSelType = null
-	if (!cands.length) return
-	/* 先选兵种：剩余多于 1 且尚未选择时，渲染选择按钮 */
-	if (remaining.length > 1 && !window.__ukSelType) {
-		highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '英国建设候选' })) })
-		render_ask_box('民主兵工厂：选择建设兵种',
-			'美国打出《民主兵工厂》，让权【英国】按任意顺序建设1支海军与1支陆军。请先选择要建造的兵种。',
-			remaining.map(r => ({
-				label: r.type === 'navy' ? '建造海军' : '建造陆军',
-				cls: 'primary',
-				onClick: () => { window.__ukSelType = r.type; update_uk_build_box() }
-			})))
+	const orderText = (dg.order || []).map(t => (t === 'navy' ? '海军' : '陆军')).join(' → ')
+	if (dg.can_skip || !cands.length) {
+		render_ask_box('民主兵工厂：无处建设' + zh,
+			'当前全图没有可建设' + zh + '的地区。放弃这一支后继续下一步' +
+			'（已选顺序：' + orderText + '）。',
+			[{
+				label: '放弃建造' + zh, cls: 'primary',
+				onClick: () => send_action('resolve_uk_build_delegate', { skip: true }),
+			}])
 		return
 	}
-	const sel = window.__ukSelType || (remaining[0] && remaining[0].type)
-	const my = cands.filter(c => c.type === sel)
-	highlight_targets({ spaces: my.map(c => ({ id: c.id, reason: '英国建设候选' })) })
-	render_ask_box('民主兵工厂：英国建设' + (sel === 'navy' ? '海军' : '陆军'),
-		'点击地图上高亮的地区，英国建设1支' + (sel === 'navy' ? '海军' : '陆军') + '。', [])
+	const step = (dg.idx || 0) + 1
+	const total = dg.total || 2
+	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '英国建设' + zh + '候选' })) })
+	render_ask_box('民主兵工厂：英国建设' + zh + '（第 ' + step + '/' + total + ' 步）',
+		'点击地图上高亮的地区，英国建设1支' + zh + '。已选顺序：' + orderText + '。', [])
 }
 
 /* 【2026-10-10】17529 摩尔曼斯克运输船队：让权苏联执行建设（多步，交互式点地图）。 */
@@ -8855,14 +8870,14 @@ function on_click_space(evt) {
 		send_action('resolve_china_delegate', { space: s })
 		return
 	}
-	/* 17526 民主兵工厂：让权英国 —— 先选兵种，再点候选地区建设 */
-	if (view && view.uk_build_delegate && !view.uk_build_delegate.waiting_for) {
+	/* 17526 民主兵工厂：让权英国 —— 顺序已定，点候选地区建【当前这一支】 */
+	if (view && view.uk_build_delegate && !view.uk_build_delegate.waiting_for &&
+		view.uk_build_delegate.stage === 'build') {
 		const dg = view.uk_build_delegate
-		const sel = window.__ukSelType || (dg.remaining && dg.remaining.length === 1 ? dg.remaining[0].type : null)
-		const hit = (dg.candidates || []).find(c => c.id === s && (!sel || c.type === sel))
+		const hit = (dg.candidates || []).find(c => c.id === s)
 		if (hit) {
 			clear_target_highlight()
-			send_action('resolve_uk_build_delegate', { space: s, build: sel || hit.type })
+			send_action('resolve_uk_build_delegate', { space: s, build: dg.current })
 			return
 		}
 	}

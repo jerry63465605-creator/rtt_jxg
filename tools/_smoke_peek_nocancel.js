@@ -69,7 +69,12 @@ console.log('\n=== 2. 服务端兜底：任何 peek 的 clear_peek 都被拒 ===
 	g.current_nation = '英国'; g.active = 'Allies'
 
 	/* ① 看【对手】手牌（双十字系统 15305） */
-	g.peek = { nation: '德国', cards: ['deA#1', 'deB#1'], card: '15305#1' }
+	/*
+	 * 【2026-10-26 夹具同步】game.peek 新增 viewer = 有权看的人。
+	 * 15305 是"德国看【对手】手牌"，故 nation(牌属谁)='德国' 是【被看方】，
+	 * viewer 才是窥视方。不带 viewer 会被 view 裁掉，客户端拿不到弹框。
+	 */
+	g.peek = { nation: '德国', cards: ['deA#1', 'deB#1'], card: '15305#1', viewer: '英国' }
 	const g2 = rules.action(g, 'Allies', 'clear_peek', {})
 	ok('双十字/看对手手牌 -> clear_peek 被拒（peek 保留）', !!g2.peek,
 		'peek=' + JSON.stringify(g2.peek))
@@ -78,7 +83,8 @@ console.log('\n=== 2. 服务端兜底：任何 peek 的 clear_peek 都被拒 ===
 
 	/* ②【2026-10-01 新口径】看【自己】牌堆顶（卓越规划 15215）也【不能】取消：
 	 *    看到自己牌堆顶 5 张 = 知道接下来会摸什么，同样是信息，取消等于免费偷看。 */
-	g.peek = { nation: '德国', cards: ['dk1#1', 'dk2#1'], card: '15215#1', topBottom: true }
+	/* 15215 是"德国检视【自己】牌堆顶"，故 nation 与被授权方都是德国 */
+	g.peek = { nation: '德国', cards: ['dk1#1', 'dk2#1'], card: '15215#1', topBottom: true, viewer: '德国' }
 	const g3 = rules.action(g, 'Axis', 'clear_peek', {})
 	ok('卓越规划/看自己牌堆 -> clear_peek 也【被拒】', !!g3.peek,
 		'peek=' + JSON.stringify(g3.peek))
