@@ -10302,6 +10302,47 @@ const EVENT_EFFECTS = {
 	'17721': {
 		name: '钢铁条约', actor: '意大利',
 		run: function (game, ctx) {
+			/*
+			 * 【2026-10-25 修复·手牌无响应牌时流程断链】
+			 *
+			 * 卡面两段串行：① 意大利打出 1 张[响应卡] → ② 德国打出 1 张[状态卡]。
+			 * 旧实现把 ② 的建链挂在【① 真的打出之后】（extra_play 消耗分支，
+			 * ep.source==='17721' && ep.nation==='意大利'），于是意大利手牌里
+			 * 没有响应牌时 ① 永远做不到 -> ② 永远不建立：
+			 *   界面停在"等意大利打响应牌"，【不会切到德国】，
+			 *   且 pending_17721_skill（意大利国家技能窗口，刻意延迟到德国
+			 *   归还后才弹）也一起丢失。
+			 *
+			 * 玩家口径（2026-10-25）：无响应牌时按"能做的部分尽量做"处理 ——
+			 * 跳过 ①，直接把链交给德国。
+			 */
+			const hand = game.hands['意大利'] || []
+			const hasResp = hand.some(id => {
+				const c = inst_card(id)
+				return !!c && c.type === 'RESPONSE'
+			})
+			if (!hasResp) {
+				/*
+				 * 与 ① 成功后的建链分支【完全同参】，保证两条路径殊途同归：
+				 * 德国打完 -> finish_delegate(29214) -> pending_17721_skill；
+				 * 德国放弃 -> event_delegate_decline 分支照常归还并弹技能窗口。
+				 */
+				set_pending_delegate(game, {
+					mode: 'chain', delegate: '德国',
+					return_nation: game.current_nation, return_active: game.active,
+				})
+				grant_extra_play(game, '德国', '17721', '钢铁条约', { filter: 'status' })
+				/*
+				 * 预置德国名额已用：使其那张状态卡成为 extra 打出，
+				 * 归还钩子（仅 extra 触发）才会被触到。
+				 */
+				game.play_done = game.play_done || {}
+				game.play_done['德国'] = true
+				return {
+					ok: true,
+					desc: '意大利手牌中没有[响应卡]，跳过该段，直接由德国打出 1 张状态卡',
+				}
+			}
 			/* 意大利先获「打出1张[响应卡]」的额外打出权 */
 			grant_extra_play(game, '意大利', '17721', '钢铁条约', { filter: 'response' })
 			return { ok: true, desc: '意大利可额外打出 1 张响应牌；打出后由德国打出 1 张状态卡' }
