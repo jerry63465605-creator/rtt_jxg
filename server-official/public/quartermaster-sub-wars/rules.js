@@ -8689,15 +8689,37 @@ function grant_supply(game, piece, untilTurn) {
  * （空军只通过夺取制空权移除，与 do_battle 口径一致）；
  * 上面的"连带消灭"是【结果】不是【目标选择】。
  */
-function eliminate_piece(game, nation, space, target_piece) {
+/*
+ * 【2026-10-26】某地区可被消灭的敌方单位候选 —— 与 eliminate_piece 内部判定【同源】。
+ *
+ * 供事件卡 eliminate 步「多个合法敌方单位时由发动方自选」使用
+ * （15316《佩塔尔二世即位》：应在<巴尔干>自选消灭哪一支）。
+ * 候选列表与执行校验必须同源，否则会出现"候选里没有、却被消灭"或反之。
+ *
+ *   · 排除空军：eliminate_piece 从不以空军为消灭目标（空军随其同国陆军连带移除）
+ *   · wantType 给定时只保留该兵种（卡面「消灭 1 支敌方陆军」）
+ */
+function eliminate_candidates(game, nation, space, wantType) {
+	const myFaction = faction_of_nation(nation)
+	return pieces_on(game, space).filter(p => {
+		const f = faction_of_nation(game.piece_nation[p])
+		if (!f || f === myFaction) return false
+		if (game.piece_type[p] === 'air') return false
+		if (wantType && game.piece_type[p] !== wantType) return false
+		return true
+	})
+}
+
+function eliminate_piece(game, nation, space, target_piece, opt) {
 	const sp = data.spaces[space]
 	if (!sp) return { ok: false, reason: '地区不存在' }
 
-	const myFaction = faction_of_nation(nation)
-	const enemies = pieces_on(game, space).filter(p => {
-		const f = faction_of_nation(game.piece_nation[p])
-		return f && f !== myFaction && game.piece_type[p] !== 'air'
-	})
+	/*
+	 * 【2026-10-26】opt.type：卡面写死兵种时（「消灭 1 支敌方陆军」）按兵种校验，
+	 * 避免地区里有敌方海军时把它当成合法目标。不传则维持旧行为（只排空军）。
+	 */
+	const wantType = (opt && opt.type) ? opt.type : null
+	const enemies = eliminate_candidates(game, nation, space, wantType)
 	if (!enemies.length)
 		return { ok: false, reason: data.name_of(space) + ' 没有可消灭的敌方部队' }
 
@@ -16972,6 +16994,37 @@ function event_card_needs(game, nation, card_id, arg) {
 					candidates: cands, pick: upto, pickMin: minNeed,
 				}
 		}
+		/*
+		 * 【2026-10-26】eliminate 步：地区确定后，若该地区有【多个】合法敌方单位，
+		 * 必须由发动方【自选】消灭哪一个 —— 不能由服务端静默取第一个。
+		 * 玩家口径来自 15316《佩塔尔二世即位》：<巴尔干>有多个敌方陆军时英国自选。
+		 *
+		 * 复用 remove 步（见上）的 need:'piece' 协议，客户端与 query 层无需改动。
+		 * 只处理 pick<=1 的单地区消灭；多地区消灭仍走原路径（arg.piece 数组逐格指定），
+		 * 避免与既有卡的多选交互冲突。单候选不问，保持"目标唯一即自动结算"。
+		 */
+		if (st.op === 'eliminate' && step_pick_count(st) <= 1) {
+			const chosenSp = pick_space_for(arg, i, steps.length)
+			const targetSp = (chosenSp != null)
+				? Number(chosenSp)
+				: (cands.length === 1 ? Number(cands[0]) : null)
+			if (targetSp != null) {
+				const ec = eliminate_candidates(game, st.as || eff.actor, targetSp, st.type)
+				const already = (Array.isArray(arg.pieces) && arg.pieces[i] != null)
+					? arg.pieces[i] : arg.piece
+				if (ec.length > 1 && already == null) {
+					return {
+						need: 'piece', step: i, total: steps.length,
+						candidates: ec.map(id => ({
+							id: id,
+							name: piece_type_zh(game.piece_type[id]) + '@' +
+								data.name_of(game.location[id]),
+						})),
+						pick: 1, pickMin: 1,
+					}
+				}
+			}
+		}
 		/* 更新 prevSpaces：本 step 若产出单位，记下它的地区供后续 useNewPiece */
 		if (st.op === 'build' || st.op === 'recruit') {
 			const one = pick_space_for(arg, i, steps.length)
@@ -18147,10 +18200,18 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 				where.push(sc)
 			}
 			let killed = 0
+			const elimBy = st.as || actor
 			for (let wi = 0; wi < where.length; wi++) {
 				const sp = where[wi]
-				const pieceArg = (Array.isArray(arg.piece)) ? arg.piece[wi] : arg.piece
-				const r = eliminate_piece(game, actor, sp, pieceArg)
+				/*
+				 * 【2026-10-26】玩家自选的消灭目标优先取 arg.pieces[i]
+				 * （多步卡的下标口径，与 remove 步、submit_event_piece 完全一致）；
+				 * 回退原来的 arg.piece（单步卡 / 多地区时是数组，逐格对应）。
+				 */
+				const pieceArg = (Array.isArray(arg.pieces) && arg.pieces[i] != null)
+					? arg.pieces[i]
+					: ((Array.isArray(arg.piece)) ? arg.piece[wi] : arg.piece)
+				const r = eliminate_piece(game, elimBy, sp, pieceArg, { type: st.type })
 				if (!r.ok) {
 					if (killed === 0 && wi === 0) { failStep(st, r.reason); continue }
 					descs.push('（' + data.name_of(sp) + ' 无敌方目标，跳过）')
