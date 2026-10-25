@@ -7506,14 +7506,12 @@ function apply_status_ongoing(game, card_id, nation) {
 				const onlyN = og.supply_point_and_markers.only || null
 				add_supply_point(game, sp, onlyN)
 				/*
-				 * 【2026-10-25 口径】标记归属是【地点级】的：
-				 * 先 set_space_marker_owner（改现有全部 + 约束此后新增），
-				 * 再按"通用"加标记（add_marker 内部会自动继承地点归属）。
-				 * 旧实现只在本次新增的那几个上贴 only 标签，漏掉"现有标记"与"此后新增"。
+				 * 【2026-10-25 阶段 1】通道 ② -> 统一 ops：
+				 * only 交给执行器落地点的持久约束，标记本身按"通用"加（由地点约束继承）。
 				 */
-				if (onlyN) set_space_marker_owner(game, sp, onlyN)
-				if (og.supply_point_and_markers.markers)
-					add_marker(game, sp, og.supply_point_and_markers.markers, null, null)
+				apply_marker_ops(game, [{
+					space: sp, delta: og.supply_point_and_markers.markers || 0, only: onlyN,
+				}])
 				lines.push(data.name_of(sp) + ' 成为仅对' + (og.supply_point_and_markers.only || '？') +
 					' 的补给点，并增加 ' + (og.supply_point_and_markers.markers || 0) + ' 个计分标记' +
 					(onlyN ? '（此地此后所有计分标记仅对' + onlyN + '生效）' : ''))
@@ -7522,12 +7520,13 @@ function apply_status_ongoing(game, card_id, nation) {
 		}
 		if (og.remove_supply_and_marker) {
 			for (const r of og.remove_supply_and_marker) {
-				const sp = space_id(r.space)
-				if (sp == null) continue
-				remove_supply_point(game, sp, null)
-				if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
-				/* 与 17840 同款：r.only 给出时把该地（现有 + 此后新增）标记改为仅该国可计分 */
-				if (r.only) set_space_marker_owner(game, sp, r.only)
+			const sp = space_id(r.space)
+			if (sp == null) continue
+			remove_supply_point(game, sp, null)
+			/* 【2026-10-25 阶段 1】通道 ③（home_override 内，17845 莫斯科）-> 统一 ops */
+			apply_marker_ops(game, [{
+				space: sp, delta: -(r.markers || 0), only: r.only || null,
+			}])
 				lines.push(data.name_of(sp) + ' 移除补给点' +
 					(r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : '') +
 					(r.only ? '（剩余标记仅对' + r.only + '有效）' : ''))
@@ -7539,17 +7538,16 @@ function apply_status_ongoing(game, card_id, nation) {
 	/* ---- 17840 焦土作战：乌克兰去补给 + 减标记（永久）---- */
 	if (og.kind === 'remove_supply_and_marker') {
 		for (const r of (og.spaces || [])) {
-			const sp = space_id(r.space)
-			if (sp == null) continue
-			remove_supply_point(game, sp, null)
-			if (r.markers) remove_marker(game, sp, r.markers, undefined, undefined)
-			/*
-			 * 【2026-10-22 玩家口径】焦土后乌克兰剩余标记只对苏联生效
-			 * 【2026-10-25 口径】"不为其他国家提供补给" = 地点级"仅对苏联"：
-			 *   · 现有剩余标记 -> 改归属（set_space_marker_owner 内含这一步）；
-			 *   · 此后此地新增标记 -> 一并只对苏联（旧 set_marker_owner 做不到）。
-			 */
-			if (r.only) set_space_marker_owner(game, sp, r.only)
+		const sp = space_id(r.space)
+		if (sp == null) continue
+		remove_supply_point(game, sp, null)
+		/*
+		 * 【2026-10-25 阶段 1】通道 ③ -> 统一 ops：
+		 * delta 为负（减标记，不筛选），only 落在地点级（现有 + 此后）。
+		 */
+		apply_marker_ops(game, [{
+			space: sp, delta: -(r.markers || 0), only: r.only || null,
+		}])
 			lines.push(data.name_of(sp) + ' 移除补给点' +
 				(r.markers ? ' 并减少 ' + r.markers + ' 个计分标记' : '') +
 				(r.only ? '（剩余标记仅对' + r.only + '有效）' : ''))
@@ -7567,20 +7565,22 @@ function apply_status_ongoing(game, card_id, nation) {
 	 * 注意：15343 的 suppress_enemy_status 不写入 state（派生式查询），
 	 * 所以这里不需要处理。
 	 */
+	/*
+	 * 【2026-10-25 阶段 1】通道 ⑤ -> 翻译为统一 ops。
+	 * 前置(require)与"加通用标记"（卡面无"仅对"字样）都由执行器处理，
+	 * 不再把 '德国'/'axis' 硬编码在通用执行器里。
+	 */
 	if (og.kind === 'marker_if_controlled') {
 		const sp = space_id(og.space)
 		if (sp != null) {
-			const okAll = (og.require || []).every(s => has_pieces(game, { space: s, nation: '德国' }))
-			if (okAll) {
-				/*
-				 * 【2026-10-25 口径】卡面只是"<德国>增加 1 个计分标记"，没有"仅对德国"，
-				 * 故加【通用】标记（旧实现把 '德国'/'axis' 硬编码在通用执行器里）。
-				 */
-				add_marker(game, sp, og.markers || 1, null, null)
+			const ml = apply_marker_ops(game, [{
+				space: sp, delta: og.markers || 1,
+				require: og.require || [], require_nation: og.require_nation || '德国',
+			}])
+			/* 执行器已给出"未满足条件"的说明；满足时补一句成功文案 */
+			if (!ml.length)
 				lines.push(data.name_of(sp) + ' 增加 ' + (og.markers || 1) + ' 个计分标记（大德意志帝国）')
-			} else {
-				lines.push(data.name_of(sp) + ' 的前置地区未全部被友方控制，未加标记')
-			}
+			for (const l of ml) lines.push(l)
 			refresh(game)
 		}
 	}
@@ -7636,10 +7636,8 @@ function apply_status_ongoing(game, card_id, nation) {
 			 * 使"仅对意大利"只对意大利生效。 */
 			const onlyN = og.only || null
 			add_supply_point(game, sp, onlyN)
-			/* 【2026-10-25 口径】地点级归属：先约束地点，再按通用加标记（add_marker 会继承） */
-			if (onlyN) set_space_marker_owner(game, sp, onlyN)
-			if (og.markers)
-				add_marker(game, sp, og.markers, null, null)
+			/* 【2026-10-25 阶段 1】通道 ②（通用分支）-> 统一 ops */
+			apply_marker_ops(game, [{ space: sp, delta: og.markers || 0, only: onlyN }])
 			lines.push(data.name_of(sp) + ' 成为仅对' + (og.only || '？') +
 				'的补给点，并增加 ' + (og.markers || 0) + ' 个计分标记' +
 				(onlyN ? '（此地此后所有计分标记仅对' + onlyN + '生效）' : ''))
@@ -7682,19 +7680,18 @@ function apply_status_ongoing(game, card_id, nation) {
 	}
 
 	/* ---- 17901 工业心脏：仅增加计分标记（不加补给点，卡面只要求标记）---- */
+	/*
+	 * 【2026-10-25 阶段 1】通道 ④ -> 翻译为统一 ops，交给 apply_marker_ops。
+	 */
 	if (og.kind === 'marker_only') {
 		const sp = space_id(og.space)
 		if (sp != null) {
-			/*
-			 * 【2026-10-25 口径】本 kind 只是"只加标记、不加补给点"。
-			 * 归属仍看卡面：写了"仅对 XX"才走 set_space_marker_owner（地点级），
-			 * 否则加【通用】标记（17901 卡面无"仅对"，故走通用）。
-			 */
-			if (og.only) set_space_marker_owner(game, sp, og.only)
-			if (og.markers)
-				add_marker(game, sp, og.markers, null, null)
+			const ml = apply_marker_ops(game, [{
+				space: sp, delta: og.markers || 0, only: og.only || null,
+			}])
 			lines.push(data.name_of(sp) + ' 增加 ' + (og.markers || 0) + ' 个计分标记' +
 				(og.only ? '（仅对' + og.only + '生效）' : ''))
+			for (const l of ml) lines.push(l)
 			refresh(game)
 		}
 	}
@@ -10002,7 +9999,8 @@ const EVENT_EFFECTS = {
 				const ctrl = has_pieces(game, { space: sp, nation: '德国' })
 				if (ctrl && sp !== hb) {
 					add_axis_score(game, 1)
-					remove_marker(game, sp, 1)
+					/* 【2026-10-25 阶段 1】通道 ⑥（掠夺）-> 统一 ops：减 1，不筛选归属 */
+					apply_marker_ops(game, [{ space: sp, delta: -1 }])
 					n++
 				}
 			}
@@ -10374,7 +10372,8 @@ const EVENT_EFFECTS = {
 				const ctrl = has_pieces(game, { space: sp, nation: '意大利' })
 				if (ctrl && sp !== hb) {
 					add_axis_score(game, 1)
-					remove_marker(game, sp, 1)
+					/* 【2026-10-25 阶段 1】通道 ⑥（掠夺）-> 统一 ops：减 1，不筛选归属 */
+					apply_marker_ops(game, [{ space: sp, delta: -1 }])
 					n++
 				}
 			}
@@ -12048,8 +12047,8 @@ const ECHO_EFFECTS = {
 			run(game, ctx) {
 				const sp = ctx && ctx.space
 				if (sp == null) return { ok: true, skip: true, desc: '未指定建设地区' }
-				/* 【2026-10-25 口径】卡面只写"增加 1 个计分标记" -> 通用标记（谁来占谁得） */
-				add_marker(game, Number(sp), 1, null, null)
+				/* 【2026-10-25 阶段 1】通道 ⑥ -> 统一 ops（地区取"建设地区"） */
+				apply_marker_ops(game, [{ from: 'ctx.space', delta: 1 }], { space: sp })
 				return { ok: true, desc: '在' + data.name_of(Number(sp)) + '增加 1 个计分标记' }
 				},
 				},
@@ -17801,12 +17800,10 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			const names = []
 			for (const sp of where) {
 				/*
-				 * 【2026-10-25 口径】卡面只写"XX 增加 1 个计分标记"、没有"仅对 XX"字样
-				 * -> 加【通用】标记（owner=null，谁占谁得）。
-				 * 若该地已被"仅对 XX 的补给点"声明过，add_marker 会自动继承该归属。
-				 * 旧实现写死 owner=actor，等于给通用标记贴了国家标签（敌方占领拿不到）。
+				 * 【2026-10-25 阶段 1】通道 ① -> 统一 ops。
+				 * 卡面只写"XX 增加 N 个计分标记"、无"仅对"字样 -> 通用标记。
 				 */
-				add_marker(game, sp, n, null, null)
+				apply_marker_ops(game, [{ space: sp, delta: n }])
 				names.push(data.name_of(sp))
 			}
 			descs.push('在 ' + names.join('、') + ' 各增加 ' + n + ' 个计分标记')
@@ -20743,8 +20740,8 @@ function resolve_pending_neutral_effects(game, nation) {
 		}
 		const usSpace = space_id('美国')
 		if (usSpace != null) {
-			/* 【2026-10-25 口径】卡面只写"<美国>增加 1 个计分标记" -> 通用标记 */
-			add_marker(game, usSpace, 1, null, null)
+			/* 【2026-10-25 阶段 1】通道 ⑥ -> 统一 ops */
+			apply_marker_ops(game, [{ space: usSpace, delta: 1 }])
 			game.log.push('（大萧条的余波·回合开始）美国弃置此牌：<美国>增加 1 个计分标记')
 		} else {
 			game.log.push('（大萧条的余波·回合开始）美国弃置此牌，但<美国>地区未配置，未增加计分标记')
@@ -21207,6 +21204,63 @@ function add_marker(game, space, n, owner, faction) {
 			value: 1,
 		})
 	return game.markers[space].length
+}
+
+/*
+ * 【2026-10-25 阶段 1】计分标记的【统一执行器】。
+ *
+ * 背景：此前 6 条通道各写各的（steps op:'marker' / supply_point_and_markers /
+ *   remove_supply_and_marker / marker_only / marker_if_controlled / 卡代码直写），
+ *   新增一张卡要"选通道"，选错就口径漂移（6601 曾把 '德国','axis' 硬编码进通用执行器）。
+ *
+ * 现在所有通道只负责【翻译】成本文件这份 ops，再由本函数统一执行。
+ *
+ * op = {
+ *   space: '乌克兰' | 27      // 目标地区（地区名或 id 均可）
+ *   from:  'ctx.space'        // 或：地区由上下文决定（如共青城"建设地区"）
+ *   delta: +N | -N            // 加 / 减
+ *   only:  '苏联'             // 可选：地点级"仅对该国"（先改现有，再约束此后新增）
+ *   require: ['西欧','德国']  // 可选：这些地区须全部被 require_nation 控制
+ *   require_nation: '德国'    // 可选，缺省取 ctx.nation / current_nation
+ * }
+ *
+ * ⚠【顺序即语义，不可颠倒】
+ *   ① only   -> set_space_marker_owner（先落地点的持久约束）
+ *   ② delta>0 -> add_marker(null,null)（归属由 add_marker 自动继承地点）
+ *   ③ delta<0 -> remove_marker(undefined,undefined)（不筛选 —— 掠夺口径）
+ */
+function apply_marker_ops(game, ops, ctx) {
+	const lines = []
+	if (!ops || !ops.length) return lines
+	for (const op of ops) {
+		let sp = null
+		if (op.space != null)
+			sp = (typeof op.space === 'number') ? op.space : space_id(op.space)
+		if (sp == null && op.from === 'ctx.space') {
+			const raw = (ctx && ctx.space != null) ? ctx.space
+				: (game.last_built && game.last_built.space)
+			sp = raw != null ? Number(raw) : null
+		}
+		if (sp == null) continue
+
+		/* 前置：require 里的地区须全部被指定国控制（6601 大德意志帝国） */
+		if (op.require && op.require.length) {
+			const who = op.require_nation || (ctx && ctx.nation) || game.current_nation
+			const okAll = op.require.every(s => {
+				const rs = space_id(s)
+				return rs != null && has_pieces(game, { space: rs, nation: who })
+			})
+			if (!okAll) {
+				lines.push(data.name_of(sp) + ' 的前置地区未全部被' + (who || '？') + '控制，未改标记')
+				continue
+			}
+		}
+
+		if (op.only) set_space_marker_owner(game, sp, op.only)
+		if (op.delta > 0) add_marker(game, sp, op.delta, null, null)
+		if (op.delta < 0) remove_marker(game, sp, -op.delta, undefined, undefined)
+	}
+	return lines
 }
 
 /*
@@ -30141,8 +30195,8 @@ function do_action(state, current, action, arg) {
 		/* <美国> = space id 27，增加 1 个计分标记（仅美国/同盟可计分） */
 		const usSpace = space_id('美国')
 		if (usSpace != null) {
-			/* 【2026-10-25 口径】卡面只写"<美国>增加 1 个计分标记" -> 通用标记 */
-			add_marker(game, usSpace, 1, null, null)
+			/* 【2026-10-25 阶段 1】通道 ⑥ -> 统一 ops */
+			apply_marker_ops(game, [{ space: usSpace, delta: 1 }])
 			game.log.push('【大萧条的余波】弃置此牌：<美国>增加 1 个计分标记')
 		} else {
 			game.log.push('【大萧条的余波】<美国>地区未配置，未能增加计分标记')
