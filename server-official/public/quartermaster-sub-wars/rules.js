@@ -16404,6 +16404,42 @@ function remove_response_frame(game, frame) {
 	return frame
 }
 
+/*
+ * 【2026-10-26 修复·同组多帧的"排序确认框"丢失】
+ *
+ * 某帧所属的「同触发组」全部帧，按 group_idx 排序。group_id 为空时返回 [frame]。
+ *
+ * 为什么必须有这个 helper：栈模型下每张响应卡是【独立帧】，同一事件命中的
+ * 多张卡共用 group_id。而 `view.pending_trigger` 曾改成只读栈顶单帧
+ * （为修 17737 的"栈里有帧、view 里没框"），于是 candidates 恒为 1 张，
+ * 客户端 `multi = candidates.length > 1 && !ordered` 永远为假
+ * -> 排序确认框永不出现 -> 玩家点"发动"被 gate 拒绝"请先在响应框中确认结算顺序"
+ * -> 死锁。实测日本建设海军时 15423 潜艇支援 + 15424 海军特别陆战队 同点必卡。
+ *
+ * 现在 view 与 gate 都走这一个 helper，保证"看到的组"与"校验的组"同源。
+ */
+function response_group_frames(game, frame) {
+	if (!frame) return []
+	const gid = frame.group_id
+	if (gid == null) return [frame]
+	const all = (game.response_stack || []).filter(f => f.group_id === gid)
+	if (!all.length) return [frame]
+	/* filter 已返回新数组，此处 sort 不会动到 response_stack 本身 */
+	return all.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+}
+
+/*
+ * 组内是否【无需再排序】：空组与单帧组视为已确认。
+ *
+ * 单帧也算已确认，是为了覆盖 `defer_remaining_group_frames` 把兄弟帧搬进延期栈后
+ * 只剩一帧的局面 —— 那时它自己在压栈时被写成 ordered:false（因为当时同组 >1），
+ * 若此处仍要求 every(ordered)，这一帧就永远发不出去了。
+ */
+function response_group_ordered(frames) {
+	if (!frames || frames.length <= 1) return true
+	return frames.every(f => f.ordered)
+}
+
 /* 【栈重构·第二期】递延续打帧暂存独立数组（不在活动栈顶，待 response_stack
  * 清空后再由 promote_deferred_response 压回成为活动帧）。彻底取代旧全局
  * game.deferred_response_choice。 */
@@ -23524,12 +23560,24 @@ exports.view = function (state, current) {
 		if (!tf) return null
 		if (tf.owner_side !== side) return null
 		/*
-		 * 待发动阶段（request_responses 刚压栈，candidates 为空）也要给出一项，
-		 * 客户端据此渲染"是否发动《X》"；否则会显示成"是否发动 ？"。
+		 * 【2026-10-26 修复·排序确认框丢失】必须下发【整组】候选，不能只发栈顶一帧。
+		 *
+		 * 客户端 update_pending_trigger_box 用
+		 *   `multi = candidates.length > 1 && !ordered`
+		 * 决定是否渲染「响应卡结算顺序」框。只发 1 张时该判定恒为假
+		 * -> 排序框永不出现 -> 玩家点"发动"被 gate 拒绝「请先在响应框中确认结算顺序」
+		 * -> 该组响应永远发不出去 = 卡死。
+		 * 实测：日本建设海军时 15423《潜艇支援》+ 15424《海军特别陆战队》同点必现。
+		 *
+		 * 「待发动」阶段（candidates 为空）取整组；「选目标」阶段（candidates 非空）
+		 * 仍按单帧 —— 那时由 view.response_choice 驱动，不归这里管。
 		 */
-		const raw = (tf.candidates && tf.candidates.length) ? tf.candidates : [{
-			card_id: tf.card_id, card_face: tf.card_face, name: tf.name,
-		}]
+		const grp = (tf.candidates && tf.candidates.length)
+			? [tf]
+			: response_group_frames(game, tf)
+		const raw = grp.map(f => ({
+			card_id: f.card_id, card_face: f.card_face, name: f.name,
+		}))
 		const cands = raw.map(c => {
 			const face = c.card_face != null ? String(c.card_face) : String(inst_card_id(c.card_id))
 			return {
@@ -23545,7 +23593,8 @@ exports.view = function (state, current) {
 			candidates: cands,
 			order: cands.map(c => c.card_id),
 			skip: {},
-			ordered: tf.ordered !== false,
+			/* 与 trigger_response 的 gate 同源（单帧组视为已确认） */
+			ordered: response_group_ordered(grp),
 			space: (tf.ctx && tf.ctx.space) || null,
 			nation: (tf.ctx && tf.ctx.nation) || null,
 		}
@@ -27232,16 +27281,14 @@ function do_action(state, current, action, arg) {
 			game.log.push('当前没有等待响应的卡牌')
 			return game
 		}
-		/* 同触发组的所有帧 */
-		const stack = game.response_stack
-		const groupFrames = stack.filter(f => f.group_id === top.group_id)
-			.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+		/* 同触发组的所有帧（与 view.pending_trigger / trigger gate 同源） */
+		const groupFrames = response_group_frames(game, top)
 		if (groupFrames[0].owner_side !== side) {
 			game.log.push('只有响应卡的持有方才能排序/确认响应')
 			return game
 		}
 		if (action === 'response_reorder') {
-			if (groupFrames.every(f => f.ordered)) {
+			if (response_group_ordered(groupFrames)) {
 				game.log.push('响应顺序已确认，无法再调整')
 				return game
 			}
@@ -27260,7 +27307,7 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		/* response_confirm */
-		if (groupFrames.every(f => f.ordered)) {
+		if (response_group_ordered(groupFrames)) {
 			game.log.push('响应顺序已确认')
 			return game
 		}
@@ -27298,15 +27345,19 @@ function do_action(state, current, action, arg) {
 		/*
 		 * 【栈重构·第二期】读栈顶帧所属 group 的所有帧，按 group_idx 排序，一次发动整组
 		 * （保留原"一次 trigger 结算整组"交互）。pending 帧标记 f.pending 后留栈、等 resolve。
+		 *
+		 * 【2026-10-26】改用 response_group_frames（与 view.pending_trigger 同源）；
+		 * 且「先确认顺序」只拦【发动】，不再拦【不发动】：
+		 * 整组放弃不需要顺序，留一条逃生口 —— 否则一旦客户端没渲染排序框，
+		 * 玩家连"不发动"都点不动，就是彻底的死锁。
 		 */
 		const stack = game.response_stack
-		const groupFrames = stack.filter(f => f.group_id === top.group_id)
-			.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
-		if (!groupFrames.every(f => f.ordered)) {
+		const groupFrames = response_group_frames(game, top)
+		const head = groupFrames[0]
+		if (action === 'trigger_response' && !response_group_ordered(groupFrames)) {
 			game.log.push('请先在响应框中确认结算顺序')
 			return game
 		}
-		const head = groupFrames[0]
 		if (action === 'pass_response') {
 			/*
 			 * 【2026-10-25 保密】截图 #223 的原场景：把没发动的暗置卡名逐个写进公开日志。
