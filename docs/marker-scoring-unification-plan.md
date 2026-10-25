@@ -107,9 +107,9 @@ function apply_marker_ops(game, ops, ctx) → lines[]
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **阶段 0** | 口径确立 + 地点级 `game.marker_only` + `set_space_marker_owner` + B 组去 owner | ✅ **已完成**（2026-10-25，回归 `_smoke_marker_ownership.js` 14/14） |
-| **阶段 1** | 统一配置 + 单一执行器 `apply_marker_ops`；6 通道退化为"翻译"；**行为等价** | ⏸ **待做（代码级）** |
+| **阶段 1** | 统一配置 + 单一执行器 `apply_marker_ops`；6 通道退化为"翻译"；**行为等价** | ✅ **已完成**（2026-10-25，快照对比逐字段一致） |
 | **阶段 2** | `permanent:false` 支持：执行器记录改动，`revert_status_ongoing` 按记录回滚 | ⏸ **待做（代码级）** |
-| **阶段 3** | 静态兜底：禁止卡代码直写三个 API（脚本扫描 `add_marker(` / `set_marker_owner(`） | ⏸ **待做（代码级）** |
+| **阶段 3** | 静态兜底：禁止卡代码直写三个 API | 🟡 **基本完成**：卡配置层直写已清零，仅剩 `move_marker` 一处（21372，需保留原归属，语义不同） |
 | **阶段 4** | D 组 PRELUDE 5 张（11300/11310/14901/17205/18410）—— 需先实现 PRELUDE 机制本身 | ⏸ **待做，玩家已决定本轮跳过** |
 
 ### 阶段 1 内部顺序（建议小步提交）
@@ -155,6 +155,20 @@ function apply_marker_ops(game, ops, ctx) → lines[]
 - [ ] 扫描脚本纳入回归：卡配置块内出现三个 API 即失败
 
 ---
+
+## 六之二、阶段 1 实施结果（2026-10-25）
+
+| 项 | 结果 |
+|---|---|
+| `apply_marker_ops(game, ops, ctx)` | 已加，支持 `space` / `from:'ctx.space'` / `delta` / `only` / `require` |
+| 6 条通道迁移 | ① steps `op:'marker'` ② `supply_point_and_markers`（两处）③ `remove_supply_and_marker`（两处）④ `marker_only` ⑤ `marker_if_controlled` ⑥ 直写 4 处（17854 / 17555×2 / 掠夺×2） |
+| 6601 硬编码 `'德国','axis'` | 已消除（改由 `require` + 通用 add） |
+| **行为等价验证** | `_dump_marker_snapshot.js` 迁移前后逐字段比对 → **完全一致**（含 9 张卡的 markers / marker_only / 6 组计分） |
+| `_smoke_marker_ownership.js` | 14/14 |
+| 全量回归 | 失败断言仍为历史 15 项，零新增 |
+| 直写点 | 从 6 处降到 1 处（21372 `move_marker`，需保留原归属，语义不同） |
+
+提交：`2ab7965 refactor(quartermaster): 计分标记统一执行器（阶段 1，行为等价）`
 
 ## 七、明确声明
 
