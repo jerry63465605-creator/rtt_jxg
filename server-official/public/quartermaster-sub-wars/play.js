@@ -6798,14 +6798,37 @@ function update_table_status() {
 			 * 正在建设时该卡仍是灰显 -> 点了也会被 !c.ready 拦掉。
 			 * 判定只看"是否正在建设中"（building），与 on_click_table_status 同源。
 			 */
-			const building = !!(pending_card && pending_card.name === '建设陆军')
+			/*
+			 * 【2026-10-25 修复】必须再判【这张卡归属国 == 当前行动国】。
+			 * 桌面状态区是【整个阵营】共享可见的，所以苏联/美国玩家也能看到
+			 * 英国桌面的 15341《澳大利亚劳管局》/ 15342《印度宣布参战》；
+			 * 旧判定只看"是否正在打《建设陆军》"，于是苏联/美国建设陆军时
+			 * 这两张英国卡也亮成"可放弃建设"（点了会被服务端拒绝，
+			 * 因为 register_status_actions 对它们要求 current_nation==='英国'）。
+			 * 通用判据（不写死卡号）：卡归属国 == view.current_nation，
+			 * 同时覆盖 17742《拉丁世界》（意大利）等所有"替换建设"卡。
+			 */
+			/*
+			 * 【同源优先】服务端 view.table_status[].forgo_build 已经按
+			 * "卡归属国 == 当前行动国"算好（15341/15342 仅在英国建设时为 true，
+			 * 17742 仅在意大利建设时为 true），客户端直接采信，不二次判断国家。
+			 * 老版本若没有该字段则退回国家比对。
+			 */
+			const ownerNation = c.nation ||
+				((view.table_status || []).find(t => t.card === c.card) || {}).nation || ''
+			const forgoOk = (c.forgo_build !== undefined && c.forgo_build !== null)
+				? (c.forgo_build === true)
+				: (ownerNation === view.current_nation)
+			const building = !!(pending_card && pending_card.name === '建设陆军') && forgoOk
 			if (building) {
 				el.classList.add('ready', 'build-ready')
 				badge = '可放弃建设'
 				badgeCls = 'green'
 			} else {
 				el.classList.add('ts-disabled')
-				badge = '待建设陆军'
+				badge = (pending_card && pending_card.name === '建设陆军')
+					? '仅' + (ownerNation || '该国') + '建设时可放弃'
+					: '待建设陆军'
 				badgeCls = 'gray'
 			}
 		} else if (ui.auto) {
@@ -7088,7 +7111,19 @@ function on_click_table_status(cardId) {
 	 * 因此：只要处于"选地块中且打的是《建设陆军》"，就放行，
 	 * 由下面 ui.build 分支带 from_status:true 提交（服务端据此跳过窗口判定）。
 	 */
-	const buildingNow = !!(ui.build && pending_card && pending_card.name === '建设陆军')
+	/*
+	 * 【2026-10-25 修复】与 update_table_status 的显示判定同源：
+	 * 必须再判"这张卡归属国 == 当前行动国"，否则苏联/美国建设陆军时
+	 * 点击英国桌面的 15341/15342 会走到下面 ui.build 分支，
+	 * 弹出"放弃建设并征召"确认框，提交后却被服务端拒绝（点了白点）。
+	 */
+	const _ownerNation = c.nation ||
+		((view.table_status || []).find(t => t.card === cardId) || {}).nation || ''
+	const _forgoOk = (c.forgo_build !== undefined && c.forgo_build !== null)
+		? (c.forgo_build === true)
+		: (_ownerNation === view.current_nation)
+	const buildingNow = !!(ui.build && pending_card && pending_card.name === '建设陆军') &&
+		_forgoOk
 	if (!c.ready && !buildingNow) {
 		toast('《' + c.name + '》此时机尚不能触发：' + (c.ready_reason || ''))
 		return

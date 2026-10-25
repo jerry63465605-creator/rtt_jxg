@@ -24327,16 +24327,20 @@ exports.view = function (state, current) {
 						 * 若这里有 true 就【不要】取消选卡（否则状态卡点不动）。
 						 */
 						/*
-						 * 【2026-10-18 修复】15341/15342 是英国状态卡，仅当【英国执行建设陆军】
-						 * （game.current_nation==='英国'，含美国 17526《民主兵工厂》让权英国建设期间，
-						 * 见 offer_uk_build_delegate 翻 current_nation='英国'）时才对客户端开放
-						 * "替换建设"入口；非英国玩家、或英国玩家的非建设陆军行为一律不开放。
-						 * 意大利 4611 等同款卡不受影响（按 id 精确限定）。
+						 * 【2026-10-18 修复】"替换建设"入口只对【正在执行建设陆军的那一个国家】开放。
+						 *
+						 * 【2026-10-25 通用化】原实现只对 15341/15342 按 id 判国家，其余恒 true：
+						 *   · 意大利 17742《拉丁世界》因此会在英/苏/美建设陆军时也亮成"可放弃建设"；
+						 *   · 将来新增同款卡都得回来补 id，容易漏。
+						 *
+						 * 统一判据：**卡归属国 n === 当前行动国**（含美国 17526《民主兵工厂》
+						 * 让权英国建设期间 current_nation 被翻成 '英国' 的情形）。
+						 * 一句话覆盖全部"替换建设"卡，且与 register_status_actions 的
+						 * activate_status 放行条件同源（两侧都按国家，不会漂移）。
 						 */
 						forgo_build: (function () {
 							if (!(trig && trig.cost && trig.cost.forgo_build_army)) return false
-							if (inst_card_id(cid) === '15341' || inst_card_id(cid) === '15342') return game.current_nation === '英国'
-							return true
+							return n === game.current_nation
 						})(),
 						ready: !!(trig && ready.ok),
 						ready_reason: ready.reason || '',
@@ -24968,7 +24972,13 @@ function register_status_actions(game, side, acts) {
 				 * 建设陆军流程，亦不可见/不可点（避免被同盟其它国家借走/误触发）。
 				 * 意大利 4611 等其它 build_army 卡不受影响（按 id 精确限定）。
 				 */
-				if (isForgoBuild && (inst_card_id(cid) === '15341' || inst_card_id(cid) === '15342') && game.current_nation !== '英国')
+				/*
+				 * 【2026-10-25 通用化】原实现按 id 精确限定 15341/15342，
+				 * 意大利 17742《拉丁世界》等"替换建设"卡因此没有国家守卫。
+				 * 统一为：**卡归属国 n === 当前行动国**（与 view.table_status
+				 * 的 forgo_build 同源，两侧不会漂移）。
+				 */
+				if (isForgoBuild && n !== game.current_nation)
 					continue
 				acts['activate_status:' + cid] = 1
 				/* R29：必须同时登记【不带后缀】的 verb，否则客户端对不上、点击静默失败 */
