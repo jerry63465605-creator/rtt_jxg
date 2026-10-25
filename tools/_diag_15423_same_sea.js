@@ -128,8 +128,9 @@ console.log('\n=== S1 第 1 次选 A，第 2 次候选不应包含 A ===')
 		const step2 = pick(g, 1) /* 选"再战" */
 		const cs2 = ((step2.top && step2.top.candidates) || []).map(c => Number(c.id))
 		info('第 2 次候选', cs2.map(x => nm(x) + '(' + x + ')'))
-		flag('★ 第 2 次候选已排除第 1 次的海域',
-			cs2.indexOf(A) < 0, '第 1 次=' + nm(A) + '(' + A + ') 第2次候选=' + JSON.stringify(cs2))
+		/* 玩家裁决：可以打重复地点 —— 第 2 次候选必须仍含第 1 次的海域 */
+		flag('★ 第 2 次候选包含第 1 次的海域（允许重复）',
+			cs2.indexOf(A) >= 0, '第 1 次=' + nm(A) + '(' + A + ') 第2次候选=' + JSON.stringify(cs2))
 	}
 }
 
@@ -145,8 +146,9 @@ console.log('\n=== S2 强行提交第 1 次的海域：服务端应拒绝 ===')
 	const b2 = g.log.length
 	rules.action(g, 'Axis', 'resolve_response_choice', { choice: A })  /* 偷偷选回 A */
 	info('结果日志', g.log.slice(b2))
-	flag('★ 服务端拒绝重复海域（不在候选内 / 不能与第 1 次同地区）',
-		/不在.*候选内|不能与第 1 次/.test(g.log.slice(b2).join('|')),
+	/* 玩家裁决：允许重复 —— 服务端不得以"不能与第 1 次同地区"为由拒绝 */
+	flag('★ 服务端不因"重复海域"拒绝（允许再打同一格）',
+		!/不能与第 1 次|不在.*候选内/.test(g.log.slice(b2).join('|')),
 		g.log.slice(b2).join(' | ').slice(0, 90))
 	void before
 }

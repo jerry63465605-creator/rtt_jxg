@@ -14032,33 +14032,16 @@ function pick_space_then_battle(game, ctx, choice, opt) {
 }
 
 /*
- * 【2026-10-26 玩家口径】"1 或 2 次"多步响应卡的【第 2 次】不能落回同一个地区。
+ * 【2026-10-26 玩家裁决·反向澄清】"1 或 2 次"多步响应卡的第 2 次【允许】与第 1 次同地区。
  *
- * 适用：15423 潜艇支援（海战）/ 15424 海军特别陆战队（建陆军）/
- *       15425 海军空降部队（陆战）/ 15426 驱逐舰运输（建陆军）。
+ * 曾经误判为"不能重复"，给 15423/15424/15426 加了候选排除 + 执行层拦截（并删掉了
+ * 15425《海军空降部队》原有的"允许重复"写法）。玩家明确裁决：
+ *   **可以打重复地点是对的，15425 是对的，其余三张当时的排除才是错误。**
+ * 现已全部回退到"不排除、不拦截"，四张卡口径一致：
+ *   15423 潜艇支援 / 15424 海军特别陆战队 / 15425 海军空降部队 / 15426 驱逐舰运输。
  *
- * 两层保障（缺一即可能重复）：
- *   ① 候选层：排除第 1 次用过的地区 —— 客户端拿不到"同一位置"的高亮；
- *   ② 执行层：把 used 透传到 extra，由各卡的 battle2/region2 分支二次校验 ——
- *      只靠候选不够：客户端沿用旧高亮、或伪造提交时，服务端仍会照着执行。
- *
- * ⚠ used 缺失（旧存档/异常）时退化为不排除（`Number(undefined)` 为 NaN，逐一保留），
- *   行为等同改动前，不会把正常流程堵死。
+ * 回归脚本：tools/_smoke_resp_step2_norepeat.js（现断言"允许重复"）。
  */
-function resp_step2(game, p, used, step) {
-	if (!p) return p
-	if (Array.isArray(p.candidates))
-		p.candidates = p.candidates.filter(c => Number(c.id) !== Number(used))
-	p.extra = { step: step, used: used }
-	return p
-}
-
-/* 第 2 次执行前的统一校验：命中"与第 1 次同一地区"则返回可读原因 */
-function resp_step2_blocked(extra, sp) {
-	if (!extra || extra.used == null) return null
-	if (Number(sp) !== Number(extra.used)) return null
-	return '（不能与第 1 次选择同一地区：' + data.name_of(Number(sp)) + '）'
-}
 
 /* 在指定地区发起陆战（复用 battle_initiators） */
 function do_land_battle_at(game, space, nat) {
@@ -15329,14 +15312,17 @@ const RESPONSE_EFFECT_IMPL = {
 			const sp = Number(choice)
 			const r1 = do_sea_battle_at(game, sp, '日本')
 			const desc1 = r1.ok ? '在' + data.name_of(sp) + '发起海战'
-				: '（未在' + data.name_of(sp) + '发起海战：' + (r1.reason || '') + '）'
+				: '（未在' + data.name_of(sp) + '发起海战：' + ((r1.desc || '').replace(/（|）|海战未发动：/g, '')) + '）'
 			if (!r1.ok) return { ok: true, desc: desc1 }
-			/* 还有别的相邻海域才问"是否再战" */
+			/*
+			 * 【2026-10-26 玩家裁决】允许重复地点：只要有候选（含首次那一格）就提供"是否再战"。
+			 * 旧实现排除首次，导致"只有一格可打"时连问都不问，等于把重复打法阉掉了。
+			 */
 			const others = (pick_space_then(game, ctx, undefined, {
 				kind: 'sea', base: ctx.space, includeBase: true, nation: '日本',
-			}).candidates || []).filter(c => c.id !== sp)
+			}).candidates || [])
 			if (!others.length)
-				return { ok: true, desc: desc1 + '（无其他相邻海域可再战）' }
+				return { ok: true, desc: desc1 + '（无可再战的海域）' }
 			return {
 				pending: true,
 				kind: 'option',
@@ -15352,22 +15338,25 @@ const RESPONSE_EFFECT_IMPL = {
 			/* ③ 选"完成"则结束；选"再战"则进入第 2 个海域选择（排除首次） */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			/* 第 2 次候选排除第 1 次的海域，并把 used 透传给执行步二次校验 */
-			return resp_step2(game, pick_space_then(game, ctx, undefined, {
+			/*
+			 * 【2026-10-26 玩家裁决】第 2 次【可以】与第 1 次同一海域：
+			 * "可以打重复地点"是正确口径 —— 候选不排除首次、执行层也不拦。
+			 */
+			const p = pick_space_then(game, ctx, undefined, {
 				kind: 'sea', base: ctx.space, includeBase: true,
 				nation: '日本',
-				prompt: '选择要再次发起海战的海域（另一相邻海域）',
-			}), extra.used, 'battle2')
+				prompt: '选择要再次发起海战的海域（可与第 1 次相同）',
+			})
+			/* 带上 desc1：第 2 步结算时要拼"第1次结果 + 第2次结果"，丢了会写出 undefined */
+			p.extra = { step: 'battle2', desc1: extra.desc1 }
+			return p
 		}
 		if (extra && extra.step === 'battle2') {
 			/* ④ 在第 2 个海域发起海战 */
 			const sp = Number(choice)
-			/* 服务端二次校验：不许与第 1 次同一海域（防客户端旧高亮 / 伪造提交） */
-			const _blk = resp_step2_blocked(extra, sp)
-			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = do_sea_battle_at(game, sp, '日本')
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再发起海战'
-				: '（第 2 次未发起：' + (r2.reason || '') + '）'
+				: '（第 2 次未发起：' + ((r2.desc || '').replace(/（|）|海战未发动：|陆战未发动：/g, '')) + '）'
 			return { ok: true, desc: extra.desc1 + '；' + desc2 }
 		}
 		return { ok: true, desc: '（潜艇支援：未执行）' }
@@ -15391,11 +15380,12 @@ const RESPONSE_EFFECT_IMPL = {
 			const desc1 = r1.ok ? '在' + data.name_of(sp) + '建设陆军'
 				: '（未在' + data.name_of(sp) + '建成陆军：' + (r1.reason || '') + '）'
 			if (!r1.ok) return { ok: true, desc: desc1 }
+			/* 【2026-10-26 玩家裁决】允许重复地点：有候选就提供"是否再建" */
 			const others = (pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false, nation: '日本',
-			}).candidates || []).filter(c => c.id !== sp)
+			}).candidates || [])
 			if (!others.length)
-				return { ok: true, desc: desc1 + '（无其他相邻地区可再建）' }
+				return { ok: true, desc: desc1 + '（无相邻地区可再建）' }
 			return {
 				pending: true,
 				kind: 'option',
@@ -15410,17 +15400,18 @@ const RESPONSE_EFFECT_IMPL = {
 		if (extra && extra.step === 'ask2') {
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			/* 第 2 次候选排除第 1 次的地区，并把 used 透传给执行步二次校验 */
-			return resp_step2(game, pick_space_then(game, ctx, undefined, {
+			/* 【2026-10-26 玩家裁决】允许与第 1 次同一地区：候选不排除、执行层不拦 */
+			const p = pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false,
 				nation: '日本',
-				prompt: '选择要再建陆军的相邻地区（另一相邻陆地）',
-			}), extra.used, 'region2')
+				prompt: '选择要再建陆军的相邻地区（可与第 1 次相同）',
+			})
+			/* 带上 desc1：第 2 步结算时要拼"第1次结果 + 第2次结果"，丢了会写出 undefined */
+			p.extra = { step: 'region2', desc1: extra.desc1 }
+			return p
 		}
 		if (extra && extra.step === 'region2') {
 			const sp = Number(choice)
-			const _blk = resp_step2_blocked(extra, sp)
-			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = build_piece(game, '日本', 'army', sp)
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再建 1 支陆军'
 				: '（第 2 支未建成：' + (r2.reason || '') + '）'
@@ -15445,14 +15436,14 @@ const RESPONSE_EFFECT_IMPL = {
 			const sp = Number(choice)
 			const r1 = do_land_battle_at(game, sp, '日本')
 			const desc1 = r1.ok ? '对' + data.name_of(sp) + '发起陆战'
-				: '（未对' + data.name_of(sp) + '发起陆战：' + (r1.reason || '') + '）'
+				: '（未对' + data.name_of(sp) + '发起陆战：' + ((r1.desc || '').replace(/（|）|陆战未发动：/g, '')) + '）'
 			if (!r1.ok) return { ok: true, desc: desc1 }
-			/* 还有别的相邻陆地才问"是否再战"（排除首次地区，见 resp_step2 说明） */
+			/* 有候选就提供"是否再战"（允许与第 1 次同一地区，故不排除首次） */
 			const others = (pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: true, nation: '日本',
-			}).candidates || []).filter(c => Number(c.id) !== Number(sp))
+			}).candidates || [])
 			if (!others.length)
-				return { ok: true, desc: desc1 + '（无其他相邻地区可再战）' }
+				return { ok: true, desc: desc1 + '（无相邻地区可再战）' }
 			return {
 				/* defer：第一次陆战已发起（含空军代死 pending_battle 与 on:'battle' 嵌套响应帧），
 				 * 把"是否再战"续打帧存入 deferred_response_stack，
@@ -15469,27 +15460,28 @@ const RESPONSE_EFFECT_IMPL = {
 			}
 		}
 		if (extra && extra.step === 'ask2') {
-			/* ③ 选"完成"则结束；选"再战"则进入第 2 个地区选择 */
+			/* ③ 选"完成"则结束；选"再战"则进入第 2 个地区选择（**允许**与第 1 次同一地区） */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			/*
-			 * 【2026-10-26 口径变更】原"方案 A：第 2 步不排除首次地区"作废。
-			 * 玩家口径：同一张卡的两步不能落在同一个位置（与 15423/15424/15426 一致）。
-			 */
-			return resp_step2(game, pick_space_then(game, ctx, undefined, {
+			const p = pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: true,
 				nation: '日本',
-				prompt: '选择要再次发起陆战的地区（另一相邻陆地）',
-			}), extra.used, 'battle2')
+				prompt: '选择要再次发起陆战的地区（可再次选择同一地区）',
+			})
+			/*
+			 * 【2026-10-26 玩家裁决·保持不动】15425 允许同一地区连打两次是正确的，
+			 * 另外三张（15423/15424/15426）已向它对齐 —— 不要再给这里加排除。
+			 */
+			/* 带上 desc1：第 2 步结算时要拼"第1次结果 + 第2次结果"，丢了会写出 undefined */
+			p.extra = { step: 'battle2', desc1: extra.desc1 }
+			return p
 		}
 		if (extra && extra.step === 'battle2') {
 			/* ④ 在第 2 个地区发起陆战 */
 			const sp = Number(choice)
-			const _blk = resp_step2_blocked(extra, sp)
-			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = do_land_battle_at(game, sp, '日本')
 			const desc2 = r2.ok ? '对' + data.name_of(sp) + '再发起陆战'
-				: '（第 2 次未发起：' + (r2.reason || '') + '）'
+				: '（第 2 次未发起：' + ((r2.desc || '').replace(/（|）|海战未发动：|陆战未发动：/g, '')) + '）'
 			return { ok: true, desc: extra.desc1 + '；' + desc2 }
 		}
 		return { ok: true, desc: '（海军空降部队：未执行）' }
@@ -15515,12 +15507,12 @@ const RESPONSE_EFFECT_IMPL = {
 			const desc1 = r1.ok ? '在' + data.name_of(sp) + '建设陆军'
 				: '（未在' + data.name_of(sp) + '建成陆军：' + (r1.reason || '') + '）'
 			if (!r1.ok) return { ok: true, desc: desc1 }   /* 建不成则直接结束 */
-			/* 还有别的相邻陆地才问"是否再建" */
+			/* 【2026-10-26 玩家裁决】允许重复地点：有候选就提供"是否再建" */
 			const others = (pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false, nation: '日本',
-			}).candidates || []).filter(c => c.id !== sp)
+			}).candidates || [])
 			if (!others.length)
-				return { ok: true, desc: desc1 + '（无其他相邻地区可再建）' }
+				return { ok: true, desc: desc1 + '（无相邻地区可再建）' }
 			return {
 				pending: true,
 				kind: 'option',
@@ -15536,18 +15528,19 @@ const RESPONSE_EFFECT_IMPL = {
 			/* ③ 选"完成"则结束；选"再建"则进入第 2 个地区选择 */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			/* 第 2 次候选排除第 1 次的地区，并把 used 透传给执行步二次校验 */
-			return resp_step2(game, pick_space_then(game, ctx, undefined, {
+			/* 【2026-10-26 玩家裁决】允许与第 1 次同一地区：候选不排除、执行层不拦 */
+			const p = pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false,
 				nation: '日本',
-				prompt: '选择要再建陆军的相邻地区（另一相邻陆地）',
-			}), extra.used, 'region2')
+				prompt: '选择要再建陆军的相邻地区（可与第 1 次相同）',
+			})
+			/* 带上 desc1：第 2 步结算时要拼"第1次结果 + 第2次结果"，丢了会写出 undefined */
+			p.extra = { step: 'region2', desc1: extra.desc1 }
+			return p
 		}
 		if (extra && extra.step === 'region2') {
 			/* ④ 在第 2 个相邻地区建 1 支陆军 */
 			const sp = Number(choice)
-			const _blk = resp_step2_blocked(extra, sp)
-			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = build_piece(game, '日本', 'army', sp)
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再建 1 支陆军'
 				: '（第 2 支未建成：' + (r2.reason || '') + '）'
