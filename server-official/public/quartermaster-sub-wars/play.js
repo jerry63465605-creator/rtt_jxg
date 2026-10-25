@@ -377,12 +377,36 @@ function reapply_all_highlights() {
 		}
 		return
 	}
+	/*
+	 * 3.5 战区移动 pending_theater（2026-10-25）：每步候选由 RPC 现算并缓存，
+	 *     这里每帧重贴【地区】与【算子】两类高亮 —— 步骤切换时缓存会被清空，
+	 *     因此不会出现"上一步高亮残留"。
+	 */
+	if (view && view.pending_theater) {
+		if ((theater_space_cands || []).length)
+			highlight_targets({
+				spaces: theater_space_cands.map(id => ({ id: id, reason: '建设候选' })),
+			})
+		if ((theater_piece_cands || []).length)
+			highlight_pieces(theater_piece_cands, 'theater')
+		return
+	}
 	/* 4. 建设预算 pending_autobahn（候选由 RPC 返回，已缓存到 autobahn_cands） */
 	if (view && view.pending_autobahn) {
 		if ((autobahn_cands || []).length)
 			highlight_targets({
 				spaces: autobahn_cands.map(id => ({ id: id, reason: '建设候选' })),
 			})
+		return
+	}
+	/* 4.5 17531 现购自运政策：已选兵种，按 targets 每帧重贴（只含该兵种合法地区） */
+	if (view && view.us_merchant && view.us_merchant.step === 'space' &&
+		(view.us_merchant.targets || []).length) {
+		highlight_targets({
+			spaces: view.us_merchant.targets.map(t => ({
+				id: t.id, reason: '征召候选',
+			})),
+		})
 		return
 	}
 	/* 5. 让权委托（候选随 view 下发，无需缓存） */
@@ -648,6 +672,8 @@ function update_phase_buttons() {
 	update_su_17817_box()
 	/* 高速公路（15228）：玩家在地图逐一选择建设位置 */
 	update_pending_autobahn_box()
+	/* 【2026-10-25】战区移动（17532）：分步状态机面板（移除 → 建海军 → 建陆军） */
+	update_pending_theater_box()
 	/* 多步脚本卡（15229/15239/14503）：牌堆 / 手牌 / 暗牌 的选牌框 */
 	update_pending_script_box()
 	/* 国家技能：★卡结算后的机会窗口 */
@@ -1813,23 +1839,43 @@ function update_us_merchant() {
 			'选择英/苏/中/法之一，美国在其本土或相邻地区征召1支合法部队（陆军/海军/空军，美国直接操作）。', opt)
 		return
 	}
-	if (dg.space == null) {
-		const tgs = dg.targets || []
-		if (!tgs.length) { render_ask_box('现购自运政策：' + dg.nation, '无可征召地区（需该国家本土或相邻且有空位）。', []); return }
-		highlight_targets({ spaces: tgs.map(t => ({ id: t.id, reason: dg.nation + ' 征召候选' })) })
-		render_ask_box('现购自运政策：' + dg.nation + ' 选择征召地区',
-			'点击地图上高亮的地区，' + dg.nation + ' 征召1支部队。', [])
+	/*
+	 * 【2026-10-25 玩家口径】顺序改为 国家 → 兵种 → 地区：
+	 *   选完国家先给"此刻能合法征召的兵种"按钮（陆军/海军/空军，按服务端判定），
+	 *   选定后再只高亮"该兵种合法"的地区。
+	 * 老存档（已在某地区上选兵种）服务端仍下发 step='type'，文案会带地区名。
+	 */
+	if (dg.step === 'type') {
+		const types = dg.types || []
+		const where = dg.space != null ? ('在' + (dg.space_name || '') + ' ') : ''
+		if (!types.length) {
+			render_ask_box('现购自运政策：' + dg.nation + ' ' + where + '选择兵种',
+				'该国此刻没有可合法征召的兵种（需本土或相邻地区、且有空位/载体）。', [])
+			return
+		}
+		const opt = types.map(t => ({
+			label: '征召' + t.zh, cls: 'primary',
+			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_type', { type: t.type }) }
+		}))
+		ask_state = { kind: 'us_merchant' }
+		render_ask_box('现购自运政策：' + dg.nation + ' ' + where + '选择兵种',
+			'只列出该国此刻能合法征召的兵种。', opt)
 		return
 	}
-	/* 第三步：选兵种 */
-	const types = dg.types || []
-	const opt = types.map(t => ({
-		label: '征召' + t.zh, cls: 'primary',
-		onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_type', { type: t.type }) }
-	}))
-	ask_state = { kind: 'us_merchant' }
-	render_ask_box('现购自运政策：' + dg.nation + ' 在' + (dg.space_name || '') + ' 选择兵种',
-		'选择要征召的合法兵种。', opt)
+	/* 第三步：选地区（只高亮该兵种合法的地区） */
+	{
+		const tgs = dg.targets || []
+		if (!tgs.length) {
+			render_ask_box('现购自运政策：' + dg.nation,
+				'该兵种当前没有可征召的地区（需本土或相邻、且有空位/载体）。', [])
+			return
+		}
+		highlight_targets({
+			spaces: tgs.map(t => ({ id: t.id, reason: dg.nation + ' ' + (dg.type_zh || '部队') + ' 征召候选' })),
+		})
+		render_ask_box('现购自运政策：' + dg.nation + ' 征召' + (dg.type_zh || '部队'),
+			'点击地图上高亮的地区完成征召（只显示该兵种合法的地区）。', [])
+	}
 }
 
 /* 【2026-10-13】17535 租借法案：委托苏/英打出 1 张手牌并摸 1 张。
@@ -4488,6 +4534,14 @@ function start_guard_discard(g) {
 		cost: g.cost, cost_filter: g.cost_filter || null,
 		drop: [],
 		submit_target: target,
+		/*
+		 * 【2026-10-25】这一栏代价由【谁】付：
+		 *   · KV-2（17837）由攻击发起国付 —— 服务端 view.pending_battle.cost_nation 已算好；
+		 *   · 17853 / 保护卡由调用方显式传入。
+		 * 绝不能再用 view.my_nation（那只是"此刻该谁操作"，日本攻击时可能是德国）。
+		 */
+		discard_nation: g.discard_nation ||
+			(view.pending_battle && view.pending_battle.cost_nation) || view.my_nation,
 	}
 	/* 让出 ask_box，避免两个弹框叠在一起 */
 	ask_state = null
@@ -4516,13 +4570,15 @@ function render_guard_discard_box() {
 		: null
 	const typeName = gs.cost_filter === 'response' ? '响应牌' : (wantType || '手牌')
 
+	/* 【2026-10-25】按"付代价的国家"取手牌（KV-2 = 攻击国），标题同时标出国名 */
+	const dn = gs.discard_nation || view.my_nation
 	set_text("echo_discard_title",
-		"《" + gs.name + "》：选 " + gs.cost + " 张" + typeName + "作为代价")
+		"《" + gs.name + "》：请【" + dn + "】选 " + gs.cost + " 张" + typeName + "作为代价")
 
 	const grid = document.getElementById("echo_discard_grid")
 	if (!grid) return
 	grid.innerHTML = ""
-	const allHand = (view.hands[view.my_nation] && view.hands[view.my_nation].cards) || []
+	const allHand = (view.hands[dn] && view.hands[dn].cards) || []
 	const hand = (wantType
 		? allHand.filter(c => String(c.type || '').toUpperCase() === wantType)
 		: allHand).filter(c => c.id !== gs.card_id)   /* 本卡不能作自己的代价 */
@@ -6430,6 +6486,72 @@ function update_pending_autobahn_box() {
 		btn.onclick = () => send_action('finish_su_build_budget', {})
 		box.appendChild(btn)
 	}
+}
+
+/* ============================================================
+ * 【2026-10-25】战区移动（17532）分步状态机 UI
+ *
+ * 服务端 view.pending_theater = { actor, stage, order, built, step, total, label, can_act }
+ * 每步调一次 resolve_theater：
+ *   stage='remove'      -> 点地图上的美国陆军/海军算子，传 { piece }
+ *   stage='build_navy'  -> 点高亮海域，传 { space }
+ *   stage='build_army'  -> 点高亮陆地，传 { space }
+ *
+ * 候选由 query('theater_targets') 按【当前 stage 现算】（服务端此时移除已真实发生），
+ * 因此候选与执行天然同源；缓存两个数组供 update_map 每帧重贴高亮。
+ * 与 15228 高速公路的区别：那边是"剩 N 次"循环，本卡是"有顺序的三步"。
+ * ============================================================ */
+let theater_query_sig = null
+let theater_space_cands = null
+let theater_piece_cands = null
+
+function update_pending_theater_box() {
+	const pa = view && view.pending_theater
+	const box = document.getElementById('theater_box')
+	if (!box) return
+	if (!pa) {
+		box.classList.add('hide')
+		box.innerHTML = ''
+		if (theater_query_sig !== null) {
+			theater_query_sig = null
+			theater_space_cands = null
+			theater_piece_cands = null
+			clear_target_highlight()
+			clear_piece_highlight('theater')
+		}
+		return
+	}
+	/* 步骤变化才重查（节流，避免每帧打 RPC） */
+	const sig = pa.stage + '|' + pa.step
+	if (theater_query_sig !== sig) {
+		theater_query_sig = sig
+		theater_space_cands = null
+		theater_piece_cands = null
+		send_query('theater_targets', {})
+	}
+	box.classList.remove('hide')
+	box.innerHTML = ''
+	const title = document.createElement('div')
+	title.className = 'eb-title'
+	title.textContent = '《' + (pa.card_name || '战区移动') + '》第 ' + pa.step + ' / ' + pa.total + ' 步'
+	box.appendChild(title)
+
+	const hint = document.createElement('div')
+	hint.className = 'eb-hint'
+	hint.textContent = pa.can_act
+		? (pa.label + '：' + (pa.stage === 'remove'
+			? '点地图上高亮的美国陆军或海军算子'
+			: '点地图上高亮的地区'))
+		: ('等待【' + pa.actor + '】操作：' + pa.label)
+	box.appendChild(hint)
+
+	const order = document.createElement('div')
+	order.className = 'eb-hint'
+	const doneList = [pa.built.navy ? '海军' : null, pa.built.army ? '陆军' : null].filter(Boolean)
+	order.textContent = '顺序：' +
+		pa.order.map(t => (t === 'navy' ? '海军' : '陆军')).join(' → ') +
+		'（已完成：' + (doneList.length ? doneList.join('、') : '无') + '）'
+	box.appendChild(order)
 }
 
 /* ============================================================
@@ -8551,6 +8673,28 @@ function on_click_space(evt) {
 	const s = evt.currentTarget.space_id
 
 	/*
+	 * 【2026-10-25】战区移动（17532）：建设步点地区即提交，优先级最高。
+	 * 候选来自 RPC 缓存（本步现算），不在候选内直接提示，不发请求。
+	 */
+	if (view && view.pending_theater &&
+		(view.pending_theater.stage === 'build_navy' || view.pending_theater.stage === 'build_army')) {
+		if (!view.pending_theater.can_act) {
+			toast('等待【' + view.pending_theater.actor + '】操作《战区移动》')
+			return
+		}
+		const ids = theater_space_cands || []
+		if (ids.indexOf(Number(s)) >= 0) {
+			send_action('resolve_theater', { space: s })
+			theater_space_cands = null
+			theater_query_sig = null
+			clear_target_highlight()
+		} else {
+			toast('该地区不是《战区移动》的合法建设目标')
+		}
+		return
+	}
+
+	/*
 	 * 【2026-10-07】armed 增强卡多步交互：需要选地区时拦截。
 	 * 候选由服务端算好下发（view.armed_offer.pending.candidates），客户端不二次过滤。
 	 */
@@ -8604,8 +8748,8 @@ function on_click_space(evt) {
 		send_action('resolve_us_theater_delegate', { space: s })
 		return
 	}
-	/* 17531 现购自运政策：点候选地区，记录征召位置（兵种待选） */
-	if (view && view.us_merchant && view.us_merchant.nation && view.us_merchant.space == null &&
+	/* 【2026-10-25】17531 现购自运政策：已选兵种 -> 点候选地区即完成征召 */
+	if (view && view.us_merchant && view.us_merchant.step === 'space' &&
 		(view.us_merchant.targets || []).some(t => t.id === s)) {
 		clear_target_highlight()
 		send_action('resolve_us_merchant_build', { space: s })
@@ -8982,6 +9126,27 @@ function on_click_piece(evt) {
 	const id = evt.currentTarget.piece_id
 
 	/*
+	 * 【2026-10-25】战区移动（17532）：stage='remove' 时点美国算子即提交移除。
+	 * 放在所有其它分支之前 —— 本卡挂起期间只有这一步可操作（服务端也冻结了其它动作）。
+	 */
+	if (view && view.pending_theater && view.pending_theater.stage === 'remove') {
+		if (!view.pending_theater.can_act) {
+			toast('等待【' + view.pending_theater.actor + '】操作《战区移动》')
+			return
+		}
+		const ids = theater_piece_cands || []
+		if (ids.some(x => String(x) === String(id))) {
+			send_action('resolve_theater', { piece: id })
+			theater_piece_cands = null
+			theater_query_sig = null
+			clear_piece_highlight('theater')
+		} else {
+			toast('《战区移动》只能选高亮的美国陆军或海军')
+		}
+		return
+	}
+
+	/*
 	 * 【2026-10-07】armed 增强卡多步交互：需要选部队时拦截。
 	 * 候选由服务端算好下发，客户端不二次过滤。
 	 */
@@ -9354,6 +9519,28 @@ function on_reply(q, params) {
 		autobahn_cands = sps.map(x => x.id)
 		highlight_targets({ spaces: sps.map(x => ({ id: x.id, reason: x.name })) })
 		toast("请点击一个高亮地区，建设 1 支" + actor + "陆军")
+		return
+	}
+
+	/* 【2026-10-25】战区移动（17532）：当前步骤的合法目标 -> 缓存 + 高亮 */
+	if (q === "theater_targets") {
+		const tg = params || {}
+		theater_space_cands = null
+		theater_piece_cands = null
+		const cands = tg.candidates || []
+		if (tg.need === 'piece') {
+			theater_piece_cands = cands.map(c => c.id)
+			if (theater_piece_cands.length)
+				highlight_pieces(theater_piece_cands, 'theater')
+			else
+				toast('《战区移动》当前没有可移除的美国陆军或海军')
+		} else if (tg.need === 'space') {
+			theater_space_cands = cands.map(c => Number(c.id))
+			if (cands.length)
+				highlight_targets({ spaces: cands.map(c => ({ id: Number(c.id), reason: c.name })) })
+			else
+				toast('《战区移动》当前没有可建设的地区')
+		}
 		return
 	}
 

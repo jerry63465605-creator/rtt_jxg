@@ -1,6 +1,7 @@
 # 当前遗留问题清单
 
 > 创建：2026-09-28（germany 分支）
+> 最近同步：**2026-10-25**（新增 A0 两项待修；E 节 15343 已确认并修复；A2 的 17852 已实现）
 > 范围：**当前仍存在的问题 / 未完成项**，按优先级排序。
 > 已解决的历史问题不要写在这里，去 `docs/pitfalls.md`（R28–R36 记录本轮修复过程与根因）。
 
@@ -70,6 +71,34 @@
 
 ## A. 未修复的 bug（需动手）
 
+### A0. 【2026-10-25】本次线上排查新增的两项
+
+| 项 | 状态 | 详情文档 |
+|---|---|---|
+| ~~**15337《生命的飞跃》**：一次断补把 2 支部队全部复活~~ | ✅ **已修复**（A+ 压帧去重 + A 结算兜底） | `docs/15337-life-leap-double-restore.md` |
+| **委托类挂起的后端门禁缺口**：`uk_build_delegate` / `su_build_delegate` / `us_theater_delegate` / `us_china_delegate` / `pending_armed_delegate` / `delegate.*` —— 前端有白名单、后端不冻结 | 已确认、未修 | `docs/delegate-gate-gaps.md` |
+
+同批已修复（工作区，未提交）：`15343` / `17805` / `17851` / `17852` / `15207` / `15337`，
+详见 `docs/pending-gate-matrix.md` 与各卡文档。
+
+> **线上测试局一律不补救**（玩家口径 2026-10-25）：game 5721（卡死）、game 5728（少算 1 分）
+> 以及所有测试局都不回滚、不补分、不热修，部署后用新局验证即可。
+
+### A0-b. 【2026-10-25】新登记的两项（待做，未动手）
+
+| 项 | 状态 | 详情文档 |
+|---|---|---|
+| **暗置/未发动卡牌的牌名泄露**：出牌流水与 `view.response_pending` / `response_stack` / `block_reason` 都写出了对手不该知道的卡名 | 已确认、未修 | `docs/pending-facedown-name-leak.md` |
+| **17737《以逸待劳》响应窗口卡死**：窗口期非持有方未冻结（时点仍显示同盟）＋ `pending_trigger` 读派生缓存 `response_queue` 而非真相源 `response_stack` | 已排查、未修（复现脚本 `tools/_repro_17737.js`） | `docs/17737-response-window-deadlock.md` |
+| ~~**battle 型响应卡缺"发起国"限定**：15431 全面侵华等 5 张日本卡~~ | ✅ **已修复 2026-10-25**（5 处 filter 加 `ctx.nation === '日本'`，`_smoke_a1a2.js` 全 PASS） | `docs/15431-battle-nation-gate.md` |
+| ~~**17821《华西列夫斯基》发起战斗须补给**~~ | ✅ **已修复 2026-10-25**（删 battle 步无条件 `grant_supply`；17821/17822 去掉 `grantSupply`） | `docs/17821-battle-supply.md` |
+| ~~**KV-2 弃牌框显示错误国家**~~ | ✅ **已修复 2026-10-25**（`pending_cost_nation` + `view.pending_battle.cost_nation` + 手牌可见性 + 客户端读它） | `docs/kv2-cost-nation.md` |
+| ~~**17737 响应窗口卡死**~~ | ✅ **已修复 2026-10-25**（`pending_trigger` 读栈顶；非持有方冻结；入口幂等重建 queue） | `docs/17737-response-window-deadlock.md` |
+| ~~**17837 KV-2 保护范围错误**~~ | ✅ **P0 已修复 2026-10-25**（`has_modifier` 加 `piece` 维度 + 本场战斗后撤销；P1 同类 `protect` 审计仍待做） | `docs/17837-kv2-protect-scope.md` |
+| ~~**战区移动（17532）整体重实现**~~ | ✅ **已实现 2026-10-25**（专用分步状态机 `pending_theater`，参照 15228 高速公路；`_smoke_17532_theater.js` 37 项全 PASS） | `docs/17532-reimpl-highway-pattern.md` |
+| ~~**17531 现购自运政策缺兵种选择**~~ | ✅ **已修复 2026-10-25**（顺序改为 国家→兵种→地区，兵种只列合法项；`_smoke_17531_merchant.js` 15 项全 PASS） | `docs/17531-merchant-type-order.md` |
+| **事件卡选地区高亮残留**（其它多步事件卡仍存在）：`update_map` 缺 `pending_event_targets.need==='space'` 重贴分支 | 已定位、未修（17532 因改走 `pending_theater` 已不再受影响，其它多步卡仍在） | `docs/17532-space-highlight-stale.md` |
+
 ### A1. 夺取制空权（seize）2 项测试失败 —— 唯一现存失败用例
 
 `tools/test_basic_cards.js` 当前 **295 通过 / 2 失败**：
@@ -95,7 +124,9 @@
 - **卡图已落盘**：11 张照片裁剪图 `cards/crop_{id}.png`（工具 `tools/_crop_cards.js`，
   源件标定可复现）；英国五张虽是 `↑` 图标，按玩家 2026-10-18 口径录为增强。
 - 后续：效果实现未做（萨宾行动走 card_effect_of；15352/15353 是"使效果无效"型，
-  需对齐 15329 反潜战术的拦截模式；17852 需要支持一次打出 2 张状态卡）。
+  需对齐 15329 反潜战术的拦截模式）。
+  - ~~17852 需要支持一次打出 2 张状态卡~~ → **已实现**（`pending_status_play` + `su_status_play`），
+    并于 2026-10-25 补齐后端门禁（见 `docs/17852-status-play-no-action-gate.md`）。
 
 ---
 
@@ -211,7 +242,7 @@
 | **苏联结束中立** | 18407 苏日中立条约联动，开局中立国设定，规则书未定义 |
 | **前奏跨堆引用** | 113 西班牙志愿军「苏联损耗 1 张前奏牌」—— 但苏联**没有前奏堆**（前奏仅轴心国 + 美国 172 例外），语义待确认 |
 | **日本 RESPONSE「出牌阶段开始时」** | 是否消耗出牌名额，未确认 |
-| **15343 压制时长** | 当前按"卡在桌上期间"实现 |
+| ~~**15343 压制时长**~~ | ✅ **2026-10-25 已由玩家确认并修复**：只在【英国回合】压制敌方状态卡（原实现是"卡在桌上期间永久压制"）。见 `docs/15343-hobart-permanent-suppress.md` |
 
 ---
 

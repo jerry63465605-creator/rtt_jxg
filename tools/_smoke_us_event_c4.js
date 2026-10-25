@@ -21,6 +21,16 @@ const q2 = I.request_responses(g, 'play_start', { nation: '日本' }, false)
 ok('压制后日本响应被屏蔽', q2 === null)
 
 g.jp_response_suppressed = false
+/*
+ * 【2026-10-25 夹具整改】q1 已经把同一张 15429 压成帧留在 game.response_stack。
+ * 而 request_responses 自 A+ 修复起会判重（同 card_id 已 ∈ 栈 -> 不再压帧），
+ * 于是"q3 = 解除压制后应能再问一次"会因为【上一次事件的帧还在栈里】而返回 null。
+ *
+ * 真实流程里这不会发生：响应帧表态后会被 pop_response_frame 弹掉。
+ * 夹具需要自己还原这一步，模拟"上一个事件的响应已经结算完毕"。
+ */
+g.response_stack = []
+g.response_queue = []
 const q3 = I.request_responses(g, 'play_start', { nation: '日本' }, false)
 ok('解除压制后日本响应恢复', q3 != null)
 

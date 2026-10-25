@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261024o">
+	<link rel="stylesheet" href="play.css?v=20261025c">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261024o"></script>
-	<script defer src="layout.js?v=20261024o"></script>
-	<script defer src="play.js?v=20261024o"></script>
+	<script defer src="data.js?v=20261025c"></script>
+	<script defer src="layout.js?v=20261025c"></script>
+	<script defer src="play.js?v=20261025c"></script>
 </head>
 <body>
 
@@ -116,6 +116,8 @@
 			<!-- 【2026-10-21 方案 B】事件卡分步执行机的"步骤边界"面板（下一步 / 待处理窗口提示） -->
 			<div id="event_step_box" class="hide"></div>
 			<div id="autobahn_box" class="hide"></div>
+			<!-- 【2026-10-25】17532 战区移动：分步状态机面板（参照 autobahn_box） -->
+			<div id="theater_box" class="hide"></div>
 			<div id="uranus_box" class="hide"></div>
 		</div>
 	</div>
