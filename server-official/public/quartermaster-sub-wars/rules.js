@@ -6984,6 +6984,17 @@ const CROSS_NATION_STATUS_WINDOWS = { after_ally_battle: 1, build_army: 1 }
 
 function status_window_ready(game, nation, card_id, tr, opts) {
 	/*
+	 * 【2026-10-26】15353《保持冷静·继续前进》本回合压制 -> 窗口直接关闭。
+	 *
+	 * 与 status_used 同源（fn 结束时 activate_status 也会写 status_used），
+	 * 但必须单独判：没有 once_per_turn 的状态卡（如 15255《征兵》）不看 status_used，
+	 * 只判 used 的话窗口仍会亮着 —— 玩家点了才被 activate_status 的压制分支拒绝，
+	 * 违反"能点的 ≠ 能成功的"（通用教训 3）。
+	 * 放在最前，理由优先于"已经发动过"。
+	 */
+	if ((game.status_suppressed_this_turn || {})[card_id] === freq_key(game))
+		return { ok: false, reason: '本回合已被《保持冷静·继续前进》压制' }
+	/*
 	 * 一回合一次：本回合已发动过则窗口关闭（视图置灰 + 防重复点击）。
 	 * status_used 由 activate_status 在成功发动后写入（键含 freq_key = 回合+行动国，跨回合自动失效）。
 	 * 17513 战时生产委员会首次发动写入 status_extra 而非 status_used，故此处只查 status_used，
@@ -12568,6 +12579,19 @@ const ECHO_EFFECTS = {
 				/* 状态卡留桌面，仅记"本国家回合无效" */
 				game.status_suppressed_this_turn = game.status_suppressed_this_turn || {}
 				game.status_suppressed_this_turn[cid] = freq_key(game)
+				/*
+				 * 【2026-10-26 玩家口径】被拦下的那次发动【算用掉】：
+				 * 同时写 status_used，让这张状态卡本回合标为「已发动」。
+				 *
+				 * 依据卡面"使其在本回合中无效"= 这一次发动机会被抵消，
+				 * 而不是"拦住之后还能当没发生过再发一次"。
+				 * 不写的话会有两个坏表现：
+				 *   · view.table_status.used_this_turn 一直 false，客户端显示"未发动"；
+				 *   · once_per_turn 的卡 ready 不会变灰（status_window_ready 只读 status_used），
+				 *     一直是亮的，点了才被 activate_status 的压制分支拒绝 —— "能点的 ≠ 能成功的"。
+				 */
+				game.status_used = game.status_used || {}
+				game.status_used[cid] = freq_key(game)
 				return {
 					ok: true,
 					desc: '英国弃置 1 张手牌：敌方状态卡《' + nm + '》本回合效果无效',
@@ -28339,6 +28363,15 @@ function do_action(state, current, action, arg) {
 
 		/* 15353 保持冷静·继续前进：本回合已被拦截压制 -> 状态卡效果不发生（卡留桌面、不付代价） */
 		if ((game.status_suppressed_this_turn || {})[cardId] === freq_key(game)) {
+			/*
+			 * 【2026-10-26 玩家口径】被压制 = 本次发动已被抵消，标为「已发动」。
+			 * 主标记在 15353 的 run 里；这里补一刀，覆盖：
+			 *   · 旧存档 / 旧代码只写了 suppressed 而没写 status_used 的局面；
+			 *   · 任何直接写 suppressed 的旁路。
+			 * 让「界面显示已发动」与「再点被拒」两处口径始终一致。
+			 */
+			game.status_used = game.status_used || {}
+			game.status_used[cardId] = freq_key(game)
 			game.log.push('《' + cName + '》本回合已被《保持冷静·继续前进》压制，无法发动')
 			return game
 		}
