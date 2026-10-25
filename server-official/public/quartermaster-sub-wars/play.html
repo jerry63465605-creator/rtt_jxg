@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261025d">
+	<link rel="stylesheet" href="play.css?v=20261025e">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261025d"></script>
-	<script defer src="layout.js?v=20261025d"></script>
-	<script defer src="play.js?v=20261025d"></script>
+	<script defer src="data.js?v=20261025e"></script>
+	<script defer src="layout.js?v=20261025e"></script>
+	<script defer src="play.js?v=20261025e"></script>
 </head>
 <body>
 
@@ -404,6 +404,16 @@
 	区别：多选（status_play_sel 数组）。内容由 update_status_play_box 动态生成。
 -->
 <div id="status_play_modal" class="modal hide">
+	<div class="modal-box"></div>
+</div>
+<!--
+	【2026-10-25】15328《破译恩尼格码》延迟窗口（英国回合开始时）。
+	德国在计分阶段凭[状态卡]自动得分后，英国可发动这张暗置响应卡，
+	选择并弃置其中 1 张德国[状态卡]；也可放弃（卡留于桌面）。
+	复用 .modal 居中 + .card-grid + card_elt 范式（同 su_purge_modal）。
+	内容由 update_uk_enigma_box 动态生成；仅英国阵营可见（view.uk_enigma_offer）。
+-->
+<div id="uk_enigma_modal" class="modal hide">
 	<div class="modal-box"></div>
 </div>
 

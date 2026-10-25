@@ -20750,6 +20750,32 @@ function resolve_pending_neutral_effects(game, nation) {
 	delete game.pending_neutral_effect[nation]
 }
 
+/*
+ * 【2026-10-25】15328《破译恩尼格码》的【延迟窗口】（参照大清洗范式）。
+ *
+ * 卡面："德国发动[状态卡]效果后：弃置该[状态卡]"。
+ * 德国在【计分阶段】自动加分的状态卡（15241 / 15244 / 6601）在结算当场不好打断，
+ * 故推迟到【英国回合开始时】给出一次可选机会：英国可发动 15328 弃置其中 1 张。
+ *
+ * · 不阻塞：是可选窗口（与大清洗 su_purge_offer 同款），玩家可先做别的，
+ *   英国回合结束仍未处理则自动放弃（见 next_nation 里的清理）。
+ * · 目标 = 计分阶段执行器记录的 game.uk_enigma_targets（只含 bonus > 0 的德国状态卡）。
+ * · 前提 = 英国桌面暗置着 15328（table_responses 里有 15328 且 owner_side 属同盟）。
+ */
+function uk_enigma_instance(game) {
+	const list = game.table_responses || []
+	return list.find(r => String(inst_card_id(r.card_id)) === '15328') || null
+}
+function resolve_uk_enigma_offer(game, nation) {
+	if (nation !== '英国') return
+	const targets = game.uk_enigma_targets || []
+	if (!targets.length) return
+	if (!uk_enigma_instance(game)) return
+	game.uk_enigma_offer = true
+	game.log.push('【破译恩尼格码】德国刚在计分阶段凭[状态卡]自动得分，' +
+		'英国可选择弃置其中 1 张德国[状态卡]（点「发动」选择，或「放弃」）')
+}
+
 /* 【2026-10-19】大清洗(17850)让权收尾：归还 current_nation 并把操作权(active)交还。
  * 仅在 handoff_to 真正推过 'su_purge' 栈时才需 reconcile（被德意攻击路径），
  * 17817/压力参战 路径 current_nation 本就是苏联、未推栈，reconcile 自动 no-op。 */
@@ -21759,6 +21785,18 @@ function phase_scoring(game, nation, opts) {
 				if (bonus !== 0) {
 					results.push({ nation: (cfg.auto.affects || n2), skipped: false, gained: bonus, items: [{ kind: 'status', card: cid, bonus: bonus }] })
 					total += bonus
+					/*
+					 * 【2026-10-25】15328《破译恩尼格码》的新触发源：
+					 * 卡面"德国发动[状态卡]效果后：弃置该[状态卡]"。
+					 * 这里记录【德国】在计分阶段【有效自动加分】（bonus > 0）的状态卡实例，
+					 * 供英国下个回合开始时发动 15328 选择弃置（延迟窗口，参照大清洗范式）。
+					 * 只记 bonus > 0（"有效的自动加分"），按 card_id 去重。
+					 */
+					if (cfg.auto.trigger_nation === '德国' && bonus > 0) {
+						game.uk_enigma_targets = game.uk_enigma_targets || []
+						if (!game.uk_enigma_targets.some(t => t.card_id === cid))
+							game.uk_enigma_targets.push({ card_id: cid, bonus: bonus })
+					}
 					if (!opts.silent) game.log.push('《' + (inst_card(cid) || {}).name + '》：' +
 						(bonus > 0 ? '额外得 ' : '扣 ') + Math.abs(bonus) + ' 分')
 				}
@@ -22285,6 +22323,14 @@ function advance_phase(game) {
 		joinedNations = check_neutral_end_on_turn(game, nextNation)
 		/* 【2026-10-19】结算"战斗参战"延迟到回合开始的状态卡效果（大清洗/大萧条的余波） */
 		resolve_pending_neutral_effects(game, nextNation)
+		/* 【2026-10-25】15328 破译恩尼格码：德国计分阶段自动加分后，英国回合开始时给机会 */
+		resolve_uk_enigma_offer(game, nextNation)
+		/* 离开英国回合 -> 上一段机会未用视为放弃（错过即失效） */
+		if (game.uk_enigma_offer && game.current_nation !== '英国') {
+			game.uk_enigma_offer = false
+			game.uk_enigma_targets = []
+			game.log.push('【破译恩尼格码】英国回合已过，本次机会作废')
+		}
 
 		/*
 		 * 【关键】操作权（active）必须跟着"当前行动国所属阵营"走。
@@ -23230,6 +23276,14 @@ exports.view = function (state, current) {
 		us_depression_offer: !!(game.us_depression_offer && table_has(game, '美国', 17555)),
 		/* 17555 大萧条的余波 ①：美国打出事件/状态卡后须自选弃 1 张手牌（仅美国阵营可见） */
 		us_depression_discard: !!(game.us_depression_discard && game.us_depression_discard.pending && table_has(game, '美国', 17555)),
+		/*
+		 * 【2026-10-25】15328《破译恩尼格码》延迟窗口。
+		 * 按【阵营】过滤：只有英国阵营看得到（对手不该知道英国手里有这张暗置响应）。
+		 * pick 只在玩家点了「发动」、服务端回传候选后才非空。
+		 */
+		uk_enigma_offer: !!(game.uk_enigma_offer && faction_of_nation('英国') === side),
+		uk_enigma_pick: (game.uk_enigma_pick && faction_of_nation('英国') === side)
+			? game.uk_enigma_pick : null,
 		/* 16304 中国远征军：让权美国选相邻地区征召中国陆军（自己/他人回合都能触发） */
 		us_china_delegate: (function () {
 			const dg = game.us_china_delegate
@@ -25405,6 +25459,15 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 		faction_of_nation('苏联') === side &&
 		table_has(game, '苏联', 17850)) {
 		acts.su_purge_skip = 1
+	}
+
+	/*
+	 * 【2026-10-25】15328《破译恩尼格码》延迟窗口：仅英国阵营可见/可点。
+	 * ⚠ 不在册 = 客户端 send_action 静默不发（通用教训 3/11）。
+	 */
+	if (game.uk_enigma_offer && faction_of_nation('英国') === side) {
+		acts.uk_enigma_play = 1
+		acts.uk_enigma_skip = 1
 	}
 
 	/* 16304 中国远征军：让权美国期间，仅美国可选地区（追加而非替换，避免死锁） */
@@ -29938,6 +30001,69 @@ function do_action(state, current, action, arg) {
 		return game
 	}
 
+	/* ============================================================
+	 * 【2026-10-25】15328《破译恩尼格码》的延迟窗口：
+	 *   英国回合开始时，若德国刚在计分阶段凭[状态卡]自动得分，
+	 *   可发动 15328 弃置其中 1 张（uk_enigma_play），或放弃（uk_enigma_skip）。
+	 * arg = { card: <要弃置的德国状态卡实例 id> }
+	 * ============================================================ */
+	if (action === 'uk_enigma_play') {
+		if (!game.uk_enigma_offer) {
+			game.log.push('当前没有可发动的《破译恩尼格码》机会')
+			return game
+		}
+		const inst = uk_enigma_instance(game)
+		if (!inst) {
+			game.log.push('《破译恩尼格码》已不在桌面，机会作废')
+			game.uk_enigma_offer = false
+			return game
+		}
+		/* 目标仍须在德国桌面（可能已被别的卡弃掉） */
+		const targets = (game.uk_enigma_targets || [])
+			.filter(t => (game.table['德国'] || []).indexOf(t.card_id) >= 0)
+		game.uk_enigma_targets = targets
+		if (!targets.length) {
+			game.log.push('目标德国[状态卡]已不在桌面，机会作废')
+			game.uk_enigma_offer = false
+			return game
+		}
+		const pick = arg && arg.card
+		if (!pick) {
+			/* 第一次进入：把候选交给客户端弹窗（与 15328 现有响应实现同款） */
+			game.uk_enigma_pick = { candidates: targets.map(t => ({
+				id: t.card_id, name: (inst_card(t.card_id) || {}).name || '状态卡', bonus: t.bonus,
+			})) }
+			game.log.push('《破译恩尼格码》：请选择要弃置的 1 张德国[状态卡]')
+			return game
+		}
+		const hit = targets.find(t => t.card_id === pick)
+		if (!hit) { game.log.push('所选卡不在候选内'); return game }
+		/* 弃置目标状态卡（复用原子：桌面移除 + 撤光环 + 进弃牌堆） */
+		const gone = discard_status_instance(game, '德国', pick)
+		if (!gone) { game.log.push('该状态卡已不在桌面'); return game }
+		/* 消耗这张 15328：移出桌面响应区 + 进英国弃牌堆 */
+		consume_response(game, inst.card_id, 'allies')
+		game.uk_enigma_offer = false
+		game.uk_enigma_targets = []
+		game.uk_enigma_pick = null
+		game.log.push('【英国】发动《破译恩尼格码》：弃置德国的《' +
+			((inst_card(gone) || {}).name || '状态卡') + '》')
+		refresh(game)
+		return game
+	}
+
+	if (action === 'uk_enigma_skip') {
+		if (!game.uk_enigma_offer) {
+			game.log.push('当前没有可放弃的《破译恩尼格码》机会')
+			return game
+		}
+		game.uk_enigma_offer = false
+		game.uk_enigma_targets = []
+		game.uk_enigma_pick = null
+		game.log.push('【英国】放弃《破译恩尼格码》机会（该响应卡留于桌面）')
+		return game
+	}
+
 	/* ---------- 17850 大清洗：跳过（仅被攻击 / 压力参战路径，无 17817 待结算） ---------- */
 	if (action === 'su_purge_skip') {
 		if (!game.su_purge_offer) {
@@ -31279,6 +31405,9 @@ if (typeof module !== 'undefined') {
 		/* 【2026-10-25】地点级计分标记归属 + 统一执行器 */
 		set_space_marker_owner,
 		apply_marker_ops,
+		/* 【2026-10-25】15328 破译恩尼格码的延迟窗口 */
+		resolve_uk_enigma_offer,
+		phase_scoring,
 		delegated_to,
 		NATIONS_DELEGATED_TO,
 		battle_initiators,

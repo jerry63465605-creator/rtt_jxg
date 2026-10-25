@@ -674,6 +674,8 @@ function update_phase_buttons() {
 	update_pending_autobahn_box()
 	/* 【2026-10-25】战区移动（17532）：分步状态机面板（移除 → 建海军 → 建陆军） */
 	update_pending_theater_box()
+	/* 【2026-10-25】15328 破译恩尼格码：英国回合开始时的延迟窗口 */
+	update_uk_enigma_box()
 	/* 多步脚本卡（15229/15239/14503）：牌堆 / 手牌 / 暗牌 的选牌框 */
 	update_pending_script_box()
 	/* 国家技能：★卡结算后的机会窗口 */
@@ -7770,6 +7772,108 @@ function update_uranus_box() {
  *   · 被攻击 / 压力参战（无 17817 待结算）：view.actions.su_purge_skip 真 → 底部给「跳过（不发动大清洗）」。
  *   · 无论哪条路径，选 1 张[状态卡]后底部「确认打出」按钮置可点，send_action('su_purge_play', {card})。
  */
+/* ============================================================
+ * 【2026-10-25】15328《破译恩尼格码》延迟窗口（英国回合开始时）。
+ *
+ * 触发：德国在【计分阶段】凭[状态卡]自动得分（15241 / 15244 / 6601）后，
+ *       服务端在切到英国回合时置 view.uk_enigma_offer。
+ * 两段式：
+ *   ① 未点「发动」：只给「发动」「放弃」两个按钮（view.uk_enigma_pick 为 null）；
+ *   ② 点「发动」后：服务端回传候选（view.uk_enigma_pick.candidates = 那些德国状态卡），
+ *      这里渲染卡片网格供点选，确认后 send_action('uk_enigma_play', { card })。
+ * 仅英国阵营可见（服务端已按阵营过滤）。
+ * ============================================================ */
+let uk_enigma_sel = null
+function update_uk_enigma_box() {
+	const modal = document.getElementById('uk_enigma_modal')
+	if (!modal) return
+	const show = !!(view && view.uk_enigma_offer &&
+		view.actions && view.actions.uk_enigma_play)
+	if (!show) {
+		modal.classList.add('hide')
+		const _b = modal.querySelector('.modal-box')
+		if (_b) _b.innerHTML = ''
+		uk_enigma_sel = null
+		return
+	}
+	modal.classList.remove('hide')
+	const box = modal.querySelector('.modal-box')
+	box.innerHTML = ''
+
+	const head = document.createElement('div')
+	head.className = 'modal-head'
+	const title = document.createElement('span')
+	title.className = 'modal-title'
+	title.textContent = '破译恩尼格码'
+	const sub = document.createElement('span')
+	sub.className = 'modal-sub'
+	sub.textContent = '德国刚在计分阶段凭[状态卡]自动得分，可弃置其中 1 张德国[状态卡]'
+	head.append(title, sub)
+	box.appendChild(head)
+
+	const cands = (view.uk_enigma_pick && view.uk_enigma_pick.candidates) || []
+	if (cands.length) {
+		const sec = document.createElement('div')
+		sec.className = 'modal-section'
+		const label = document.createElement('div')
+		label.className = 'modal-label'
+		label.textContent = '选择要弃置的 1 张德国[状态卡]'
+		const hint = document.createElement('span')
+		hint.className = 'modal-hint'
+		hint.textContent = uk_enigma_sel ? '已选 1 / 1，点确认弃置' : '点选 1 张状态卡'
+		label.appendChild(hint)
+		sec.appendChild(label)
+
+		const grid = document.createElement('div')
+		grid.className = 'card-grid'
+		for (const c of cands) {
+			const el = card_elt(c, () => {
+				uk_enigma_sel = (uk_enigma_sel === c.id) ? null : c.id
+				update_uk_enigma_box()
+			})
+			if (uk_enigma_sel === c.id) el.classList.add('sel')
+			grid.appendChild(el)
+		}
+		sec.appendChild(grid)
+		box.appendChild(sec)
+	}
+
+	const foot = document.createElement('div')
+	foot.className = 'modal-foot'
+
+	if (!cands.length) {
+		/* ① 阶段：先问是否发动 */
+		const go = document.createElement('button')
+		go.className = 'action primary'
+		go.textContent = '发动（选择要弃置的状态卡）'
+		go.onclick = () => send_action('uk_enigma_play', {})
+		foot.appendChild(go)
+	} else {
+		const ok = document.createElement('button')
+		ok.className = 'action primary'
+		const chosen = cands.find(c => c.id === uk_enigma_sel)
+		ok.textContent = uk_enigma_sel && chosen
+			? ('弃置《' + (chosen.name || chosen.id) + '》') : '确认弃置'
+		ok.disabled = !uk_enigma_sel
+		ok.onclick = () => {
+			if (!uk_enigma_sel) return
+			const card = uk_enigma_sel
+			uk_enigma_sel = null
+			send_action('uk_enigma_play', { card })
+		}
+		foot.appendChild(ok)
+	}
+
+	if (view.actions && view.actions.uk_enigma_skip) {
+		const skip = document.createElement('button')
+		skip.className = 'action'
+		skip.textContent = '放弃（响应卡留于桌面）'
+		skip.onclick = () => { uk_enigma_sel = null; send_action('uk_enigma_skip', {}) }
+		foot.appendChild(skip)
+	}
+	box.appendChild(foot)
+}
+
 let su_purge_sel = null
 function update_su_17817_box() {
 	const modal = document.getElementById('su_purge_modal')
