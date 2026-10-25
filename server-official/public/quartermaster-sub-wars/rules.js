@@ -14031,6 +14031,35 @@ function pick_space_then_battle(game, ctx, choice, opt) {
 	}))
 }
 
+/*
+ * 【2026-10-26 玩家口径】"1 或 2 次"多步响应卡的【第 2 次】不能落回同一个地区。
+ *
+ * 适用：15423 潜艇支援（海战）/ 15424 海军特别陆战队（建陆军）/
+ *       15425 海军空降部队（陆战）/ 15426 驱逐舰运输（建陆军）。
+ *
+ * 两层保障（缺一即可能重复）：
+ *   ① 候选层：排除第 1 次用过的地区 —— 客户端拿不到"同一位置"的高亮；
+ *   ② 执行层：把 used 透传到 extra，由各卡的 battle2/region2 分支二次校验 ——
+ *      只靠候选不够：客户端沿用旧高亮、或伪造提交时，服务端仍会照着执行。
+ *
+ * ⚠ used 缺失（旧存档/异常）时退化为不排除（`Number(undefined)` 为 NaN，逐一保留），
+ *   行为等同改动前，不会把正常流程堵死。
+ */
+function resp_step2(game, p, used, step) {
+	if (!p) return p
+	if (Array.isArray(p.candidates))
+		p.candidates = p.candidates.filter(c => Number(c.id) !== Number(used))
+	p.extra = { step: step, used: used }
+	return p
+}
+
+/* 第 2 次执行前的统一校验：命中"与第 1 次同一地区"则返回可读原因 */
+function resp_step2_blocked(extra, sp) {
+	if (!extra || extra.used == null) return null
+	if (Number(sp) !== Number(extra.used)) return null
+	return '（不能与第 1 次选择同一地区：' + data.name_of(Number(sp)) + '）'
+}
+
 /* 在指定地区发起陆战（复用 battle_initiators） */
 function do_land_battle_at(game, space, nat) {
 	nat = nat || '日本'
@@ -15323,18 +15352,19 @@ const RESPONSE_EFFECT_IMPL = {
 			/* ③ 选"完成"则结束；选"再战"则进入第 2 个海域选择（排除首次） */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			const p = pick_space_then(game, ctx, undefined, {
+			/* 第 2 次候选排除第 1 次的海域，并把 used 透传给执行步二次校验 */
+			return resp_step2(game, pick_space_then(game, ctx, undefined, {
 				kind: 'sea', base: ctx.space, includeBase: true,
 				nation: '日本',
 				prompt: '选择要再次发起海战的海域（另一相邻海域）',
-			})
-			p.candidates = (p.candidates || []).filter(c => c.id !== extra.used)
-			p.extra = { step: 'battle2' }
-			return p
+			}), extra.used, 'battle2')
 		}
 		if (extra && extra.step === 'battle2') {
 			/* ④ 在第 2 个海域发起海战 */
 			const sp = Number(choice)
+			/* 服务端二次校验：不许与第 1 次同一海域（防客户端旧高亮 / 伪造提交） */
+			const _blk = resp_step2_blocked(extra, sp)
+			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = do_sea_battle_at(game, sp, '日本')
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再发起海战'
 				: '（第 2 次未发起：' + (r2.reason || '') + '）'
@@ -15380,17 +15410,17 @@ const RESPONSE_EFFECT_IMPL = {
 		if (extra && extra.step === 'ask2') {
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			const p = pick_space_then(game, ctx, undefined, {
+			/* 第 2 次候选排除第 1 次的地区，并把 used 透传给执行步二次校验 */
+			return resp_step2(game, pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false,
 				nation: '日本',
 				prompt: '选择要再建陆军的相邻地区（另一相邻陆地）',
-			})
-			p.candidates = (p.candidates || []).filter(c => c.id !== extra.used)
-			p.extra = { step: 'region2' }
-			return p
+			}), extra.used, 'region2')
 		}
 		if (extra && extra.step === 'region2') {
 			const sp = Number(choice)
+			const _blk = resp_step2_blocked(extra, sp)
+			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = build_piece(game, '日本', 'army', sp)
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再建 1 支陆军'
 				: '（第 2 支未建成：' + (r2.reason || '') + '）'
@@ -15417,10 +15447,10 @@ const RESPONSE_EFFECT_IMPL = {
 			const desc1 = r1.ok ? '对' + data.name_of(sp) + '发起陆战'
 				: '（未对' + data.name_of(sp) + '发起陆战：' + (r1.reason || '') + '）'
 			if (!r1.ok) return { ok: true, desc: desc1 }
-			/* 还有别的相邻陆地才问"是否再战"（方案 A：候选不排除首次地区） */
+			/* 还有别的相邻陆地才问"是否再战"（排除首次地区，见 resp_step2 说明） */
 			const others = (pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: true, nation: '日本',
-			}).candidates || [])
+			}).candidates || []).filter(c => Number(c.id) !== Number(sp))
 			if (!others.length)
 				return { ok: true, desc: desc1 + '（无其他相邻地区可再战）' }
 			return {
@@ -15439,21 +15469,24 @@ const RESPONSE_EFFECT_IMPL = {
 			}
 		}
 		if (extra && extra.step === 'ask2') {
-			/* ③ 选"完成"则结束；选"再战"则进入第 2 个地区选择（方案 A：不排斥首次地区） */
+			/* ③ 选"完成"则结束；选"再战"则进入第 2 个地区选择 */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			const p = pick_space_then(game, ctx, undefined, {
+			/*
+			 * 【2026-10-26 口径变更】原"方案 A：第 2 步不排除首次地区"作废。
+			 * 玩家口径：同一张卡的两步不能落在同一个位置（与 15423/15424/15426 一致）。
+			 */
+			return resp_step2(game, pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: true,
 				nation: '日本',
-				prompt: '选择要再次发起陆战的地区（可再次选择同一地区）',
-			})
-			/* 方案 A：第 2 步候选不排除首次地区 */
-			p.extra = { step: 'battle2' }
-			return p
+				prompt: '选择要再次发起陆战的地区（另一相邻陆地）',
+			}), extra.used, 'battle2')
 		}
 		if (extra && extra.step === 'battle2') {
 			/* ④ 在第 2 个地区发起陆战 */
 			const sp = Number(choice)
+			const _blk = resp_step2_blocked(extra, sp)
+			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = do_land_battle_at(game, sp, '日本')
 			const desc2 = r2.ok ? '对' + data.name_of(sp) + '再发起陆战'
 				: '（第 2 次未发起：' + (r2.reason || '') + '）'
@@ -15503,18 +15536,18 @@ const RESPONSE_EFFECT_IMPL = {
 			/* ③ 选"完成"则结束；选"再建"则进入第 2 个地区选择 */
 			if (!choice || Number(choice) === 0)
 				return { ok: true, desc: extra.desc1 }
-			const p = pick_space_then(game, ctx, undefined, {
+			/* 第 2 次候选排除第 1 次的地区，并把 used 透传给执行步二次校验 */
+			return resp_step2(game, pick_space_then(game, ctx, undefined, {
 				kind: 'land', base: ctx.space, includeBase: false,
 				nation: '日本',
 				prompt: '选择要再建陆军的相邻地区（另一相邻陆地）',
-			})
-			p.candidates = (p.candidates || []).filter(c => c.id !== extra.used)
-			p.extra = { step: 'region2' }
-			return p
+			}), extra.used, 'region2')
 		}
 		if (extra && extra.step === 'region2') {
 			/* ④ 在第 2 个相邻地区建 1 支陆军 */
 			const sp = Number(choice)
+			const _blk = resp_step2_blocked(extra, sp)
+			if (_blk) return { ok: true, desc: extra.desc1 + _blk }
 			const r2 = build_piece(game, '日本', 'army', sp)
 			const desc2 = r2.ok ? '在' + data.name_of(sp) + '再建 1 支陆军'
 				: '（第 2 支未建成：' + (r2.reason || '') + '）'
