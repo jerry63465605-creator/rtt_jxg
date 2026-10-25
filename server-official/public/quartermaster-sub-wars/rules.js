@@ -31276,8 +31276,9 @@ if (typeof module !== 'undefined') {
 		init_markers,
 		ensure_markers,
 		ensure_marker_only,
-		/* 【2026-10-25】地点级计分标记归属 */
+		/* 【2026-10-25】地点级计分标记归属 + 统一执行器 */
 		set_space_marker_owner,
+		apply_marker_ops,
 		delegated_to,
 		NATIONS_DELEGATED_TO,
 		battle_initiators,
