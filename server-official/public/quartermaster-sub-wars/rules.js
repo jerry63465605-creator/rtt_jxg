@@ -14032,28 +14032,17 @@ function pick_space_then_battle(game, ctx, choice, opt) {
 }
 
 /*
- * 【2026-10-26】"全图任意可发起战斗的地区"候选（不限定与某格的相邻关系）。
+ * 【2026-10-26】15430《奇袭》的"全图战斗候选"直接复用权威原子
+ * `step_space_candidates(game, actor, { op:'battle', kind }, {})` ——
+ * 它的全图分支已经做了：地形匹配 + 目标格无本方部队 + `battle_initiators` 非空，
+ * 与 `do_battle` 完全同源。
  *
- * 用途：15430《奇袭》—— 卡面「发起海战后：发起 1 次海战，发起 1 次陆战」，
- * **没有"相邻"字样**；旧实现以"刚打完的那场海战地区"为 base 取相邻，
- * 把可打范围硬压成"那一格旁边"，与卡面不符（玩家反馈"奇袭应该没相邻的需求"）。
- *
- * 判据与 do_sea_battle_at / do_land_battle_at 同源：
- * 只有"能真的发起战斗"的地区才进候选 —— battle_initiators 非空，
- * 即存在与该格相邻、处于补给状态的本国陆/海军。
+ * ⚠ 不要再为"全图能发起战斗的地区"另写遍历（本项目铁律：
+ *   candidate 判定只允许一份实现，见 rtt-atomic-operations 第三节）。
+ *   本卡只需要把返回的【裸 id 数组】套成 `{id, name}` 形状给客户端。
  */
-function any_battle_space_candidates(game, nation, kind) {
-	const pool = []
-	if (kind === 'sea') {
-		pool.push(...all_sea_space_ids())
-	} else {
-		for (let i = 1; i < data.spaces.length; i++) {
-			const s = data.spaces[i]
-			if (s && s.terrain === 'land') pool.push(i)
-		}
-	}
-	return pool
-		.filter(sp => battle_initiators(game, nation, sp).length > 0)
+function battle_space_candidates_view(game, actor, kind) {
+	return step_space_candidates(game, actor, { op: 'battle', kind: kind }, {})
 		.map(sp => ({ id: sp, name: data.name_of(sp) }))
 }
 
@@ -15588,7 +15577,7 @@ const RESPONSE_EFFECT_IMPL = {
 			 * 【2026-10-26 修复】卡面「发起 1 次陆战」没有"相邻"限定 ——
 			 * 候选改为【全图】日本能发起陆战的地区，不再只给"奇袭海战那一格的相邻陆地"。
 			 */
-			const cands = any_battle_space_candidates(game, '日本', 'land')
+			const cands = battle_space_candidates_view(game, '日本', 'land')
 			if (!cands.length)
 				return { ok: true, desc: (descPrefix || '海战已结算') + '（全图无可发起陆战的地区，跳过陆战）' }
 			const prompt = (descPrefix || '海战已结算') + '；选择要发起陆战的地区（任意）'
@@ -15607,7 +15596,7 @@ const RESPONSE_EFFECT_IMPL = {
 			 * ① 选海域发起海战 —— 卡面「发起 1 次海战」无"相邻"限定：
 			 * 候选是【全图】日本能发起海战的海域（不限于 ctx.space 及其相邻）。
 			 */
-			const cands = any_battle_space_candidates(game, '日本', 'sea')
+			const cands = battle_space_candidates_view(game, '日本', 'sea')
 			if (!cands.length)
 				return { ok: false, desc: '（全图无可发起海战的海域）' }
 			return {
