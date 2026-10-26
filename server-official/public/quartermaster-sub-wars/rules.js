@@ -12048,12 +12048,20 @@ const ECHO_EFFECTS = {
 				const picked = (arg && arg.piece != null) ? String(arg.piece) : null
 				/* 多支占领军时由美国自选，不静默取第一个 */
 				if (cands.length > 1 && !picked) {
+					/*
+					 * 【2026-10-27】候选名必须带【国家】。
+					 *
+					 * 共存规则是"每国每格 1 个单位"（不是"每格 1 个"），
+					 * 所以中国东部可以同时有 日本陆军 + 意大利陆军 + 德国陆军。
+					 * 原先写成 "兵种@地区"（"陆军@中国东部"），同格两支不同国家的
+					 * 陆军会显示【完全相同的名字】，玩家只能靠猜，选错就误杀。
+					 * 地区本来就固定是中国东部，无需重复显示。
+					 */
 					return {
 						need: 'piece',
 						candidates: cands.map(id => ({
 							id: id,
-							name: piece_type_zh(game.piece_type[id]) + '@' +
-								data.name_of(game.location[id]),
+							name: game.piece_nation[id] + piece_type_zh(game.piece_type[id]),
 						})),
 						pick: 1, pickMin: 1,
 					}

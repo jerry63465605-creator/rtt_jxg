@@ -199,14 +199,9 @@ section('S12【2026-10-27】候选名可区分：同格多个轴心国陆军')
 		pend && (pend.candidates || []).length)
 	const names = ((pend && pend.candidates) || []).map(c => c.name)
 	console.log('    候选名: ' + names.join(' / '))
-	/*
-	 * TODO【2026-10-27·待玩家确认】候选名目前是 "兵种@地区"，两支不同国家的
-	 * 陆军会显示【完全相同的名字】（"陆军@中国东部 / 陆军@中国东部"），玩家无法区分。
-	 * 记录在此作为证据；一旦确认改为 "国家·兵种" 即把下面这条改成断言。
-	 */
-	const distinguishable = names.length === 2 && names[0] !== names[1]
-	console.log('    候选名可区分 = ' + distinguishable +
-		(distinguishable ? '' : '   <- 待改进：应显示国家名'))
+	ok('★ 两个候选名【可区分】（带国家名）', names.length === 2 && names[0] !== names[1])
+	ok('★ 候选名含国家（日本 / 意大利）',
+		names.some(n => n.indexOf('日本') === 0) && names.some(n => n.indexOf('意大利') === 0))
 }
 
 section('S10 跨阵营让权：敌方回合弹窗后 active 交给同盟')
