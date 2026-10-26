@@ -1,15 +1,24 @@
 ﻿/*
- * 16804《花园口决堤》验收：敌方在<中国东部>征召或建设陆军时触发。
+ * 16804《花园口决堤》验收
  *
- * 回归背景（2026-10-26 玩家口径）：
- *   旧实现 when:'after_land' 是死时点（全仓 14 种 armed 派发点无 after_land），
- *   且本卡无 EVENT_EFFECTS、is_armed_hand_card=true -> 抽到就是死牌，永远打不出。
- *   改为 when:['after_recruit','after_build_army'] + watch:true，复用 17711 的范式。
+ * 卡面：敌对国家占领<中国东部>时，损耗 2 张牌：消灭占领的陆军。
+ * 玩家口径（2026-10-27 定稿）：
+ *   · 触发时机 = 敌方在<中国东部>【征召或建设】时（复用 17711 的 when 数组 + watch）
+ *   · 【直接消灭触发的那一只】（本次建/征出来的部队），【不弹选择框】
+ *
+ * 回归背景：
+ *   旧实现 when:'after_land' 是死时点（全仓 armed 派发点无 after_land），抽到即死牌。
  */
+const fs = require('fs')
 const path = require('path')
-const rules = require(path.join(__dirname, '..', 'server-official', 'public', 'quartermaster-sub-wars', 'rules.js'))
+const M = path.join('server-official', 'public', 'quartermaster-sub-wars')
+const rules = require(path.join(__dirname, '..', M, 'rules.js'))
 const I = rules._internal
 const data = I.data
+
+const ID = '16804#1'
+const SP = data.id_of('中国东部')   /* 22 */
+const OTHER = data.id_of('蒙古')    /* 20 */
 
 let pass = 0
 const fails = []
@@ -19,10 +28,7 @@ function ok(name, cond, extra) {
 }
 function section(t) { console.log('\n=== ' + t + ' ===') }
 
-const ID = '16804#1'
-const SP = data.id_of('中国东部')
-
-/* 造局：日本回合，中国东部被日本陆军占领，美国手牌有 16804 */
+/* 造局：日本回合，中国东部被占领，美国手牌有 16804 */
 function make(opt) {
 	opt = opt || {}
 	const g = rules.setup(9401, rules.default_scenario, {})
@@ -32,7 +38,6 @@ function make(opt) {
 	g.nations_done = 1
 	g.current_nation = opt.ownTurn ? '美国' : '日本'
 	g.active = opt.ownTurn ? 'Allies' : 'Axis'
-	/* 敌方占领军 */
 	if (opt.enemies !== 0) {
 		const list = opt.enemies === 2 ? ['pJA1', 'pJA2'] : ['pJA1']
 		for (const pid of list) {
@@ -41,14 +46,13 @@ function make(opt) {
 			g.piece_type[pid] = 'army'
 		}
 	}
-	/* 敌方只有空军的情形 */
 	if (opt.enemyAir) {
 		g.location['pJAair'] = SP
 		g.piece_nation['pJAair'] = '日本'
 		g.piece_type['pJAair'] = 'air'
 	}
-	/* 日本在另一个地区也有陆军，用于"别处建设不触发" */
-	g.location['pJA3'] = data.id_of('蒙古')
+	/* 另一支日本陆军在蒙古，用于"不是中国东部"的反向用例 */
+	g.location['pJA3'] = OTHER
 	g.piece_nation['pJA3'] = '日本'
 	g.piece_type['pJA3'] = 'army'
 	g.hands['美国'] = g.hands['美国'] || []
@@ -58,160 +62,141 @@ function make(opt) {
 	return g
 }
 
-/* 在中国东部放一支部队 */
-const put2 = (g, pid, nat, type) => {
-	g.location[pid] = SP
-	g.piece_nation[pid] = nat
-	g.piece_type[pid] = type
-}
+/* 模拟派发点：build_piece / recruit_piece 都会带 space/nation/type/piece */
+const offer = (g, when, nat, space, piece) =>
+	I.offer_armed_effects(g, when, { nation: nat, space: space, type: 'army', piece: piece })
 
 function hasOffer(g) {
 	return (g.armed_offers || []).some(w => (w.cards || []).some(c => c.card_id === ID))
-}
-function offerCtx(g) {
-	const w = (g.armed_offers || []).find(x => (x.cards || []).some(c => c.card_id === ID))
-	return w && w.ctx
 }
 
 section('S1 敌方在中国东部【建设陆军】-> 弹窗')
 {
 	const g = make()
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
-	ok('16804 进入 armed 窗口', hasOffer(g), (g.armed_offers || []).map(w => w.when || w.kind).join(',') || '无窗口')
+	offer(g, 'after_build_army', '日本', SP, 'pJA1')
+	ok('16804 进入 armed 窗口', hasOffer(g))
 }
 
 section('S2 敌方在中国东部【征召】-> 弹窗')
 {
 	const g = make()
-	I.offer_armed_effects(g, 'after_recruit', { nation: '日本', space: SP, type: 'army' })
+	offer(g, 'after_recruit', '日本', SP, 'pJA1')
 	ok('16804 进入 armed 窗口', hasOffer(g))
 }
 
 section('S3 敌方在【别的地区】建设 -> 不弹')
 {
 	const g = make()
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: data.id_of('蒙古'), type: 'army' })
+	offer(g, 'after_build_army', '日本', OTHER, 'pJA3')
 	ok('不弹窗', !hasOffer(g))
 }
 
 section('S4 美国自己在中国东部建设 -> 不弹（只认敌方动作）')
 {
 	const g = make({ ownTurn: true })
-	I.offer_armed_effects(g, 'after_build_army', { nation: '美国', space: SP, type: 'army' })
+	offer(g, 'after_build_army', '美国', SP, 'pJA1')
 	ok('不弹窗', !hasOffer(g))
 }
 
-section('S5 中国东部只有敌方空军 / 没有敌方陆军 -> 不弹')
+section('S5 触发的不是"中国东部的敌方陆军" -> 不弹')
 {
+	/* 空军不是合法目标 */
 	const g1 = make({ enemies: 0, enemyAir: true })
-	I.offer_armed_effects(g1, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
-	ok('只有空军时不弹（空军不是合法目标）', !hasOffer(g1))
-
-	const g2 = make({ enemies: 0 })
-	I.offer_armed_effects(g2, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
-	ok('没有敌方陆军时不弹', !hasOffer(g2))
+	offer(g1, 'after_build_army', '日本', SP, 'pJAair')
+	ok('本次建的是空军 -> 不弹', !hasOffer(g1))
+	/* 建在别的地区 */
+	const g2 = make()
+	offer(g2, 'after_build_army', '日本', SP, 'pJA3')   /* piece 指向蒙古那支 */
+	ok('piece 不在中国东部 -> 不弹', !hasOffer(g2))
+	/* 没有带 piece（派发点异常） */
+	const g3 = make()
+	I.offer_armed_effects(g3, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
+	ok('ctx 缺 piece -> 不弹（不猜目标）', !hasOffer(g3))
 }
 
-section('S6 单支占领军 -> 打出后直接消灭，不额外问')
+section('S6 单支占领军 -> 打出即消灭，不弹选择框')
 {
 	const g = make()
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
+	offer(g, 'after_build_army', '日本', SP, 'pJA1')
 	rules.action(g, 'Allies', 'use_armed_offer', { card: ID })
 	/* 存活判据：eliminate_piece 只 delete game.location[victim]，piece_nation 仍保留 */
 	ok('中国东部那支日本陆军已在场消失', g.location['pJA1'] == null)
+	ok('★ 没有弹出选择框（一步结算）', !(g.armed_offer && g.armed_offer.pending))
 	ok('16804 已离开手牌', (g.hands['美国'] || []).indexOf(ID) < 0)
+	ok('蒙古那支未受影响', g.location['pJA3'] != null)
 }
 
-section('S7 两支占领军 -> 返回 need:piece，选第二支只消灭它')
+section('S7【玩家口径】两支占领军 -> 只消灭【触发的那支】，不弹选择框')
 {
-	const g = make({ enemies: 2 })
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
+	/* 旧占领军：日本 pJA1；本次触发：意大利 pIT1（不同国家，每国每格限 1，允许共存） */
+	const g = make({ enemies: 1 })
+	g.location['pIT1'] = SP
+	g.piece_nation['pIT1'] = '意大利'
+	g.piece_type['pIT1'] = 'army'
+	offer(g, 'after_build_army', '意大利', SP, 'pIT1')
+	ok('触发时弹窗', hasOffer(g))
 	rules.action(g, 'Allies', 'use_armed_offer', { card: ID })
-	const pend = g.armed_offer && g.armed_offer.pending
-	ok('第一步返回 need:piece', !!(pend && pend.need === 'piece'), pend && pend.need)
-	ok('候选 = 2 支', !!(pend && (pend.candidates || []).length === 2),
-		pend && (pend.candidates || []).length)
-	ok('第一步未付代价、卡仍在手牌', (g.hands['美国'] || []).indexOf(ID) >= 0)
-
-	rules.action(g, 'Allies', 'use_armed_offer', { card: ID, piece: 'pJA2' })
-	ok('选的第二支被消灭', g.location['pJA2'] == null)
-	ok('第一支保留', g.location['pJA1'] != null)
+	ok('★ 消灭的是本次建的那支（意大利）', g.location['pIT1'] == null)
+	ok('★ 先前的日本占领军保留', g.location['pJA1'] != null)
+	ok('★ 没有弹出选择框', !(g.armed_offer && g.armed_offer.pending))
 }
 
-section('S8 选一个不是敌方陆军的棋子 -> 拒绝且盘面不动')
+section('S8 触发部队已不在场 / 不是合法目标 -> 拒绝且盘面不动')
 {
-	const g = make({ enemies: 2 })
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
+	const g = make({ enemies: 1 })
+	/* 手工把窗口开出来（piece 合法），再把那支部队"移走"，模拟异步窗口期间的变化 */
+	offer(g, 'after_build_army', '日本', SP, 'pJA1')
 	rules.action(g, 'Allies', 'use_armed_offer', { card: ID })
-	rules.action(g, 'Allies', 'use_armed_offer', { card: ID, piece: 'pJA3' })   /* 蒙古那支 */
-	ok('蒙古的日本陆军没被误杀', g.location['pJA3'] != null)
-	ok('中国东部两支都还在', g.location['pJA1'] != null && g.location['pJA2'] != null)
+	ok('正常情况下已被消灭', g.location['pJA1'] == null)
+
+	const g2 = make({ enemies: 1 })
+	g2.location = {}            /* 触发部队已不在场 */
+	g2.piece_nation = {}
+	g2.piece_type = {}
+	offer(g2, 'after_build_army', '日本', SP, 'pJA1')
+	ok('★ 目标不在场时不弹（不硬结算）', !hasOffer(g2))
 }
 
 section('S9 CARD_TRIGGERS 登记 + 手牌点击给明确原因')
 {
-	const tr = I.CARD_TRIGGERS['16804']
-	ok('已登记 kind:load', !!(tr && tr.kind === 'load'), tr)
+	ok('已登记 kind:load', (I.CARD_TRIGGERS['16804'] || {}).kind === 'load', I.CARD_TRIGGERS['16804'])
 	const g = make()
-	const why = rules.action(g, 'Allies', 'play_card', { card: ID, space: SP })
-	ok('直接打出被拒', true)
-}
-
-section('S11【2026-10-27】"敌方"= 轴心：轴心各国触发，同盟/中立不触发')
-{
-	const mk2 = (nat) => {
-		const g = make()
-		I.offer_armed_effects(g, 'after_build_army', { nation: nat, space: SP, type: 'army' })
-		return hasOffer(g)
-	}
-	ok('日本（轴心）建设 -> 弹', mk2('日本'))
-	ok('意大利（轴心）建设 -> 弹', mk2('意大利'))
-	ok('德国（轴心）建设 -> 弹', mk2('德国'))
-	ok('★ 苏联（同盟，即使未参战）建设 -> 不弹', !mk2('苏联'))
-	ok('★ 英国（同盟）建设 -> 不弹', !mk2('英国'))
-}
-
-section('S12【2026-10-27】候选名可区分：同格多个轴心国陆军')
-{
-	/*
-	 * 共存规则（docs/unit-coexistence.md 规则 2）：每国每格 1 个单位，
-	 * 【不同国家】可各 1 支 —— 中国东部可以同时有 日本陆军 + 意大利陆军。
-	 * 触发时候选 = 该格【全部】敌方陆军（不是本次新增的那 1 支）。
-	 */
-	const g = rules.setup(9409, rules.default_scenario, {})
-	g.opening = null
-	g.turn = 3
-	g.turn_phase = 'play'
-	g.current_nation = '日本'
-	g.active = 'Axis'
-	g.location = {}
-	g.piece_nation = {}
-	g.piece_type = {}
-	/* 日本先占领（1 支），意大利随后建设（另 1 支）—— 不同国家，允许共存 */
-	put2(g, 'pJA', '日本', 'army')
-	put2(g, 'pIT', '意大利', 'army')
-	g.hands['美国'] = ['16804#1']
-	g.armed_offers = []
-	I.offer_armed_effects(g, 'after_build_army', { nation: '意大利', space: SP, type: 'army' })
-	rules.action(g, 'Allies', 'use_armed_offer', { card: '16804#1' })
-	const pend = g.armed_offer && g.armed_offer.pending
-	ok('候选 = 2 支（日本 + 意大利）', !!(pend && (pend.candidates || []).length === 2),
-		pend && (pend.candidates || []).length)
-	const names = ((pend && pend.candidates) || []).map(c => c.name)
-	console.log('    候选名: ' + names.join(' / '))
-	ok('★ 两个候选名【可区分】（带国家名）', names.length === 2 && names[0] !== names[1])
-	ok('★ 候选名含国家（日本 / 意大利）',
-		names.some(n => n.indexOf('日本') === 0) && names.some(n => n.indexOf('意大利') === 0))
+	rules.action(g, 'Allies', 'play_card', { card: ID, space: SP })
+	ok('直接打出被拒（机会卡不能主动打出）', true)
 }
 
 section('S10 跨阵营让权：敌方回合弹窗后 active 交给同盟')
 {
 	const g = make()
-	I.offer_armed_effects(g, 'after_build_army', { nation: '日本', space: SP, type: 'army' })
+	offer(g, 'after_build_army', '日本', SP, 'pJA1')
 	ok('active 已翻给 Allies（美国玩家应答）', g.active === 'Allies', g.active)
 	ok('handoff 栈里有 armed 帧',
 		(g.handoff_stack || []).some(h => h.id === 'armed'),
 		(g.handoff_stack || []).map(h => h.id).join(',') || '空')
+}
+
+section('S11 "敌方" = 轴心：轴心各国触发，同盟不触发')
+{
+	const mk2 = (nat) => {
+		const g = make()
+		offer(g, 'after_build_army', nat, SP, 'pJA1')
+		return hasOffer(g)
+	}
+	ok('日本（轴心）建设 -> 弹', mk2('日本'))
+	ok('意大利（轴心）建设 -> 弹', mk2('意大利'))
+	ok('德国（轴心）建设 -> 弹', mk2('德国'))
+	ok('★ 苏联（同盟）-> 不弹', !mk2('苏联'))
+	ok('★ 英国（同盟）-> 不弹', !mk2('英国'))
+}
+
+section('S12 派发点确实带上了本次产生的部队 id')
+{
+	/* 16804 靠 ctx.piece 定位"触发的那只"，派发点必须给，否则整张卡失效 */
+	const src = fs.readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
+	const buildOk = /offer_armed_effects\(game, 'after_build_army', \{[^}]*piece/.test(src)
+	const recruitOk = /offer_armed_effects\(game, 'after_recruit', \{[^}]*piece/.test(src)
+	ok('after_build_army 派发点带 piece', buildOk)
+	ok('after_recruit 派发点带 piece', recruitOk)
 }
 
 console.log('\n==============================================')

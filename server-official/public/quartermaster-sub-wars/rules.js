@@ -8589,7 +8589,13 @@ function build_piece(game, nation, type, space) {
 		 * 导致"敌方建设时…"的卡永不触发。这里补上 after_build_army。
 		 * 与 after_build_navy / after_deploy_air 同款，ctx 带 space/nation/type。
 		 */
-		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type })
+		/*
+		 * 【2026-10-27】ctx 补 piece = 本次建出来的部队 id。
+		 * 16804《花园口决堤》要"消灭触发的那一支"（玩家口径：不用选），
+		 * 必须能定位到本次动作产生的那支部队，不能靠"取第一个候选"。
+		 * 字段名与 armed 家族的 piece_removed 一致（piece），便于卡面复用。
+		 */
+		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece: __r.id })
 	}
 	return __r
 }
@@ -8762,7 +8768,8 @@ function recruit_piece(game, nation, type, space) {
 	 * 征召此前【没有】armed 派发点，导致"敌方征召时…"的卡永不触发。
 	 * 这里补上 after_recruit（与 after_build_army 区分，便于卡面精确匹配）。
 	 */
-	offer_armed_effects(game, 'after_recruit', { space: space, nation: nation, type: type })
+	/* 【2026-10-27】同上：ctx 带本次征召出来的部队 id（piece） */
+	offer_armed_effects(game, 'after_recruit', { space: space, nation: nation, type: type, piece: id })
 	/* 17553 抗日义勇军：中国【征召】后，让权日本弃牌+损耗 */
 	if (nation === '中国') offer_us_japan_delegate(game, '中国征召')
 	refresh(game)
@@ -12026,52 +12033,41 @@ const ECHO_EFFECTS = {
 			actor: '美国', watch: true,
 			cost: { attrition: 2 },
 			desc: '敌方在<中国东部>征召或建设陆军时：损耗2张牌，消灭该地区1支敌方陆军',
+			/*
+			 * 【2026-10-27 玩家口径】消灭【触发的那一只】—— 即本次建设 / 征召出来的
+			 * 那支部队，不需要玩家在多个占领军之间选。
+			 *
+			 * 因此这里【不发 need:'piece'】：弹窗问"打不打"之后点"打出"即直接结算。
+			 * 定位依据是 ctx.piece（由 build_piece / recruit_piece 的派发点补上），
+			 * 而不是"取候选里的第一个"—— 后者在中国东部已有旧占领军时会杀错目标。
+			 */
 			ready(game, ctx) {
 				/*
 				 * 只认【敌方】在【中国东部】的征召/建设。
 				 *
-				 * 【2026-10-27】"敌方"写死为【轴心】而不是"不等于美国阵营"：
+				 * "敌方"写死为【轴心】而不是"不等于美国阵营"：
 				 * 后者会把中立 / 未参战国也算成触发方。本作阵营只有 axis / allies，
-				 * 美国的敌对阵营即 axis。常量取自 NATION_FACTION 的口径（小写）。
+				 * 美国的敌对阵营即 axis。
 				 */
 				if (!ctx || !ctx.nation) return false
 				if (faction_of_nation(ctx.nation) !== 'axis') return false
 				const sp = space_id('中国东部')
 				if (Number(ctx.space) !== sp) return false
-				/* 该地区必须真有可消灭的敌方陆军（没把握不弹，避免"弹了点了没用"） */
-				return eliminate_candidates(game, '美国', sp, 'army').length > 0
+				/* 本次建/征的必须是【中国东部的敌方陆军】（没把握不弹） */
+				if (ctx.piece == null) return false
+				return eliminate_candidates(game, '美国', sp, 'army').indexOf(String(ctx.piece)) >= 0
 			},
 			run(game, ctx, arg) {
 				const sp = space_id('中国东部')
-				const cands = eliminate_candidates(game, '美国', sp, 'army')
-				if (!cands.length) return { ok: true, skip: true, desc: '中国东部没有敌方陆军' }
-				const picked = (arg && arg.piece != null) ? String(arg.piece) : null
-				/* 多支占领军时由美国自选，不静默取第一个 */
-				if (cands.length > 1 && !picked) {
-					/*
-					 * 【2026-10-27】候选名必须带【国家】。
-					 *
-					 * 共存规则是"每国每格 1 个单位"（不是"每格 1 个"），
-					 * 所以中国东部可以同时有 日本陆军 + 意大利陆军 + 德国陆军。
-					 * 原先写成 "兵种@地区"（"陆军@中国东部"），同格两支不同国家的
-					 * 陆军会显示【完全相同的名字】，玩家只能靠猜，选错就误杀。
-					 * 地区本来就固定是中国东部，无需重复显示。
-					 */
-					return {
-						need: 'piece',
-						candidates: cands.map(id => ({
-							id: id,
-							name: game.piece_nation[id] + piece_type_zh(game.piece_type[id]),
-						})),
-						pick: 1, pickMin: 1,
-					}
-				}
-				const target = picked || cands[0]
-				if (cands.indexOf(target) < 0)
-					return { ok: true, skip: true, desc: '所选不是中国东部的敌方陆军' }
+				if (!ctx || ctx.piece == null)
+					return { ok: true, skip: true, desc: '未记录本次建设/征召的部队' }
+				const target = String(ctx.piece)
+				/* 仍做同源校验：防止"派发点给了 id，但它已经不在场上/不是合法目标" */
+				if (eliminate_candidates(game, '美国', sp, 'army').indexOf(target) < 0)
+					return { ok: true, skip: true, desc: '本次建设/征召的不是中国东部的敌方陆军' }
 				const r = eliminate_piece(game, '美国', sp, target, { type: 'army' })
 				return r.ok
-					? { ok: true, desc: '花园口决堤：消灭中国东部占领的敌方陆军' }
+					? { ok: true, desc: '花园口决堤：消灭刚在中国东部建设/征召的敌方陆军' }
 					: { ok: true, skip: true, desc: '无法消灭：' + r.reason }
 			},
 		},
