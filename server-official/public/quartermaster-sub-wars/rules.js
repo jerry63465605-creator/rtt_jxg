@@ -14032,6 +14032,32 @@ function pick_space_then_battle(game, ctx, choice, opt) {
 }
 
 /*
+ * 【2026-10-26】"全图任意可发起战斗的地区"候选（不限定与某格的相邻关系）。
+ *
+ * 用途：15430《奇袭》—— 卡面「发起海战后：发起 1 次海战，发起 1 次陆战」，
+ * **没有"相邻"字样**；旧实现以"刚打完的那场海战地区"为 base 取相邻，
+ * 把可打范围硬压成"那一格旁边"，与卡面不符（玩家反馈"奇袭应该没相邻的需求"）。
+ *
+ * 判据与 do_sea_battle_at / do_land_battle_at 同源：
+ * 只有"能真的发起战斗"的地区才进候选 —— battle_initiators 非空，
+ * 即存在与该格相邻、处于补给状态的本国陆/海军。
+ */
+function any_battle_space_candidates(game, nation, kind) {
+	const pool = []
+	if (kind === 'sea') {
+		pool.push(...all_sea_space_ids())
+	} else {
+		for (let i = 1; i < data.spaces.length; i++) {
+			const s = data.spaces[i]
+			if (s && s.terrain === 'land') pool.push(i)
+		}
+	}
+	return pool
+		.filter(sp => battle_initiators(game, nation, sp).length > 0)
+		.map(sp => ({ id: sp, name: data.name_of(sp) }))
+}
+
+/*
  * 【2026-10-26 玩家裁决·反向澄清】"1 或 2 次"多步响应卡的第 2 次【允许】与第 1 次同地区。
  *
  * 曾经误判为"不能重复"，给 15423/15424/15426 加了候选排除 + 执行层拦截（并删掉了
@@ -15558,39 +15584,37 @@ const RESPONSE_EFFECT_IMPL = {
 		 * landCont/optCont、手写 defer 分支、newResp 签名对比、清队列拷贝 hack ——
 		 * 海战后的响应本就由触发层（request_responses）调度，15430 不再内嵌 15426。 */
 		const emitLand2 = (seaId, descPrefix, defer) => {
-			const land = pick_space_then(game, ctx, undefined, {
-				kind: 'land', base: Number(seaId), includeBase: false,
-				nation: '日本',
-				prompt: '选择要发起陆战的地区（奇袭海战的相邻陆地）',
-			})
-			if (!land.candidates || !land.candidates.length)
-				return { ok: true, desc: '（海战相邻无陆地，跳过陆战）' }
-			const prompt = (descPrefix || '海战已结算') + '；' + (land.desc || '继续选择陆战地区')
+			/*
+			 * 【2026-10-26 修复】卡面「发起 1 次陆战」没有"相邻"限定 ——
+			 * 候选改为【全图】日本能发起陆战的地区，不再只给"奇袭海战那一格的相邻陆地"。
+			 */
+			const cands = any_battle_space_candidates(game, '日本', 'land')
+			if (!cands.length)
+				return { ok: true, desc: (descPrefix || '海战已结算') + '（全图无可发起陆战的地区，跳过陆战）' }
+			const prompt = (descPrefix || '海战已结算') + '；选择要发起陆战的地区（任意）'
 			if (defer) {
 				/*
 				 * 【栈重构·第二期】不再手写 deferred_response_choice 兼容壳；
 				 * 直接返回 {defer:true}，由 trigger/resolve 的 defer 分支统一收编进
 				 * game.deferred_response_stack（纯栈）。
 				 */
-				return { defer: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
+				return { defer: true, kind: 'space', candidates: cands, prompt, extra: { step: 'land', seaId } }
 			}
-			return { pending: true, kind: land.kind || 'space', candidates: land.candidates, prompt, extra: { step: 'land', seaId } }
+			return { pending: true, kind: 'space', candidates: cands, prompt, extra: { step: 'land', seaId } }
 		}
 		if (choice === undefined) {
-			/* ① 选海域发起海战（仅保留"日本真能发起海战"的海域） */
-			const sea = pick_space_then(game, ctx, undefined, {
-				kind: 'sea', base: ctx.space, includeBase: true,
-				nation: '日本',
-				prompt: '选择要发起海战的海域（须相邻有补给中的日本海军）',
-			})
-			if (sea.pending) {
-				sea.candidates = sea.candidates.filter(c =>
-					battle_initiators(game, '日本', Number(c.id)).length > 0)
-				if (!sea.candidates.length)
-					return { ok: false, desc: '（相邻海域均无可发起海战的日本海军）' }
+			/*
+			 * ① 选海域发起海战 —— 卡面「发起 1 次海战」无"相邻"限定：
+			 * 候选是【全图】日本能发起海战的海域（不限于 ctx.space 及其相邻）。
+			 */
+			const cands = any_battle_space_candidates(game, '日本', 'sea')
+			if (!cands.length)
+				return { ok: false, desc: '（全图无可发起海战的海域）' }
+			return {
+				pending: true, kind: 'space', candidates: cands,
+				prompt: '选择要发起海战的海域（任意，只要日本能发起）',
+				extra: { step: 'sea' },
 			}
-			sea.extra = { step: 'sea' }
-			return sea
 		}
 		if (extra && extra.step === 'sea') {
 			/* ② 已选海战地区：开海战 */
