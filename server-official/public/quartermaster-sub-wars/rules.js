@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 军需官 · 次要战场（自研变体） —— 服务端规则
  *
  * 本文件当前实现「骨架 + 连通性」两层：
@@ -8833,7 +8833,13 @@ const PLACE_ALIAS = {
 	'不列颠群岛': '不列颠',    /* id=2  */
 	'南非': '非洲南部',       /* id=31 */
 	'北非': '非洲北部',       /* id=15 —— 2026-09-28 补（14923 隆美尔） */
-	'美洲': '拉丁美洲',       /* id=30 —— 2026-09-28 补（15422 太平洋海岸线攻势） */
+	/*
+	 * 【2026-10-26 退役】原 '美洲': '拉丁美洲'(id=30) 是为 15422《太平洋海岸线攻势》
+	 * 旧实现（"对相邻陆战"）补的单格别名。卡面「<美洲>」是区域泛称，
+	 * 现已改登记到 REGION_GROUPS['美洲'] = [加拿大, 美国, 拉丁美洲]。
+	 * 按本表约定「泛称与单格别名不要混用」，这里不再保留别名 ——
+	 * 需要区域用 space_ids_expand(['美洲'])，需要单格请直接写「拉丁美洲」。
+	 */
 	'埃及': '中东',           /* id=16 */
 	'阿尔及利亚': '非洲北部',  /* id=15 */
 	'缅甸': '东南亚',         /* id=37 */
@@ -8882,6 +8888,20 @@ const REGION_GROUPS = {
 	'中国': ['中国西部', '中国东北', '中国东部'],
 	'太平洋': ['中太平洋', '南太平洋', '北太平洋', '东太平洋'],
 	'非洲': ['非洲北部', '非洲南部', '非洲东部'],
+	/*
+	 * 【2026-10-26 补】「美洲」是【区域泛称】，含三格。
+	 *
+	 * 之前 PLACE_ALIAS 把它做成一對一别名「美洲 -> 拉丁美洲(30)」，
+	 * 于是 15422《太平洋海岸线攻势》的「在战斗地区建设 / 在<美洲>建设」两句
+	 * 必然指向同一格，第 2 支被「每国每格限 1 支」挡住，实际只能建 1 支，
+	 * 与卡面「共 2 支」不符。
+	 *
+	 * 同时【退役】了原来的一对一别名 `PLACE_ALIAS['美洲'] = '拉丁美洲'`
+	 * （那是给旧实现补的）—— 按地名口径，泛称与单格别名**不允许混用**，
+	 * 一个地名只保留一个身份。需要单格时请直接写「拉丁美洲」。
+	 * 影响面已核：全仓用到「美洲」的只有 15422 的 filter 与效果。
+	 */
+	'美洲': ['加拿大', '美国', '拉丁美洲'],
 }
 
 /*
@@ -14032,17 +14052,21 @@ function pick_space_then_battle(game, ctx, choice, opt) {
 }
 
 /*
- * 【2026-10-26】15430《奇袭》的"全图战斗候选"直接复用权威原子
- * `step_space_candidates(game, actor, { op:'battle', kind }, {})` ——
- * 它的全图分支已经做了：地形匹配 + 目标格无本方部队 + `battle_initiators` 非空，
- * 与 `do_battle` 完全同源。
+ * 【2026-10-26】候选"形状适配"：把权威原子 `step_space_candidates` 返回的【裸 id 数组】
+ * 套成客户端需要的 `{ id, name }`。
  *
- * ⚠ 不要再为"全图能发起战斗的地区"另写遍历（本项目铁律：
- *   candidate 判定只允许一份实现，见 rtt-atomic-operations 第三节）。
- *   本卡只需要把返回的【裸 id 数组】套成 `{id, name}` 形状给客户端。
+ * 使用方：
+ *   · 15430《奇袭》—— `{ op:'battle', kind }`（全图任意能发起战斗的地区）
+ *   · 15422《太平洋海岸线攻势》—— `{ op:'build', type:'army', spaces:[…] }`
+ *
+ * ⚠ 本函数**只做形状转换，不含任何判据**。判据一律由 step_space_candidates 承担
+ *   （地形 / 目标格无本方部队 / battle_initiators / can_build_at / can_recruit_at…），
+ *   与执行端 do_battle / build_piece 同源。
+ *   绝不要为某张卡另写遍历（本项目铁律：candidate 判定只允许一份实现，
+ *   见 rtt-atomic-operations 第三节）。
  */
-function battle_space_candidates_view(game, actor, kind) {
-	return step_space_candidates(game, actor, { op: 'battle', kind: kind }, {})
+function space_candidates_view(game, actor, st) {
+	return step_space_candidates(game, actor, st || {}, {})
 		.map(sp => ({ id: sp, name: data.name_of(sp) }))
 }
 
@@ -15303,12 +15327,53 @@ const RESPONSE_EFFECT_IMPL = {
 			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
 		})
 	},
-	'15422': (game, side, ctx, choice) => {
-		/* 对<美洲>发起陆战后：对战斗地区或其相邻发起 1 次陆战 */
-		return pick_space_then_battle(game, ctx, choice, {
-			kind: 'land', base: ctx.space, includeBase: true,
-			prompt: '选择要发起陆战的地区（战斗地区或其相邻）',
-		})
+	'15422': (game, side, ctx, choice, extra) => {
+		/*
+		 * 卡面：「对<美洲>发起陆战后：在战斗地区建设陆军。在<美洲>建设 1 支陆军。」
+		 *
+		 * 【2026-10-26 玩家裁决】按卡面拆成【两步、各 1 支】，有合法位置才建、没有就跳过。
+		 * 旧实现是"对战斗地区或其相邻发起 1 次陆战" —— 与卡面完全不符
+		 * （建设 vs 发起战斗、两次 vs 一次）。
+		 *
+		 * 「<美洲>」按【区域】理解（加拿大 / 美国 / 拉丁美洲，见 REGION_GROUPS）。
+		 * 第 ② 句若有多处可建，交给玩家选 —— 不复现"服务端替玩家挑一个"的老毛病。
+		 *
+		 * 复用：候选走 space_candidates_view（内部即 step_space_candidates -> can_build_at），
+		 * 执行走 build_piece —— 于是"有合法位置才建、没有就跳过"天然成立。
+		 */
+		const buildOne = (sp) => {
+			if (sp == null || !data.spaces[sp]) return '（地区不存在，跳过）'
+			const r = build_piece(game, '日本', 'army', Number(sp))
+			return r.ok
+				? '在' + data.name_of(sp) + '建设陆军'
+				: '（未在' + data.name_of(sp) + '建设陆军：' + (r.reason || '无合法位置') + '，跳过）'
+		}
+
+		if (!extra || extra.step !== 'americas') {
+			/* ① 战斗地区建设 */
+			const d1 = buildOne(ctx.space)
+			/*
+			 * ② <美洲> 建设：候选 = 区域内能建设陆军、且该格尚未驻本国陆军的格。
+			 * ⚠ 补 unit_slot_free：step_space_candidates 的陆/海 build 分支【已知漏这一条】
+			 *   （见 rtt-event-card-framework 五之四的遗留说明），不补会给"已驻军"的格，
+			 *   玩家选了才被 build_piece 拒 —— 即"能点的 ≠ 能成功的"。
+			 */
+			const cands = space_candidates_view(game, '日本', {
+				op: 'build', type: 'army', spaces: space_ids_expand(['美洲']),
+			}).filter(c => unit_slot_free(game, '日本', 'army', Number(c.id)).ok)
+			if (!cands.length)
+				return { ok: true, desc: d1 + '；<美洲>无可建设地区（跳过）' }
+			if (cands.length === 1)
+				return { ok: true, desc: d1 + '；' + buildOne(Number(cands[0].id)) }
+			return {
+				pending: true, kind: 'space', candidates: cands,
+				prompt: d1 + '；选择在<美洲>建设陆军的地区',
+				extra: { step: 'americas', desc1: d1 },
+			}
+		}
+
+		/* ③ 玩家选定的美洲地区 */
+		return { ok: true, desc: (extra.desc1 || '') + '；' + buildOne(Number(choice)) }
 	},
 	'15423': (game, side, ctx, choice, extra) => {
 		/* 日本建设海军后：在建设地区或其相邻海域【发起 1 或 2 次海战】 */
@@ -15577,7 +15642,7 @@ const RESPONSE_EFFECT_IMPL = {
 			 * 【2026-10-26 修复】卡面「发起 1 次陆战」没有"相邻"限定 ——
 			 * 候选改为【全图】日本能发起陆战的地区，不再只给"奇袭海战那一格的相邻陆地"。
 			 */
-			const cands = battle_space_candidates_view(game, '日本', 'land')
+			const cands = space_candidates_view(game, '日本', { op: 'battle', kind: 'land' })
 			if (!cands.length)
 				return { ok: true, desc: (descPrefix || '海战已结算') + '（全图无可发起陆战的地区，跳过陆战）' }
 			const prompt = (descPrefix || '海战已结算') + '；选择要发起陆战的地区（任意）'
@@ -15596,7 +15661,7 @@ const RESPONSE_EFFECT_IMPL = {
 			 * ① 选海域发起海战 —— 卡面「发起 1 次海战」无"相邻"限定：
 			 * 候选是【全图】日本能发起海战的海域（不限于 ctx.space 及其相邻）。
 			 */
-			const cands = battle_space_candidates_view(game, '日本', 'sea')
+			const cands = space_candidates_view(game, '日本', { op: 'battle', kind: 'sea' })
 			if (!cands.length)
 				return { ok: false, desc: '（全图无可发起海战的海域）' }
 			return {
