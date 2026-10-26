@@ -10886,6 +10886,27 @@ function advance_italy_chain(game) {
 		game.log.push('【' + nat + '】因《卡佩里尼》从弃牌堆随机抽到 1 张牌，请处置')
 		return
 	}
+	/*
+	 * 【2026-10-27 玩家口径】链结束输出【汇总】：每个国家抽到什么、怎么处置。
+	 * 单条处置日志已经带卡名（见 resolve_italy_chain），这里再汇总一次便于复盘。
+	 * 注意：finish_delegate 会清掉 game.delegate，必须先取 results。
+	 */
+	{
+		const rows = []
+		for (const r of (ch.results || [])) {
+			if (!r.card) {
+				rows.push(r.nation + '：弃牌堆为空（跳过）')
+				continue
+			}
+			const c = inst_card(String(inst_card_id(r.card)))
+			const nm = c ? c.name : String(r.card)
+			const how = r.choice === 'play' ? '打出'
+				: (r.choice === 'decktop' ? '置于牌堆顶'
+					: (r.choice === 'discard' ? '留在弃牌堆' : (r.choice || '?')))
+			rows.push(r.nation + '：《' + nm + '》→ ' + how)
+		}
+		if (rows.length) game.log.push('【卡佩里尼】处置结果：' + rows.join('；'))
+	}
 	finish_delegate(game, game.delegate)
 	game.log.push('【卡佩里尼】所有友方玩家处置完毕')
 }
@@ -24823,25 +24844,47 @@ exports.view = function (state, current) {
 				italy_chain: (function () {
 					if (!game.delegate || game.delegate.mode !== 'order') return null
 					const ch = game.delegate
-				let picked = null
-				if (ch.pickedNation && ch.pickedCard) {
-					const c = inst_card(String(inst_card_id(ch.pickedCard)))
-					picked = {
-						card_id: ch.pickedCard,
-						name: c ? c.name : ch.pickedCard,
-						type: c ? c.type : null,
-						nation: ch.pickedNation,
-						playable: !!c && c.type === 'BASIC',
+					/*
+					 * 【2026-10-27 保密】抽到的牌来自【弃牌堆】（暗区）。
+					 *
+					 * 只有【待处置国所在阵营】能拿到完整卡面；对手只看到
+					 * "某国正在处置 1 张牌"，拿不到卡名/卡图。
+					 *
+					 * ⚠ 不能对对手返回 null —— 客户端 update_italy_chain_box 写的是
+					 * `view.italy_chain || view.delegate`，一旦为 null 会 fallback 到
+					 * view.delegate，那里 pickedCard 是【裸实例 id】，反而更糟。
+					 * 所以这里始终返回对象，只是 pickedCard 裁成 null。
+					 */
+					const ownerSide = ch.pickedNation ? faction_of_nation(ch.pickedNation) : null
+					const visible = !!(ch.pickedNation && ch.pickedCard) && ownerSide === side
+					let picked = null
+					if (visible) {
+						const c = inst_card(String(inst_card_id(ch.pickedCard)))
+						picked = {
+							card_id: ch.pickedCard,
+							name: c ? c.name : ch.pickedCard,
+							type: c ? c.type : null,
+							nation: ch.pickedNation,
+							playable: !!c && c.type === 'BASIC',
+							/*
+							 * 【2026-10-27】补卡面信息：客户端据此渲染【具体卡面】
+							 * （build_card_elt 需要 img，悬停提示需要 text）。
+							 */
+							text: (c && c.text) || '',
+							img: (c && c.img) || '',
+							ops: (c && c.ops != null) ? c.ops : null,
+						}
 					}
-				}
-				return {
-					order: ch.order,
-					step: ch.step,
-					pickedNation: ch.pickedNation,
-					pickedCard: picked,
-					sub: ch.sub,
-				}
-				})(),
+					return {
+						order: ch.order,
+						step: ch.step,
+						pickedNation: ch.pickedNation,
+						pickedCard: picked,
+						sub: ch.sub,
+						/* 客户端据此区分"我在处置"还是"等对手处置" */
+						mine: visible,
+					}
+					})(),
 				italy_german_draw: (function () {
 				if (!game.delegate || game.delegate.mode !== 'german_draw') return null
 				const handCount = (game.hands && game.hands['德国']) ? game.hands['德国'].length : 0
@@ -29711,25 +29754,24 @@ function do_action(state, current, action, arg) {
 				/* 进入"选目标"子状态，暂停链，等待 resolve_italy_play */
 				game.current_nation = nat
 				ch.sub = { kind: 'play', nation: nat, card: cid }
-				game.log.push('【' + nat + '】选择打出《' + c.name + '》（请在地图选择位置）')
+				game.log.push('【' + nat + '】抽到《' + (c ? c.name : cid) + '》并选择打出（请在地图选择位置）')
 				return game
-			}
-			/*
-			 * 【2026-10-26 保密】这张牌来自弃牌堆（暗区），别写卡名；
-			 * 若玩家选择"打出"，打出的动作本身会在别处公开播报。
-			 */
-			game.log.push('【' + nat + '】该牌非基本卡，不可经《卡佩里尼》打出，仅可置顶或弃置')
-		} else if (choice === 'decktop') {
-			const di = (game.discard[nat] || []).indexOf(cid)
-			if (di >= 0) game.discard[nat].splice(di, 1)
-			game.decks[nat] = game.decks[nat] || []
-			game.decks[nat].unshift(cid)
-			/* 【2026-10-26 保密】牌堆顶也是暗区 -> 不写卡名 */
-			game.log.push('【' + nat + '】' + HIDDEN_CARD_DESC.putOnDeck)
-		} else {
-			/* 【2026-10-26 保密】留在弃牌堆 -> 不写卡名 */
-			game.log.push('【' + nat + '】' + HIDDEN_CARD_DESC.leaveInDiscard)
-		}
+				}
+				/*
+				* 【2026-10-27 玩家口径】改回写卡名（此前为保密写成 HIDDEN_CARD_DESC）。
+				* 理由：牌已被翻开检视，且处置完成后去向已定；
+				*      玩家要求日志能看到"每个国家抽到什么"，便于复盘。
+				*/
+				game.log.push('【' + nat + '】该牌《' + (c ? c.name : cid) + '》非基本卡，不可经《卡佩里尼》打出，仅可置顶或弃置')
+				} else if (choice === 'decktop') {
+				const di = (game.discard[nat] || []).indexOf(cid)
+				if (di >= 0) game.discard[nat].splice(di, 1)
+				game.decks[nat] = game.decks[nat] || []
+				game.decks[nat].unshift(cid)
+				game.log.push('【' + nat + '】抽到《' + (c ? c.name : cid) + '》，置于牌堆顶')
+				} else {
+				game.log.push('【' + nat + '】抽到《' + (c ? c.name : cid) + '》，留在弃牌堆')
+				}
 		ch.results.push({ nation: nat, card: cid, choice: choice })
 		ch.step++
 		ch.pickedNation = null

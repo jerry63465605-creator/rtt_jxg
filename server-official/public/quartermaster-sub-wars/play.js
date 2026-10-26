@@ -1360,6 +1360,9 @@ function update_it_delegate_box() {
 		'德国可额外打出 1 张状态卡；打出后控制权归还意大利。', opt)
 }
 
+/* 本帧已贴过的卡佩里尼卡面（card_id）；换牌或收起时重置，避免重复贴/漏贴 */
+let italy_chain_shown_card = null
+
 /* 【2026-10-08】17729 卡佩里尼：轴心依次链提示框。
  * 当前待处置国抽到一张牌，玩家选：打出(基本卡)/置牌堆顶/留弃牌堆。 */
 function update_italy_chain_box() {
@@ -1373,11 +1376,14 @@ function update_italy_chain_box() {
 	if (view && (view.response_pending || (ch && ch.waiting_response))) {
 		if (ask_state && (ask_state.kind === 'italy_chain' || ask_state.kind === 'italy_chain_sub')) {
 			ask_state = null
+			italy_chain_shown_card = null
 			render_ask_box(null, null, null)
 		}
 		return
 	}
 	if (!ch || !ch.pickedCard) {
+		/* 框收起 -> 清掉"已贴过"的标记，下次重新贴 */
+		italy_chain_shown_card = null
 		if (ask_state && ask_state.kind === 'italy_chain') {
 			ask_state = null
 			render_ask_box(null, null, null)
@@ -1444,6 +1450,41 @@ function update_italy_chain_box() {
 		'友方玩家依次检视抽到的牌。选择处置方式：' +
 			(pc.playable ? '可打出（基本卡）/置顶/弃置。' : '该牌非基本卡，仅可置顶/弃置。'),
 		opt)
+	/*
+	 * 【2026-10-27】显示【具体卡面】。
+	 *
+	 * render_box_into 的 title/text 走 textContent（纯文本，放不了图），
+	 * 所以卡面单独作为一个 DOM 节点追加进 #ask_box：
+	 *   · build_card_elt 是现成的（卡图优先 + 缺图回落文字 + 悬停放大）；
+	 *   · render_box_into 重建时会 innerHTML="" 清空，下一帧自然会重新追加，
+	 *     不会叠加（这里只在"本帧还没贴过这张牌"时贴一次，避免重复）。
+	 */
+	const _box = document.getElementById('ask_box')
+	if (_box && italy_chain_shown_card !== pc.card_id) {
+		italy_chain_shown_card = pc.card_id
+		const raw = build_card_elt({
+			id: pc.card_id, card_id: pc.card_id,
+			name: pc.name, type: pc.type, img: pc.img, text: pc.text,
+		})
+		/*
+		 * 克隆一份再用：build_card_elt 内部挂了 click -> on_click_hand_card，
+		 * 那是【手牌】的打出入口。而这张牌来自【弃牌堆】，并不在手牌里，
+		 * 直接复用会让人点一下卡面就误触发出牌流程。
+		 * cloneNode(true) 会丢弃所有事件监听器（点击/悬停），这里只需要"看得见卡面"。
+		 */
+		const face = raw.cloneNode(true)
+		face.className = 'card italy_chain_face'
+		const wrap = document.createElement('div')
+		wrap.className = 'italy_chain_card'
+		wrap.appendChild(face)
+		if (pc.text) {
+			const tip = document.createElement('div')
+			tip.className = 'card_text'
+			tip.textContent = pc.text
+			wrap.appendChild(tip)
+		}
+		_box.appendChild(wrap)
+	}
 }
 
 /* 【2026-10-08】16703 罗马尼亚铁卫团：德国弃牌摸牌提示框。

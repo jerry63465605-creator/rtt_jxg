@@ -1034,6 +1034,35 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	color: #333;
 }
 
+/*
+ * 【2026-10-27】17729《卡佩里尼》：提示框里显示【抽到的那张牌的卡面】。
+ * 左：卡图（120x180，沿用 .card 尺寸）；右：卡面描述，便于决定打出/置顶/弃置。
+ */
+.italy_chain_card {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	margin: 8px 0 4px;
+}
+
+/* 纯展示：去掉 .card 的 hover 位移与手型指针（它不可点） */
+.italy_chain_card .italy_chain_face {
+	cursor: default;
+	flex: 0 0 auto;
+}
+
+.italy_chain_card .italy_chain_face:hover {
+	transform: none;
+}
+
+.italy_chain_card .card_text {
+	flex: 1 1 auto;
+	max-width: 190px;
+	font-size: 10px;
+	line-height: 1.5;
+	color: #444;
+}
+
 /* ================= 右上角预算 HUD（战斗预算 / 高速公路建设预算） ================= */
 /*
  * 固定右上角的【共享容器】：战斗预算与建设预算作为其子元素【纵向排列】，
