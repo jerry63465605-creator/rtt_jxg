@@ -16582,13 +16582,31 @@ function defer_response_frame(game, frame) {
  * @param curFrame 刚被 defer 的当前帧（用它的 group_id 定位同组兄弟）
  * @return 被排队的兄弟帧数量
  */
-function defer_remaining_group_frames(game, curFrame) {
-	const gid = curFrame && curFrame.group_id
-	if (gid == null) return 0
-	/* 只看【仍在活动栈】且同组的帧；pending 的等待结算，不能搬走 */
-	const rest = (game.response_stack || [])
-		.filter(f => f !== curFrame && f.group_id === gid && !f.pending)
-		.sort((a, b) => (a.group_idx || 0) - (b.group_idx || 0))
+function defer_other_pending_frames(game, curFrame, baseIdx) {
+	/*
+	 * 【2026-10-26 扩展·跨组插队】把"排在本卡续打之前的【外层残留待发动帧】"也挪到后面。
+	 *
+	 * 旧实现只搬【同组】兄弟帧（`f.group_id === gid`）。实测 game 29 暴露了缺口：
+	 *   15423《潜艇支援》的海战触发了 15430《奇袭》（内层 battle 事件），
+	 *   奇袭第 ① 步海战后 defer，栈上还压着【外层 build 事件】的 15424《海军特别陆战队》（待发动），
+	 *   且它位于奇袭帧【之下】-> 玩家把整张 15424 做完，奇袭的陆战才恢复，
+	 *   表现为"奇袭被劈成两半"。
+	 *
+	 * 但**不能**搬所有帧：effect 执行期间压入的【嵌套响应帧】位于本帧【之上】，
+	 * 按既有铁律必须先于续打结算（15431《全面侵华》建陆军触发的 build 响应即此形态，
+	 * 一搬就把它挤到陆战之后，_smoke_15431_queue 直接红）。
+	 *
+	 * 所以边界是【栈位置】：只搬 index < baseIdx（本帧原位置）的待发动帧。
+	 *   · 之上（index > baseIdx）= effect 内部触发的嵌套帧 -> 不搬，先结算；
+	 *   · 之下（index < baseIdx）= 外层事件残留 -> 搬走，排在本卡续打之后；
+	 *   · pending 帧不动 —— 它们正被玩家 resolve，属于自己事件的收尾。
+	 *
+	 * @param baseIdx 本帧在 response_stack 中的【原始下标】（调用方在移除本帧前取好）
+	 */
+	if (!curFrame) return 0
+	const st = game.response_stack || []
+	const idx = (typeof baseIdx === 'number' && baseIdx >= 0) ? baseIdx : st.length
+	const rest = st.filter((f, i) => i < idx && !f.pending)
 	if (!rest.length) return 0
 	for (const f of rest) {
 		game.response_stack = game.response_stack.filter(x => x !== f)
@@ -27247,6 +27265,9 @@ function do_action(state, current, action, arg) {
 						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
+						/* 【2026-10-26】续打帧：本卡已发动过，只等选目标，必须标记 pending，
+						 * 否则 trigger_response 会把它当"待发动"从头再跑一遍 effect。 */
+						pending: true,
 					})
 					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
 						(top_response_frame(game) || {}).prompt)
@@ -27268,6 +27289,8 @@ function do_action(state, current, action, arg) {
 					 * （纯栈：不再写 deferred_response_choice 旧全局）。栈清空后由
 					 * promote_deferred_response 压回成为活动帧（按引用移除，保留嵌套响应帧）。
 					 */
+					/* 先记下本帧原位置：搬"外层残留帧"时用它区分「之下」与「之上（嵌套）」 */
+					const _pcIdx = (game.response_stack || []).indexOf(pc)
 					 remove_response_frame(game, pc)
 					const df = {
 						card_id: pc.card_id,
@@ -27279,6 +27302,8 @@ function do_action(state, current, action, arg) {
 						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
 						ctx: pc.ctx || {},
 						extra: r.extra || null,
+						/* 【2026-10-26】续打帧同 pending 分支：已发动过，只等选目标 */
+						pending: true,
 						/* 【2026-10-20】带上组信息，便于恢复后仍能被组相关逻辑识别 */
 						group_id: pc.group_id,
 						group_idx: pc.group_idx,
@@ -27294,7 +27319,7 @@ function do_action(state, current, action, arg) {
 					 * FIFO 提升自然保证"本卡先走完 -> 才轮到下一张"。
 					 * 注意必须放在 defer_response_frame(game, df) 之后，保证顺序是 [本卡续打, 兄弟…]。
 					 */
-					defer_remaining_group_frames(game, pc)
+					defer_other_pending_frames(game, pc, _pcIdx)
 					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
 					/*
 					 * 【2026-10-20 修复·一类问题】栈帧已移除，必须同步派生队列视图：
@@ -27571,10 +27596,22 @@ function do_action(state, current, action, arg) {
 							candidates: r.candidates || [],
 							prompt: r.prompt || ('请选择《' + c.name + '》的目标'),
 							extra: r.extra || null,
+							/*
+							 * 【2026-10-26 修复】必须带 pending：这张卡【已经发动过】，
+							 * 恢复后处于"等玩家选目标"状态，不是"还没发动"。
+							 *
+							 * 缺了它，`trigger_response` 的循环里 `if (f.pending) continue` 不生效，
+							 * 会把 effect(undefined) 从头再跑一遍 —— 表现为"回到《X》"之后
+							 * 又重新问一次"选择要发起海战的海域"，玩家看着像卡在第一步。
+							 * （game 29 重放实测：缺 pending 时恢复帧被 trigger 重跑。）
+							 */
+							pending: true,
 							/* 【2026-10-20】带上组信息，恢复后仍能被组相关逻辑识别 */
 							group_id: f.group_id,
 							group_idx: f.group_idx,
 						}
+						/* 先记下本帧原位置：下面搬"外层残留帧"要用它区分「之下」与「之上（嵌套）」 */
+						const _fIdx = (game.response_stack || []).indexOf(f)
 						game.response_stack = game.response_stack.filter(x => x !== f)
 						defer_response_frame(game, df)
 						/*
@@ -27586,7 +27623,7 @@ function do_action(state, current, action, arg) {
 						 * 然后直接 return —— 组循环在此打住，
 						 * 由 promote_deferred_response 按 FIFO 依次恢复，严格兑现玩家排的顺序。
 						 */
-						defer_remaining_group_frames(game, f)
+						defer_other_pending_frames(game, f, _fIdx)
 						sync_response_queue_view(game)
 						game.log.push('【响应】《' + c.name + '》稍后继续：' + df.prompt)
 						return game
