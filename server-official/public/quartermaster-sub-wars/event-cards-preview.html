@@ -75,10 +75,36 @@
  */
 const MODULES = {}
 
+/*
+ * Node 内置模块的浏览器占位。
+ *
+ * 【2026-10-26】rules.js 顶部有 `const zlib = require('zlib')`（存档编解码用，
+ * 见 deflateSave / inflateSave 两处）。本页只读 EVENT_EFFECTS 配置、
+ * 从不调用存档压缩，但 require 必须能返回东西 —— 否则整页加载失败：
+ *   Error: 模块未加载: zlib
+ *
+ * 占位故意【抛错而不是返回 undefined】：真被调用时立刻报清楚，
+ * 而不是悄悄算出 undefined 让人以为"页面正常但数据不对"。
+ */
+const NODE_STUBS = {
+	zlib: {
+		deflateSync() { throw new Error('本预览页不支持存档压缩（zlib）') },
+		inflateSync() { throw new Error('本预览页不支持存档解压（zlib）') },
+	},
+	buffer: {
+		Buffer: {
+			from() { throw new Error('本预览页不支持 Buffer') },
+		},
+	},
+}
+
 function runModule(name, code) {
 	const module = { exports: {} }
 	const require = (p) => {
-		const key = String(p).replace(/^\.\//, '')
+		const raw = String(p)
+		/* Node 内置模块优先走占位，否则会被当成"未加载的本地文件" */
+		if (NODE_STUBS[raw]) return NODE_STUBS[raw]
+		const key = raw.replace(/^\.\//, '')
 		if (!MODULES[key]) throw new Error('模块未加载: ' + p)
 		return MODULES[key]
 	}
