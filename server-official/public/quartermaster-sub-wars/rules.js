@@ -8590,12 +8590,15 @@ function build_piece(game, nation, type, space) {
 		 * 与 after_build_navy / after_deploy_air 同款，ctx 带 space/nation/type。
 		 */
 		/*
-		 * 【2026-10-27】ctx 补 piece = 本次建出来的部队 id。
+		 * 【2026-10-27】ctx 补 piece_id = 本次建出来的部队 id。
 		 * 16804《花园口决堤》要"消灭触发的那一支"（玩家口径：不用选），
 		 * 必须能定位到本次动作产生的那支部队，不能靠"取第一个候选"。
-		 * 字段名与 armed 家族的 piece_removed 一致（piece），便于卡面复用。
+		 *
+		 * 字段名统一为 piece_id —— 与响应栈侧（request_responses('build'/'recruit')
+		 * 传的 piece_id、以及 17738 殖民地游击队读的 ctx.piece_id）保持一致，
+		 * 避免"同一件事两个名字"。
 		 */
-		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece: __r.id })
+		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece_id: __r.id })
 	}
 	return __r
 }
@@ -8768,8 +8771,8 @@ function recruit_piece(game, nation, type, space) {
 	 * 征召此前【没有】armed 派发点，导致"敌方征召时…"的卡永不触发。
 	 * 这里补上 after_recruit（与 after_build_army 区分，便于卡面精确匹配）。
 	 */
-	/* 【2026-10-27】同上：ctx 带本次征召出来的部队 id（piece） */
-	offer_armed_effects(game, 'after_recruit', { space: space, nation: nation, type: type, piece: id })
+	/* 【2026-10-27】同上：ctx 带本次征召出来的部队 id（piece_id） */
+	offer_armed_effects(game, 'after_recruit', { space: space, nation: nation, type: type, piece_id: id })
 	/* 17553 抗日义勇军：中国【征召】后，让权日本弃牌+损耗 */
 	if (nation === '中国') offer_us_japan_delegate(game, '中国征召')
 	refresh(game)
@@ -12045,23 +12048,23 @@ const ECHO_EFFECTS = {
 				/*
 				 * 只认【敌方】在【中国东部】的征召/建设。
 				 *
-				 * "敌方"写死为【轴心】而不是"不等于美国阵营"：
-				 * 后者会把中立 / 未参战国也算成触发方。本作阵营只有 axis / allies，
-				 * 美国的敌对阵营即 axis。
+				 * "敌方" = 与【本卡持有国（美国）】不同阵营，不写死 'axis' ——
+				 * 与 17737/17738 的 `faction_of_nation(ct.nation) !== owner_side` 同口径，
+				 * 也避免把中立 / 未参战国算成触发方（它们的 faction 与谁都不同）。
 				 */
 				if (!ctx || !ctx.nation) return false
-				if (faction_of_nation(ctx.nation) !== 'axis') return false
+				if (faction_of_nation(ctx.nation) === faction_of_nation('美国')) return false
 				const sp = space_id('中国东部')
 				if (Number(ctx.space) !== sp) return false
 				/* 本次建/征的必须是【中国东部的敌方陆军】（没把握不弹） */
-				if (ctx.piece == null) return false
-				return eliminate_candidates(game, '美国', sp, 'army').indexOf(String(ctx.piece)) >= 0
+				if (ctx.piece_id == null) return false
+				return eliminate_candidates(game, '美国', sp, 'army').indexOf(String(ctx.piece_id)) >= 0
 			},
 			run(game, ctx, arg) {
 				const sp = space_id('中国东部')
-				if (!ctx || ctx.piece == null)
+				if (!ctx || ctx.piece_id == null)
 					return { ok: true, skip: true, desc: '未记录本次建设/征召的部队' }
-				const target = String(ctx.piece)
+				const target = String(ctx.piece_id)
 				/* 仍做同源校验：防止"派发点给了 id，但它已经不在场上/不是合法目标" */
 				if (eliminate_candidates(game, '美国', sp, 'army').indexOf(target) < 0)
 					return { ok: true, skip: true, desc: '本次建设/征召的不是中国东部的敌方陆军' }
@@ -26447,8 +26450,13 @@ function play_status_card_impl(game, nation, card_id) {
  refresh(game)
  game.last_built = { space: space, nation: nation, type: type }
  request_responses(game, 'build', { nation: nation, space: space, type: type, piece_id: id }, false)
+ /*
+  * 【2026-10-27】补 piece_id（与 build_piece / recruit_piece 同口径）。
+  * 本函数此前派发 after_build_army 却不带"本次产生的部队 id"，
+  * 任何"消灭触发的那一只"的卡走这条路径都会静默不触发。
+  */
  if (type === 'army')
- offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type })
+ 	offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece_id: id })
  return { ok: true, id: id }
  }
  /* 收尾：把卡从手牌移入弃牌堆 + 占出牌名额 + 触发国家技能窗口 */

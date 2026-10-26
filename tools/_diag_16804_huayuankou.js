@@ -64,7 +64,7 @@ function make(opt) {
 
 /* 模拟派发点：build_piece / recruit_piece 都会带 space/nation/type/piece */
 const offer = (g, when, nat, space, piece) =>
-	I.offer_armed_effects(g, when, { nation: nat, space: space, type: 'army', piece: piece })
+	I.offer_armed_effects(g, when, { nation: nat, space: space, type: 'army', piece_id: piece })
 
 function hasOffer(g) {
 	return (g.armed_offers || []).some(w => (w.cards || []).some(c => c.card_id === ID))
@@ -191,12 +191,17 @@ section('S11 "敌方" = 轴心：轴心各国触发，同盟不触发')
 
 section('S12 派发点确实带上了本次产生的部队 id')
 {
-	/* 16804 靠 ctx.piece 定位"触发的那只"，派发点必须给，否则整张卡失效 */
+	/* 16804 靠 ctx.piece_id 定位"触发的那只"，派发点必须给，否则整张卡失效 */
 	const src = fs.readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
-	const buildOk = /offer_armed_effects\(game, 'after_build_army', \{[^}]*piece/.test(src)
-	const recruitOk = /offer_armed_effects\(game, 'after_recruit', \{[^}]*piece/.test(src)
-	ok('after_build_army 派发点带 piece', buildOk)
-	ok('after_recruit 派发点带 piece', recruitOk)
+	const buildOk = /offer_armed_effects\(game, 'after_build_army', \{[^}]*piece_id/.test(src)
+	const recruitOk = /offer_armed_effects\(game, 'after_recruit', \{[^}]*piece_id/.test(src)
+	ok('after_build_army 派发点带 piece_id', buildOk)
+	ok('after_recruit 派发点带 piece_id', recruitOk)
+	/* 三个派发点（build_piece / recruit_piece / uranus_build）必须同口径 */
+	const allBuildArmy = src.split("offer_armed_effects(game, 'after_build_army'").length - 1
+	const withId = src.split("offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece_id:").length - 1
+	ok('★ 所有 after_build_army 派发点都带 piece_id（' + withId + '/' + allBuildArmy + '）',
+		allBuildArmy > 0 && withId === allBuildArmy, { allBuildArmy, withId })
 }
 
 console.log('\n==============================================')
