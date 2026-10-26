@@ -257,6 +257,24 @@ function strait_controller(game, strait_space) {
 }
 
 /*
+ * 【2026-10-27】某张状态卡的【持续光环】当前是否生效。
+ *
+ * 为什么单独抽出来：15254《战争海军》的光环（海峡强制轴心 / 虚拟海军）
+ * 之前直接读持久字段 game.status_aura.*，于是
+ *   · 15353《保持冷静》压制后【照旧生效】（压制只拦 activate_status 入口）；
+ *   · 卡离场后【永不撤销】。
+ * 判据统一在这里，避免各处各写一套：
+ *   ① 15353 压制：status_suppressed_this_turn[card] === freq_key(game)
+ *   ② 15343 霍巴特 / 17805 红色管弦乐队：status_active()
+ */
+function status_card_effective(game, cardId) {
+	if (!cardId) return false
+	if ((game.status_suppressed_this_turn || {})[cardId] === freq_key(game)) return false
+	const cfg = status_config_of(cardId)
+	return status_active(game, cardId, (cfg && cfg.actor) || null)
+}
+
+/*
  * 计算两岸营的私有连通快照（纯函数，不修改 state）。
  *
  * 这是本作连通性的核心：海峡连通是【动态】的（取决于谁控制海峡陆地），
@@ -282,7 +300,22 @@ function compute_connections(game) {
 	 */
 	for (const s of data.straits) {
 		if (s.a == null || s.b == null) continue
-		const ctrl = strait_controller(game, s.id)
+		/*
+		 * 【2026-10-27】15254《战争海军》
+		 * 卡面①：<北海>与<波罗的海>在任何情况下仅对轴心国相邻
+		 *      = 等效【北欧海峡永远视为被轴心控制】（即便同盟占领北欧）。
+		 *
+		 * 【修正】旧实现把这句做成了"过滤海区的陆地邻居（要有轴心部队才保留）"，
+		 * 语义完全不对，且导致北海的【同盟】海军必然断补 ——
+		 * 过滤器只留"有轴心部队的陆地"，而同盟海军需要的本国陆军所在陆地
+		 * 必然没有轴心部队，于是 A/B 条件永远不满足。现改为只强制海峡归属。
+		 *
+		 * 用 status_card_effective 判定：15353 压制 / 卡离场后自动恢复按实际控制者计算。
+		 */
+		let ctrl = strait_controller(game, s.id)
+		const _forced = game.status_aura && game.status_aura.strait_force_axis
+		const _fCard = _forced ? _forced[s.id] : null
+		if (_fCard && status_card_effective(game, _fCard)) ctrl = AXIS
 
 		for (const side of [AXIS, ALLIES]) {
 			remove_neighbor(out, side, s.a, s.b)
@@ -325,17 +358,13 @@ function get_connections(game, s, side, snap) {
 	const tbl = snap || game.limited_connections
 	const lc = tbl && tbl[side]
 	let conns = (lc && lc[s]) ? lc[s] : (() => { const sp = data.spaces[s]; return sp ? sp.connections : [] })()
-	/* 15254 战争海军：北海/波罗的海仅对轴心国相邻（对所有来源生效，含缓存） */
-	if (game.status_aura && game.status_aura.sea_axis_only && game.status_aura.sea_axis_only.indexOf(s) >= 0) {
-		conns = conns.filter(nb => {
-			const nsp = data.spaces[nb]
-			if (!nsp) return false
-			if (nsp.terrain === 'sea') return true
-			const axisThere = Object.keys(game.location || {}).some(p =>
-				game.location[p] === nb && game.piece_nation[p] && faction_of_nation(game.piece_nation[p]) === 'axis')
-			return axisThere
-		})
-	}
+	/*
+	 * 【2026-10-27 已删除】15254《战争海军》原在这里过滤"海区的陆地邻居
+	 * （要有轴心部队才保留）"。该实现语义错误 —— 卡面说的是【北欧海峡永远视为
+	 * 轴心控制】，不是"这两个海区不与陆地相邻"；且它让北海的【同盟】海军
+	 * 必然断补（本国陆军所在陆地必然没有轴心部队 -> A/B 条件永远不满足）。
+	 * 现改为在 compute_connections 里只强制海峡归属（见该函数 15254 段）。
+	 */
 	/* 【2026-10-06】本回合临时邻接（如 17823 千岛群岛：本回合<海参崴><日本>仅对苏联相邻）。
 	 * game.temp_connections = [{a, b, side}]，仅对指定阵营 side 生效，且只在设置当回合有效
 	 * （用 game.temp_connections_turn 标记，跨回合自动作废，无需显式清理）。 */
@@ -728,6 +757,47 @@ function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 function compute_supply(game, conn_snap) {
 	const snap = conn_snap || compute_connections(game)
 
+	/*
+	 * 【2026-10-27】15254《战争海军》卡面第二句：
+	 *   若<波罗的海>没有敌对国家海军 —— 【补给阶段】视为该格有【德国 / 意大利】海军。
+	 *
+	 * 语义是【中继】而不是【凭空造源】：虚拟海军与真实海军一样走 navy_ab_check，
+	 * 必须自己先满足 A（相邻有本国陆军）与 B（相邻有补给中的部队）才算补给中，
+	 * 之后才能 can_source 给两岸的德/意部队续链。
+	 * 若像旧 15444 那样直接置 in_supply + can_source，波罗的海会变成无条件的
+	 * 补给源，远超卡面（"连接补给线"= 接起来，不是无中生有）。
+	 *
+	 * 虚拟部队只在本函数生命周期内存在：入口注入、出口清理，
+	 * 不污染 game.location 与返回结果（15444 的 __varmy_* 旧坑）。
+	 * 因注入在 bySpace / allPieces 两者之前，迭代会自然把它们当普通海军处理。
+	 */
+	const _vnavy = []
+	{
+		const balId = space_id('波罗的海')
+		const _forced = game.status_aura && game.status_aura.strait_force_axis
+		const _hasCard = _forced && Object.keys(_forced).some(k => status_card_effective(game, _forced[k]))
+		if (balId != null && _hasCard) {
+			/* "敌对国家海军" = 非轴心阵营的海军（本作海军只有两阵营） */
+			const hasEnemyNavy = Object.keys(game.location).some(p =>
+				game.location[p] === balId && game.piece_type[p] === 'navy' &&
+				faction_of_nation(game.piece_nation[p]) !== 'axis')
+			if (!hasEnemyNavy) {
+				for (const nat of ['德国', '意大利']) {
+					/* 该格已有这个国家的真海军 -> 不重复注入 */
+					const dup = Object.keys(game.location).some(p =>
+						game.location[p] === balId && game.piece_nation[p] === nat &&
+						game.piece_type[p] === 'navy')
+					if (dup) continue
+					const vid = '__vnavy_' + nat
+					game.location[vid] = balId
+					game.piece_nation[vid] = nat
+					game.piece_type[vid] = 'navy'
+					_vnavy.push(vid)
+				}
+			}
+		}
+	}
+
 	/* 1. 建立索引：格位 -> 部队列表、部队 -> 所属格位 */
 	const bySpace = {}
 	for (const [pid, loc] of Object.entries(game.location)) {
@@ -945,7 +1015,21 @@ function compute_supply(game, conn_snap) {
 		}
 	}
 
-	/* 【2026-10-23】原"清理注入的虚拟陆军"随 1b 段一起移除（不再注入任何虚拟部队） */
+	/*
+	 * 【2026-10-27】清理本函数注入的虚拟海军（15254 第二句）。
+	 * 必须在 return 之前，且三个字典一并抹掉 —— 否则调用方会看到
+	 * 不存在于 game.location 的棋子 id（15444 的 __varmy_* 旧坑）。
+	 * 说明：虚拟海军在迭代里已经把 can_source 传给了真实部队，
+	 * 这里删除它自身不会影响"已经接通"的结果。
+	 */
+	for (const vid of _vnavy) {
+		delete game.location[vid]
+		delete game.piece_nation[vid]
+		delete game.piece_type[vid]
+		delete in_supply[vid]
+		delete sources[vid]
+		delete can_source[vid]
+	}
 
 	return { in_supply, sources, can_source }
 }
@@ -7718,14 +7802,35 @@ function apply_status_ongoing(game, card_id, nation) {
 		}
 	}
 
+	/*
+	 * 15254《战争海军》
+	 *   卡面①：<北海>与<波罗的海>在任何情况下仅对轴心国相邻
+	 *          = 等效【北欧海峡永远视为被轴心控制】；
+	 *   卡面②：若<波罗的海>没有敌对国家海军 -> 补给阶段视为该格有【德国/意大利】海军
+	 *          （在 compute_supply 里注入，见该函数的 _vnavy 段）。
+	 *
+	 * 存 {海峡id: cardId} 而不是布尔/数组：
+	 *   · 压制（15353）与离场（revert_status_ongoing）都能按卡精确失效；
+	 *   · 不再需要"永不撤销"的持久数组（旧实现的 sea_axis_only 就没法清）。
+	 */
 	if (og.kind === 'axis_only_seas') {
-		game.status_aura.sea_axis_only = game.status_aura.sea_axis_only || []
+		const aura = status_aura(game)
+		aura.strait_force_axis = aura.strait_force_axis || {}
 		for (const nm of (og.spaces || [])) {
 			const sid = space_id(nm)
-			if (sid != null && game.status_aura.sea_axis_only.indexOf(sid) < 0)
-				game.status_aura.sea_axis_only.push(sid)
+			if (sid == null) continue
+			const st = data.straits.find(x => x.a === sid || x.b === sid)
+			if (st) aura.strait_force_axis[st.id] = card_id
 		}
-		lines.push('北海/波罗的海仅对轴心国相邻（战争海军）')
+		/*
+		 * 【2026-10-27】必须刷新连通缓存。
+		 * game.limited_connections 是【快照】，get_connections 不传 snap 时直接读它。
+		 * 打出状态卡的分支并没有 refresh，若不在这里补，
+		 * 补给侧（每次现算 compute_connections）会生效、
+		 * 而移动/战斗/候选地区（读缓存）仍是旧连接 —— 两处口径不一致。
+		 */
+		refresh(game)
+		lines.push('北欧海峡永远视为轴心控制（战争海军）：北海↔波罗的海恒对轴心相邻')
 	}
 
 	/* ---- 光环：15444 <硫磺岛>视为日本港口 ---- */
@@ -7898,6 +8003,19 @@ function revert_status_ongoing(game, card_id, nation) {
 			delete aura.port_as[sp]
 			lines.push(data.name_of(sp) + ' 的港口光环消失')
 		}
+	}
+	/*
+	 * 【2026-10-27】15254《战争海军》：撤销"海峡强制轴心"。
+	 * 旧实现根本没有这个分支 —— 光环一旦写入就永不撤销。
+	 * 按 card_id 精确删除（同一张卡可能强制多条海峡；只清自己那一批）。
+	 */
+	if (og.kind === 'axis_only_seas' && aura.strait_force_axis) {
+		for (const sid of Object.keys(aura.strait_force_axis)) {
+			if (aura.strait_force_axis[sid] === card_id) delete aura.strait_force_axis[sid]
+		}
+		/* 与 apply 对称：撤销后必须重算连通缓存，否则旧快照继续生效 */
+		refresh(game)
+		lines.push('北欧海峡恢复按实际控制者判定')
 	}
 	if (og.kind === 'space_immune' && og.space) {
 		const sp = space_id(og.space)
