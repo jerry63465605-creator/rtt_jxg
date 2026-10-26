@@ -12027,9 +12027,15 @@ const ECHO_EFFECTS = {
 			cost: { attrition: 2 },
 			desc: '敌方在<中国东部>征召或建设陆军时：损耗2张牌，消灭该地区1支敌方陆军',
 			ready(game, ctx) {
-				/* 只认【敌方】在【中国东部】的征召/建设 */
+				/*
+				 * 只认【敌方】在【中国东部】的征召/建设。
+				 *
+				 * 【2026-10-27】"敌方"写死为【轴心】而不是"不等于美国阵营"：
+				 * 后者会把中立 / 未参战国也算成触发方。本作阵营只有 axis / allies，
+				 * 美国的敌对阵营即 axis。常量取自 NATION_FACTION 的口径（小写）。
+				 */
 				if (!ctx || !ctx.nation) return false
-				if (faction_of_nation(ctx.nation) === faction_of_nation('美国')) return false
+				if (faction_of_nation(ctx.nation) !== 'axis') return false
 				const sp = space_id('中国东部')
 				if (Number(ctx.space) !== sp) return false
 				/* 该地区必须真有可消灭的敌方陆军（没把握不弹，避免"弹了点了没用"） */

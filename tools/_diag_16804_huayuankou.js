@@ -58,6 +58,13 @@ function make(opt) {
 	return g
 }
 
+/* 在中国东部放一支部队 */
+const put2 = (g, pid, nat, type) => {
+	g.location[pid] = SP
+	g.piece_nation[pid] = nat
+	g.piece_type[pid] = type
+}
+
 function hasOffer(g) {
 	return (g.armed_offers || []).some(w => (w.cards || []).some(c => c.card_id === ID))
 }
@@ -148,6 +155,58 @@ section('S9 CARD_TRIGGERS 登记 + 手牌点击给明确原因')
 	const g = make()
 	const why = rules.action(g, 'Allies', 'play_card', { card: ID, space: SP })
 	ok('直接打出被拒', true)
+}
+
+section('S11【2026-10-27】"敌方"= 轴心：轴心各国触发，同盟/中立不触发')
+{
+	const mk2 = (nat) => {
+		const g = make()
+		I.offer_armed_effects(g, 'after_build_army', { nation: nat, space: SP, type: 'army' })
+		return hasOffer(g)
+	}
+	ok('日本（轴心）建设 -> 弹', mk2('日本'))
+	ok('意大利（轴心）建设 -> 弹', mk2('意大利'))
+	ok('德国（轴心）建设 -> 弹', mk2('德国'))
+	ok('★ 苏联（同盟，即使未参战）建设 -> 不弹', !mk2('苏联'))
+	ok('★ 英国（同盟）建设 -> 不弹', !mk2('英国'))
+}
+
+section('S12【2026-10-27】候选名可区分：同格多个轴心国陆军')
+{
+	/*
+	 * 共存规则（docs/unit-coexistence.md 规则 2）：每国每格 1 个单位，
+	 * 【不同国家】可各 1 支 —— 中国东部可以同时有 日本陆军 + 意大利陆军。
+	 * 触发时候选 = 该格【全部】敌方陆军（不是本次新增的那 1 支）。
+	 */
+	const g = rules.setup(9409, rules.default_scenario, {})
+	g.opening = null
+	g.turn = 3
+	g.turn_phase = 'play'
+	g.current_nation = '日本'
+	g.active = 'Axis'
+	g.location = {}
+	g.piece_nation = {}
+	g.piece_type = {}
+	/* 日本先占领（1 支），意大利随后建设（另 1 支）—— 不同国家，允许共存 */
+	put2(g, 'pJA', '日本', 'army')
+	put2(g, 'pIT', '意大利', 'army')
+	g.hands['美国'] = ['16804#1']
+	g.armed_offers = []
+	I.offer_armed_effects(g, 'after_build_army', { nation: '意大利', space: SP, type: 'army' })
+	rules.action(g, 'Allies', 'use_armed_offer', { card: '16804#1' })
+	const pend = g.armed_offer && g.armed_offer.pending
+	ok('候选 = 2 支（日本 + 意大利）', !!(pend && (pend.candidates || []).length === 2),
+		pend && (pend.candidates || []).length)
+	const names = ((pend && pend.candidates) || []).map(c => c.name)
+	console.log('    候选名: ' + names.join(' / '))
+	/*
+	 * TODO【2026-10-27·待玩家确认】候选名目前是 "兵种@地区"，两支不同国家的
+	 * 陆军会显示【完全相同的名字】（"陆军@中国东部 / 陆军@中国东部"），玩家无法区分。
+	 * 记录在此作为证据；一旦确认改为 "国家·兵种" 即把下面这条改成断言。
+	 */
+	const distinguishable = names.length === 2 && names[0] !== names[1]
+	console.log('    候选名可区分 = ' + distinguishable +
+		(distinguishable ? '' : '   <- 待改进：应显示国家名'))
 }
 
 section('S10 跨阵营让权：敌方回合弹窗后 active 交给同盟')
