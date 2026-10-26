@@ -11884,27 +11884,62 @@ const ECHO_EFFECTS = {
 				: { ok: true, skip: true, desc: '无法夺取制空权：' + (r.reason || '') }
 		},
 	},
-	/* 16804 花园口决堤：敌占<中国东部>时，损耗2：消灭占领的1支陆军 */
+	/* 16804 花园口决堤：敌方在<中国东部>征召或建设陆军时，损耗2：消灭该地区1支敌方陆军
+	 *
+	 * 【2026-10-26 玩家口径】触发时机改为「敌方在<中国东部>征召或建设时」。
+	 *
+	 * 旧实现 when:'after_land' 是【死时点】：全仓 14 种 armed 派发点里没有 after_land
+	 * （after_land 只用于状态卡的 arm_status_instant 瞬间窗口，属另一套机制），
+	 * 且本卡没有 EVENT_EFFECTS 配置、is_armed_hand_card 又返回 true
+	 * —— 不能当事件卡直打、也等不到增强窗口，玩家抽到就是一张死牌。
+	 *
+	 * 复用 17711《维希法国殖民地》的范式（when 数组 + watch:true）：
+	 *   · when 数组：一张卡同时监听【征召】与【建设陆军】两个窗口；
+	 *   · watch:true：事件发起国是敌方（日本/意大利），卡持有国是美国，
+	 *     不声明会被 offer_armed_effects 的"发起国==持有国"过滤掉（永不触发）；
+	 *   · 跨阵营让权由 sync_armed_handoff 自动处理 —— 敌方回合中途翻给同盟，美国玩家应答后再归还。
+	 *
+	 * 多目标自选复用 15316《佩塔尔二世即位》的 need:'piece' 协议（客户端现成，零改动）。
+	 */
 	'16804': {
 		name: '花园口决堤', actor: '美国',
 		armed: {
-			when: 'after_land', cost: { attrition: 2 },
-			desc: '敌占<中国东部>时：损耗2，消灭占领的1支陆军',
+			when: ['after_recruit', 'after_build_army'],
+			actor: '美国', watch: true,
+			cost: { attrition: 2 },
+			desc: '敌方在<中国东部>征召或建设陆军时：损耗2张牌，消灭该地区1支敌方陆军',
 			ready(game, ctx) {
+				/* 只认【敌方】在【中国东部】的征召/建设 */
+				if (!ctx || !ctx.nation) return false
+				if (faction_of_nation(ctx.nation) === faction_of_nation('美国')) return false
 				const sp = space_id('中国东部')
-				return pieces_on(game, sp).some(p =>
-					faction_of_nation(game.piece_nation[p]) === 'axis' &&
-					game.piece_type[p] === 'army')
+				if (Number(ctx.space) !== sp) return false
+				/* 该地区必须真有可消灭的敌方陆军（没把握不弹，避免"弹了点了没用"） */
+				return eliminate_candidates(game, '美国', sp, 'army').length > 0
 			},
-			run(game, ctx) {
+			run(game, ctx, arg) {
 				const sp = space_id('中国东部')
-				const enemy = pieces_on(game, sp).find(p =>
-					faction_of_nation(game.piece_nation[p]) === 'axis' &&
-					game.piece_type[p] === 'army')
-				if (!enemy) return { ok: true, skip: true, desc: '中国东部没有敌方陆军' }
-				const r = eliminate_piece(game, '美国', sp, enemy)
+				const cands = eliminate_candidates(game, '美国', sp, 'army')
+				if (!cands.length) return { ok: true, skip: true, desc: '中国东部没有敌方陆军' }
+				const picked = (arg && arg.piece != null) ? String(arg.piece) : null
+				/* 多支占领军时由美国自选，不静默取第一个 */
+				if (cands.length > 1 && !picked) {
+					return {
+						need: 'piece',
+						candidates: cands.map(id => ({
+							id: id,
+							name: piece_type_zh(game.piece_type[id]) + '@' +
+								data.name_of(game.location[id]),
+						})),
+						pick: 1, pickMin: 1,
+					}
+				}
+				const target = picked || cands[0]
+				if (cands.indexOf(target) < 0)
+					return { ok: true, skip: true, desc: '所选不是中国东部的敌方陆军' }
+				const r = eliminate_piece(game, '美国', sp, target, { type: 'army' })
 				return r.ok
-					? { ok: true, desc: '消灭中国东部的敌方陆军' }
+					? { ok: true, desc: '花园口决堤：消灭中国东部占领的敌方陆军' }
 					: { ok: true, skip: true, desc: '无法消灭：' + r.reason }
 			},
 		},
@@ -16708,6 +16743,8 @@ CARD_TRIGGERS['16800'] = { kind: 'load', nation: '美国' }   /* 艾森豪威尔
 CARD_TRIGGERS['16801'] = { kind: 'load', nation: '美国' }   /* 哈尔西 after_battle(sea) */
 CARD_TRIGGERS['16802'] = { kind: 'load', nation: '美国' }   /* 麦克阿瑟 after_land */
 CARD_TRIGGERS['16803'] = { kind: 'load', nation: '美国' }   /* 尼米兹 after_build_navy */
+/* 【2026-10-26】16804 此前漏登记：玩家点手牌会走默认分支，给不出"这是机会卡"的原因 */
+CARD_TRIGGERS['16804'] = { kind: 'load', nation: '美国' }   /* 花园口决堤 after_recruit/after_build_army */
 CARD_TRIGGERS['17506'] = { kind: 'load', nation: '美国' }   /* 沉睡的巨人 after_build_navy */
 CARD_TRIGGERS['17511'] = { kind: 'load', nation: '美国' }   /* 美国陆军游骑兵 after_deploy_air */
 /*
