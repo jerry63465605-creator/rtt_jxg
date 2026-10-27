@@ -6583,8 +6583,13 @@ function resolve_us_merchant_select(game, arg) {
 	const dg = game.us_merchant
 	if (!dg || dg.done || dg.nation) return game
 	const nat = arg && arg.nation
-	if (['英国', '苏联', '中国', '法国'].indexOf(nat) < 0) {
-		game.log.push('【美国】《现购自运政策》只能选择英/苏/中/法')
+	/*
+	 * 【2026-10-28 #16】卡面是「选择 1 个【友方国家】」，【没有】"自己之外"字样
+	 * —— 对比 17535《租借法案》卡面明写「自己之外的友方国家」。
+	 * 所以美国自己必须可选（在美国大本营或相邻地区征召 1 支美军）。
+	 */
+	if (['英国', '苏联', '中国', '法国', '美国'].indexOf(nat) < 0) {
+		game.log.push('【美国】《现购自运政策》只能选择英/苏/中/法/美')
 		return game
 	}
 	dg.nation = nat
@@ -8465,8 +8470,22 @@ function can_build_at(game, nation, space, type) {
 	 * ---------- 陆军 / 空军 ----------
 	 * 1. 本国大本营（注意：data.js 字段名是 home_base）
 	 */
-	/* 15344 光环：大本营可能已被状态卡改判（B5① 建设位置） */
-	if (sp.home_base && effective_home_base(game, nation) === space)
+	/*
+	 * 【2026-10-28 #17】迁都后必须能在【新】大本营建设。
+	 *
+	 * 旧写法多了一个静态前置 `sp.home_base &&` —— 那是 data.js 写死的标记，
+	 * 而【迁都目标地区】在 data 里恰好是 false：
+	 *     西伯利亚(18)  <- 17845 迁都古比雪夫（苏联）
+	 *     中国西部(19)  <- 17554 重庆国民政府（中国）
+	 * 于是 effective_home_base() 虽然正确改判到新都，
+	 * 这条却因静态 false 而不成立 -> 迁都后【完全无法在新大本营建设】，
+	 * 17827《西伯利亚大铁路》"收回再建设"也一起挂。
+	 *
+	 * effective_home_base() 只会返回 home_override.to 或 home_base_of(nation)，
+	 * 两者都是合法大本营，所以去掉静态前缀是安全的：
+	 * 迁都后旧都自然不再可建（effective 已改判），符合"大本营已迁走"的语义。
+	 */
+	if (effective_home_base(game, nation) === space)
 		return { ok: true, reason: '本国大本营' }
 
 	/*
@@ -8731,12 +8750,33 @@ function can_recruit_at(game, nation, space, type) {
 		if (!isSea) return { ok: false, reason: '只能在海域征召海军' }
 	}
 
-	/* 不能有敌方部队 / 本国部队（共同条件） */
+	/*
+	 * 【2026-10-28 #18】空军必须走【载体校验】，不能独立存在。
+	 *
+	 * 旧实现把空军与陆军/海军一视同仁，两处都错：
+	 *   ① 没有 air_host_check —— 可以在【无单位】的位置征召空军；
+	 *   ② "已有本国部队 -> 拒绝" 对空军是【反的】——
+	 *      空军恰恰必须依托【同格】的本国陆/海军（那就是它的载体），
+	 *      这条把唯一合法的位置给拒了。
+	 * 于是 17531《现购自运政策》征召空军时完全颠倒：
+	 *   无单位处能建（非法）、有载体处不能建（合法被拒）。
+	 *
+	 * 与《空军力量》部署同源：air_host_check（载体）+ unit_slot_free（格位），
+	 * 见 can_deploy_air 的注释（不可用 can_build_at 校验空军）。
+	 */
+	const myFac = faction_of_nation(nation)
 	for (const p of pieces_on(game, space)) {
-		if (game.piece_nation[p] === nation)
-			return { ok: false, reason: data.name_of(space) + ' 已有本国部队' }
-		if (faction_of_nation(game.piece_nation[p]) !== faction_of_nation(nation))
+		if (faction_of_nation(game.piece_nation[p]) !== myFac)
 			return { ok: false, reason: data.name_of(space) + ' 有敌方部队' }
+	}
+	if (type === 'air') {
+		const host = air_host_check(game, nation, space)
+		if (!host.ok) return host
+	} else {
+		for (const p of pieces_on(game, space)) {
+			if (game.piece_nation[p] === nation)
+				return { ok: false, reason: data.name_of(space) + ' 已有本国部队' }
+		}
 	}
 
 	/* 单位槽位容量（每国每格：1 个单位 + 1 支空军） */

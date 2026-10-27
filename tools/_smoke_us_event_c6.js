@@ -41,10 +41,21 @@ const suTgt = pickTarget(g, '苏联', 'army')
 ok('苏联候选征召点非空', !!suTgt, 'tgs=' + JSON.stringify(I.us_merchant_targets(g, '苏联').slice(0, 3)))
 const a0 = countType(g, '苏联', 'army')
 I.resolve_us_merchant_build(g, { space: suTgt.id })
-ok('记录征召地区成功', g.us_merchant.space === suTgt.id)
-const types0 = I.us_merchant_types(g, '苏联', suTgt.id).map(t => t.type)
-ok('苏联该地区含陆军兵种', types0.indexOf('army') >= 0)
-I.resolve_us_merchant_type(g, { type: 'army' })
+/*
+ * 【2026-10-28】候选兵种【唯一】时，resolve_us_merchant_build 会【直接征召】
+ * 并把 us_merchant 清空（不进"选兵种"步骤）—— 见 rules.js 的 types.length === 1 分支。
+ *
+ * 2026-10-28 修 #18 之后空军必须有载体，空地的候选从 ['army','air'] 变成 ['army']，
+ * 于是这里会走自动征召分支。两条路径都要覆盖，否则脚本会读 null.space 崩掉。
+ */
+if (g.us_merchant) {
+	ok('记录征召地区成功', g.us_merchant.space === suTgt.id)
+	const types0 = I.us_merchant_types(g, '苏联', suTgt.id).map(t => t.type)
+	ok('苏联该地区含陆军兵种', types0.indexOf('army') >= 0)
+	I.resolve_us_merchant_type(g, { type: 'army' })
+} else {
+	console.log('    （该地区候选兵种唯一 -> 服务端已直接征召）')
+}
 ok('苏联 +1 陆军（美国代理征召）', countType(g, '苏联', 'army') === a0 + 1)
 ok('us_merchant 清除', !g.us_merchant)
 
@@ -59,10 +70,15 @@ ok('英国存在可征召海军的相邻海域', !!ukSea, JSON.stringify(ukTgts)
 if (ukSea) {
 	const n0 = countType(g2, '英国', 'navy')
 	I.resolve_us_merchant_build(g2, { space: ukSea.id })
-	ok('英国记录征召地区成功', g2.us_merchant.space === ukSea.id)
-	const ukTypes = I.us_merchant_types(g2, '英国', ukSea.id).map(t => t.type)
-	ok('该海域含海军兵种', ukTypes.indexOf('navy') >= 0)
-	I.resolve_us_merchant_type(g2, { type: 'navy' })
+	/* 同 g：兵种唯一时服务端直接征召并清空 us_merchant */
+	if (g2.us_merchant) {
+		ok('英国记录征召地区成功', g2.us_merchant.space === ukSea.id)
+		const ukTypes = I.us_merchant_types(g2, '英国', ukSea.id).map(t => t.type)
+		ok('该海域含海军兵种', ukTypes.indexOf('navy') >= 0)
+		I.resolve_us_merchant_type(g2, { type: 'navy' })
+	} else {
+		console.log('    （英国该海域兵种唯一 -> 已直接征召）')
+	}
 	ok('英国 +1 海军（美国代理征召）', countType(g2, '英国', 'navy') === n0 + 1)
 	ok('us_merchant 清除', !g2.us_merchant)
 }
@@ -80,9 +96,14 @@ I.offer_us_merchant(g4)
 I.resolve_us_merchant_select(g4, { nation: '苏联' })
 const suTgt2 = pickTarget(g4, '苏联', 'army')
 I.resolve_us_merchant_build(g4, { space: suTgt2.id })
-const a0b = countType(g4, '苏联', 'army')
-I.resolve_us_merchant_type(g4, { type: 'navy' }) // 苏联陆地无海军
-ok('非法兵种被拒绝（苏联陆军点不能征召海军）', countType(g4, '苏联', 'army') === a0b && !!g4.us_merchant)
+/* 同上：若该地区兵种唯一会直接征召，此时已无"待选兵种"状态可拒绝 */
+if (!g4.us_merchant) {
+	console.log('    （g4 该地区兵种唯一 -> 已直接征召，跳过非法兵种用例）')
+} else {
+	const a0b = countType(g4, '苏联', 'army')
+	I.resolve_us_merchant_type(g4, { type: 'navy' }) // 苏联陆地无海军
+	ok('非法兵种被拒绝（苏联陆军点不能征召海军）', countType(g4, '苏联', 'army') === a0b && !!g4.us_merchant)
+}
 
 // 非法地点被拒绝（不在候选集）
 const g5 = newGame()
