@@ -44,6 +44,16 @@
 		overflow-x: auto; color: #9cf; max-width: 380px; }
 	#err { margin: 20px; padding: 14px; background: #4a1a1a; border-left: 4px solid #f44; display: none; }
 	#err pre { color: #faa; max-width: none; }
+	/* 【2026-10-28】卡牌 id 过滤栏 */
+	.idbar { margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+	.idbar label { font-size: 12px; color: #888; }
+	.idbar input { background: #1e1e1e; border: 1px solid #444; color: #ddd;
+		border-radius: 4px; padding: 5px 8px; font-size: 13px; width: 340px; }
+	.idbar input:focus { outline: none; border-color: #7ec97e; }
+	.idbar #idcount { font-size: 12px; color: #999; }
+	.idbar button { background: #2a2a2a; border: 1px solid #444; color: #ccc;
+		border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+	.idbar button:hover { background: #333; }
 </style>
 </head>
 <body>
@@ -57,6 +67,18 @@
 <div class="note">
 	左：卡图（看右上角图标确认类型）　右：从配置自动生成的当前实现<br>
 	<span class="k">黄色</span>=地区/参数，<b style="color:#7ec97e">绿色</b>=操作。红色表示尚未实现。
+</div>
+<!--
+	【2026-10-28】卡牌 id 过滤栏。
+	刻意放在 #bar 【外面】：#bar 每次点国家/类型按钮都会 innerHTML 重建，
+	输入框放进去会导致输入被清空、焦点丢失。
+-->
+<div class="idbar">
+	<label for="idfilter">卡牌 id</label>
+	<input id="idfilter" type="text" autocomplete="off" spellcheck="false"
+		placeholder="输入 id 过滤，支持多个：逗号 / 空格分隔，如 16804 15254 15405">
+	<span id="idcount"></span>
+	<button id="idclear" type="button">清除</button>
 </div>
 <div class="bar" id="bar"></div>
 <div id="err"><strong>加载失败</strong><pre id="errmsg"></pre></div>
@@ -341,11 +363,46 @@ function statusHtml(c, ctx) {
 		'</td>'
 }
 
-function render(ctx, nation, type) {
+/*
+ * 【2026-10-28】卡牌 id 过滤。
+ *
+ * 用法：
+ *   · 单个 id：16804
+ *   · 前缀/包含：168 -> 16800~16899
+ *   · 多个：用逗号 / 空格 / 顿号分隔，任一命中即可（并集）
+ * 空串 = 不过滤。
+ */
+function parseIdQuery(q) {
+	return String(q || '').split(/[,，、\s]+/).filter(Boolean)
+}
+
+function idMatch(c, q) {
+	const parts = parseIdQuery(q)
+	if (!parts.length) return true
+	const idStr = String(c.id)
+	return parts.some(p => idStr.indexOf(p) >= 0)
+}
+
+/* 当前筛选状态：国家/类型由 buildBar 维护，id 关键字由输入框维护 */
+const CUR = { nation: '德国', type: 'ALL', q: '' }
+
+function render(ctx, nation, type, q) {
+	if (nation !== undefined) CUR.nation = nation
+	if (type !== undefined) CUR.type = type
+	if (q !== undefined) CUR.q = q
 	const tbl = document.getElementById('tbl')
 	const list = ctx.CARDS
-		.filter(c => (nation === 'ALL' || c.nation === nation) && (type === 'ALL' || c.type === type))
+		.filter(c => (CUR.nation === 'ALL' || c.nation === CUR.nation) &&
+			(CUR.type === 'ALL' || c.type === CUR.type) &&
+			idMatch(c, CUR.q))
 		.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+
+	const cnt = document.getElementById('idcount')
+	if (cnt) {
+		cnt.textContent = parseIdQuery(CUR.q).length
+			? ('命中 ' + list.length + ' 张（共 ' + ctx.CARDS.length + '）')
+			: ('共 ' + ctx.CARDS.length + ' 张')
+	}
 
 	tbl.innerHTML = list.map(c => {
 		/*
@@ -460,8 +517,22 @@ loadAll().then(ctx => {
 	 * 默认 Tab：跟着本次开发重点走。
 	 * 历史：RESPONSE -> STATUS（核验）-> ECON -> 德国卡组核验（2026-09-27，国家+类型双筛选）。
 	 */
-	buildBar(ctx, '德国', 'ALL')
-	render(ctx, '德国', 'ALL')
+	buildBar(ctx, CUR.nation, CUR.type)
+	render(ctx, CUR.nation, CUR.type)
+
+	/*
+	 * 【2026-10-28】id 过滤栏的事件绑定。
+	 * 只绑一次：它在 #bar 之外，buildBar 重建 bar 不会动到它，
+	 * 所以输入内容与焦点都能保持。
+	 */
+	const inp = document.getElementById('idfilter')
+	const rerun = () => render(ctx, CUR.nation, CUR.type, inp.value.trim())
+	inp.addEventListener('input', rerun)
+	document.getElementById('idclear').onclick = () => {
+		inp.value = ''
+		rerun()
+		inp.focus()
+	}
 }).catch(e => {
 	document.getElementById('err').style.display = 'block'
 	document.getElementById('errmsg').textContent = (e && e.stack) || String(e)
