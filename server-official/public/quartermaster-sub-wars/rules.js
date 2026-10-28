@@ -731,14 +731,37 @@ function supply_group_partner(game, nat, onat) {
  * A 只认 can_source（★ 或从源头链下来），临时补给（光环 / 卡牌授予）不算来源。
  */
 /*
- * 【2026-10-23】该 (国, 兵种, 地区) 是否被"总是处于补给状态"的光环覆盖。
+ * 【2026-10-23】该 (国, 兵种, 地区) 是否被"总是处于补给状态"的覆盖。
  *
  * 用途：建设时的**免 A**。
  *   · 15346 自由法国（整国、无 scope）-> 法国新建的海军也应视为已连回源
  *   · 15356 地中海基地（scope: navy + 指定海域）-> 只对该兵种/该海域生效
+ *   · 17838 苏联（陆军/整国）
  * 玩家口径：「全补给的法国、苏联，不要求连补给点」。
+ *
+ * 【2026-10-28 新增 15207】JU-52 空投补给：
+ *   「回合开始时（若场上有德国空军），损耗 1 张牌：本回合内所有德国部队处于补给状态。」
+ *
+ *   它与 15346 / 17838 完全同构 —— 都是【整国部队一次性全补给】，只是载体不同：
+ *     · 15346 / 17838 走 status_aura.supply_immune（持久光环）
+ *     · 15207 走 modifiers 的 all_german_supplied（本回合 echo）
+ *   故待遇必须一致：**免 A**（建海军只要求相邻有本国陆军作港口）。
+ *
+ *   修复前实测（德国陆军断补在〈非洲北部〉）：
+ *     关 15207 -> 北海/南大西洋/阿拉伯海/地中海 全部「还须有本国且连回补给源的部队」❌
+ *     开 15207 -> in_supply=true 但 roots={} -> **仍然全部不可建** ❌（卡面被架空）
+ *     换成 15346 式 supply_immune -> 四片海域全部可建 ✅（同一件事两种待遇）
+ *
+ *   ⚠ 不改变「空投不是补给源」这条既有口径：
+ *     compute_supply 里 15207 分支仍写 can_source=false、不往 roots 塞东西，
+ *     所以它【不能把补给传给别的部队】（德国断补陆军旁边那支德军依旧断补）。
+ *     这里只是不拿它当"建海军的硬门槛"。
+ *
+ *   范围：只对【德国】，且 echo_mod_active 内部已限定「德国本国回合」。
  */
 function supply_aura_covers(game, nation, type, space) {
+	/* 【2026-10-28】15207 JU-52 空投补给：本回合内所有德国部队处于补给状态 -> 免 A */
+	if (nation === '德国' && echo_mod_active(game, 'all_german_supplied')) return true
 	const imm = (game.status_aura && game.status_aura.supply_immune) || {}
 	if (imm[nation]) {
 		const sc = (game.status_aura.supply_immune_scope || {})[nation] || null
@@ -33185,6 +33208,7 @@ if (typeof module !== 'undefined') {
 		/* 【2026-10-23】港口光环（15444 丘克群岛）测试入口 */
 		status_aura,
 		navy_ab_check,
+		supply_aura_covers,      /* 【2026-10-28】建海军「免 A」判定（15346/17838/15207），供验收直接断言 */
 		ensure_status_aura,
 		/* 【2026-10-23】航母时点修复的测试入口 */
 		arm_status_instant,
