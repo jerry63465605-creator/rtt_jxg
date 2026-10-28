@@ -7068,8 +7068,13 @@ function status_repeat_bump(game, card_id) {
  *                        （见 arm_status_instant 按同阵营武装所有持有国）。
  *   build_army        —— 恒 false（事件驱动），走 activate_status 的
  *                        from_status 专用通道，此处限制无意义。
+ *   piece_removed     —— 【2026-10-28】17543《雷达》「美国海军被攻击时」发动，
+ *                        必然发生在【敌方回合】（谁打你，就是谁的行动轮）。
+ *                        不加这条 -> activate_status 的"不能触发非本方的状态卡"
+ *                        会把它挡死，窗口亮着但点了永远无效。
+ *                        当前该窗口只有 17543 一张，影响面可控。
  */
-const CROSS_NATION_STATUS_WINDOWS = { after_ally_battle: 1, build_army: 1 }
+const CROSS_NATION_STATUS_WINDOWS = { after_ally_battle: 1, build_army: 1, piece_removed: 1 }
 
 function status_window_ready(game, nation, card_id, tr, opts) {
 	/*
@@ -16865,14 +16870,30 @@ function promote_deferred_response(game) {
 
 /* 把"本要删除的算子"加回版面（拦截类响应卡事后还原用） */
 function restore_piece(game, ctx) {
-	const pid = ctx.piece
-	if (pid == null) return
-	if (game.location[pid] == null) {
+	const pid = ctx && ctx.piece
+	if (pid != null && game.location[pid] == null) {
 		game.location[pid] = ctx.space
 		game.piece_nation[pid] = ctx.piece_nation
 		game.piece_type[pid] = ctx.piece_type
 		refresh(game)
 	}
+	/*
+	 * 【2026-10-28 · B 方案】任何"救回部队"都顺手复原同场因不代受撤退的空军。
+	 *
+	 * 为什么收在这里而不是逐个 impl 显式调：
+	 *   "还原/免死"横跨三条路径，靠人记必漏——
+	 *     · 响应卡：15330/15332/15334/15337/15420/15421/15436/17730/17733/17735
+	 *       + 苏联 17832/17833/17835/17836（都走 su_defense_protect）
+	 *     · 增强卡：15311 马奇诺防线
+	 *     · 状态卡：17543 雷达
+	 *   收进 restore_piece 后，三条路径 + 将来任何新写的还原卡【全部自动生效】。
+	 *
+	 * 显式调用（那 10 张响应卡）保留 —— 幂等，重复调只是再走一遍（location 已等于 space 会跳过）。
+	 *
+	 * ⚠ 前提：ctx 必须带 retreated_airs。do_battle 的三个派发点已补：
+	 *   响应卡（request_responses）/ 增强卡（offer_armed_effects）/ 状态卡（last_piece_removed）。
+	 */
+	if (ctx) restore_retreated_airs(game, ctx)
 }
 
 /*
@@ -19732,6 +19753,9 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		game.last_piece_removed = {
 			nation: rmvNation, type: rmvType, space: space,
 			reason: 'piece_removed', piece: victim,
+			/* 【2026-10-28】17543《雷达》等状态卡从本对象取 ctx 做 restore_piece，
+			 * 因此这里也必须带 retreated_airs，否则它们救回海军后飞机留在撤退地。 */
+			retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
 		}
 		arm_status_instant(game, 'piece_removed', rmvNation, space)
 		/* 16304 中国远征军：让权美国选相邻地区征召 */
@@ -19745,6 +19769,10 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 				piece_nation: rmvNation, piece_type: rmvType,
 				space: space, reason: 'piece_removed',
 				was_supplied: rmvSupplied,
+				/* 【2026-10-28】增强卡路径也要带撤退信息：
+				 * 15311《马奇诺防线》在 armed.run 里调 restore_piece 救法国陆军，
+				 * 没有这个字段它救不回同场撤走的法国空军。 */
+				retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
 			})
 		} catch (e) { game.log.push('arm piece_removed 错误：' + e.message) }
 		/* 【2026-10-16】17749 轴心协定：登记真实击杀信用并尝试落账（无窗口则立即 +1） */

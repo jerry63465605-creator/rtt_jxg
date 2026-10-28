@@ -102,9 +102,9 @@ function make(opt) {
  * 发起战斗：play_card 的 piece 参数是【被攻击的目标敌方部队】（不是发起单位），
  * 发起单位由服务端从 battle_initiators 里选（本局固定 de_a）。
  */
-function startBattle(g, target) {
-	const victim = (target === NS) ? 'uk_navy' : 'uk_army'
-	rules.action(g, 'Axis', 'play_card', { card: WAR, space: target, piece: victim })
+function startBattle(g, target, victim) {
+	const v = victim || ((target === NS) ? 'uk_navy' : 'uk_army')
+	rules.action(g, 'Axis', 'play_card', { card: WAR, space: target, piece: v })
 	return g.pending_battle
 }
 function frames(g) { return (g.response_stack || []) }
@@ -291,6 +291,138 @@ section('S9 配置守卫：10 张免死卡的 impl 都调用了 restore_retreate
 		else console.log('    未接线: ' + id)
 	}
 	ok('★ 10 张全部接线', wired === ids.length, wired + '/' + ids.length)
+}
+
+/* ============================================================
+ * S10 增强卡路径（15311 马奇诺防线）：法国陆军 + 法国空军撤退 -> armed 发动 -> 都回位
+ *
+ * 为什么必须有这条：飞机复原最初只接在 10 张【响应卡】上，
+ * 增强卡（ECHO_EFFECTS.armed.run）与状态卡（trigger.run）是另外两条路径，
+ * 它们的 ctx 当时【没有 retreated_airs】。B 方案把复原收进 restore_piece 后，
+ * 这两条路径应当自动生效 —— 本场景就是验证它。
+ * ============================================================ */
+section('S10 增强卡路径（15311 马奇诺防线）：法国陆军 + 法国空军撤退 -> armed 发动 -> 都回位')
+{
+	const g = make({ space: WE })
+	/* 把英国守军换成法国守军 */
+	delete g.location['uk_army']; delete g.location['uk_air']
+	g.location['fr_army'] = WE; g.piece_nation['fr_army'] = '法国'; g.piece_type['fr_army'] = 'army'
+	g.location['fr_air'] = WE; g.piece_nation['fr_air'] = '法国'; g.piece_type['fr_air'] = 'air'
+	/* 15311 的 armed.cost = { discard: 4 }，手牌必须够（含自身） */
+	g.hands['法国'] = ['15311#1', 'fr_d1#1', 'fr_d2#1', 'fr_d3#1', 'fr_d4#1']
+	g.armed_offers = []
+	I.refresh(g)
+
+	startBattle(g, WE, 'fr_army')
+	ok('发起对西欧（法国陆军）的陆战并挂起', !!g.pending_battle)
+	rules.action(g, 'Allies', 'resolve_battle', { declined: true })
+	ok('不代受：法国陆军被移除', g.location['fr_army'] == null)
+	ok('不代受：法国空军无处可撤 -> 被删除', g.location['fr_air'] == null, loc(g, 'fr_air'))
+
+	const offer = (g.armed_offers || []).some(w =>
+		(w.cards || []).some(c => String(c.card_id).indexOf('15311') === 0))
+	ok('★ 增强卡 15311 进入 armed 窗口（piece_removed）', offer,
+		(g.armed_offers || []).map(w => w.when))
+	/* 注意：ctx 挂在【window】上（w.ctx），不在 w.cards[i] 上 */
+	const wid = (g.armed_offers || [])[0]
+	ok('★ armed 窗口的 ctx 带 retreated_airs（此前缺字段）',
+		!!wid && Array.isArray(wid.ctx && wid.ctx.retreated_airs) &&
+		wid.ctx.retreated_airs.indexOf('fr_air') >= 0,
+		wid && wid.ctx && wid.ctx.retreated_airs)
+
+	/* 15311 的代价是弃 4 张手牌，必须传 drop */
+	rules.action(g, 'Allies', 'use_armed_offer', {
+		card: '15311#1', drop: ['fr_d1#1', 'fr_d2#1', 'fr_d3#1', 'fr_d4#1'],
+	})
+	ok('★ 15311 发动后：法国陆军回到西欧', loc(g, 'fr_army') === '西欧', loc(g, 'fr_army'))
+	ok('★ 15311 发动后：撤退的法国空军也回到西欧（B 方案生效）',
+		loc(g, 'fr_air') === '西欧', loc(g, 'fr_air'))
+}
+
+/* ============================================================
+ * S11 状态卡路径（17543 雷达）：美国海军 + 美国空军撤退 -> activate_status -> 都回位
+ * ============================================================ */
+section('S11 状态卡路径（17543 雷达）：美国海军 + 美国空军撤退 -> 发动 -> 都回位')
+{
+	const g = make({ space: NS })
+	/* 英国守军换成美国守军：北海（海军+空军）、不列颠（陆军，作撤退载体） */
+	delete g.location['uk_navy']; delete g.location['uk_air']; delete g.location['uk_home']
+	g.location['us_navy'] = NS; g.piece_nation['us_navy'] = '美国'; g.piece_type['us_navy'] = 'navy'
+	g.location['us_air'] = NS; g.piece_nation['us_air'] = '美国'; g.piece_type['us_air'] = 'air'
+	g.location['us_home'] = UK; g.piece_nation['us_home'] = '美国'; g.piece_type['us_home'] = 'army'
+	g.table = g.table || {}
+	g.table['美国'] = ['17543#1']
+	g.decks['美国'] = ['d1#1', 'd2#1', 'd3#1', 'd4#1', 'd5#1']
+	g.status_instant = []
+	I.refresh(g)
+
+	I.do_battle(g, '德国', NS, 'us_navy', 'sea', { from: 'de_a' })
+	ok('对北海发起海战并挂起', !!g.pending_battle)
+	rules.action(g, 'Allies', 'resolve_battle', { declined: true })
+	ok('不代受：美国海军被移除', g.location['us_navy'] == null)
+	ok('不代受：美国空军撤到不列颠', loc(g, 'us_air') === '不列颠', loc(g, 'us_air'))
+
+	const si = (g.status_instant || []).some(x => String(x.card_id || x.card_face || '').indexOf('17543') === 0)
+	ok('★ 状态卡 17543 进入瞬间窗口（piece_removed）', si,
+		(g.status_instant || []).map(x => x.card_id || x.card_face))
+	const lp = g.last_piece_removed || {}
+	ok('★ last_piece_removed 带 retreated_airs（此前缺字段）',
+		Array.isArray(lp.retreated_airs) && lp.retreated_airs.indexOf('us_air') >= 0,
+		lp.retreated_airs)
+
+	rules.action(g, 'Allies', 'activate_status', { card: '17543#1' })
+	ok('★ 17543 发动后：美国海军回到北海', loc(g, 'us_navy') === '北海', loc(g, 'us_navy'))
+	ok('★ 17543 发动后：撤退的美国空军也回到北海（B 方案生效）',
+		loc(g, 'us_air') === '北海', loc(g, 'us_air'))
+}
+
+/* ============================================================
+ * S12 苏联响应路径（17832 列宁格勒保卫战，走 su_defense_protect -> restore_piece）
+ * ============================================================ */
+section('S12 苏联响应（17832 列宁格勒保卫战）：苏陆军 + 苏空军撤退 -> 发动 -> 都回罗斯')
+{
+	const ROSS = data.id_of('罗斯')
+	const nb = (data.spaces[ROSS].connections || []).find(x => data.spaces[x] && data.spaces[x].terrain === 'land')
+	const g = make({ space: WE })
+	for (const pid of Object.keys(g.location)) delete g.location[pid]
+	g.location['su_army'] = ROSS; g.piece_nation['su_army'] = '苏联'; g.piece_type['su_army'] = 'army'
+	g.location['su_air'] = ROSS; g.piece_nation['su_air'] = '苏联'; g.piece_type['su_air'] = 'air'
+	g.location['de_a'] = nb; g.piece_nation['de_a'] = '德国'; g.piece_type['de_a'] = 'army'
+	g.table_responses = [{ card_id: '17832#1', nation: '苏联', owner_side: 'allies' }]
+	try { I.end_neutral(g, '苏联', 'test') } catch (e) { }
+	/* 北欧与罗斯相邻，但德国在北欧断补 -> do_battle 会拒「发起单位不处于补给状态」。
+	 * 这里给发起单位授补给（测试手段，等价于该地区在补给链上）。 */
+	I.grant_supply(g, 'de_a', 99)
+	I.refresh(g)
+
+	I.do_battle(g, '德国', ROSS, 'su_army', 'land', { from: 'de_a' })
+	ok('对罗斯发起陆战并挂起', !!g.pending_battle)
+	rules.action(g, 'Allies', 'resolve_battle', { declined: true })
+	ok('不代受：苏联陆军被移除', g.location['su_army'] == null)
+	ok('不代受：苏联空军无处可撤 -> 被删除', g.location['su_air'] == null, loc(g, 'su_air'))
+	ok('★ 响应栈出现 17832 帧', hasFrame(g, '17832'), frames(g).map(f => f.card_face))
+
+	trigger(g)
+	ok('★ 17832 发动后：苏联陆军回到罗斯', loc(g, 'su_army') === '罗斯', loc(g, 'su_army'))
+	ok('★ 17832 发动后：撤退的苏联空军也回到罗斯（su_defense_protect -> restore_piece 自动生效）',
+		loc(g, 'su_air') === '罗斯', loc(g, 'su_air'))
+}
+
+/* ============================================================
+ * S13 幂等：显式调用 + restore_piece 内部调用不重复搬运
+ * ============================================================ */
+section('S13 幂等：impl 连打两次，空军仍只在原地区（不会搬到别处/重复置位）')
+{
+	const g = make({ space: WE, cards: ['15330'] })
+	startBattle(g, WE)
+	rules.action(g, 'Allies', 'resolve_battle', { declined: true })
+	const f = frames(g).find(x => String(x.card_face) === '15330')
+	const impl = I.RESPONSE_EFFECT_IMPL['15330']
+	impl(g, 'allies', f.ctx)            /* 第一次：复原 */
+	const after1 = loc(g, 'uk_air')
+	impl(g, 'allies', f.ctx)            /* 第二次：应无副作用 */
+	ok('第一次复原后空军在西欧', after1 === '西欧', after1)
+	ok('★ 第二次调用后空军仍在西欧（幂等）', loc(g, 'uk_air') === '西欧', loc(g, 'uk_air'))
 }
 
 console.log('\n' + (fails.length ? ('有失败断言：' + fails.join(', ')) : '全部通过') +
