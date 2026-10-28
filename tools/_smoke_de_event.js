@@ -40,7 +40,17 @@ const give = (nation, face) => {
 	last_g.hands[nation] = last_g.hands[nation] || []
 	last_g.hands[nation].push(String(face) + '#1')
 }
-const play = arg => { last_g = rules.action(last_g, 'Axis', 'play_card', arg) }
+/*
+ * 【2026-10-28】事件卡已改为【分步停机】（opt.oneStep，每完成一个原子步就停，等玩家点「下一步」）。
+ * 本文件的断言只关心【最终结果】，所以在打出后自动把剩余的原子步跑完。
+ * 若将来需要断言中间态，请直接用 rules.action(..., 'event_step_next', {}) 手工推进。
+ */
+const play = arg => {
+	last_g = rules.action(last_g, 'Axis', 'play_card', arg)
+	for (let i = 0; i < 30 && last_g && last_g.pending_event_step; i++)
+		last_g = rules.action(last_g, 'Axis', 'event_step_next', {})
+	return last_g
+}
 /*
  * 放棋子并【授予补给】——否则 build/battle 会因"发起单位不在补给中"被拒，
  * 测试用例就会死于无关的原因（见 ls pitfalls R 系列："薄局面"是 bug 高发区）。
