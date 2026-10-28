@@ -19228,6 +19228,27 @@ function finish_event_card(game, nation, card_id, opt) {
 	game.card_actions_this_nation = (game.card_actions_this_nation || 0) + 1
 	game.log.push('【' + nation + '】《' + nm + '》分步结算完成')
 	after_card_resolved(game, nation, card_id)
+	/*
+	 * 【2026-10-28 #13 修复】分步事件卡结算完成 = 卡牌生效，必须派发 play_card。
+	 *
+	 * 症状：15333《配给》「英国卡牌生效后将其洗回牌堆」对 steps>=2 的卡**【永不触发】**。
+	 * 原因是两条收尾路径不对称：
+	 *   · 单步卡走 play_card 的 EVENT 分支（`request_responses(game,'play_card',…)` 在
+	 *     该分支里本来就有）-> 能触发；
+	 *   · 多步卡首次调用就 stepPause 返回，最终由本函数收尾，而本函数只调
+	 *     after_card_resolved（★技能窗口）—— **没有** play_card 派发。
+	 * 英国 9 张事件卡里 12501/15319/15327 是单步（能触发），
+	 * 15315/15316/15317/15318/15320/15349 是两步（不能触发）——
+	 * 正好对上玩家"配给有的能发动、有的不能"的观感。
+	 *
+	 * 顺序：本函数开头已把 card_id 放进弃牌堆（15333 的 filter 要求"卡在弃牌堆"），
+	 * 所以在这里派发是安全的。
+	 */
+	try {
+		request_responses(game, 'play_card', {
+			nation: nation, card: card_id, card_obj: inst_card(card_id),
+		}, false)
+	} catch (e) { game.log.push('play_card(分步收尾) 错误：' + e.message) }
 	return game
 }
 
@@ -29065,6 +29086,16 @@ function do_action(state, current, action, arg) {
 			push_discard_direct(game, b.nation, b.card_id)
 		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
 		after_card_resolved(game, b.nation, b.card_id)
+		/*
+		 * 【2026-10-28 #13 修复】战斗预算卡收尾 = 卡牌生效（战斗已打完），同样派发 play_card。
+		 * 与 EVENT 分支、finish_event_card 三处对齐 —— 缺任何一处，
+		 * 15333《配给》对相应类型的英国事件卡就不触发。
+		 */
+		try {
+			request_responses(game, 'play_card', {
+				nation: b.nation, card: b.card_id, card_obj: inst_card(b.card_id),
+			}, false)
+		} catch (e) { game.log.push('play_card(budget) 错误：' + e.message) }
 		return game
 	}
 
@@ -31300,6 +31331,25 @@ function do_action(state, current, action, arg) {
 					after_card_resolved(game, nation, card_id)
 				else
 					game.log.push('（17721《钢铁条约》国家技能窗口延迟至德国归还后弹出）')
+				/*
+				 * 【2026-10-28 #13 修复】事件卡结算完成 = 卡牌生效，必须派发 play_card。
+				 *
+				 * 症状：15333《配给》「英国卡牌生效后将其洗回牌堆」对**所有事件卡**永不触发
+				 * （不只是多步卡）。因为本分支（EVENT）在 31295 discard_card 之后就
+				 * 直接 return，【从来没有】play_card 派发 ——
+				 * 派发点只存在于 BASIC / EFFECT / 其余卡牌 三个分支。
+				 *
+				 * 英国 9 张事件卡全部命中：12501/15319/15327（单步，走本分支）、
+				 * 15315/15316/15317/15318/15320/15349（多步，走 finish_event_card）。
+				 *
+				 * 位置：此处卡已在弃牌堆（31295），满足 15333 的 filter「卡在弃牌堆」。
+				 * cardResolved=true 的战斗预算卡不走这里 —— 它们由 event_finish 收尾，那里另派发。
+				 */
+				try {
+					request_responses(game, 'play_card', {
+						nation: nation, card: card_id, card_obj: c,
+					}, false)
+				} catch (e) { game.log.push('play_card(event) 错误：' + e.message) }
 			}
 			return game
 			}
