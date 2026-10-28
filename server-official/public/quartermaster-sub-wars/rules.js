@@ -1164,9 +1164,31 @@ function compute_supply(game, conn_snap) {
 			if (ch) changed = true
 
 			/* 自己国的根在手 -> 自身补给（异国根只传不补） */
-			if (mine[nat] && !in_supply[pid]) {
-				in_supply[pid] = true
-				if (!sources[pid]) sources[pid] = 'chain'
+			if (mine[nat]) {
+				if (!in_supply[pid]) {
+					in_supply[pid] = true
+					if (!sources[pid]) sources[pid] = 'chain'
+				} else if (sources[pid] === 'aura' || sources[pid] === 'granted' || sources[pid] === 'echo') {
+					/*
+					 * 【2026-10-28 补漏·#12 的第二半】
+					 *
+					 * 上一轮只改了【跳过条件】（让 aura/granted 也参与迭代），
+					 * 但这里的升级分支还留着 `!in_supply[pid]` 守卫 ——
+					 * 于是被光环罩住的部队即使接到了【自己国的根】，
+					 * 也只是"本来就补给着"，sources 仍是 'aura'、can_source 仍为 false：
+					 * **它依然当不了中继**。
+					 *
+					 * 症状（15344 法国迁都 + 17549 + 15346）：
+					 *   不列颠的法国陆军是 base（可传根），旁边的法国海军被 15346 打成 aura
+					 *   -> 接得到根却不升级 -> can_source=false
+					 *   -> 与「不加 15346」相比，加了光环反而更差（同一 bug 的另半边）。
+					 *
+					 * 现在：能证明"连得回真源"就【升级为 chain】并拿到 can_source；
+					 * 连不回源的（孤立远洋）仍在上面被 `hasLand` / 接根条件挡住，
+					 * 保持 aura + can_source=false，继续遵守「光环本身不是源」。
+					 */
+					sources[pid] = 'chain'
+				}
 				can_source[pid] = true
 			}
 		}

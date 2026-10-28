@@ -384,7 +384,10 @@ section('S13 源码守卫：根集合模型的关键约束')
 	ok('承载阶段用 supply_sources_at 收集该格全部源', /supply_sources_at\(game, Number\(loc\), pids\)/.test(srcText))
 	ok('接根要求"传递者同国或 17549 组内"',
 		/if \(!\(onat === nat \|\| supply_group_partner\(game, nat, onat\)\)\) continue/.test(srcText))
-	ok('自己补给只认"自己国的根"', /if \(mine\[nat\] && !in_supply\[pid\]\)/.test(srcText))
+	ok('自己补给只认"自己国的根"', /if \(mine\[nat\]\)/.test(srcText))
+	/* 【2026-10-28】#12 的第二半：aura/granted/echo 接到本国根时升级为 chain（否则永远当不了中继） */
+	ok('光环部队能连回本国根时升级为 chain',
+		/sources\[pid\] === 'aura' \|\| sources\[pid\] === 'granted' \|\| sources\[pid\] === 'echo'/.test(srcText))
 	ok('海陆链未按兵种限制（保留海军中继）',
 		!/piece_type\[other\] === 'army' &&\s*\n?\s*supply_group_partner\(game, game\.piece_nation\[other\]/.test(srcText))
 	ok('大本营参与供源（effective_home_base 进 supply_sources_at）',
