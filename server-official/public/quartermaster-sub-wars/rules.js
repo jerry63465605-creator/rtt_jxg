@@ -4812,7 +4812,7 @@ const STATUS_EFFECTS = {
 				if (!r.ok) return { ok: false, reason: '征召失败：' + (r.reason || '') }
 				refresh(game)
 				/* 用掉本回合出牌行动（占出牌名额、关闭其它 play_start 卡），但不结束/推进阶段 */
-				mark_play_done(game, me)
+				apply_skip_play(game, me)
 				return { ok: true, desc: '在' + data.name_of(sp) + '征召1支中国陆军' }
 			},
 		},
@@ -4855,7 +4855,7 @@ const STATUS_EFFECTS = {
 				}
 				refresh(game)
 				/* 用掉本回合出牌行动（占出牌名额、关闭其它 play_start 卡），但不结束/推进阶段 */
-				mark_play_done(game, me)
+				apply_skip_play(game, me)
 				return { ok: true, desc: me + ' 从弃牌堆真实打出[建设陆军]，在' + data.name_of(sp) + ' 建设1支陆军' }
 			},
 		},
@@ -5238,16 +5238,16 @@ const STATUS_EFFECTS = {
 	'15255': {
 		trigger: {
 			window: 'play_start',
-			cost: { skip_play: true },
+			/*
+			 * 【2026-10-28 统一】损耗 2 张从 run 内部迁到 cost.attrition ——
+			 * 与 17746《耀武》一致，交给 activate_status / status_window_ready 统一处理：
+			 *   · 牌库不足 -> status_window_ready 直接置灰（不能发动），等价于旧的 can_attrite 前置
+			 *   · 扣牌与日志由框架统一做，不再散落在 run 里
+			 * 这样 #14 那类「代价已付但效果失败」也不会再绕过统一预检。
+			 */
+			cost: { skip_play: true, attrition: 2 },
 			desc: '跳过出牌阶段，损耗2张牌：建设1支陆军',
 			run(game, ctx) {
-				/*
-				 * 【2026-09-29】"损耗 2 张牌"是本卡的【代价】——牌库不足则无法发动
-				 * （玩家口径：主动损耗牌库不够就不能用）。
-				 */
-				if (!can_attrite(game, '德国', 2))
-					return { ok: false, reason: '牌库不足 2 张，无法损耗（无法发动）' }
-				const lost = attrition_cards(game, '德国', 2)
 				const home = effective_home_base(game, '德国')
 				const cands = []
 				/*
@@ -5261,10 +5261,10 @@ const STATUS_EFFECTS = {
 					if (ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok) cands.push(nb)
 				})
 				const tgt = cands[0]
-				if (tgt == null) return { ok: true, desc: '无德控陆地可建设（损耗' + lost.length + '张）' }
+				if (tgt == null) return { ok: true, desc: '无德控陆地可建设（已损耗 2 张）' }
 				const r = build_piece(game, '德国', 'army', tgt)
 				refresh(game)
-				return { ok: true, desc: '损耗' + lost.length + '张，在' + data.name_of(tgt) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+				return { ok: true, desc: '损耗 2 张，在' + data.name_of(tgt) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
 			} },
 	},
 
@@ -5653,7 +5653,8 @@ const STATUS_EFFECTS = {
 						}
 						if (tr.cost.attrition) attrition_cards(game, n, tr.cost.attrition)
 						if (tr.cost.lose_score) { const fc = faction_of_nation(n); if (fc) game.score[fc] = (game.score[fc] || 0) - tr.cost.lose_score }
-						if (tr.cost.skip_play) { game.skip_play_done = game.skip_play_done || {}; game.skip_play_done[n] = game.turn }
+						/* 【2026-10-28】统一走 apply_skip_play（旧写法只设 skip_play_done，缺 mark_play_acted / play_done） */
+						if (tr.cost.skip_play) apply_skip_play(game, n)
 					}
 					const r = (typeof tr.run === 'function')
 						? tr.run(game, { nation: n, card_id: cid, ctx: ctx || {}, arg: {} })
@@ -21132,6 +21133,30 @@ function play_acted(game, nation) {
 }
 
 /*
+ * 【2026-10-28 统一口径】「跳过出牌阶段」的【唯一】实现。
+ *
+ * 口径（玩家 2026-10-26 / 10-28）：
+ *   · 只能在实际出牌前发动 —— 由 status_window_ready 的 play_start 分支把关
+ *     （`play_done[nation] || play_acted(nation)` 就拒绝），不在本函数
+ *   · 发动占用出牌 —— 三件套：占名额 + 关掉其它 play_start 卡 + 记「本回合已跳过」
+ *   · 不自动推进阶段 —— 刻意【不设】game.pending_advance_phase
+ *     （maybe_advance_after_skip_play 只认该标记，所以本卡永远不替玩家推进）
+ *
+ * 为什么要统一：此前有三套写法 ——
+ *   ① activate_status 的 cost.skip_play 分支（三件套齐全）
+ *   ② 自动派发路径（只写 skip_play_done）
+ *   ③ 17841《近卫军》/ 17849《中国人民解放军》在 run 里手写 mark_play_done
+ * ②③ 缺 skip_play_done / mark_play_acted，导致「本回合已跳过出牌阶段」这条
+ * 拦截不生效（虽然 play_done 兜住了，但写法不一致，日后改动极易漏）。
+ */
+function apply_skip_play(game, nation) {
+	game.skip_play_done = game.skip_play_done || {}
+	game.skip_play_done[nation] = game.turn
+	mark_play_acted(game, nation)
+	mark_play_done(game, nation)
+}
+
+/*
  * 【2026-10-09 16701】意大利本回合还剩几次"额外出牌机会"。
  * 只在出牌阶段生效；未打出 16701 时恒为 0（不影响任何既有行为）。
  */
@@ -29435,10 +29460,8 @@ function do_action(state, current, action, arg) {
 		 * 即"跳过"= 出牌阶段已被这张卡用掉，但【不】替玩家推进阶段。
 		 */
 		if (cost.skip_play && !borrowed) {
-			game.skip_play_done = game.skip_play_done || {}
-			game.skip_play_done[costPayer] = game.turn
-			mark_play_acted(game, costPayer)
-			mark_play_done(game, costPayer)
+			/* 【2026-10-28】统一走 apply_skip_play（与自动派发 / 17841 等同一实现） */
+			apply_skip_play(game, costPayer)
 			game.log.push('【' + costPayer + '】跳过本回合出牌阶段（不再出牌，可点「下一阶段」继续）')
 		}
 
