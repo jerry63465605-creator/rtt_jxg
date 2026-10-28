@@ -6251,12 +6251,28 @@ function update_pending_battle_box() {
 				label: "弃置 4 张手牌（该陆军照常被移除）",
 				/* 【2026-10-23】复用战斗内通用的"选 N 张牌"入口，不另建 UI。
 				 * 手牌不足 4 张时按现有张数选（与服务端 Math.min(4, hand.length) 同口径）。 */
-				onClick: () => start_guard_discard({
-					card_id: pb.kv2_card,
-					name: 'KV-2 重型坦克',
-					cost: Math.min(4, ((view.hands[view.my_nation] || {}).cards || []).length),
-					submit_target: 'kv2',
-				}),
+				onClick: () => {
+					/*
+					 * 【2026-10-28 #8】代价张数必须按【cost_nation】的手牌算，
+					 * 不能用 view.my_nation。
+					 *
+					 * KV-2 是【攻击发起国】弃牌（德国攻苏联时就是德国付），
+					 * 服务端 view.pending_battle.cost_nation 已算好（rules.js 23898）。
+					 * 旧写法取 view.my_nation —— 那只是"此刻该谁操作"，
+					 * 一旦与 cost_nation 不同（同阵营多国共控、委托等），
+					 * 张数会算成 0 -> start_guard_discard 走 !g.cost 分支直接提交，
+					 * 选牌框根本不出现，表现为"没有选择框"。
+					 */
+					const cn = pb.cost_nation || view.my_nation
+					const hand = ((view.hands || {})[cn] || {}).cards || []
+					start_guard_discard({
+						card_id: pb.kv2_card,
+						name: 'KV-2 重型坦克',
+						cost: Math.min(4, hand.length),
+						submit_target: 'kv2',
+						discard_nation: cn,
+					})
+				},
 			}, {
 				label: "使该陆军在本次战斗中不被移除",
 				cls: "primary",

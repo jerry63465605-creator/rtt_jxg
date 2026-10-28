@@ -15216,6 +15216,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'15330': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该英国陆军本回合不会被移除' }
 	},
 	'15331': (game, side, ctx) => {
@@ -15225,6 +15226,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'15332': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该英国部队本回合不会被移除' }
 	},
 	'15333': (game, side, ctx) => {
@@ -15243,16 +15245,10 @@ const RESPONSE_EFFECT_IMPL = {
 	'15334': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		/* 驱逐舰还原海军后：若同场英国空军因本场战斗"不代受"而撤离，则一并归位。
-		 * （仅还原"撤离"的飞机；若撤离空间无位被移除的飞机不在 location 中，跳过不动。） */
-		if (ctx.retreated_airs && ctx.retreated_airs.length) {
-			for (const a of ctx.retreated_airs) {
-				if (game.piece_type[a] && (a in game.location) && game.location[a] !== ctx.space) {
-					game.location[a] = ctx.space
-				}
-			}
-			refresh(game)
-		}
+		/* 驱逐舰还原海军后：同场因"不代受"而撤离的英国空军一并归位。
+		 * 【2026-10-28】原本这里是内联 9 行，现改为与其它免死卡共用原子。
+		 * 口径变化：无处可撤被删除的飞机也复活（原来只看 location 是否还在）。 */
+		restore_retreated_airs(game, ctx)
 		return { ok: true, desc: '该海军本回合不会被移除' }
 	},
 	'15335': (game, side, ctx) => {
@@ -15266,6 +15262,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'15337': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该法国陆军本回合不会被移除' }
 	},
 	'12503': (game, side, ctx) => {
@@ -15300,6 +15297,7 @@ const RESPONSE_EFFECT_IMPL = {
 			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
 			spaces: [ctx.space], untilTurn: game.turn,
 		})
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该日本部队本回合不会被移除' }
 	},
 	'15421': (game, side, ctx) => {
@@ -15309,6 +15307,7 @@ const RESPONSE_EFFECT_IMPL = {
 			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
 			spaces: [ctx.space], untilTurn: game.turn,
 		})
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该日本陆军本回合不会被移除' }
 	},
 	'15429': (game, side, ctx) => {
@@ -15353,6 +15352,7 @@ const RESPONSE_EFFECT_IMPL = {
 			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
 			spaces: [ctx.space], untilTurn: game.turn,
 		})
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '该日本海军本回合不会被移除' }
 	},
 	'15437': (game, side, ctx) => {
@@ -16126,6 +16126,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'17730': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '还原<巴尔干/相邻>的意大利陆军并本回合保护' }
 	},
 	'17731': (game, side, ctx) => {
@@ -16136,6 +16137,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'17733': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '还原<意大利>的轴心陆军并本回合保护' }
 	},
 	'17734': (game, side, ctx) => {
@@ -16146,6 +16148,7 @@ const RESPONSE_EFFECT_IMPL = {
 	'17735': (game, side, ctx) => {
 		restore_piece(game, ctx)
 		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
+		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
 		return { ok: true, desc: '还原<意大利/相邻>的意大利陆军并本回合保护' }
 	},
 	'17737': (game, side, ctx) => {
@@ -16870,6 +16873,39 @@ function restore_piece(game, ctx) {
 		game.piece_type[pid] = ctx.piece_type
 		refresh(game)
 	}
+}
+
+/*
+ * 【2026-10-28】撤退复原：把本场战斗里「因不代受而撤离」的同国空军拉回原地区。
+ *
+ * 背景：空军在防守方「不代受」时会从战斗地区撤离（do_battle 的 guardAirs 循环）：
+ *   · 有处可撤 -> game.location[a] = retreatTo（只改位置，不派发任何事件）
+ *   · 无处可撤 -> delete game.location[a]
+ * 免死/还原类响应卡发动后，这些飞机应当【回到原地区】，而不是留在撤退地或凭空消失。
+ *
+ * 与 restore_piece 的分工（两者都要调，不要混）：
+ *   · restore_piece(game, ctx)          -> 救【victim】本身（被移除的那支部队）
+ *   · restore_retreated_airs(game, ctx) -> 拉回【retreated_airs】（同场撤离的其它空军）
+ *
+ * ⚠ 代受死亡（defend_air 被删）与抵消死亡（counter_air 被删）【不在】retreated_airs 里
+ *   —— 抵消分支压根不撤退、代受成立分支不派发 piece_removed，
+ *   所以「飞机互相替代死亡 / 抵消」不会凭空复活，本函数碰不到它们。
+ *
+ * ⚠ 无处可撤的飞机（location 已被 delete）也【复活】：玩家口径 2026-10-28 明确要求
+ *   "撤退的飞机都要回原处"。安全性来自 piece_nation / piece_type 在删除时并不清理
+ *   （与 eliminate_piece 一致），补回 location 即可。
+ */
+function restore_retreated_airs(game, ctx) {
+	if (!ctx || !Array.isArray(ctx.retreated_airs) || !ctx.retreated_airs.length) return 0
+	let n = 0
+	for (const a of ctx.retreated_airs) {
+		if (!game.piece_nation[a] && !game.piece_type[a]) continue   /* 素未存在 */
+		if (game.location[a] === ctx.space) continue                 /* 本来就在原位 */
+		game.location[a] = ctx.space                                 /* 撤走的拉回 / 被删的复活 */
+		n++
+	}
+	if (n) refresh(game)
+	return n
 }
 
 /* 在 CARD_TRIGGERS 里声明响应卡为 B 类（kind='any'）。
@@ -19719,10 +19755,20 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	/*
 	 * 同地区未代受的空军：撤往 retreatTo，或（无处可撤时）直接移除。
 	 * 按 id 排序保证结果可复现。
+	 *
+	 * 【2026-10-28 玩家口径 · b】victim 受保护（is_protected）时【不撤退空军】。
+	 *
+	 * 旧行为：目标受保护只影响"目标不被移除"这一件事，撤退循环在 if/else 之外照常执行，
+	 * 于是本场战斗「根本没打穿」，同场空军却被白白逼走；更糟的是受保护分支不派发
+	 * piece_removed，撤退的飞机连一个可救回的响应窗口都没有，只能留在撤退地或其消失。
+	 *
+	 * 现行为：目标受保护 = 攻击被完全挡下 -> 空军原地不动（也不会进 retreated_airs）。
 	 */
-	for (const a of guardAirs.slice().sort()) {
-		if (retreatTo != null) game.location[a] = retreatTo
-		else { delete game.location[a]; retreatRemoved.push(a) }
+	if (!victimProtected) {
+		for (const a of guardAirs.slice().sort()) {
+			if (retreatTo != null) game.location[a] = retreatTo
+			else { delete game.location[a]; retreatRemoved.push(a) }
+		}
 	}
 
 	refresh(game)
@@ -19751,7 +19797,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	return {
 		ok: true, removed: victimProtected ? null : victim, removed_type: vType, removed_nation: vNation,
 		space: space, defended_by_air: null,
-		retreated: (retreatTo != null && guardAirs.length) ? guardAirs.slice().sort() : [],
+		retreated: (retreatTo != null && guardAirs.length && !victimProtected) ? guardAirs.slice().sort() : [],
 		retreat_to: retreatTo, removed_airs: retreatRemoved,
 	}
 }
