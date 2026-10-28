@@ -317,6 +317,39 @@ section('S14 普通补给点（意大利，无国籍限制）-> 17549 仍可跨�
 	ok('巴尔干法军靠法军海军 -> chain', on(s, 'fr_bal') && src(s, 'fr_bal') === 'chain')
 }
 
+/* ---------------- S15 西欧加一支法国陆军（玩家 2026-10-28 追加） ---------------- */
+section('S15 S9 布局 + 西欧法国陆军：普通补给点提供【通用源】-> 英国陆军全部补给')
+{
+	const g = make([
+		['fr_we', WE, '法国', 'army'],       /* 西欧是地图标定补给点，无国籍限制 */
+		['fr_sa', SA, '法国', 'army'],       /* 非洲南部：仅对法国的源 */
+		['uk_sa', SA, '英国', 'army'],
+		['fr_na', NA, '法国', 'army'],
+		['uk_na', NA, '英国', 'army'],
+		['fr_n', MED, '法国', 'navy'],
+		['uk_n', MED, '英国', 'navy'],
+		['uk_bal', BAL, '英国', 'army'],
+	], [CARD_15345, CARD_15346, CARD_15356, CARD_17549])
+	const s = sup(g)
+	/* 两个源并存：非洲南部（仅法国）+ 西欧（通用） */
+	ok('西欧法军陆军 base（普通补给点）', on(s, 'fr_we') && src(s, 'fr_we') === 'base', src(s, 'fr_we'))
+	ok('西欧这个源【无国籍限制】', !(s.src_owner && s.src_owner['fr_we']))
+	ok('非洲南部法军 base（仅对法国的源仍在）',
+		on(s, 'fr_sa') && src(s, 'fr_sa') === 'base' && s.src_owner['fr_sa'] === '法国')
+	/* 法国：两条源都能用 */
+	ok('非洲北部法军 chain', on(s, 'fr_na') && src(s, 'fr_na') === 'chain')
+	ok('地中海法军海军 chain', on(s, 'fr_n') && src(s, 'fr_n') === 'chain')
+	/* 英国：靠西欧那条通用链全部打通（不是借非洲南部的专属源） */
+	ok('★ 非洲南部英军补给（经通用链）', on(s, 'uk_sa') && src(s, 'uk_sa') === 'chain', src(s, 'uk_sa'))
+	ok('★ 非洲北部英军补给', on(s, 'uk_na') && src(s, 'uk_na') === 'chain', src(s, 'uk_na'))
+	ok('★ 地中海英军海军补给', on(s, 'uk_n') && src(s, 'uk_n') === 'chain', src(s, 'uk_n'))
+	ok('★ 巴尔干英军补给', on(s, 'uk_bal') && src(s, 'uk_bal') === 'chain', src(s, 'uk_bal'))
+	/* 关键：英军链条的源国籍必须为空 —— 证明走的是通用源，不是「仅法国」那条 */
+	ok('英军链条的源国籍为空（走通用源而非专属源）',
+		!s.src_owner['uk_na'] && !s.src_owner['uk_n'] && !s.src_owner['uk_bal'],
+		{ uk_na: s.src_owner['uk_na'], uk_n: s.src_owner['uk_n'], uk_bal: s.src_owner['uk_bal'] })
+}
+
 /* ---------------- S13 源码守卫 ---------------- */
 section('S13 源码守卫：迭代跳过条件只认 base / chain')
 {
