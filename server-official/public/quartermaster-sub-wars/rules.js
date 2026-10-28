@@ -4281,8 +4281,14 @@ const STATUS_EFFECTS = {
 	/* ---- 17838 什维尔尼克疏散委员会：苏联陆军总是补给 ---- */
 	'17838': {
 		ongoing: {
-			kind: 'always_supplied', nation: '苏联',
-			desc: '苏联陆军总是处于补给状态（光环，随卡）',
+			/*
+			 * 【2026-10-28 修】卡面写「苏联【陆军】总是处于补给状态」，
+			 * 原配置漏了 type -> 光环罩住苏联全军（海军/空军也被判补给），与卡面不符。
+			 * 补 type:'army' 后由 supply_immune_scope 精确限定兵种
+			 * （supply_aura_covers 的"免 A"同时也只对陆军生效）。
+			 */
+			kind: 'always_supplied', nation: '苏联', type: 'army',
+			desc: '苏联陆军总是处于补给状态（光环，随卡；仅陆军）',
 		},
 		desc: '什维尔尼克疏散委员会',
 	},
