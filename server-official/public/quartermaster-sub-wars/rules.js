@@ -10618,7 +10618,25 @@ const EVENT_EFFECTS = {
 		 * 候选 = 北大西洋的相邻陆地里【真能发起战斗】的那些（动态计算）。
 		 */
 		steps: [
-			{ op: 'build', type: 'navy', spaces: space_ids_of(['北大西洋']) },
+			/*
+			 * 【2026-10-28 修复·玩家实机报「没有增强打出时点」】
+			 *
+			 * 建海军这一步必须带 pauseArmed：建完会开出 after_build_navy 的增强窗口
+			 * （15208 齐柏林伯爵号 / 15210 施佩伯爵号）。若不挂起等待，
+			 * 事件卡会直接进入分步停机（pending_event_step），而该状态的
+			 * build_actions 白名单【不含】use_armed_offer / skip_armed_offer ->
+			 * 客户端拿不到任何可提交动作（build_actions=[]）-> 窗口等于失效；
+			 * 玩家点「下一步」时 armed_offers 还会被一并清掉。
+			 *
+			 * 实测（game 30 的同型盘面，北海放一支英国海军使 15210 ready=true）：
+			 *   改前：armed_offers 有 15210+15208、view.armed_offer 也下发了，
+			 *         但 build_actions = []、view.armed_offers = []，
+			 *         点「下一步」后 armed_offers 直接清空。
+			 *   改后：挂 pending_event_armed，等两张增强卡全部结算完再从 step2 续跑。
+			 *
+			 * 与 10730/10731（《土耳其加入轴心国》黑海建海军/中东征召）同款写法。
+			 */
+			{ op: 'build', type: 'navy', spaces: space_ids_of(['北大西洋']), pauseArmed: true },
 			{
 				op: 'battle', kind: 'land', pick: 2, pickMin: 1, useNewPiece: true,
 				spacesFn: (game, actor) => {
@@ -19088,8 +19106,22 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			/* 【2026-10-28】单格时不能说"各征召"（15231《进攻美国》历史上多出的"各"字） */
 			descs.push('在 ' + names.join('、') + (names.length > 1 ? ' 各征召 1 支' : ' 征召 1 支') +
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
-			/* 【2026-10-12】pauseArmed：征召后若存在 after_recruit 增强窗口，同样挂起等待。 */
-			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_recruit')) {
+			/*
+			 * 【2026-10-12 引入 / 2026-10-28 改为自动】征召后若存在 after_recruit 增强窗口，
+			 * 挂起等待该窗口结算完再续跑。
+			 *
+			 * 为什么去掉 st.pauseArmed 开关（玩家 2026-10-28 实机报「没有增强打出时点」）：
+			 * 全仓 40+ 个 recruit/build 步骤里只有《最后胜利》《土耳其加入轴心国》
+			 * 三处配了 pauseArmed，其余都靠默认值 -> 不挂起 -> 事件卡直接进入
+			 * pending_event_step（分步停机），而该状态的 build_actions / view.actions
+			 * 【不放行】use_armed_offer / skip_armed_offer -> 窗口中服务端虽已生成、
+			 * view.armed_offer 也下发，但客户端拿不到动作白名单 -> 等于失效；
+			 * 玩家点「下一步」时 armed_offers 还会被一并清掉。
+			 *
+			 * 既然「挂起等待」才是正确行为，就让它【自动】发生，不再要求逐卡声明。
+			 * st.pauseArmed 字段保留兼容（现在写不写都一样）。
+			 */
+			if (has_armed_window(game, st.as || actor, 'after_recruit')) {
 				game.pending_event_armed = {
 					card_id, nation, resumeStep: i + 1, extra: !!extra,
 					/* 【2026-10-22】跨挂起携带刚产出的单位（battle 的 useNewPiece 依赖） */
@@ -19126,9 +19158,26 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			descs.push('在 ' + names.join('、') + (names.length > 1 ? ' 各建设 1 支' : ' 建设 1 支') +
 				piece_type_zh(st.type) +
 				(bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
-			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
-			 * 挂起等待该窗口全部结算完，再从第 i+1 步续跑，最后由 resume_event_after_armed 触发国家技能。 */
-			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_build_navy')) {
+			/*
+			 * 【2026-10-12 引入 / 2026-10-28 改为自动】本步建设后若存在对应增强窗口，
+			 * 挂起等待该窗口全部结算完，再从第 i+1 步续跑
+			 * （最后由 resume_event_after_armed 触发国家技能）。
+			 *
+			 * 改动两点（玩家 2026-10-28 实机报 15231 建海军后「没有增强打出时点」）：
+			 *   ① 去掉 st.pauseArmed 开关 -> 自动挂起。理由同 recruit 分支：
+			 *      全仓 40+ 个 build/recruit 步骤只有三处声明了 pauseArmed，
+			 *      其余都会掉进 pending_event_step，而那个状态不放行 use_armed_offer
+			 *      -> 窗口在服务端已生成、view.armed_offer 也下发，客户端却无动作可发。
+			 *   ② 按 st.type 选窗口名 —— 旧写死 'after_build_navy'，
+			 *      于是 build army（16800 艾森豪威尔 / 17814 朱可夫 的 after_build_army）
+			 *      与 build air（after_deploy_air）的窗口照样被跳过。
+			 *
+			 * st.pauseArmed 字段保留兼容（现在写不写都一样）。
+			 */
+			const _armedWhen = (st.type === 'navy') ? 'after_build_navy'
+				: (st.type === 'air') ? 'after_deploy_air'
+					: 'after_build_army'
+			if (has_armed_window(game, st.as || actor, _armedWhen)) {
 				game.pending_event_armed = {
 					card_id, nation, resumeStep: i + 1, extra: !!extra,
 					/* 【2026-10-22】跨挂起携带刚产出的单位（battle 的 useNewPiece 依赖） */
