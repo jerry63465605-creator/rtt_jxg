@@ -129,120 +129,12 @@ ok('17815 打出未抛异常，返回二项选择提示（走 查询→选向→
 	!!r15 && (_g15.log || []).join('').indexOf('Z 计划') >= 0,
 	'logLen=' + (_g15.log ? _g15.log.length : 'null'))
 
-console.log('\n=== 17805 红色管弦乐队（苏/德/英出牌阶段开始：挂起苏联询问使用 -> 苏联选卡 -> 挂起德国二选一）===')
-const I = rules._internal
-
-console.log('--- 1) 触发派发：苏/德/英 出牌阶段开始时挂起苏联（su_red_ask）---')
-{
-	const g2 = rules.setup(1)
-	if (!g2.hands['苏联']) g2.hands['苏联'] = []
-	g2.hands['苏联'].push('17805#1')
-	if (!g2.table['德国']) g2.table['德国'] = []
-	g2.table['德国'].push('15340#1') // 德国 STATUS 卡《压制》
-	for (const n of ['苏联', '德国', '英国']) {
-		g2.su_red_ask = null
-		I.offer_su_red(g2, n)
-		ok(n + ' 出牌阶段开始挂起苏联(su_red_ask)', !!g2.su_red_ask, 'ask=' + JSON.stringify(g2.su_red_ask))
-	}
-	// 法国/美国/意大利 不应触发
-	g2.su_red_ask = null
-	I.offer_su_red(g2, '法国')
-	ok('法国出牌阶段不触发', !g2.su_red_ask)
-}
-
-console.log('--- 2) 苏联逐步：询问使用 -> 选卡 -> 挂起 pending_red ---')
-{
-	const g2 = rules.setup(1)
-	if (!g2.hands['苏联']) g2.hands['苏联'] = []
-	g2.hands['苏联'].push('17805#1')
-	if (!g2.table['德国']) g2.table['德国'] = []
-	g2.table['德国'].push('15340#1', '15341#1') // 两张德国 STATUS
-	I.offer_su_red(g2, '苏联')
-	ok('已挂起苏联询问', !!g2.su_red_ask)
-	rules.action(g2, 'Allies', 'su_red_use', {})
-	ok('苏联使用 -> 转交选卡(su_red_pick)', !!g2.su_red_pick && !g2.su_red_ask, 'pick=' + JSON.stringify(g2.su_red_pick))
-	ok('17805#1 已离手（进弃牌堆）',
-		(g2.hands['苏联'] || []).indexOf('17805#1') < 0 && (g2.discard['苏联'] || []).indexOf('17805#1') >= 0)
-	rules.action(g2, 'Allies', 'su_red_pick', { status: '15340#1' })
-	ok('挂起 pending_red（target=15340#1, waiting_for=德国）',
-		!!g2.pending_red && g2.pending_red.target === '15340#1' && g2.pending_red.waiting_for === '德国',
-		'pr=' + JSON.stringify(g2.pending_red))
-	ok('su_red_pick 已清空', !g2.su_red_pick)
-}
-
-console.log('--- 3) 苏联可放弃使用（su_red_decline）---')
-{
-	const g2 = rules.setup(1)
-	if (!g2.hands['苏联']) g2.hands['苏联'] = []
-	g2.hands['苏联'].push('17805#1')
-	if (!g2.table['德国']) g2.table['德国'] = []
-	g2.table['德国'].push('15340#1')
-	I.offer_su_red(g2, '德国')
-	ok('德国出牌阶段也挂起苏联', !!g2.su_red_ask)
-	rules.action(g2, 'Allies', 'su_red_decline', {})
-	ok('放弃后 su_red_ask 清空（卡仍在手）',
-		!g2.su_red_ask && (g2.hands['苏联'] || []).indexOf('17805#1') >= 0)
-}
-
-console.log('--- 4) 跨国守卫：苏联（同盟）不能替德国选择 ---')
-{
-	const g2 = rules.setup(1)
-	g2.pending_red = { target: '15340#1', target_name: '压制', waiting_for: '德国', card_name: '红色管弦乐队' }
-	rules.action(g2, 'Allies', 'resolve_red', { choice: 0 })
-	ok('苏联尝试 resolve_red 被拒（pending_red 仍在）', !!g2.pending_red)
-}
-
-console.log('--- 5) 德国 choice=0：本回合内无效（status_active 返回 false）---')
-{
-	const g2 = rules.setup(1)
-	g2.turn = 7
-	g2.pending_red = { target: '15340#1', target_name: '压制', waiting_for: '德国', card_name: '红色管弦乐队' }
-	if (!g2.table['德国']) g2.table['德国'] = []
-	g2.table['德国'].push('15340#1')
-	g2.current_nation = '德国'
-	g2.active = 'Axis'
-	rules.action(g2, 'Axis', 'resolve_red', { choice: 0 })
-	ok('su_red_suppressed[15340]===game.turn',
-		g2.su_red_suppressed && g2.su_red_suppressed['15340'] === 7, 'val=' + JSON.stringify(g2.su_red_suppressed))
-	ok('status_active(15340,德国) 本回合为 false', I.status_active(g2, '15340#1', '德国') === false)
-	ok('pending_red 已清空', !g2.pending_red)
-}
-
-console.log('--- 6) 德国 choice=1：损耗 2 张牌（deck -> discard）---')
-{
-	const g2 = rules.setup(1)
-	g2.pending_red = { target: '15340#1', target_name: '压制', waiting_for: '德国', card_name: '红色管弦乐队' }
-	g2.deck = g2.deck || {}
-	g2.discard = g2.discard || {}
-	if (!g2.discard['德国']) g2.discard['德国'] = []
-	/* attrition_cards 实际作用于 game.decks[nation]（init_nation_deck 初始化），这里只确保弃牌堆可收 */
-	const beforeDeck = (g2.decks && g2.decks['德国'] || []).length
-	const beforeDis = (g2.discard['德国'] || []).length
-	g2.current_nation = '德国'
-	g2.active = 'Axis'
-	rules.action(g2, 'Axis', 'resolve_red', { choice: 1 })
-	ok('德国损耗 2 张（decks 减 2）', (g2.decks && g2.decks['德国'] || []).length === beforeDeck - 2, 'deck=' + ((g2.decks && g2.decks['德国']) || []).length)
-	ok('德国弃牌堆 +2', (g2.discard['德国'] || []).length === beforeDis + 2)
-	ok('pending_red 已清空', !g2.pending_red)
-}
-
-console.log('--- 7) 把关：德国无[状态卡] / 苏联无 17805 时不触发 ---')
-{
-	const g2 = rules.setup(1)
-	if (!g2.hands['苏联']) g2.hands['苏联'] = []
-	g2.hands['苏联'].push('17805#1')
-	// 故意不放德国 STATUS
-	g2.su_red_ask = null
-	I.offer_su_red(g2, '苏联')
-	ok('无德国状态卡时不挂起', !g2.su_red_ask)
-	// 苏联无 17805
-	const g3 = rules.setup(1)
-	if (!g3.table['德国']) g3.table['德国'] = []
-	g3.table['德国'].push('15340#1')
-	g3.su_red_ask = null
-	I.offer_su_red(g3, '苏联')
-	ok('苏联无 17805 时不挂起', !g3.su_red_ask)
-}
+/*
+ * 【2026-10-28 基线清理】原「17805 红色管弦乐队」一节（su_red_ask / su_red_use / su_red_pick /
+ * su_red_decline / resolve_red）已删除：该机制整体重做为 armed 跨阵营让权（_handoff_base），
+ * 上述行动名与 su_red_ask 字段在 rules.js 中已不存在，脚本每次加载即 TypeError 崩溃。
+ * 17805 的现行行为由 _smoke_su_purge_handoff.js 等脚本覆盖。
+ */
 
 console.log('\n=== 语法校验 ===')
 require('child_process').execSync('node --check ' + path.join(MOD, 'rules.js'))

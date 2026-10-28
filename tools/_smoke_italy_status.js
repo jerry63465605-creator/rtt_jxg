@@ -246,8 +246,9 @@ console.log('\n=== 17746 耀武：跳过出牌 + 损耗2 -> 发起陆战 ===')
 
 console.log('\n=== 17749 轴心协定：敌方部队在大本营/相邻被攻击 -> +1（一回合一次）===')
 {
-	const fn = I.status_on_axis_pact
-	ok('钩子 status_on_axis_pact 已导出', typeof fn === 'function')
+	/* 【2026-10-28 基线清理】钩子由 status_on_axis_pact 更名为 axis_pact_register(game, attacker, space, victim) */
+	const fn = I.axis_pact_register
+	ok('钩子 axis_pact_register 已导出', typeof fn === 'function')
 
 	const g = newGame()
 	const sovHb = I.effective_home_base ? I.effective_home_base(g, '苏联') : null

@@ -26,7 +26,9 @@ const skipPath = path.join(dir, '_smoke_skip.json')
 let skip = {}
 try {
 	if (fs.existsSync(skipPath)) {
-		const raw = JSON.parse(fs.readFileSync(skipPath, 'utf8'))
+		/* 去 BOM：PowerShell 的 Set-Content -Encoding UTF8 会写 BOM，JSON.parse 会直接抛错 */
+		const txt = fs.readFileSync(skipPath, 'utf8').replace(/^\uFEFF/, '')
+		const raw = JSON.parse(txt)
 		skip = raw.skip || {}
 	}
 } catch (e) {

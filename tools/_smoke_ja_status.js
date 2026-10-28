@@ -53,8 +53,8 @@ console.log('=== 15444 丘克群岛：虚拟陆军光环 ===')
 	g = rules.action(g, 'Axis', 'play_card', { card: '15444#1' })
 	ok('15444 进桌面', (g.table['日本'] || []).indexOf('15444#1') >= 0)
 	ok('virtual_army 光环写入硫磺岛=日本',
-		g.status_aura.virtual_army[SP.硫] === '日本',
-		JSON.stringify(g.status_aura.virtual_army))
+		g.status_aura.port_as[SP.硫] === '日本',
+		JSON.stringify(g.status_aura.port_as))
 }
 
 console.log('\n=== 15444 计分：相邻海域都有日本海军 +1 ===')
