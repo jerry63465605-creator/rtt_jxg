@@ -16614,7 +16614,7 @@ function response_queue_view(game) {
 	return items
 }
 
-function request_responses(game, on, ctx, pre) {
+function request_responses(game, on, ctx, pre, opt) {
 	const cands = fire_trigger(game, on, ctx)
 	if (!cands.length) return null
 	const matched = cands.filter(t =>
@@ -16656,8 +16656,9 @@ function request_responses(game, on, ctx, pre) {
 	 * game.response_queue 改为栈的派生只读视图（sync_response_queue_view）。
 	 */
 	const group_id = 'rg_' + ((game._resp_gid = (game._resp_gid || 0) + 1))
+	const _pushed = []
 	_toPush.forEach((t, idx) => {
-		push_response_frame(game, {
+		_pushed.push(push_response_frame(game, {
 			card_id: t.card_id,
 			card_face: String(t.card_face),
 			name: t.name,
@@ -16672,8 +16673,34 @@ function request_responses(game, on, ctx, pre) {
 			group_id,
 			group_idx: idx,
 			ordered: _toPush.length <= 1,
-		})
+		}))
 	})
+	/*
+	 * 【2026-10-28 #1】opt.deferToTail：把本次新压的帧排到【已有帧之后】。
+	 *
+	 * 场景（do_battle 的 battle 链）：同一场战斗里先压 piece_removed（victim 被移除），
+	 * 后压 battle（战斗结算）。栈是 LIFO，后压的 battle 会【先】结算 —— 与事件发生顺序相反。
+	 * 实测 17734《罗马尼亚增援》(piece_removed) 与 15336《法兰西爱国者》(battle) 同场时：
+	 * battle 先算 -> 法国先进占战斗地区 -> 意大利再征召时被「有敌方部队」拒掉；
+	 * 把两条链顺序对调则结果完全相反 —— 即"谁先结算谁赢"，而玩家无从预期。
+	 *
+	 * 做法：压帧后立刻把新帧从活动栈摘除、压进 deferred_response_stack。
+	 * 已有的 promote_deferred_response 是 FIFO，且只在「活动栈空 + 无 pending_battle」
+	 * 时提升，所以这批帧会等 piece_removed 链全部结算完再回来 —— 无需新增状态机。
+	 *
+	 * 守卫：仅当活动栈里【还有别的帧】（即本次事件之前已压了别的链）时才 defer。
+	 * 否则（没有 piece_removed 卡）立即 defer 会被立刻 promote，白推一次还多一条日志。
+	 */
+	if (opt && opt.deferToTail && (game.response_stack || []).length > _pushed.length) {
+		for (const f of _pushed) {
+			remove_response_frame(game, f)
+			defer_response_frame(game, f)
+		}
+		sync_response_queue_view(game)
+		/* 让权给【剩下那批】的栈顶（piece_removed 链），延后的帧等栈空再提升 */
+		response_reconcile_active(game)
+		return _toPush
+	}
 	/*
 	 * 【2026-09-25 跨阵营响应：锁住当前方 + 让权给持有方】
 	 * 响应卡持有方可能是【对方阵营】。此时要锁住当前操作者并把操作权让给持有方，
@@ -19216,11 +19243,12 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		 *
 		 * victimNation 为 null：空打没有守军、没有受击方。
 		 */
+		/* 【2026-10-28 #1】deferToTail：battle 链排在 piece_removed 链之后（详见 request_responses） */
 		request_responses(game, 'battle', {
 			nation: nation, space: space, kind: kind,
 			victimNation: null,
 			result: { removed: null, removed_nation: null, empty: true },
-		}, false)
+		}, false, { deferToTail: true })
 		/*
 		 * 【2026-10-12 玩家口径】空打同样算"发起陆战/海战成功"，
 		 * 武装 after_land / after_naval（如 15253 闪电战）窗口。
@@ -19682,6 +19710,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			 * 字段与 battleCtxAir / battleCtx 对齐，filter 行为才一致；
 			 * result 额外带 by_air / countered 供将来按"空军介入"过滤。
 			 */
+			/* 【2026-10-28 #1】deferToTail：抵消分支同样让 battle 链等 piece_removed 链结算完 */
 			request_responses(game, 'battle', {
 				nation: nation, space: space, kind: kind,
 				victimNation: vNation,
@@ -19691,7 +19720,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 					by_air: true,
 					countered: true,
 				},
-			}, false)
+			}, false, { deferToTail: true })
 			/* 【2026-09-30 修复】抵消成立（原目标已移除）同样算发起陆战成功，
 			 * 武装 after_land（闪电战）窗口，否则空军互相抵消时窗口不出现。 */
 			arm_after_battle_status(game, nation, kind, space, opt)
@@ -19719,7 +19748,8 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			nation: nation, space: space, kind: kind,
 			result: { removed: defend_air, removed_nation: vNation, by_air: true },
 		}
-		request_responses(game, 'battle', battleCtxAir, false)
+		/* 【2026-10-28 #1】deferToTail：代受分支同样让 battle 链等 piece_removed 链结算完 */
+		request_responses(game, 'battle', battleCtxAir, false, { deferToTail: true })
 		/* 【2026-09-30 修复】代受成立（原目标保住）也算发起陆战成功，武装 after_land 窗口。 */
 		arm_after_battle_status(game, nation, kind, space, opt)
 		return {
@@ -19836,7 +19866,8 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		victimNation: vNation,
 		result: { removed: victimProtected ? null : victim, removed_nation: vNation },
 	}
-	request_responses(game, 'battle', battleCtx, false)
+	/* 【2026-10-28 #1】deferToTail：主路径 battle 链排在 piece_removed 链之后 */
+	request_responses(game, 'battle', battleCtx, false, { deferToTail: true })
 	/*
 	 * 状态卡：发起陆战/海战后自动发动德国触发卡（after_land / after_naval）。
 	 * 放在 victim 已移除、battle 钩子已触发【之后】，保证「战斗地区」已清空，
