@@ -291,7 +291,8 @@ console.log('\n=== 9. 15207 JU-52：回合开始+德空军 → 全德部队补�
 	ok('补给前 西伯利亚德军不在补给', !sup0.in_supply['de_lost'])
 	const g2 = rules.action(g, 'Axis', 'play_card', { card: '15207#1' })
 	ok('15207 不能主动打出（留在手牌）', g2.hands['德国'].indexOf('15207#1') >= 0)
-	offerThenUse(g2, '15207#1', 'turn_start', { nation: '德国' })
+	/* 【2026-10-28 #2】时点由 turn_start 改为 play_start（避免 active 未重置 + 不按国过滤） */
+	offerThenUse(g2, '15207#1', 'play_start', { nation: '德国' })
 	ok('15207 打出后入弃牌堆', (g2.discard['德国'] || []).indexOf('15207#1') >= 0)
 	const sup1 = I.compute_supply(g2)
 	ok('触发后 西伯利亚德军处于补给', sup1.in_supply['de_lost'], 'src=' + (sup1.sources && sup1.sources['de_lost']))

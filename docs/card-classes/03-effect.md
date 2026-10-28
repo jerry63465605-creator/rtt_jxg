@@ -38,9 +38,9 @@ name, actor, armed, choice, cond, cost, desc, kind, modifiers, notes, one_step, 
 | `econ_used` | 4 | 经济战结算后 | |
 | `after_build_army` | 4 | 建设陆军后 | |
 | `enemy_echo_played` | 2 | 敌方打出增强卡 | |
-| `play_start` | 2 | 出牌阶段开始（`phase_play`） | **按国过滤**，时机安全 |
+| `play_start` | **3** | 出牌阶段开始（`phase_play`） | **按国过滤**，时机安全；现有使用者都非 `watch`（不串卡）——**15207 首选** |
 | `after_recruit` | 2 | 征召后 | |
-| `turn_start` | 1 | `on_turn_start()` 末尾 | ⚠ `active` **还没**重置，且不传 nation |
+| `turn_start` | **0**（已腾空） | `on_turn_start()` 末尾 / 首回合 | ⚠ `active` **还没**重置，且不传 nation → 15207 已迁走，留给将来真正的"整轮开始"卡 |
 | `scoring_north` | 1 | 北方计分 | ⚠ 硬编码 `{nation:'德国'}` |
 | `enemy_status_effect` | 1 | 敌方发动状态卡效果 | ⚠ 只在 `activate_status` 派发，纯 ongoing 卡不走这里 |
 | `piece_attacked` | 1 | 被攻击瞬间 | ⚠ **不走** `offer_armed_effects`，走 `suspend` 专用路径 |
@@ -82,7 +82,8 @@ name, actor, armed, choice, cond, cost, desc, kind, modifiers, notes, one_step, 
 |---|---|---|
 | 1 | **`when` 写了但全仓没有派发点** | 抽到就是死牌（16804 旧版 `after_land` 即此） |
 | 2 | **跨阵营效果忘加 `watch: true`** | `offer_armed_effects` 按"发起国 == 持有国"过滤 → 永不触发 |
-| 3 | **`turn_start` 派发在 `active` 重置之前**，且不传 `nation` | 让权基准过期 → 点「不打出」后全场卡死（15207） |
+| 3 | **`turn_start` 派发在 `active` 重置之前**，且不传 `nation` | 让权基准过期 → 点「不打出」后全场卡死（15207；已于 2026-10-28 迁到 `play_start`，该时点已腾空） |
+| 3b | **`watch` 卡占用某个时点后，别国非 watch 卡不能再共用** | armed 窗口按 `when` 合并（`find(w => w.when === when)`）→ 两张卡串窗口、泄露对手手牌名。`nation_turn_start`（17805 watch）与 `draw_phase_end`（17855 watch）都属此类 |
 | 4 | 派发 `ctx` 缺本次部队 id（`after_build_navy` / `after_deploy_air`） | 卡想"消灭刚建的那支"却拿不到 id |
 | 5 | `run` 里多个合法目标时 `find()` 取第一个 | 服务端静默替玩家决定（与 15316 同类） |
 | 6 | `ready()` 判得太松 | 框弹出来但点了无效 |

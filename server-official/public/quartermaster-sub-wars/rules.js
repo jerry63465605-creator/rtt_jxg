@@ -11372,7 +11372,25 @@ const ECHO_EFFECTS = {
 	'15207': {
 		name: 'JU-52 空投补给', actor: '德国',
 		armed: {
-			when: 'turn_start', actor: '德国', cost: { attrition: 1 },
+			/*
+			 * 【2026-10-28 #2】when 由 'turn_start' 改为 'play_start'。
+			 *
+			 * 为什么改：'turn_start' 派发在 on_turn_start（22895），而 active 的重置在
+			 * next_turn 的 23138 —— 弹窗那一刻 active 还停在【上一轮最后一国】（美国=Allies），
+			 * 于是 handoff_to 把 _handoff_base 记成 'Allies'；回合推进改成 'Axis' 后，
+			 * 玩家点「不打出」按过期基准还原回 'Allies' -> current_nation='德国' 但 active='Allies'
+			 * -> 轴心"等待对方行动"，全场卡死（线上 game 5731）。
+			 * 另外该派发点传的是 {}，不按国过滤，所有国家的 turn_start 卡会挤进同一窗口。
+			 *
+			 * 为什么选 'play_start' 而不是 'nation_turn_start'：
+			 * 后者语义最准，但被 17805《红色管弦乐队》（watch:true）占用，
+			 * 而 armed 窗口按 when 合并（13795）-> 两张卡会串窗口、泄露对手手牌名。
+			 * 'play_start' 的现有使用者（15355 英国 / 17809 苏联）都非 watch，各国弹自己的卡，干净。
+			 *
+			 * 语义差的只是 resource / draw 两个阶段，而这张卡的效果是"补给光环"，
+			 * 真正判定补给在 supply 阶段（play 之后）-> 功能完全等价。
+			 */
+			when: 'play_start', actor: '德国', cost: { attrition: 1 },
 			cond: (game) => has_pieces(game, { types: ['air'], nation: '德国' }),
 			desc: '回合开始时若场上有德国空军：本回合内所有德国部队处于补给状态',
 			run(game, ctx) {
