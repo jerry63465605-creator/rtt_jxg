@@ -1253,7 +1253,7 @@ function resolve_supply(game, nation) {
 	/* 移除后挂起响应卡（事后类：15330/15334 等） */
 	for (const d of deletedInfo) {
 		const ctx = {
-			nation: d.nation, piece: d.pid,
+			nation: d.nation, piece: d.pid, piece_id: d.pid,
 			piece_nation: d.nation, piece_type: d.type, space: d.space, reason: 'supply',
 			was_supplied: d.supplied,
 		}
@@ -1262,7 +1262,7 @@ function resolve_supply(game, nation) {
 		try { offer_armed_effects(game, 'piece_removed', ctx) }
 		catch (e) { game.log.push('arm piece_removed(supply) 错误：' + e.message) }
 		/* 【2026-10-10】16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
-		game.last_piece_removed = { nation: d.nation, type: d.type, space: d.space, reason: 'supply', piece: d.pid }
+		game.last_piece_removed = { nation: d.nation, type: d.type, space: d.space, reason: 'supply', piece: d.pid, piece_id: d.pid }
 		arm_status_instant(game, 'piece_removed', d.nation, d.space)
 		/* 16304 中国远征军：让权美国选相邻地区征召 */
 		offer_us_china_delegate(game, d.space, d.nation, d.type)
@@ -3283,7 +3283,7 @@ function econ_remove_piece(game, space, piece) {
 
 	/* 事后类响应卡：算子被移除后，持有方可选择还原/保护 */
 	const ctx = {
-		nation: vNation, piece: piece,
+		nation: vNation, piece: piece, piece_id: piece,
 		piece_nation: vNation, piece_type: vType,
 		space: space, reason: 'econ',
 		was_supplied: wasSupplied,
@@ -3294,7 +3294,7 @@ function econ_remove_piece(game, space, piece) {
 	catch (e) { game.log.push('arm piece_removed(econ) 错误：' + e.message) }
 
 	/* 16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
-	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'econ', piece: piece }
+	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'econ', piece: piece, piece_id: piece }
 	arm_status_instant(game, 'piece_removed', vNation, space)
 	/* 16304 中国远征军：让权美国选相邻地区征召 */
 	offer_us_china_delegate(game, space, vNation, vType)
@@ -8776,8 +8776,15 @@ function build_piece(game, nation, type, space) {
 		 * 【2026-09-30 德国增强 B 组】建设海军/部署空军后，触发对应装载卡。
 		 * ctx.nation = 建设方；只有 actor 匹配的装载卡才会结算。
 		 */
-		if (type === 'navy') offer_armed_effects(game, 'after_build_navy', { space: space, nation: nation })
-		if (type === 'air') offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nation })
+		/*
+		 * 【2026-10-28 待办 #5】补 piece_id = 本次建出来的部队 id（与 after_build_army / after_recruit 一致）。
+		 *
+		 * 此前只有陆军/征召两处带 piece_id，「同一件事两个名字」的口径缺口就在这里：
+		 * 任何 after_build_navy / after_deploy_air 卡若要定位「本次产生的那一支」
+		 * （而不是取候选第一个），都拿不到 id。当前无卡踩到，纯防未来。
+		 */
+		if (type === 'navy') offer_armed_effects(game, 'after_build_navy', { space: space, nation: nation, piece_id: __r.id })
+		if (type === 'air') offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nation, piece_id: __r.id })
 		/*
 		 * 【2026-10-09 意大利 17711 维希法国殖民地】
 		 * 陆军建设此前【没有】armed 派发点（只有 navy/air），
@@ -9147,7 +9154,7 @@ function eliminate_piece(game, nation, space, target_piece, opt) {
 
 	/* 事后类响应卡：本算子被移除后，持有方可选择还原/保护 */
 	const ctx = {
-		nation: vNation, piece: victim,
+		nation: vNation, piece: victim, piece_id: victim,
 		piece_nation: vNation, piece_type: vType,
 		space: space, reason: 'eliminate',
 		was_supplied: wasSupplied,
@@ -9160,7 +9167,7 @@ function eliminate_piece(game, nation, space, target_piece, opt) {
 	maybe_settle_axis_pact(game)
 
 	/* 16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
-	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'eliminate', piece: victim }
+	game.last_piece_removed = { nation: vNation, type: vType, space: space, reason: 'eliminate', piece: victim, piece_id: victim }
 	arm_status_instant(game, 'piece_removed', vNation, space)
 	/* 16304 中国远征军：让权美国选相邻地区征召 */
 	offer_us_china_delegate(game, space, vNation, vType)
@@ -14769,7 +14776,8 @@ function run_sea_air_deploy(game, ctx, nat) {
 		 * 经 build_piece（内部有 offer_armed_effects）才会上报，这里是直接改 location。
 		 * 与 26834（另一处空军调度入口）保持一致。
 		 */
-		offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nat })
+		/* 【2026-10-28 待办 #5】补 piece_id = 被调度的空军 id */
+		offer_armed_effects(game, 'after_deploy_air', { space: space, nation: nat, piece_id: air })
 		return { ok: true, desc: '调度空军 ' + data.name_of(from) + ' → ' + data.name_of(space) }
 	}
 
@@ -19936,7 +19944,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 				 * 防守方/持有方可决定是否发动响应卡（如驱逐舰让船本回合不可移除）。 */
 				request_responses(game, 'piece_removed', {
 					nation: nation,
-					piece: victim,
+					piece: victim, piece_id: victim,
 					piece_nation: rmvNationC,
 					piece_type: rmvTypeC,
 					space: space,
@@ -19947,7 +19955,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 				 * armed 增强窗口（如 15311 马奇诺），否则 15311 在"日本选抵消"时不触发，与预期不符。 */
 				try {
 					offer_armed_effects(game, 'piece_removed', {
-						nation: rmvNationC, piece: victim,
+						nation: rmvNationC, piece: victim, piece_id: victim,
 						piece_nation: rmvNationC, piece_type: rmvTypeC,
 						space: space, reason: 'piece_removed',
 						was_supplied: rmvSuppliedC,
@@ -20051,7 +20059,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		 * 让持有方（如英国）挂起决定是否发动。request_responses 无匹配会自动跳过。 */
 		request_responses(game, 'piece_removed', {
 			nation: nation,
-			piece: victim,
+			piece: victim, piece_id: victim,
 			piece_nation: rmvNation,
 			piece_type: rmvType,
 			space: space,
@@ -20068,7 +20076,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		/* 16304/17543：移除瞬间记录上下文（含 piece id，供还原）并武装 STATUS 窗口 */
 		game.last_piece_removed = {
 			nation: rmvNation, type: rmvType, space: space,
-			reason: 'piece_removed', piece: victim,
+			reason: 'piece_removed', piece: victim, piece_id: victim,
 			/* 【2026-10-28】17543《雷达》等状态卡从本对象取 ctx 做 restore_piece，
 			 * 因此这里也必须带 retreated_airs，否则它们救回海军后飞机留在撤退地。 */
 			retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
@@ -20081,7 +20089,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		if (rmvNation === '中国') offer_us_japan_delegate(game, '中国部队被发起战斗')
 		try {
 			offer_armed_effects(game, 'piece_removed', {
-				nation: rmvNation, piece: victim,
+				nation: rmvNation, piece: victim, piece_id: victim,
 				piece_nation: rmvNation, piece_type: rmvType,
 				space: space, reason: 'piece_removed',
 				was_supplied: rmvSupplied,
@@ -21628,7 +21636,7 @@ function remove_piece(game, nation, piece) {
 	delete game.location[piece]
 	refresh(game)
 	const ctx = {
-		nation: nation, piece: piece,
+		nation: nation, piece: piece, piece_id: piece,
 		piece_nation: pNation, piece_type: pType, space: loc, reason: 'supply',
 		was_supplied: pSupplied,
 	}
@@ -29179,7 +29187,8 @@ function do_action(state, current, action, arg) {
 		 * 【2026-09-30 德国增强 B 组】调度空军后，触发 after_deploy_air 装载卡
 		 * （如 JU-87 俯冲轰炸机）。
 		 */
-		offer_armed_effects(game, 'after_deploy_air', { space: target, nation: nation })
+		/* 【2026-10-28 待办 #5】补 piece_id = 被调度的空军 id */
+		offer_armed_effects(game, 'after_deploy_air', { space: target, nation: nation, piece_id: air })
 		game.air_done = game.air_done || {}
 		game.air_done[nation] = true
 		game.log.push('【' + nation + '】空军阶段：调度空军到 ' +
