@@ -897,6 +897,16 @@ function compute_supply(game, conn_snap) {
 				if (sc.type && game.piece_type[pid] !== sc.type) continue
 				if (sc.space != null && Number(game.location[pid]) !== Number(sc.space)) continue
 			}
+			/*
+			 * 【2026-10-28】已有更明确的来源（base 补给点 / granted 授予）时【不覆盖】。
+			 *
+			 * 旧写法无条件写 in_supply/sources：15345《塞内加尔步兵团》让非洲南部成为
+			 * 法国的补给点，本应 sources='base'；叠加 15346《自由法国》后，
+			 * 光环把 sources 从 'base' 改写成 'aura'（can_source 有"不降级"保护，
+			 * sources 标签没有），迭代里再被升级成 'chain' ——
+			 * 真补给点被显示成"从链条连过来"，排查时极易误判。
+			 */
+			if (in_supply[pid]) continue
 			in_supply[pid] = true
 			sources[pid] = 'aura'
 			/* 光环补给：不是源（15346/17838 等）；已在★上的不降级 */
@@ -914,6 +924,8 @@ function compute_supply(game, conn_snap) {
 		const nat = auraSpaceImmune[sp]
 		for (const pid of (bySpace[Number(sp)] || [])) {
 			if (game.piece_nation[pid] !== nat) continue
+			/* 【2026-10-28】同 2c：已有 base/granted 来源时不覆盖 */
+			if (in_supply[pid]) continue
 			in_supply[pid] = true
 			sources[pid] = 'aura'
 			/* 空间免疫光环：不是源；已在★上的不降级 */
@@ -949,7 +961,22 @@ function compute_supply(game, conn_snap) {
 		changed = false
 
 		for (const pid of allPieces) {
-			if (in_supply[pid]) continue
+			/*
+			 * 【2026-10-28 玩家口径】只有【真源头 base】与【已连回源的 chain】才跳过。
+			 *
+			 * 旧写法是 `if (in_supply[pid]) continue` —— 把 aura / granted 也一起跳过，
+			 * 于是被光环罩住的部队【永远失去证明自己连得回真源的机会】，can_source 恒为 false。
+			 *
+			 * 症状（17549 + 15346）：法国海军停在西欧英国陆军（补给点）旁边，
+			 * 本可算 chain 并给巴尔干英国陆军当中继；被 15346「总是补给」打了 in_supply 后
+			 * 直接跳过迭代 -> can_source 永远 false -> 巴尔干的英国陆军断补。
+			 * 即「加了全补给光环，反而比不加更差」。
+			 *
+			 * 现在：aura / granted 也参与迭代，能连回真源就【升级为 chain】并拿到 can_source；
+			 * 连不回（孤立远洋）就保持 aura、can_source=false，【不当中继】——
+			 * 这样仍然遵守 2026-10-23「光环本身不是补给源」的口径。
+			 */
+			if (sources[pid] === 'base' || sources[pid] === 'chain') continue
 
 			const nat = game.piece_nation[pid]
 			const type = game.piece_type[pid]
