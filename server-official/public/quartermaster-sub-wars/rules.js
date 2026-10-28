@@ -18466,9 +18466,16 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	 *   · 只有【所有】子句都做不了时，整张卡才不能打出
 	 *     （此时打出没有任何意义，宁可留在手里）。
 	 */
-	const stepFails = []
+	/*
+	 * 【2026-10-28】续跑（分步停机 / event_step_next）时恢复前面各步的失败记录。
+	 *
+	 * 否则第 1 步"未执行"的原因会在停机后丢失（续跑是新的空数组），
+	 * 玩家点完「下一步」只看到最后一步的结果 —— 这正是 15315 第二步静默失败的观感来源。
+	 */
+	const stepFails = (opt && Array.isArray(opt.fails)) ? opt.fails.slice() : []
 	const failStep = (st, reason) => {
-		stepFails.push(event_step_label(st) + ' 未执行（' + reason + '）')
+		/* 【2026-10-28】统一文案「步骤 — 原因」，供 toast 与主日志共用（见收尾处的日志） */
+		stepFails.push(event_step_label(st) + ' — ' + reason)
 	}
 	/*
 	 * 【2026-10-20】逐地区失败（部分成功、部分被拒）单独收集一份，
@@ -18806,7 +18813,7 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			descs.push('移除 1 支' + piece_type_zh(pType))
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
 			const ps = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
-				{ newPiece: newPiece, prevSpaces: prevSpaces })
+				{ newPiece: newPiece, prevSpaces: prevSpaces, fails: stepFails.concat(spaceFails) })
 			if (ps) return ps
 			continue
 			}
@@ -18816,14 +18823,18 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			const names = [], bad = []
 			for (const sp of where) {
 				const r = recruit_piece(game, st.as || actor, st.type, sp)
-				if (!r.ok) { bad.push(data.name_of(sp) + '：' + r.reason); continue }
+				if (!r.ok) {
+					/* 【2026-10-28】多数 reason 自带地区名（"X 已有本国部队"），别重复拼一次 */
+					bad.push(r.reason.indexOf(data.name_of(sp)) >= 0 ? r.reason : data.name_of(sp) + ' ' + r.reason)
+					continue
+				}
 				newPiece = r.id
 				if (st.grantSupply) grant_supply(game, r.id, game.turn || 1)
 				names.push(data.name_of(sp))
 			}
 			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
 			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
-			for (const b of bad) spaceFails.push(event_step_label(st) + '：' + b)
+			for (const b of bad) spaceFails.push(event_step_label(st) + ' — ' + b)
 			const extra = st.grantSupply ? '（本回合内始终处于补给状态）' : ''
 			descs.push('在 ' + names.join('、') + ' 各征召 1 支' +
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
@@ -18838,7 +18849,7 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			}
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
 			const psR = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
-				{ newPiece: newPiece, prevSpaces: prevSpaces })
+				{ newPiece: newPiece, prevSpaces: prevSpaces, fails: stepFails.concat(spaceFails) })
 			if (psR) return psR
 			continue
 			}
@@ -18849,14 +18860,18 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			const names = [], bad = []
 			for (const sp of where) {
 				const r = build_piece(game, st.as || actor, st.type, sp)
-				if (!r.ok) { bad.push(data.name_of(sp) + '：' + r.reason); continue }
+				if (!r.ok) {
+					/* 【2026-10-28】多数 reason 自带地区名（"X 已有本国部队"），别重复拼一次 */
+					bad.push(r.reason.indexOf(data.name_of(sp)) >= 0 ? r.reason : data.name_of(sp) + ' ' + r.reason)
+					continue
+				}
 				newPiece = r.id
 				prevSpaces = (prevSpaces || []).concat([sp]) /* 供后续 useNewPiece */
 				names.push(data.name_of(sp))
 			}
 			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
 			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
-			for (const b of bad) spaceFails.push(event_step_label(st) + '：' + b)
+			for (const b of bad) spaceFails.push(event_step_label(st) + ' — ' + b)
 			descs.push('在 ' + names.join('、') + ' 各建设 1 支' + piece_type_zh(st.type) +
 				(bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
@@ -18871,7 +18886,7 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			}
 			/* 【2026-10-21 方案 B】分步停机：等玩家点「下一步」 */
 			const psB = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
-				{ newPiece: newPiece, prevSpaces: prevSpaces })
+				{ newPiece: newPiece, prevSpaces: prevSpaces, fails: stepFails.concat(spaceFails) })
 			if (psB) return psB
 			continue
 			}
@@ -18913,6 +18928,17 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 					d += '，并连带消灭同地区 ' + r.killed_airs.length + ' 支同国空军'
 				descs.push(d)
 			}
+			/*
+			 * 【2026-10-28】与 build / recruit 对齐：分步停机，等玩家点「下一步」。
+			 *
+			 * 旧实现这里直接 continue —— eliminate 步不停机，多步卡（如 15315 阿拉曼战役
+			 * "消灭非洲北部敌方陆军 + 中东/非洲北部之一征召"）会一口气连跑下一步；
+			 * 第二步若失败又被 failStep 静默吞掉，玩家只看到"卡打了、只消灭没征召"，
+			 * 且没有「下一步」按钮可点。补上与其它 op 一致的分步停机即可。
+			 */
+			const psE = maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt,
+				{ newPiece: newPiece, prevSpaces: prevSpaces, fails: stepFails.concat(spaceFails) })
+			if (psE) return psE
 			continue
 		}
 
@@ -19014,12 +19040,23 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	 * token 自增是为了让客户端能识别"这是一条新提示"，避免同一步多次刷新重复弹窗。
 	 */
 	const allFails = stepFails.concat(spaceFails)
-	if (allFails.length)
+	if (allFails.length) {
 		game.last_card_fail = {
 			token: (game._card_fail_token = (game._card_fail_token || 0) + 1),
 			name: c.name,
 			fails: allFails,
 		}
+		/*
+		 * 【2026-10-28 通用提示】同步写一条主日志。
+		 *
+		 * 旧实现只写 game.last_card_fail -> 客户端 toast，闪一下就没、战斗日志里查不到；
+		 * 而分步停机后玩家往往是"点下一步才发现没效果"，更需要可回溯的记录。
+		 *
+		 * 覆盖所有事件卡的所有"整步未执行 / 部分地区被拒"（不限 15315）：
+		 *   【英国】《阿拉曼战役》部分效果未执行：征召 1 支陆军 — 中东 已有本国部队
+		 */
+		game.log.push('【' + nation + '】《' + c.name + '》部分效果未执行：' + allFails.join('；'))
+	}
 
 	/*
 	 * 【2026-09-30】extraPlay：本卡结算后可【额外打出】1 张。
@@ -19059,6 +19096,17 @@ function has_armed_window(game, nation, when) {
 function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt, carry) {
 	if (!opt || !opt.oneStep) return null
 	if (i + 1 >= steps.length) return null     /* 最后一步：不停，交给调用方收尾 */
+	/*
+	 * 【2026-10-28】本步【什么都没做成】时不停机。
+	 *
+	 * 否则会打出一条「第 1/2 步完成：（下一步：…）」的空停机记录：
+	 * 玩家点「下一步」才发现两步都没效果，而收尾处的「没有任何可执行的效果」
+	 * 判定（19020）被提前 return 绕过 —— 卡就被白白打掉（15315 在
+	 * 「非洲北部无敌方 + 中东已有本国部队」时实测如此）。
+	 *
+	 * 有内容才停：失败原因仍由 stepFails / spaceFails 累积（见收尾日志）。
+	 */
+	if (!descs || !descs.length) return null
 	const nxt = steps[i + 1]
 	const label = event_step_label(nxt)
 	const doneDesc = descs.length ? descs[descs.length - 1] : ''
@@ -19083,6 +19131,8 @@ function maybe_pause_event_step(game, nation, card_id, arg, i, steps, descs, opt
 		/* 跨步携带：刚产出的单位 + 产出地区（battle 的 useNewPiece 依赖它们） */
 		newPiece: (carry.newPiece != null) ? carry.newPiece : null,
 		prevSpaces: carry.prevSpaces ? carry.prevSpaces.slice() : null,
+		/* 【2026-10-28】累积"未执行"原因，续跑时由 resolve_event_card 的 opt.fails 恢复 */
+		fails: Array.isArray(carry.fails) ? carry.fails.slice() : [],
 		token: (game._event_step_token = (game._event_step_token || 0) + 1),
 	}
 	game.log.push('【' + nation + '】《' + (inst_card(card_id) ? inst_card(card_id).name : card_id) +
@@ -19170,7 +19220,7 @@ function resume_event_after_armed(game) {
 	 * extra 显式取自挂起时记录（旧代码用的是未定义的裸 extra，恒为 falsy）。
 	 */
 	const r = resolve_event_card(game, nation, card_id, {}, resumeStep, pend.extra,
-		{ oneStep: true, extra: pend.extra, newPiece: pend.newPiece, prevSpaces: pend.prevSpaces })
+		{ oneStep: true, extra: pend.extra, newPiece: pend.newPiece, prevSpaces: pend.prevSpaces, fails: pend.fails })
 	if (r && r.ok && !r.pending) {
 		/* 全部分步执行完毕（含所有 armed 窗口）：卡入弃牌堆 + 国家技能 */
 		finish_event_card(game, nation, card_id, { extra: pend.extra })
@@ -28975,7 +29025,7 @@ function do_action(state, current, action, arg) {
 		arg.card = ps.card_id
 		game.pending_event_step = null
 		const r = resolve_event_card(game, ps.nation, ps.card_id, arg, ps.step, ps.extra,
-			{ oneStep: true, extra: ps.extra, newPiece: ps.newPiece, prevSpaces: ps.prevSpaces })
+			{ oneStep: true, extra: ps.extra, newPiece: ps.newPiece, prevSpaces: ps.prevSpaces, fails: ps.fails })
 		if (r && r.ok && !r.pending) {
 			/* 与旧"一步到底"路径保持日志一致：打出《X》—— <各步描述> */
 			if (r.desc) game.log.push('【' + ps.nation + '】打出《' + nmc + '》—— ' + r.desc)
