@@ -3109,28 +3109,22 @@ function maybe_offer_national_skill(game, nation, trigger) {
 	return game
 }
 
-/* 17555 大萧条的余波 ①：美国玩家自己打出[事件卡]/[状态卡]时，强制自选弃 1 张手牌。
- * 挂在 after_card_resolved（EVENT 在打出或 event_finish 收尾时、STATUS 在
- * play_status_card_impl 收尾时各只调一次），不会重复触发。
- * 仅"美国玩家自己"打出才触发（卡文主语<美国>）。 */
-function trigger_us_depression_discard(game, nation, card_id, from_play) {
-	if (from_play === false) return
-	if (nation !== '美国') return
-	if (!table_has(game, '美国', 17555)) return
-	const face = String(inst_card_id(card_id))
-	if (!is_card_type(face, 'EVENT') && !is_card_type(face, 'STATUS')) return
-	const hand = game.hands['美国'] || []
-	if (!hand.length) {
-		game.log.push('【大萧条的余波】美国手牌为空，无需弃置')
-		return
-	}
-	game.us_depression_discard = { nation: '美国', pending: true }
-	game.log.push('【大萧条的余波】美国打出[事件/状态]卡：须自选弃置 1 张手牌')
-}
-
+/*
+ * 17555 大萧条的余波 ①：「打出[事件卡]/[状态卡]时弃置 1 张手牌」
+ *
+ * 【2026-10-28 玩家口径】从【事后补做】改为【出牌代价】——
+ * 挂起点移到了 play_card 入口（在拦截响应之前），弃完牌再重放本次出牌。
+ *
+ * 为什么不留在 after_card_resolved：
+ *   卡先结算完再挂弃牌，会与「卡结算过程中开出的窗口」并存
+ *   （16803 尼米兹的 after_build_navy、17547 人工港的 status_instant、★卡国家技能），
+ *   两个 ask_box 抢同一块 UI；而 armed 窗口的 build_actions 白名单里没有
+ *   us_depression_discard -> 客户端静默不发 -> 玩家点「确认弃置」毫无反应（卡死）。
+ *
+ * 旧实现（已删除）在这里挂 game.us_depression_discard = { nation:'美国', pending:true }。
+ * 如需回滚：把挂起改回本函数、并删掉 play_card 入口的前置段与弃牌动作里的 resume 重放。
+ */
 function after_card_resolved(game, nation, card_id, from_play) {
-	/* 17555: only trigger on genuine play (from_play defaults to true) */
-	trigger_us_depression_discard(game, nation, card_id, from_play !== false)
 	/* 德国：带★的卡打出并效果结算后给窗口；其余情况清掉旧 offer */
 	if (!card_id || !is_starred_card(card_id)) {
 		// 仅清【本国】窗口：15210 战斗里英国响应卡结算不得误清德国的窗口
@@ -30619,6 +30613,58 @@ function do_action(state, current, action, arg) {
 		const c = inst_card(card_id)
 
 		/*
+		 * ============================================================
+		 * 【2026-10-28】17555《大萧条的余波》：「打出[事件/状态]卡时弃置 1 张手牌」
+		 * 从【事后补做】改为【出牌代价】（玩家口径 2026-10-28）。
+		 * ============================================================
+		 *
+		 * 旧实现：卡先结算完，再由 after_card_resolved -> trigger_us_depression_discard
+		 * 挂起弃牌。于是「弃牌」与「卡结算过程中开出的窗口」同时存在：
+		 *   · 16803 尼米兹（建设海军 -> armed_offers）
+		 *   · 17547 人工港（status_instant）
+		 *   · 国家技能窗口（★卡）
+		 * 两个 ask_box 争用同一块 UI，且 armed 分支的 build_actions 白名单里
+		 * 没有 us_depression_discard -> 客户端 send_action 静默不发 -> 玩家点「确认弃置」
+		 * 毫无反应（典型「不在册=静默不发」死锁）。
+		 *
+		 * 现在：点击打出时就先收代价 —— 卡【未生效、未离手、未占名额】，
+		 * 弃完牌再重放本次 play_card（见 us_depression_discard 动作末尾）。
+		 * 顺序为「弃牌 -> 拦截响应 -> 结算」，与玩家的心理模型一致：
+		 * 先付代价，再走打出的全部流程。
+		 *
+		 * 预检（玩家 2026-10-28 裁定 Q1=只做 check_phase_for_card）：
+		 * 该函数【只读】（21492-21620 区间无任何赋值），不会消耗额外打出权，
+		 * 用它挡掉「阶段不对 / 名额已用」这类必然失败的打出，避免白弃一张牌。
+		 * 更深的目标校验（事件卡是否有合法目标）不在此预判 —— 多步卡的目标是
+		 * 分步算的，预判会误伤；付了代价但效果失败与 cost.discard 同口径。
+		 *
+		 * ⚠ __skip_depression 是一次性标记：重放时置位，否则会二次挂起（死循环）。
+		 */
+		if (c && !game.__skip_depression &&
+			(c.type === 'EVENT' || c.type === 'STATUS') &&
+			nation === '美国' && table_has(game, '美国', 17555) &&
+			/*
+			 * 至少还要有 1 张【可弃】的牌：手牌里这张就是要打的那张，
+			 * 长度 > 1 才意味着弃完它之后还能把牌打出去。
+			 * 旧实现（事后补做）只判 > 0，代价前置后必须收紧，
+			 * 否则「手上只剩这一张」会变成「弃了它，卡就再也打不出来」。
+			 */
+			(game.hands['美国'] || []).length > 1) {
+			const _pre = check_phase_for_card(game, nation, c, arg)
+			if (_pre.ok) {
+				game.us_depression_discard = {
+					nation: '美国', pending: true,
+					/* 弃完后按原参数重放这张卡 */
+					resume: { card: card_id, arg: Object.assign({}, arg || {}), role: current },
+				}
+				game.log.push('【大萧条的余波】美国打出[事件/状态]卡：须先自选弃置 1 张手牌' +
+					'（弃完自动结算该卡）')
+				refresh(game)
+				return game
+			}
+		}
+
+		/*
 		 * 【2026-09-25 第 3 步】play_card 拦截类响应（15329 反潜战术）：
 		 * 在卡生效【前】挂起询问，等待持有方是否令其无效。
 		 * 被拦截的牌【暂未真正打出】—— 占出牌名额分两种情况：
@@ -31926,10 +31972,28 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		discard_card(game, nation, card_id)
+		/* 【代价前置】取出重放信息后再清挂起（旧实现没有 resume，弃完就结束） */
+		const _resume = st.resume || null
 		game.us_depression_discard = null
 		/* 【2026-10-26 保密】弃的是手牌 -> 不写卡名 */
 		game.log.push('【大萧条的余波】美国自选' + HIDDEN_CARD_DESC.discard(1))
 		refresh(game)
+		/*
+		 * 【2026-10-28 玩家口径】代价已付 -> 重放刚才被挂起的 play_card，
+		 * 让这张事件/状态卡真正打出并结算（拦截响应、效果、国家技能都在这之后）。
+		 *
+		 * 与拦截响应（15329）的重放同款：用【原打出方 role】重放 + 一次性跳过标记，
+		 * 否则会再次走到本文件 play_card 开头的 17555 前置段（死循环）。
+		 */
+		if (_resume && _resume.card) {
+			game.__skip_depression = true
+			try {
+				const _r = exports.action(game, _resume.role || current, 'play_card', _resume.arg)
+				return _r || game
+			} finally {
+				delete game.__skip_depression
+			}
+		}
 		return game
 	}
 

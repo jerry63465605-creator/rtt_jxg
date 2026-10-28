@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 17531《现购自运政策》回归：顺序改为【国家 → 兵种 → 地区】
  *
  * 覆盖：
@@ -24,6 +24,9 @@ function ok(label, cond, extra) {
 
 function fresh() {
 	const g = rules.setup(1)
+/* 【2026-10-28】清掉开局自带的 17555（INITIAL_STATUS）：本脚本不测大萧条交互，避免被代价前置的弃牌挂起打断 
+ * （17555 的交互由 _smoke_17555_depression.js 覆盖）。 */
+g.table['美国'] = []
 	g.opening = null
 	g.turn = 2
 	g.turn_phase = 'play'
