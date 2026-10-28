@@ -17980,6 +17980,25 @@ function event_cands_filter(game, actor, st, list) {
 			game.piece_type[p] !== 'air' &&
 			(st.type ? game.piece_type[p] === st.type : true)))
 	}
+	/*
+	 * 【2026-10-28 待办 #26】battle 步骤：排除「该格已有【我方阵营单位】」的地区。
+	 *
+	 * 判据与 do_battle 的拒绝条件【完全同源】（rules.js 里那句
+	 * 「X 有我方阵营单位（Y），不能攻击」）—— 那里对 pieces_on 的**每一支**都判
+	 * `faction_of_nation(nation) === myFaction`，不分兵种、不分陆海空。
+	 *
+	 * 症状（_smoke_seq.js 第 3 战）：德国陆军在 44<德国>，邻接 5/12/13；
+	 * 13=<意大利> 是意大利本土、开局就有意大利陆军（与德国同属 Axis）。
+	 * 候选阶段只判「有苏联陆军 + 德国能发起」-> 13 进了候选（客户端高亮），
+	 * 玩家点了却被 do_battle 拒绝 —— 典型的「能点的 ≠ 能成功的」。
+	 *
+	 * 空格【保留】：`some` 为 false，仍可空打（既有口径，雷霆/闪电战等靠空打触发后续窗口）。
+	 */
+	if (st.op === 'battle') {
+		const myF = faction_of_nation(actor)
+		out = out.filter(sp => !pieces_on(game, sp).some(p =>
+			faction_of_nation(game.piece_nation[p]) === myF))
+	}
 	return out
 }
 

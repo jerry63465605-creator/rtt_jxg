@@ -79,10 +79,6 @@
       "kind": "B",
       "reason": "检视牌不再从对手手牌移除 / 顶底顺序断言（5 条）"
     },
-    "_smoke_seq.js": {
-      "kind": "B",
-      "reason": "第 3 战(target 13) 的 event_battle 被拒（remaining 仍 1、苏军未移除）；前两战均 PASS，属造局与现行发起条件不匹配，需按 battle_initiators 重造"
-    },
     "_smoke_status.js": {
       "kind": "B",
       "reason": "东欧计分标记、15338 触发后跳过出牌阶段（2 条断言过期）"

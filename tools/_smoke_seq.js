@@ -44,7 +44,19 @@ function setupBudget() {
 	putId(g, 'ger_a', '德国', 'army', 44)                  // 德国（补给点）
 	putId(g, 'sov_a', '苏联', 'army', 5)
 	putId(g, 'sov_b', '苏联', 'army', 12)
-	putId(g, 'sov_c', '苏联', 'army', 13)
+	/*
+	 * 【2026-10-28 #26 修复造局】第 3 个目标改用 6=西欧。
+	 *
+	 * 原用 13=意大利 —— 那是意大利本土，开局就部署了意大利陆军（与德国同属 Axis），
+	 * 而 do_battle 会拒绝「该格有我方阵营单位」，所以第 3 战永远打不成
+	 * （remaining 停在 1、苏联陆军也不会被移除）。
+	 * 44<德国> 的陆地邻居只有 5/12/13/6，前两个已用于第 1/2 战，故取 6。
+	 */
+	/* 6=西欧 开局有法国陆军（盟军），先清干净，保证第 3 战的目标是【苏联】陆军 */
+	for (const p of Object.keys(g.location)) {
+		if (g.location[p] === 6) { delete g.location[p]; delete g.piece_nation[p]; delete g.piece_type[p] }
+	}
+	putId(g, 'sov_c', '苏联', 'army', 6)
 	I.compute_supply(g)
 	return g
 }
@@ -64,11 +76,19 @@ console.log('=== 1. 《巴巴罗萨》打出即建立预算(remaining=3)，不�
 		'remaining=' + JSON.stringify(g.event_budget && g.event_budget.remaining))
 	ok('against=苏联 / kind=land', g.event_budget && g.event_budget.against === '苏联' && g.event_budget.kind === 'land')
 	ok('旧 pending_seq 不再存在', !g.pending_seq)
-	// 发起方视角能看到目标 5/12/13
+	// 发起方视角能看到目标 5/12/6
 	const v = rules.view(g, 'Axis')
 	ok('发起方看到 event_budget 面板', !!v.event_budget, 'v.event_budget=' + JSON.stringify(v.event_budget))
-	ok('目标含 5/12/13', v.event_budget &&
-		[5, 12, 13].every(t => v.event_budget.targets.indexOf(t) >= 0),
+	ok('目标含 5/12/6', v.event_budget &&
+		[5, 12, 6].every(t => v.event_budget.targets.indexOf(t) >= 0),
+		'targets=' + JSON.stringify(v.event_budget && v.event_budget.targets))
+	/*
+	 * 【2026-10-28 #26】13=意大利 不该出现在候选里：
+	 * 该格有意大利陆军（与德国同属 Axis），do_battle 会拒绝。
+	 * 旧实现候选只判「有敌军 + 能发起」，把 13 也列了出来（高亮却打不了）。
+	 */
+	ok('★ 目标【不含】13（意大利有我方阵营单位，do_battle 会拒）', v.event_budget &&
+		v.event_budget.targets.indexOf(13) < 0,
 		'targets=' + JSON.stringify(v.event_budget && v.event_budget.targets))
 	ok('防守方(苏联)看不到预算面板', rules.view(g, 'Allies').event_budget === null)
 	ok('出牌瞬间尚未武装闪电战窗口', !armed(g, '15253#1'), 'status_instant=' + JSON.stringify(g.status_instant))
@@ -103,11 +123,11 @@ console.log('\n=== 2. 逐次 event_battle + 两场之间插入闪电战 ===')
 	ok('第 2 战(12)苏联陆军被移除', armiesAt(g, 12, '苏联') === 0)
 	ok('第 2 战(12)后闪电战不再武装（once_per_turn）', !armed(g, '15253#1'))
 
-	// 第 3 战目标 13：remaining 清空
-	g = rules.action(g, '德国', 'event_battle', { target: 13 })
-	ok('第 3 战(13)后 remaining === 0', g.event_budget && g.event_budget.remaining === 0,
+	// 第 3 战目标 6（西欧）：remaining 清空
+	g = rules.action(g, '德国', 'event_battle', { target: 6 })
+	ok('第 3 战(6)后 remaining === 0', g.event_budget && g.event_budget.remaining === 0,
 		'remaining=' + JSON.stringify(g.event_budget && g.event_budget.remaining))
-	ok('第 3 战(13)苏联陆军被移除', armiesAt(g, 13, '苏联') === 0)
+	ok('第 3 战(6)苏联陆军被移除', armiesAt(g, 6, '苏联') === 0)
 	ok('打满后预算仍在（需显式结束，国家技能才触发）', !!g.event_budget)
 }
 
@@ -176,9 +196,9 @@ console.log('\n=== 4. 空军代受/抵消：pending_battle 期间 event_battle �
 	ok('抵消后武装闪电战窗口（修复：空军互相抵消时也武装）', armed(g, '15253#1'),
 		'status_instant=' + JSON.stringify(g.status_instant))
 
-	// 打完剩余两战
+	// 打完剩余两战（#26：第 3 战用 6=西欧，不再用 13=意大利）
 	g = rules.action(g, '德国', 'event_battle', { target: 12 })
-	g = rules.action(g, '德国', 'event_battle', { target: 13 })
+	g = rules.action(g, '德国', 'event_battle', { target: 6 })
 	ok('全部打完后 remaining=0', g.event_budget && g.event_budget.remaining === 0)
 	g = rules.action(g, '德国', 'event_finish')
 	ok('结算后预算清空', !g.event_budget)
