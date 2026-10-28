@@ -5250,6 +5250,12 @@ const STATUS_EFFECTS = {
 				const lost = attrition_cards(game, '德国', 2)
 				const home = effective_home_base(game, '德国')
 				const cands = []
+				/*
+				 * 【2026-10-28 待办 #14】旧实现只看大本营【相邻】地区，漏了大本营自身。
+				 * 当相邻全不可建（有敌军 / 已满格）而大本营本身可建时，cands 为空 ->
+				 * 玩家已扣 2 张牌，却只得到「无德控陆地可建设」。
+				 */
+				if (home != null && can_build_at(game, '德国', home, 'army').ok) cands.push(home)
 				if (home != null) get_connections(game, home, 'axis').map(Number).forEach(nb => {
 					const ss = data.spaces[nb]
 					if (ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok) cands.push(nb)
@@ -29276,6 +29282,29 @@ function do_action(state, current, action, arg) {
 					'（未支付代价）')
 				return game
 			}
+		}
+		/*
+		 * 【2026-10-28 修 · 待办 #14】effect.kind==='battle' 的【参数预检】。
+		 *
+		 * 症状（玩家原话）：「损耗了牌却没触发」——17746《耀武》扣掉 2 张牌 + 跳过出牌阶段后，
+		 * 效果什么都没发生。
+		 *
+		 * 根因链：
+		 *   ① 代价（attrition / skip_play）在本段【之前】就已扣掉；
+		 *   ② run_status_effect 的 battle 分支要求 `arg.from`（发起单位），否则
+		 *      `{ ok:false, reason:'请选择发起单位' }` —— 但客户端对 17746 这类
+		 *      「卡面没写地区」的 battle 效果不弹选择框，`from` 恒为 null；
+		 *   ③ 失败处理（29464）只回滚 `cost.discard`，**attrition 不回滚**
+		 *      （损耗已进牌库底，注释里明说"无法精确还原"）。
+		 *   => 牌白扣、出牌阶段白跳，效果零。
+		 *
+		 * 修法：把"battle 效果必须带发起单位"提前到【付代价之前】拒绝。
+		 * 对所有 effect.kind==='battle' 的状态卡通用（15338 / 15339 / 15346 / 15247 / 17746 …），
+		 * 与上面 tr.precheck 同位置、同口径（未支付代价）。
+		 */
+		if (tr.effect && tr.effect.kind === 'battle' && ((arg || {}).from == null)) {
+			game.log.push('《' + cName + '》请先选择发起战斗的单位与地区（未支付代价）')
+			return game
 		}
 		/*
 		 * 【2026-10-23 修复】"跳过出牌阶段"原本在这里就置位，早于 cost.discard /
