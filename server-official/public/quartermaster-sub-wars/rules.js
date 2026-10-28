@@ -15218,22 +15218,14 @@ const RESPONSE_EFFECT_IMPL = {
 		/* 拦截经济战：在 play_card 前触发，返回 cancel 中止 */
 		return { ok: true, desc: '使《' + (ctx.card_obj ? ctx.card_obj.name : '经济战') + '》无效', cancel: true }
 	},
-	'15330': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该英国陆军本回合不会被移除' }
-	},
+	'15330': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '该英国陆军本回合不会被移除' }),
 	'15331': (game, side, ctx) => {
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
 		return { ok: r.ok, desc: r.ok ? '消灭该陆军' : '（无敌军可消灭）' }
 	},
-	'15332': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该英国部队本回合不会被移除' }
-	},
+	'15332': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '该英国部队本回合不会被移除' }),
 	'15333': (game, side, ctx) => {
 		/* 英国卡牌生效后洗回牌堆 */
 		const dn = ctx.nation
@@ -15247,15 +15239,8 @@ const RESPONSE_EFFECT_IMPL = {
 		shuffle_deck(game, dn)
 		return { ok: true, desc: '将卡牌洗回牌堆' }
 	},
-	'15334': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		/* 驱逐舰还原海军后：同场因"不代受"而撤离的英国空军一并归位。
-		 * 【2026-10-28】原本这里是内联 9 行，现改为与其它免死卡共用原子。
-		 * 口径变化：无处可撤被删除的飞机也复活（原来只看 location 是否还在）。 */
-		restore_retreated_airs(game, ctx)
-		return { ok: true, desc: '该海军本回合不会被移除' }
-	},
+	'15334': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '该海军本回合不会被移除' }),
 	'15335': (game, side, ctx) => {
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
 		return { ok: r.ok, desc: r.ok ? '消灭该陆军' : '（无敌军可消灭）' }
@@ -15264,12 +15249,8 @@ const RESPONSE_EFFECT_IMPL = {
 		const r = recruit_piece(game, '法国', 'army', ctx.space)
 		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '征召法国陆军' : '（无法征召）' }
 	},
-	'15337': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该法国陆军本回合不会被移除' }
-	},
+	'15337': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '该法国陆军本回合不会被移除' }),
 	'12503': (game, side, ctx) => {
 		/* 敌方在北海建设海军后：消灭该海军 */
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
@@ -15297,23 +15278,11 @@ const RESPONSE_EFFECT_IMPL = {
 
 	'15420': (game, side, ctx) => {
 		/* <日本>/<东海> 的日本部队被移除时：还原并保护（本回合不会被移除） */
-		restore_piece(game, ctx)
-		register_modifier(game, {
-			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
-			spaces: [ctx.space], untilTurn: game.turn,
-		})
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该日本部队本回合不会被移除' }
+		return protect_restored(game, ctx, { desc: '该日本部队本回合不会被移除' })
 	},
 	'15421': (game, side, ctx) => {
 		/* <中国东北>或相邻的【补给状态】日本陆军被移除时：还原并保护 */
-		restore_piece(game, ctx)
-		register_modifier(game, {
-			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
-			spaces: [ctx.space], untilTurn: game.turn,
-		})
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该日本陆军本回合不会被移除' }
+		return protect_restored(game, ctx, { desc: '该日本陆军本回合不会被移除' })
 	},
 	'15429': (game, side, ctx) => {
 		/*
@@ -15352,13 +15321,7 @@ const RESPONSE_EFFECT_IMPL = {
 	},
 	'15436': (game, side, ctx) => {
 		/* 【补给状态】的日本海军被移除时：还原并保护 */
-		restore_piece(game, ctx)
-		register_modifier(game, {
-			key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type,
-			spaces: [ctx.space], untilTurn: game.turn,
-		})
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '该日本海军本回合不会被移除' }
+		return protect_restored(game, ctx, { desc: '该日本海军本回合不会被移除' })
 	},
 	'15437': (game, side, ctx) => {
 		/* 对<印度>发起陆战后：在【战斗地区】建设陆军 */
@@ -16099,14 +16062,31 @@ const RESPONSE_EFFECT_IMPL = {
 		return { ok: ok, desc: msg || '（均无法征召）' }
 	},
 
-	/* 17832 列宁格勒保卫战 / 17833 莫斯科保卫战 / 17835 斯大林格勒保卫战 */
-	'17832': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('罗斯')].filter(x => x != null)),
-	'17833': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('莫斯科')].filter(x => x != null)),
-	'17835': (game, side, ctx) => su_defense_protect(game, ctx, [space_id_of('乌克兰')].filter(x => x != null)),
-
-	/* 17836 无休止的扩张（A）：西伯利亚/中亚苏陆军被移除后还原 + 本回合保护两区 */
-	'17836': (game, side, ctx) => su_defense_protect(game, ctx,
-		['西伯利亚', '中亚'].map(space_id_of).filter(x => x != null)),
+	/*
+	 * 17832 列宁格勒 / 17833 莫斯科 / 17835 斯大林格勒 / 17836 无休止的扩张
+	 *
+	 * 【2026-10-28】不再走 su_defense_protect（已删除），与普通响应卡统一到
+	 * protect_restored。差异只有 spaces：
+	 *   · 前三张保护 victim 所在的那一个地区（默认 [ctx.space]）
+	 *   · 17836 卡面是「<西伯利亚><中亚>的苏联陆军」，保护【两个】地区
+	 */
+	'17832': (game, side, ctx) => protect_restored(game, ctx, {
+		nation: '苏联', type: 'army', spaces: [space_id_of('罗斯')].filter(x => x != null),
+		desc: '苏联陆军已还原，<罗斯>的苏联陆军本回合内不会被移除',
+	}),
+	'17833': (game, side, ctx) => protect_restored(game, ctx, {
+		nation: '苏联', type: 'army', spaces: [space_id_of('莫斯科')].filter(x => x != null),
+		desc: '苏联陆军已还原，<莫斯科>的苏联陆军本回合内不会被移除',
+	}),
+	'17835': (game, side, ctx) => protect_restored(game, ctx, {
+		nation: '苏联', type: 'army', spaces: [space_id_of('乌克兰')].filter(x => x != null),
+		desc: '苏联陆军已还原，<乌克兰>的苏联陆军本回合内不会被移除',
+	}),
+	'17836': (game, side, ctx) => protect_restored(game, ctx, {
+		nation: '苏联', type: 'army',
+		spaces: ['西伯利亚', '中亚'].map(space_id_of).filter(x => x != null),
+		desc: '苏联陆军已还原，<西伯利亚><中亚>的苏联陆军本回合内不会被移除',
+	}),
 
 	/* 17834 湿季泥沼：敌方在莫斯科或相邻建陆军后，消灭该陆军 */
 	'17834': (game, side, ctx, choice) => {
@@ -16128,34 +16108,22 @@ const RESPONSE_EFFECT_IMPL = {
 	 * 全部复用原子：还原保护类 = restore_piece + register_modifier(protect)；
 	 * 消灭类 = eliminate_piece；征召类 = recruit_piece。
 	 */
-	'17730': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '还原<巴尔干/相邻>的意大利陆军并本回合保护' }
-	},
+	'17730': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '还原<巴尔干/相邻>的意大利陆军并本回合保护' }),
 	'17731': (game, side, ctx) => {
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
 		return { ok: r.ok, desc: r.ok ? '消灭苏联在' + data.name_of(ctx.space) + '建设的陆军'
 			: '（无法消灭）' }
 	},
-	'17733': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '还原<意大利>的轴心陆军并本回合保护' }
-	},
+	'17733': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '还原<意大利>的轴心陆军并本回合保护' }),
 	'17734': (game, side, ctx) => {
 		const r = recruit_piece(game, '意大利', 'army', ctx.space)
 		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '征召意大利陆军'
 			: '（无法征召：' + (r.reason || '') + '）' }
 	},
-	'17735': (game, side, ctx) => {
-		restore_piece(game, ctx)
-		register_modifier(game, { key: 'protect', nation: ctx.piece_nation, type: ctx.piece_type, spaces: [ctx.space], untilTurn: game.turn })
-		restore_retreated_airs(game, ctx)   /* 同场不代受而撤离的空军一并归位 */
-		return { ok: true, desc: '还原<意大利/相邻>的意大利陆军并本回合保护' }
-	},
+	'17735': (game, side, ctx) =>
+		protect_restored(game, ctx, { desc: '还原<意大利/相邻>的意大利陆军并本回合保护' }),
 	'17737': (game, side, ctx) => {
 		const it = space_id_of('意大利')
 		if (it == null) return { ok: false, desc: '（<意大利> 不存在）' }
@@ -16397,19 +16365,39 @@ function air_seize_spaces(game, nation) {
 	return out
 }
 
-/* 共用：被移除后还原该部队 + 本回合保护指定地区内全部苏联陆军
- * 苏联响应卡 17832/17833/17835/17836 复用 */
-function su_defense_protect(game, ctx, spaces) {
-	if (ctx && ctx.piece != null) restore_piece(game, ctx)
-	const mods = game.modifiers || (game.modifiers = [])
-	mods.push({
-		key: 'protect', nation: '苏联', type: 'army', spaces: spaces,
-		untilTurn: game.turn, card: 'su_defense',
-		turnNation: game.current_nation,   /* 设保护时的进攻方回合（响应结算时仍停在进攻方回合） */
+/*
+ * 「还原被移除的部队 + 本回合保护」的【唯一入口】。
+ *
+ * 【2026-10-28】合并两套实现（原来是各写一遍）：
+ *   · 普通响应卡：15330 / 15332 / 15334 / 15337 / 15420 / 15421 / 15436 / 17730 / 17733 / 17735
+ *   · 苏联响应卡：17832 / 17833 / 17835 / 17836（原来走 su_defense_protect）
+ *
+ * 两者【唯一的实质差异】是"保护几个地区"（17836 保护 <西伯利亚>+<中亚>），其余全同：
+ *   · turnNation —— 由 register_modifier 自动补 = game.current_nation
+ *     （= 设保护时的进攻方回合，见 register_modifier 注释），不需要手工写；
+ *   · card:'su_defense' —— 原实现里的**死字段**（全仓无消费方），已删除；
+ *   · type —— 默认取 ctx.piece_type，比硬编码 'army' 稳（卡面扩到海军时不用改）；
+ *   · 统一走 register_modifier，**不再直接 push game.modifiers** ——
+ *     绕过它的话，将来 register_modifier 新增字段（来源追踪等）会自动漏掉。
+ *
+ * 内部调 restore_piece（其内部已含 restore_retreated_airs），
+ * 所以"救回部队"必然连带复原同场撤退的空军，各卡不必再写一遍。
+ *
+ * opt: { nation?, type?, spaces?, desc? }
+ *   spaces 省略时 = [ctx.space]（victim 所在地区）
+ */
+function protect_restored(game, ctx, opt) {
+	opt = opt || {}
+	restore_piece(game, ctx)
+	register_modifier(game, {
+		key: 'protect',
+		nation: opt.nation || (ctx && ctx.piece_nation),
+		type: opt.type || (ctx && ctx.piece_type),
+		spaces: (opt.spaces && opt.spaces.length) ? opt.spaces.slice()
+			: [(ctx && ctx.space)],
+		untilTurn: game.turn,
 	})
-	const names = spaces.map(data.name_of).join('、')
-	return { ok: true, desc: (ctx && ctx.piece != null ? '苏联陆军已还原，' : '') +
-		names + '的苏联陆军本回合内不会被移除' }
+	return { ok: true, desc: opt.desc || '该部队本回合不会被移除' }
 }
 
 /* 取某阵营下一个代表国（用于弃牌堆归属） */
@@ -16883,7 +16871,7 @@ function restore_piece(game, ctx) {
 	 * 为什么收在这里而不是逐个 impl 显式调：
 	 *   "还原/免死"横跨三条路径，靠人记必漏——
 	 *     · 响应卡：15330/15332/15334/15337/15420/15421/15436/17730/17733/17735
-	 *       + 苏联 17832/17833/17835/17836（都走 su_defense_protect）
+	 *       + 苏联 17832/17833/17835/17836（2026-10-28 起也走 protect_restored）
 	 *     · 增强卡：15311 马奇诺防线
 	 *     · 状态卡：17543 雷达
 	 *   收进 restore_piece 后，三条路径 + 将来任何新写的还原卡【全部自动生效】。
@@ -32470,6 +32458,8 @@ if (typeof module !== 'undefined') {
 		prune_modifiers,
 		has_modifier,
 		is_protected,
+		/* 【2026-10-28】"还原部队 + 本回合保护"的唯一入口（14 张免死响应卡共用） */
+		protect_restored,
 		event_effect_of,
 		card_effect_of,
 		event_card_needs,

@@ -87,8 +87,36 @@ RESPONSE_EFFECT_IMPL[id]    // (game, side, ctx, choice, extra) => { ok, desc, c
 > —— 任何"救回部队"自动带上飞机复原。所以**新写的还原卡只要调 `restore_piece` 就够了**，
 > 显式调用只是双保险（幂等）。
 >
-> 覆盖范围因此从"响应卡"扩展到三条路径：响应卡（含苏联 17832/17833/17835/17836 走的
-> `su_defense_protect`）、增强卡（15311 马奇诺）、状态卡（17543 雷达）。
+> 覆盖范围因此从"响应卡"扩展到三条路径：响应卡（含苏联 17832/17833/17835/17836）、
+> 增强卡（15311 马奇诺）、状态卡（17543 雷达）。
+
+## 五之二、还原类只需一行：`protect_restored`
+
+2026-10-28 起，「还原部队 + 本回合保护」有**唯一入口**，14 张卡全部改用它
+（原来是普通 10 张一套、苏联 4 张走 `su_defense_protect` 另一套，已删除后者）：
+
+```js
+/* 默认：保护 victim 所在地区、用 victim 的国家/兵种 */
+'15330': (game, side, ctx) =>
+    protect_restored(game, ctx, { desc: '该英国陆军本回合不会被移除' }),
+
+/* 需要保护多个地区 / 指定兵种时传 opts —— 17836 保护两区 */
+'17836': (game, side, ctx) => protect_restored(game, ctx, {
+    nation: '苏联', type: 'army',
+    spaces: ['西伯利亚', '中亚'].map(space_id_of).filter(x => x != null),
+    desc: '苏联陆军已还原，<西伯利亚><中亚>的苏联陆军本回合内不会被移除',
+}),
+```
+
+| `opt` 字段 | 默认 | 说明 |
+|---|---|---|
+| `nation` | `ctx.piece_nation` | 受保护部队的国家 |
+| `type` | `ctx.piece_type` | 兵种（比硬编码 `'army'` 稳） |
+| `spaces` | `[ctx.space]` | 保护地区数组；**卡面写多个地区时必须显式传** |
+| `desc` | `'该部队本回合不会被移除'` | 日志文案 |
+
+内部依次做：`restore_piece`（含飞机复原）→ `register_modifier`（`turnNation` 自动补）。
+**不要**再手工 `game.modifiers.push` —— 会漏掉 `register_modifier` 将来新增的字段。
 
 ## 六、共同易错点
 

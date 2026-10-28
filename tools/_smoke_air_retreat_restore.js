@@ -277,20 +277,25 @@ section('S8 抵消 + 陆军受保护：双方空军死、陆军保住、无窗�
 }
 
 /* ============================================================
- * S9 配置守卫：10 张卡都必须调用新原子（防漏接线）
+ * S9 配置守卫：14 张免死卡都必须走统一入口 protect_restored（防漏接线）
+ *
+ * 【2026-10-28】判定方式从"扫源码文本"改为"看运行时的 impl 函数体"——
+ * 统一成 protect_restored 后各卡只剩一行，源码正则很容易跨卡误判。
  * ============================================================ */
-section('S9 配置守卫：10 张免死卡的 impl 都调用了 restore_retreated_airs')
+section('S9 配置守卫：14 张免死响应卡都走 protect_restored（普通 10 + 苏联 4）')
 {
-	const src = require('fs').readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
-	const ids = ['15330', '15332', '15334', '15337', '15420', '15421', '15436', '17730', '17733', '17735']
+	const ids = [
+		'15330', '15332', '15334', '15337', '15420', '15421', '15436', '17730', '17733', '17735',
+		'17832', '17833', '17835', '17836',
+	]
 	let wired = 0
 	for (const id of ids) {
-		const re = new RegExp("'" + id + "':\\s*\\(game,\\s*side,\\s*ctx\\)\\s*=>\\s*\\{([\\s\\S]{0,700}?)\\n\\t\\},")
-		const m = src.match(re)
-		if (m && m[1].indexOf('restore_retreated_airs') >= 0) wired++
+		const s = String(I.RESPONSE_EFFECT_IMPL[id] || '')
+		if (s.indexOf('protect_restored') >= 0) wired++
 		else console.log('    未接线: ' + id)
 	}
-	ok('★ 10 张全部接线', wired === ids.length, wired + '/' + ids.length)
+	ok('★ 14 张全部走 protect_restored', wired === ids.length, wired + '/' + ids.length)
+	ok('★ 旧函数 su_defense_protect 已删除', typeof I.su_defense_protect === 'undefined')
 }
 
 /* ============================================================
@@ -423,6 +428,45 @@ section('S13 幂等：impl 连打两次，空军仍只在原地区（不会搬�
 	impl(g, 'allies', f.ctx)            /* 第二次：应无副作用 */
 	ok('第一次复原后空军在西欧', after1 === '西欧', after1)
 	ok('★ 第二次调用后空军仍在西欧（幂等）', loc(g, 'uk_air') === '西欧', loc(g, 'uk_air'))
+}
+
+/* ============================================================
+ * S14 17836《无休止的扩张》双地区保护：spaces 数组不得被压成单个
+ *
+ * 卡面：「任意时机：使<西伯利亚><中亚>的苏联陆军在本回合内不会被移除。」
+ * 统一到 protect_restored 后，spaces 是 opt 参数；本场景守的就是
+ * "17836 传两个地区"这件事，防止将来有人把 spaces 默认成 [ctx.space]。
+ * ============================================================ */
+section('S14 17836 双地区保护：<西伯利亚>被还原，<中亚>的苏军也受保护')
+{
+	const SIB = data.id_of('西伯利亚')
+	const CAA = data.id_of('中亚')
+	const nb = (data.spaces[SIB].connections || []).find(x =>
+		data.spaces[x] && data.spaces[x].terrain === 'land')
+	const g = make({ space: WE })
+	for (const pid of Object.keys(g.location)) delete g.location[pid]
+	g.location['su_army'] = SIB; g.piece_nation['su_army'] = '苏联'; g.piece_type['su_army'] = 'army'
+	g.location['su_air'] = SIB; g.piece_nation['su_air'] = '苏联'; g.piece_type['su_air'] = 'air'
+	/* 中亚另放一支：它没被移除，用来验证"另一个地区也在保护范围内" */
+	g.location['su_far'] = CAA; g.piece_nation['su_far'] = '苏联'; g.piece_type['su_far'] = 'army'
+	g.location['de_a'] = nb; g.piece_nation['de_a'] = '德国'; g.piece_type['de_a'] = 'army'
+	g.table_responses = [{ card_id: '17836#1', nation: '苏联', owner_side: 'allies' }]
+	try { I.end_neutral(g, '苏联', 'test') } catch (e) { }
+	I.grant_supply(g, 'de_a', 99)
+	I.refresh(g)
+
+	I.do_battle(g, '德国', SIB, 'su_army', 'land', { from: 'de_a' })
+	ok('对<西伯利亚>发起陆战并挂起', !!g.pending_battle)
+	rules.action(g, 'Allies', 'resolve_battle', { declined: true })
+	ok('不代受：西伯利亚苏陆军被移除', g.location['su_army'] == null)
+	ok('★ 响应栈出现 17836 帧', hasFrame(g, '17836'), frames(g).map(f => f.card_face))
+
+	trigger(g)
+	ok('★ 17836 发动后：西伯利亚陆军回位', loc(g, 'su_army') === '西伯利亚', loc(g, 'su_army'))
+	ok('★ 17836 发动后：撤退的苏联空军也回位', loc(g, 'su_air') === '西伯利亚', loc(g, 'su_air'))
+	ok('★ <西伯利亚>的苏陆军受保护', I.is_protected(g, 'su_army') === true)
+	ok('★★ <中亚>的苏陆军也受保护（spaces 双地区生效，没被压成单个）',
+		I.is_protected(g, 'su_far') === true)
 }
 
 console.log('\n' + (fails.length ? ('有失败断言：' + fails.join(', ')) : '全部通过') +
