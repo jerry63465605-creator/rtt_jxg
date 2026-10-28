@@ -6375,11 +6375,8 @@ function resolve_su_build_delegate(game, arg) {
 /* 与 step_space_candidates 的 build 分支同源：中国大本营 + 相邻，且能建设（含空位） */
 function us_china_build_candidates(game) {
 	const nation = '中国'
-	const home = home_base_of(nation)
-	if (home == null) return []
-	const f = faction_of_nation(nation)
-	const pool = [home]
-	get_connections(game, home, f).forEach(nb => pool.push(Number(nb)))
+	/* 【2026-10-28 #21】改用 home_or_adjacent_spaces（尊重 17554 迁都中国西部） */
+	const pool = home_or_adjacent_spaces(game, nation).spaces
 	return pool.filter(sp =>
 		can_build_at(game, nation, sp, 'army').ok &&
 		unit_slot_free(game, nation, 'army', sp).ok)
@@ -6439,11 +6436,8 @@ function resolve_us_china_build(game, arg) {
 	const sp = arg && arg.space
 	if (sp == null) { game.log.push('【美国人民同情中国】请选择建设地区'); return }
 	const tgt = Number(sp)
-	/* 仅允许 中国大本营 或 其相邻地区 */
-	const home = home_base_of(dg.nation)
-	const pool = [home]
-	/* 连通性唯一枢纽：改用 get_connections，自动尊重临时/永久邻接（千岛群岛等） */
-	get_connections(game, home, faction_of_nation(dg.nation)).forEach(nb => pool.push(Number(nb)))
+	/* 仅允许 中国大本营 或 其相邻地区（#21：与候选同源，尊重 17554 迁都） */
+	const pool = home_or_adjacent_spaces(game, dg.nation).spaces
 	if (pool.indexOf(tgt) < 0) {
 		game.log.push('【美国人民同情中国】只能在中国大本营或相邻地区建设'); return
 	}
@@ -6684,11 +6678,9 @@ function resolve_us_replay(game, arg) {
  * 候选地区 = 大本营 + 相邻，且 army/navy/air 任一合法（不列颠可在相邻水域征召海军/空军）。
  * ============================================================ */
 function us_merchant_targets(game, nation) {
-	const home = home_base_of(nation)
+	/* 【2026-10-28 #21】改用 home_or_adjacent_spaces（尊重 17845/17554/15344 改判） */
+	const ids = home_or_adjacent_spaces(game, nation).spaces
 	const set = []
-	if (home == null) return set
-	/* 连通性唯一枢纽：改用 get_connections，自动尊重临时/永久邻接 */
-	const ids = [home].concat(get_connections(game, home, faction_of_nation(nation)))
 	for (const sp of ids) {
 		const spn = Number(sp)
 		if (spn == null || !data.spaces[spn]) continue
@@ -8497,6 +8489,31 @@ function effective_home_base(game, nation) {
 		}
 	}
 	return home_base_of(nation)
+}
+
+/*
+ * 【2026-10-28 待办 #21】「某国大本营 + 相邻」的【唯一】候选池实现。
+ *
+ * 为什么要有这个原子：
+ *   「在<某国大本营>或相邻地区建设/征召」这句话在仓库里被抄了 5 遍
+ *   （17537 美国人民同情中国 ×3：服务端候选 / 执行校验 / view 候选；
+ *     17531 现购自运 ×1；17505 P-51 野马 ×1），
+ *   每一遍都自己读 home_base_of（静态常量），于是迁都后【候选不跟随】——
+ *   能建但列表里不给，或高亮了点不动。
+ *
+ * 判据：凡是「本国大本营」语义，一律走 effective_home_base（尊重 17845/17554/15344
+ *   的 home_override）。静态 home_base_of 只允许出现在
+ *   ① 开局部署 ② 「有没有大本营」的存在性判断 ③ 美国本土固定语义（参战/轰炸条件）。
+ *
+ * 返回 { home, spaces }；home 为 null 表示该国没有大本营。
+ */
+function home_or_adjacent_spaces(game, nation) {
+	const home = effective_home_base(game, nation)
+	if (home == null) return { home: null, spaces: [] }
+	const h = Number(home)
+	if (!data.spaces[h]) return { home: null, spaces: [] }
+	const list = [h].concat(get_connections(game, h, faction_of_nation(nation)).map(Number))
+	return { home: h, spaces: list }
 }
 
 /*
@@ -24614,10 +24631,8 @@ exports.view = function (state, current) {
 			const st = dg.steps[dg.done]
 			let cands = []
 			if (st && isNation) {
-				const home = home_base_of(dg.nation)
-				const pool = [home]
-				/* 连通性唯一枢纽：改用 get_connections，自动尊重临时/永久邻接 */
-				get_connections(game, home, faction_of_nation(dg.nation)).forEach(nb => pool.push(Number(nb)))
+				/* 【2026-10-28 #21】与 us_china_build_candidates / resolve_us_china_build 同源 */
+				const pool = home_or_adjacent_spaces(game, dg.nation).spaces
 				for (const nb of pool) {
 					const ok = (st.op === 'build')
 						? (can_build_at(game, dg.nation, nb, st.type).ok && unit_slot_free(game, dg.nation, nb, st.type).ok)
@@ -31053,7 +31068,12 @@ function do_action(state, current, action, arg) {
 				try { status_on_econ(game, cfg.tag, t, nation) } catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
 				/* 17505 P-51 野马：打出[轰炸行动]时，目标地区每有1支美国空军，损耗数+2（追加受害方损耗） */
 				if (game.us_p51 && cfg.tag === '轰炸行动') {
-					const hb = home_base_of(t)
+					/*
+					 * 【2026-10-28 #21】改用 effective_home_base（尊重迁都）。
+					 * 实际无差别：轰炸目标 t 是轴心国（德/日/意），而轴心没有迁都卡 ——
+					 * 这里只是让口径统一，避免日后给轴心加迁都卡时又漏一处。
+					 */
+					const hb = effective_home_base(game, t)
 					let usAir = 0
 					if (hb != null) {
 						const region = [hb].concat(get_connections(game, hb, '美国')).map(Number)
@@ -33050,6 +33070,7 @@ if (typeof module !== 'undefined') {
 		status_config_of,
 		/* 供测试 / 预览页调用的工具函数 */
 		effective_home_base,
+		home_or_adjacent_spaces,
 		status_active,
 		nation_supply_immune,
 		apply_status_ongoing,
