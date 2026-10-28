@@ -91,8 +91,10 @@ ok('after_recruit 调用后海军窗口仍在（多窗口共存，不再被清�
 const recWin = (g.armed_offers || []).find(w => w.when === 'after_recruit')
 ok('after_recruit 窗口独立存在（与海军窗口分离）', !recWin || recWin.when === 'after_recruit')
 
-/* 连打多张：先打 15208（在 sp 部署德军空军） */
-const g1 = rules.action(g, 'Axis', 'use_armed_offer', { card: '15208#1' })
+/* 连打多张：先打 15208（在 sp 部署德军空军）
+ * 【2026-10-28】15208 改为「部署 / 调度」由玩家选（need:'choice' + choiceOptions），
+ * 这里直接带 choice:'deploy' 一步打完（等价于玩家点了「部署」按钮）。 */
+const g1 = rules.action(g, 'Axis', 'use_armed_offer', { card: '15208#1', choice: 'deploy' })
 const navWin3 = (g1.armed_offers || []).find(w => w.when === 'after_build_navy')
 ok('打完 15208 后海军窗口仍在（同窗口连打）', !!navWin3, g1.log.slice(-3))
 ok('海军窗口还剩 15210', navWin3 && navWin3.cards.some(c => c.card_id === '15210#1'))
@@ -113,6 +115,13 @@ if (navWin3 && navWin3.cards.some(c => c.card_id === '15210#1')) {
 /* skip 测试 */
 const g3 = newGame()
 g3.hands['德国'] = ['15208#1']
+/* 【2026-10-28】15208 现在有 ready 预检（载体 + 格位），
+ * after_build_navy 的 ctx.space 上必须真的有一支德国海/陆军作载体，
+ * 否则窗口不会打开。这里补一支刚"建好"的德国海军。 */
+put(g3, 'de_army_az', '德国', 'army', az)
+I.add_supply_point(g3, az)
+put(g3, 'de_navy_skip', '德国', 'navy', sp)
+I.refresh(g3)
 I.offer_armed_effects(g3, 'after_build_navy', { nation: '德国', space: sp })
 ok('skip 前窗口存在', !!(g3.armed_offers || []).length)
 const g4 = rules.action(g3, 'Axis', 'skip_armed_offer', {})

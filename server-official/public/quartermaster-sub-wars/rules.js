@@ -11706,25 +11706,89 @@ const ECHO_EFFECTS = {
 			},
 		},
 	},
-	/* 15208 齐柏林伯爵号：建设海军后，损耗1：在该海域部署或调度1支空军 */
+	/*
+	 * 15208 齐柏林伯爵号：建设海军后，损耗1张牌：在该海域【部署或调度】1支空军。
+	 *
+	 * 【2026-10-28 修复】旧实现三个问题（玩家 2026-10-28 报，已实测复现）：
+	 *
+	 *   ① 没有 ready -> 窗口必弹，但 run 里可能失败/跳过，而代价（损耗1张牌）
+	 *      已由 use_armed_offer 扣掉 -> **白亏 1 张牌**。
+	 *      实测：该海域已有德国空军（格位已满）时，牌库 64->63、空军数仍 1。
+	 *
+	 *   ② 自己手搓载体判定（okCarrier = 德国 + 陆军/海军 + 补给中），
+	 *      与既有原子 air_host_check **重复**，且漏了 unit_slot_free（格位）
+	 *      与 unit_cap_ok（空军总数上限，德国 2 支）—— 正是 ① 的直接原因。
+	 *      改用 can_deploy_air（= air_host_check + unit_slot_free）。
+	 *
+	 *   ③ 卡面「部署**或**调度」只实现了部署（build_piece），
+	 *      空军总数用尽时无法"部署"，但本可"调度"（移入已有空军）。
+	 *
+	 * 【复用】选择交互与服务端执行都走现成实现，不新造轮子：
+	 *   · need:'choice' + choiceOptions -> 客户端渲染按钮 -> use_armed_offer 带 choice
+	 *     （15406《南云忠一指挥航空队》同一通道，play.js 2345 已通用，**客户端零改动**）
+	 *   · 执行 -> run_sea_air_deploy(game, {arg:{space, choice}}, nat)（14862，
+	 *     15408 山本五十六 / 17706 意大利完成航母在用；choice===1 即调度）
+	 */
 	'15208': {
 		name: '齐柏林伯爵号', actor: '德国',
 		armed: {
 			when: 'after_build_navy', actor: '德国', cost: { attrition: 1 },
 			desc: '建设海军后：在该海域部署或调度1支空军',
-			run(game, ctx) {
-				const sp = ctx.space
-				if (sp == null) return { ok: true, desc: '未指定海军所在海域' }
-				const supNow = compute_supply(game)
-				const okCarrier = pieces_on(game, sp).some(p =>
-					game.piece_nation[p] === '德国' &&
-					(game.piece_type[p] === 'army' || game.piece_type[p] === 'navy') &&
-					supNow.in_supply[p])
-				if (!okCarrier) return { ok: true, skip: true, desc: '该海域无处于补给状态的德国海陆部队，无法部署空军' }
-				const r = build_piece(game, '德国', 'air', sp)
-				refresh(game)
-				return r.ok ? { ok: true, desc: '在' + data.name_of(sp) + '部署1支德国空军' }
-					: { ok: true, desc: '无法在该海域部署空军：' + r.reason }
+			/*
+			 * 预检（修复 ①）：载体 + 格位通过（can_deploy_air 同源），
+			 * 且【部署或调度至少一条路可走】——否则不弹窗，避免白扣代价。
+			 */
+			ready(game, ctx) {
+				const sp = (ctx && ctx.space != null) ? Number(ctx.space) : null
+				if (sp == null) return false
+				const spd = data.spaces[sp]
+				if (!spd || spd.terrain !== 'sea') return false
+				if (!can_deploy_air(game, '德国', sp, { terrain: 'sea' }).ok) return false
+				/* 部署：空军总数未满 */
+				if (unit_cap_ok(game, '德国', 'air').ok) return true
+				/* 调度：别处还有德国空军可移 */
+				return list_pieces(game, { types: ['air'], nation: '德国' })
+					.some(a => Number(game.location[a]) !== sp)
+			},
+			run(game, ctx, g) {
+				const sp = (ctx && ctx.space != null) ? Number(ctx.space) : null
+				if (sp == null) return { ok: true, skip: true, desc: '未指定海军所在海域' }
+				const spd = data.spaces[sp]
+				if (!spd || spd.terrain !== 'sea')
+					return { ok: true, skip: true, desc: '只能在海域部署或调度空军' }
+				/* 同源预检（修复 ②）：载体 + 格位 */
+				const chk = can_deploy_air(game, '德国', sp, { terrain: 'sea' })
+				if (!chk.ok)
+					return { ok: true, skip: true, desc: '无法在该海域部署/调度空军：' + chk.reason }
+
+				/* 第三步：玩家还没选 -> 给「部署 / 调度」二选一（修复 ③） */
+				const choice = g && g.choice
+				if (choice == null) {
+					const canDeploy = unit_cap_ok(game, '德国', 'air').ok
+					const canMove = list_pieces(game, { types: ['air'], nation: '德国' })
+						.some(a => Number(game.location[a]) !== sp)
+					if (!canDeploy && !canMove)
+						return {
+							ok: true, skip: true,
+							desc: '既无法部署（空军已达上限 ' + NATION_UNIT_CAPS['德国'].air +
+								' 支）也没有可调度的德国空军',
+						}
+					const options = []
+					if (canDeploy) options.push({ id: 'deploy', name: '部署（新建 1 支空军）' })
+					if (canMove) options.push({ id: 'move', name: '调度（移入已有空军）' })
+					return {
+						ok: true, need: 'choice', pick: 1, pickMin: 1,
+						/* candidates 只用于过 use_armed_offer 的 need 守卫，与 choiceOptions 同 id */
+						candidates: options.map(o => ({ id: o.id })),
+						choiceOptions: options,
+						desc: '选择部署或调度',
+					}
+				}
+				/* 复用共享原子：choice==='move' -> 1（调度），否则 0（部署） */
+				const r = run_sea_air_deploy(game, {
+					arg: { space: sp, choice: (choice === 'move' || choice === 1) ? 1 : 0 },
+				}, '德国')
+				return r.ok ? { ok: true, desc: r.desc } : { ok: true, skip: true, desc: r.reason }
 			},
 		},
 	},
@@ -19021,7 +19085,8 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
 			for (const b of bad) spaceFails.push(event_step_label(st) + ' — ' + b)
 			const extra = st.grantSupply ? '（本回合内始终处于补给状态）' : ''
-			descs.push('在 ' + names.join('、') + ' 各征召 1 支' +
+			/* 【2026-10-28】单格时不能说"各征召"（15231《进攻美国》历史上多出的"各"字） */
+			descs.push('在 ' + names.join('、') + (names.length > 1 ? ' 各征召 1 支' : ' 征召 1 支') +
 				piece_type_zh(st.type) + extra + (bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：征召后若存在 after_recruit 增强窗口，同样挂起等待。 */
 			if (st.pauseArmed && has_armed_window(game, st.as || actor, 'after_recruit')) {
@@ -19057,7 +19122,9 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			if (!names.length) { failStep(st, bad.join('；') || '没有合法位置'); continue }
 			/* 【2026-10-20】部分地区被拒：单独记一笔，结算后给玩家 toast 提示 */
 			for (const b of bad) spaceFails.push(event_step_label(st) + ' — ' + b)
-			descs.push('在 ' + names.join('、') + ' 各建设 1 支' + piece_type_zh(st.type) +
+			/* 【2026-10-28】单格时不能说"各建设"（15231《进攻美国》的"在北大西洋 各建设 1 支海军"） */
+			descs.push('在 ' + names.join('、') + (names.length > 1 ? ' 各建设 1 支' : ' 建设 1 支') +
+				piece_type_zh(st.type) +
 				(bad.length ? '（' + bad.join('；') + ' 未执行）' : ''))
 			/* 【2026-10-12】pauseArmed：本步建设后若存在 after_build_navy 增强窗口，
 			 * 挂起等待该窗口全部结算完，再从第 i+1 步续跑，最后由 resume_event_after_armed 触发国家技能。 */
