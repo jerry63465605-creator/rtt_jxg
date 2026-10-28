@@ -59,7 +59,13 @@ function totArmy(nation) {
 	return n
 }
 const give = (face, nation) => (g.hands[nation || '德国']).push(String(face) + '#1')
-const score = () => (g.score && g.score['axis']) || 0
+/*
+ * 【2026-10-28 基线清理】原写 `g.score['axis']` —— 但 phase_scoring 只做【统计】，
+ * 把结果写进 g.last_scoring（另由 pending_scoring / apply 结算才落到 g.score）。
+ * 读 g.score 永远是 0，于是所有 auto 计分卡都被误判成「Δ=0 不生效」（假 bug）。
+ * 本次口径：问"这一轮算出来的总分" -> 读 last_scoring.gross。
+ */
+const score = () => (g.last_scoring && g.last_scoring.gross) || 0
 const delPiece = (id) => { delete g.location[id]; delete g.piece_nation[id]; delete g.piece_type[id] }
 function givePlay(face, target) {
 	give(face)
@@ -122,9 +128,16 @@ ok('打出即<德国>加1标记', (g.markers[d.id_of('德国')] || []).length >=
 console.log('\n=== 15242 人民冲锋队 ===')
 clearBoard(); seedSupply()
 put('sov_german', '苏联', 'army', '德国')
-give('15225'); give('15226')
+/*
+ * 【2026-10-28 基线清理】15242《人民冲锋队》现要求：
+ *   requires  { type:'BASIC', name:'发起陆战' }
+ *   cost      { skip_play:true, discard:1, discard_is:{ type:'BASIC', name:'发起陆战' } }
+ * 旧测试拿 15225/15226 当代价 -> 前提不满足、activate_status 被拒 -> 苏军没被消灭（假 bug）。
+ * 德国基本卡【发起陆战】= 15201。
+ */
+give('15201')
 givePlay('15242')
-g = rules.action(g, 'Axis', 'activate_status', { card: '15242#1', discard: ['15225#1'] })
+g = rules.action(g, 'Axis', 'activate_status', { card: '15242#1', discard: ['15201#1'] })
 ok('在<德国>消灭苏军', cnt('德国', '苏联', 'army') === 0, '苏军=' + cnt('德国','苏联','army'))
 ok('在<德国>征召德军', cnt('德国', '德国', 'army') >= 1, '德军=' + cnt('德国','德国','army'))
 
@@ -199,16 +212,19 @@ givePlay('15249')
 givePlay('15217')   /* givePlay 会清空本回合出牌标记，ECON 卡方可打出并触发 econ_used 反应 */
 ok('经济战触发+1分（15249 反应增量）', score() - base49 === 1, '基线=' + base49 + ' 带反应=' + score() + ' 增量=' + (score() - base49))
 
-/* ---- 15254 战争海军（北海仅对轴心国相邻） ---- */
+/* ---- 15254 战争海军（新口径：北欧海峡永远视为轴心控制） ---- */
 console.log('\n=== 15254 战争海军 ===')
 clearBoard(); seedSupply()
 givePlay('15254')
-const nbConns = I.get_connections(g, d.id_of('北海'), 'axis')
-const allAxis = nbConns.every(nb => {
-	const nsp = d.spaces[nb]
-	if (nsp.terrain === 'sea') return true
-	return Object.keys(g.location).some(p => g.location[p] === nb && g.piece_nation[p] && I.faction_of_nation(g.piece_nation[p]) === 'axis')
-})
-ok('北海邻接被限制为轴心国/海', allAxis, 'conns=' + JSON.stringify(nbConns.map(n=>d.name_of(n))))
+/*
+ * 【2026-10-28 基线清理】15254 已重做：
+ *   旧口径「限制北海邻接为轴心国/海」→ 新口径「北欧海峡永远视为轴心控制」
+ *   （status_aura.strait_force_axis，见 fix-log 第 13 条）。
+ * 旧断言按新实现必然失败，改为校验新口径写入的字段。
+ */
+const sf = (g.status_aura && g.status_aura.strait_force_axis) || null
+ok('15254 写入 strait_force_axis（北欧海峡视为轴心控制）',
+	!!sf && Object.keys(sf).some(k => String(sf[k]).indexOf('15254') === 0),
+	'sf=' + JSON.stringify(sf))
 
 console.log('\nDONE pass=' + pass + ' fail=' + fail)

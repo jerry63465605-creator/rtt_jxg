@@ -15,32 +15,97 @@
     "消化一条就把对应条目从 skip 里删掉，回归会自动重新守护它。"
   ],
   "skip": {
-    "_smoke_15425_defer.js": { "kind": "B", "reason": "响应栈 defer 帧机制调整后，『战斗进行中』标记的置位/清除断言过期" },
-    "_smoke_17721.js": { "kind": "B", "reason": "★事件卡打出后窗口未立即 OPEN（断言格式未被汇总器识别，实际 1 条失败）" },
-    "_smoke_17809.js": { "kind": "B", "reason": "17809 仍出现在 turn_start 窗口；15207 已改 play_start，17809 是否同步待确认" },
-    "_smoke_armed_whitelist.js": { "kind": "B", "reason": "use_armed_offer 经全局拦截器后窗口未消费，断言 2 条过期" },
-    "_smoke_de_event.js": { "kind": "B", "reason": "事件卡改分步停机（oneStep）+ 战斗预算后需交互推进；20 条已改善到 16 条，剩余为额外打出/★窗口类断言" },
-    "_smoke_fr_respond.js": { "kind": "B", "reason": "『两张结算后 active 归还 Axis』2 条 —— 与待办 #15（委托/借用后行动权归还基准）同源；另有 15311 单独还原断言过期" },
-    "_smoke_de_status.js": { "kind": "C", "reason": "15241 +2 / 15244 +3 计分 Δ=0，疑计分不生效（8 条）" },
-    "_smoke_delegate.js": { "kind": "B", "reason": "16703 委托 mode / 控制权翻转断言过期（delegate 对象字段变化）" },
-    "_smoke_german_effect.js": { "kind": "B", "reason": "15205 打出后离手/入弃牌堆、15212 拦截后窗口（4 条）" },
-    "_smoke_german_status.js": { "kind": "B", "reason": "status_instant 瞬时窗口机制变化，16 条断言过期" },
-    "_smoke_homebase.js": { "kind": "C", "reason": "英法同格计分 sum=6（期望 2），疑同格重复计分" },
-    "_smoke_italy_effect1.js": { "kind": "C", "reason": "打出后 axis 计分 +1 实得 0、卡未离手" },
-    "_smoke_italy_event.js": { "kind": "B", "reason": "17723 报『没有任何可执行的效果』+ 17721 委托/额外打出断言（18 条）" },
-    "_smoke_italy_response.js": { "kind": "C", "reason": "借用激活执行效果后苏联陆军未消除" },
-    "_smoke_italy_skill.js": { "kind": "B", "reason": "国家技能 grant.filter 由 status_econ 改为 status_response（5 条断言过期）" },
-    "_smoke_italy_status.js": { "kind": "C", "reason": "钩子已更名 axis_pact_register 并修正调用；剩 3 条计分断言失败（axis_pact_register 后 axis 未 +1），与 #23 疑同源" },
-    "_smoke_ja_status.js": { "kind": "B", "reason": "virtual_army 已更名 port_as 并修正；剩 2 条断言过期（港口光环现在同时满足 A+B、马达加斯加补给点口径），30/32 通过" },
-    "_smoke_jp_effect.js": { "kind": "C", "reason": "『无补给的日本陆/海军』候选恒空，触发被拒（4 条）" },
-    "_smoke_jp_response.js": { "kind": "B", "reason": "响应卡改为返回 pending（选目标）后再结算，6 条断言按旧的一次性结算写" },
-    "_smoke_peek_nocancel.js": { "kind": "B", "reason": "检视牌不再从对手手牌移除 / 顶底顺序断言（5 条）" },
-    "_smoke_seq.js": { "kind": "C", "reason": "战斗预算 remaining 不为 0、第 3 战苏军未移除（3 条）" },
-    "_smoke_status.js": { "kind": "B", "reason": "东欧计分标记、15338 触发后跳过出牌阶段（2 条断言过期）" },
-    "_smoke_su_status.js": { "kind": "D", "reason": "测试未传『建设地区』参数、断言弃牌堆有卡但实际没有（6 条）" },
-    "_smoke_us_effect_b.js": { "kind": "B", "reason": "美国增强卡断言过期（4 条）" },
-    "_smoke_us_event_b.js": { "kind": "B", "reason": "美国事件卡断言过期（失败行格式未被汇总器识别）" },
-    "_smoke_us_event_c5.js": { "kind": "B", "reason": "美国事件卡断言过期（1 条）" },
-    "_smoke_us_event_c7.js": { "kind": "B", "reason": "美国事件卡断言过期（1 条）" }
+    "_smoke_15425_defer.js": {
+      "kind": "B",
+      "reason": "响应栈 defer 帧机制调整后，『战斗进行中』标记的置位/清除断言过期"
+    },
+    "_smoke_17721.js": {
+      "kind": "B",
+      "reason": "★事件卡打出后窗口未立即 OPEN（断言格式未被汇总器识别，实际 1 条失败）"
+    },
+    "_smoke_17809.js": {
+      "kind": "B",
+      "reason": "17809 仍出现在 turn_start 窗口；15207 已改 play_start，17809 是否同步待确认"
+    },
+    "_smoke_armed_whitelist.js": {
+      "kind": "B",
+      "reason": "use_armed_offer 经全局拦截器后窗口未消费，断言 2 条过期"
+    },
+    "_smoke_de_event.js": {
+      "kind": "B",
+      "reason": "事件卡改分步停机（oneStep）+ 战斗预算后需交互推进；20 条已改善到 16 条，剩余为额外打出/★窗口类断言"
+    },
+    "_smoke_fr_respond.js": {
+      "kind": "B",
+      "reason": "『两张结算后 active 归还 Axis』2 条 —— 与待办 #15（委托/借用后行动权归还基准）同源；另有 15311 单独还原断言过期"
+    },
+    "_smoke_de_status.js": {
+      "kind": "B",
+      "reason": "已修 4 条（auto 计分口径改读 last_scoring.gross ×3、15254 新口径 strait_force_axis、15242 造局补 requires 基本卡）；剩 5 条属旧造局与现行 trigger 窗口机制不匹配（15253/15247/15248/15249/15242），需按 activate_status 开窗流程重写"
+    },
+    "_smoke_delegate.js": {
+      "kind": "B",
+      "reason": "16703 委托 mode / 控制权翻转断言过期（delegate 对象字段变化）"
+    },
+    "_smoke_german_effect.js": {
+      "kind": "B",
+      "reason": "15205 打出后离手/入弃牌堆、15212 拦截后窗口（4 条）"
+    },
+    "_smoke_german_status.js": {
+      "kind": "B",
+      "reason": "status_instant 瞬时窗口机制变化，16 条断言过期"
+    },
+    "_smoke_italy_effect1.js": {
+      "kind": "B",
+      "reason": "17707 已改为多步 echo（打出后进 pending_echo 等待《一日之狮》应答，卡留在手），不再立即结算并离手；断言按旧的一次性结算写"
+    },
+    "_smoke_italy_event.js": {
+      "kind": "B",
+      "reason": "17723 报『没有任何可执行的效果』+ 17721 委托/额外打出断言（18 条）"
+    },
+    "_smoke_italy_skill.js": {
+      "kind": "B",
+      "reason": "国家技能 grant.filter 由 status_econ 改为 status_response（5 条断言过期）"
+    },
+    "_smoke_ja_status.js": {
+      "kind": "B",
+      "reason": "virtual_army 已更名 port_as 并修正；剩 2 条断言过期（港口光环现在同时满足 A+B、马达加斯加补给点口径），30/32 通过"
+    },
+    "_smoke_jp_response.js": {
+      "kind": "B",
+      "reason": "响应卡改为返回 pending（选目标）后再结算，6 条断言按旧的一次性结算写"
+    },
+    "_smoke_peek_nocancel.js": {
+      "kind": "B",
+      "reason": "检视牌不再从对手手牌移除 / 顶底顺序断言（5 条）"
+    },
+    "_smoke_seq.js": {
+      "kind": "B",
+      "reason": "第 3 战(target 13) 的 event_battle 被拒（remaining 仍 1、苏军未移除）；前两战均 PASS，属造局与现行发起条件不匹配，需按 battle_initiators 重造"
+    },
+    "_smoke_status.js": {
+      "kind": "B",
+      "reason": "东欧计分标记、15338 触发后跳过出牌阶段（2 条断言过期）"
+    },
+    "_smoke_su_status.js": {
+      "kind": "D",
+      "reason": "测试未传『建设地区』参数、断言弃牌堆有卡但实际没有（6 条）"
+    },
+    "_smoke_us_effect_b.js": {
+      "kind": "B",
+      "reason": "美国增强卡断言过期（4 条）"
+    },
+    "_smoke_us_event_b.js": {
+      "kind": "B",
+      "reason": "美国事件卡断言过期（失败行格式未被汇总器识别）"
+    },
+    "_smoke_us_event_c5.js": {
+      "kind": "B",
+      "reason": "美国事件卡断言过期（1 条）"
+    },
+    "_smoke_us_event_c7.js": {
+      "kind": "B",
+      "reason": "美国事件卡断言过期（1 条）"
+    }
   }
 }

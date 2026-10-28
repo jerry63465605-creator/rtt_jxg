@@ -29283,7 +29283,15 @@ function do_action(state, current, action, arg) {
 		 * 代价一分没付、效果也没结算，且 status_window_ready 会以"本回合已跳过出牌阶段"
 		 * 拒绝重试 —— 白丢整个出牌阶段。现移到所有代价校验通过之后（见下方"执行效果"前）。
 		 */
-		if (cost.discard) {
+		/*
+		 * 【2026-10-28 修】17732《德国军事顾问》借用德国状态卡时是「免费激活」：
+		 * `borrowed` 已用于窗口放行与 costPayer 重定向，但【代价校验全部没跳过】——
+		 * 于是借用 15242 时仍要求弃 1 张手牌，玩家不传 discard 就卡在
+		 * 「请先选择要弃置的 1 张手牌」，效果一个都不结算
+		 * （症状：玩家报「借用《贵在行动》没有生效」）。
+		 * 下面 discard / attrition / skip_play 三处代价统一按 borrowed 免除。
+		 */
+		if (cost.discard && !borrowed) {
 			const picked = (arg && arg.discard) || []
 			if (picked.length < cost.discard) {
 				game.log.push('请先选择要弃置的 ' + cost.discard + ' 张手牌')
@@ -29376,7 +29384,7 @@ function do_action(state, current, action, arg) {
 		 * 注意这里【不】走 attrition_passive 的"差额扣分"——
 		 * 那条规则只适用于【被别国损耗】，自己主动付代价不适用。
 		 */
-		if (cost.attrition) {
+		if (cost.attrition && !borrowed) {
 			if (!can_attrite(game, costPayer, cost.attrition)) {
 				game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
 					' 张牌，但牌库不足，无法发动')
@@ -29397,7 +29405,7 @@ function do_action(state, current, action, arg) {
 		 *     play_done 未置 -> 还能继续打出别的牌，代价形同虚设。
 		 * 即"跳过"= 出牌阶段已被这张卡用掉，但【不】替玩家推进阶段。
 		 */
-		if (cost.skip_play) {
+		if (cost.skip_play && !borrowed) {
 			game.skip_play_done = game.skip_play_done || {}
 			game.skip_play_done[costPayer] = game.turn
 			mark_play_acted(game, costPayer)

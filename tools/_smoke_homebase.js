@@ -106,6 +106,13 @@ ok('⑤ 中国大本营被占：美国【照常计分】', r.of('美国').gained
 
 /* ⑥ 不重复计分：英法同格时总分为 2 而不是 4 */
 g = rules.setup(1)
+/*
+ * 【2026-10-28 基线清理】必须先清空开局部署。
+ * 原测试只 put 两支到印度，却保留 setup() 的初始部队 ——
+ * 那些部队分散在别的标记格上，于是「英+3 / 法+3」里有 2 分来自别处，
+ * sum=6 被误当成「同格重复计分」的 bug（实际 allocate_space_score 已正确摊成 英+1/法+1）。
+ */
+for (const p of Object.keys(g.location)) delete g.location[p]
 put(g, 'uk_in2', '英国', 'army', '印度')
 put(g, 'fr_in2', '法国', 'army', '印度')
 r = score(g, '英国')

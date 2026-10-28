@@ -258,18 +258,29 @@ console.log('\n=== 17749 轴心协定：敌方部队在大本营/相邻被攻击
 	const sovId = put(g, '苏联', 'army', sovHb)
 	g.table['意大利'] = ['17749#1']
 	g.status_active_all = true
+	/*
+	 * 【2026-10-28 基线清理】axis_pact_register 只【登记待结算】
+	 * （game.axis_pact_pending），真正加分在 settle_axis_pact，
+	 * 且要求 victim 已从版面移除（被还原的不计分）。旧测试少走这两步 -> 永远 0 分。
+	 */
 	fn(g, '意大利', sovHb, [sovId])
-	ok('轴心攻击大本营上的敌方部队 -> axis +1', g.score.axis === 1)
+	delete g.location[sovId]
+	I.settle_axis_pact(g)
+	ok('轴心攻击大本营上的敌方部队 -> axis +1', g.score.axis === 1, 'axis=' + g.score.axis)
 
 	/* 同回合再攻击 -> 不再加分（一回合一次） */
 	const sovId2 = put(g, '苏联', 'army', sovHb)
 	fn(g, '意大利', sovHb, [sovId2])
-	ok('一回合一次：同回合第二次不加分', g.score.axis === 1)
+	delete g.location[sovId2]
+	I.settle_axis_pact(g)
+	ok('一回合一次：同回合第二次不加分', g.score.axis === 1, 'axis=' + g.score.axis)
 
 	/* 换回合 -> 可再加分 */
 	g.turn = 2
 	fn(g, '意大利', sovHb, [sovId2])
-	ok('跨回合后可再次加分', g.score.axis === 2)
+	delete g.location[sovId2]
+	I.settle_axis_pact(g)
+	ok('跨回合后可再次加分', g.score.axis === 2, 'axis=' + g.score.axis)
 
 	/* 空打（无敌人）不加分 */
 	const g2 = newGame()

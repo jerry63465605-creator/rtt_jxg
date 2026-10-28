@@ -329,8 +329,15 @@ console.log('\n=== 6. 15411 夜间运输：补给阶段开始时 + 选 1 支【�
 		eff && eff.pickUnit && eff.pickUnit.supplied === false)
 
 	const g = freshJp('supply')
-	/* 造一支【无补给】的日本海军：没接补给点、不邻接补给中的友军 */
-	const sid = I.space_id_of('东海')
+	/*
+	 * 造一支【无补给】的日本海军：没接补给点、不邻接补给中的友军。
+	 *
+	 * 【2026-10-28 基线清理】原来放在<东海>——但东海邻<日本>（日本大本营），
+	 * 而 freshJp() 用 setup(1) 未清盘，开局部署里日本本土有部队，
+	 * 于是这支海军被判「有港口 = 有补给」，与造局意图相反。
+	 * 改用<南大西洋>（陆邻全空、无日本部队，纯海区）。
+	 */
+	const sid = I.space_id_of('南大西洋')
 	g.location['jp_bad'] = sid
 	g.piece_nation['jp_bad'] = '日本'
 	g.piece_type['jp_bad'] = 'navy'

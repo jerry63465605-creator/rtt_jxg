@@ -250,6 +250,13 @@ console.log('\n=== 17732 德国军事顾问（借用德国状态卡，免费激�
 	/* 免代价激活：放苏联陆军于<德国>以便效果 ok */
 	const ger = I.space_id_of('德国')
 	const sovId = putPiece('苏联', 'army', ger)
+	/*
+	 * 【2026-10-28 基线清理】15242 现在有 requires { type:'BASIC', name:'发起陆战' }：
+	 * 借用时"免代价"只是跳过 cost（弃手牌 / skip_play），requires 仍要满足。
+	 * 德国手牌补一张【发起陆战】(15201) 才能激活。
+	 */
+	g.hands['德国'] = g.hands['德国'] || []
+	g.hands['德国'].push('15201#1')
 	const deHandBefore = (g.hands['德国'] || []).length
 	rules.action(g, 'Axis', 'activate_status', { card: gst })
 	ok('借用激活免代价：德国未弃手牌', (g.hands['德国'] || []).length === deHandBefore)
