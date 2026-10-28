@@ -3321,7 +3321,7 @@ function theater_targets(game, pa) {
 				(game.piece_type[id] === 'army' || game.piece_type[id] === 'navy'))
 			.map(id => ({
 				id: id,
-				name: piece_type_zh(game.piece_type[id]) + '@' + data.name_of(game.location[id]),
+				name: piece_candidate_label(game, id),
 			}))
 		return { need: 'piece', candidates: cands }
 	}
@@ -8883,6 +8883,22 @@ function grant_supply(game, piece, untilTurn) {
  *   · 排除空军：eliminate_piece 从不以空军为消灭目标（空军随其同国陆军连带移除）
  *   · wantType 给定时只保留该兵种（卡面「消灭 1 支敌方陆军」）
  */
+/*
+ * 【2026-10-28 #3】玩家选择部队时的候选显示名：国家 + 兵种 + @地区。
+ *
+ * 为什么必须带国家：规则是「每国每格 1 个单位 + 1 个飞机」（见 _build_piece_impl），
+ * 同一格内允许【不同国家】的同兵种部队并存 —— 典型：<巴尔干> 可能有
+ * 德国陆军 + 意大利陆军，若只拼「兵种@地区」，两个候选名完全相同
+ * （15316《佩塔尔二世即位》玩家报的就是这个）。
+ *
+ * 客户端 highlight_pieces 只用 id（地图高亮），name 供日志 / 提示 / 复盘使用；
+ * 重名不会让操作失败，但会让人分不清"刚才消灭的是哪一支"。
+ */
+function piece_candidate_label(game, id) {
+	return (game.piece_nation[id] || '?') + piece_type_zh(game.piece_type[id]) +
+		'@' + data.name_of(game.location[id])
+}
+
 function eliminate_candidates(game, nation, space, wantType) {
 	const myFaction = faction_of_nation(nation)
 	return pieces_on(game, space).filter(p => {
@@ -11165,7 +11181,8 @@ const ECHO_EFFECTS = {
 				if (!cands.length) return { ok: true, skip: true, desc: '没有可消灭的敌方空军' }
 				/* 多步：让玩家指定消灭哪一支（need:'piece'，armed 挂起机制已支持回传） */
 				if (!arg || arg.piece == null)
-					return { need: 'piece', candidates: cands, pick: 1, pickMin: 1 }
+					/* 【2026-10-28 #3】敌方空军可能来自多国，候选必须带国家名才可分 */
+					return { need: 'piece', candidates: cands.map(id => ({ id: id, name: piece_candidate_label(game, id) })), pick: 1, pickMin: 1 }
 				const pick = String(arg.piece)
 				if (cands.indexOf(pick) < 0) return { ok: false, reason: '所选单位不在候选内' }
 				const initiator = uk_sas_initiator(game, pick)
@@ -12408,7 +12425,9 @@ const ECHO_EFFECTS = {
 				const cands = su_enemy_armies_near(game, '莫斯科')
 				if (!cands.length) return { ok: true, skip: true, desc: '没有可消灭的敌方陆军' }
 				/* 首次进入：请玩家选敌方陆军（框架 need:'piece'） */
-				if (arg.piece == null) return { need: 'piece', candidates: cands, pick: 1, pickMin: 1 }
+				if (arg.piece == null)
+					/* 【2026-10-28 #3】敌方陆军可能来自多国，候选必须带国家名才可分 */
+					return { need: 'piece', candidates: cands.map(id => ({ id: id, name: piece_candidate_label(game, id) })), pick: 1, pickMin: 1 }
 				const pick = String(arg.piece)
 				if (cands.indexOf(pick) < 0) return { ok: false, reason: '所选部队不在候选内' }
 				const sp = game.location[pick]
@@ -17419,8 +17438,8 @@ function event_card_needs(game, nation, card_id, arg) {
 						wantTypes.indexOf(game.piece_type[id]) >= 0)
 					.map(id => ({
 						id: id,
-						name: piece_type_zh(game.piece_type[id]) + '@' +
-							data.name_of(game.location[id]),
+						/* 只本国部队（每国每格 1 支），但仍统一走命名原子，避免两套风格 */
+						name: piece_candidate_label(game, id),
 					}))
 				/*
 				 * 【2026-10-21 修复】必须带 total（与下方 need:'space' 同口径）：
@@ -17494,10 +17513,10 @@ function event_card_needs(game, nation, card_id, arg) {
 				if (ec.length > 1 && already == null) {
 					return {
 						need: 'piece', step: i, total: steps.length,
+						/* 【2026-10-28 #3】必须带国家名：同格可有多国同兵种部队 */
 						candidates: ec.map(id => ({
 							id: id,
-							name: piece_type_zh(game.piece_type[id]) + '@' +
-								data.name_of(game.location[id]),
+							name: piece_candidate_label(game, id),
 						})),
 						pick: 1, pickMin: 1,
 					}
@@ -31826,8 +31845,7 @@ exports.query = function (state, current, query, params) {
 					const nmIn = (pid && typeof pid === 'object') ? pid.name : null
 					return {
 						id: id,
-						name: nmIn || (piece_type_zh(game.piece_type[id]) || '部队') +
-							'@' + (data.name_of(game.location[id]) || '?'),
+						name: nmIn || piece_candidate_label(game, id),
 					}
 				}),
 				pick: need.pick || 1,
@@ -32496,6 +32514,10 @@ if (typeof module !== 'undefined') {
 		recruit_piece,
 		grant_supply,
 		eliminate_piece,
+		/* 【2026-10-28 #3】候选与执行同源：eliminate_candidates 给出合法目标，
+		 * piece_candidate_label 统一候选显示名（国家+兵种@地区）。 */
+		eliminate_candidates,
+		piece_candidate_label,
 		/* 参战 / 中立（苏联、美国） */
 		NEUTRAL_RULES,
 		is_neutral,
