@@ -89,6 +89,20 @@ name, actor, armed, choice, cond, cost, desc, kind, modifiers, notes, one_step, 
 | 7 | 同一 `when` 上多个国家的卡共用窗口 | `pushArmedWindow` 按 `when` 去重，窗口归属取 `cards[0].nation` → **别国手牌名泄露** |
 | 8 | 改 `when` 只改一处 | 数组时点要确认两个派发点都在（`after_recruit` + `after_build_army` 是两条链） |
 
+> **2026-10-28 补充**：`armed.run` 里做「还原/保护部队」时**不要自己写**
+> `restore_piece` + `register_modifier`，统一调：
+
+```js
+protect_restored(game, ctx, { desc: '…' })          // 保护 victim 所在地区
+protect_restored(game, ctx, { spaces: [...] })      // 保护多个地区
+```
+
+它内部会做 `restore_piece`（含同场撤退空军复原）+ `register_modifier`（`turnNation` 自动补）。
+当前唯一实例是 **15311《马奇诺防线》**（法国陆军被移除时还原）。
+
+> 同理，`ctx` 里必须带 `retreated_airs` —— `offer_armed_effects('piece_removed', …)` 的派发点
+> 已在 2026-10-28 补齐该字段，否则 15311 救回陆军后飞机留在撤退地。
+
 ## 六、参考实现（照抄优先级）
 
 | 想做 | 抄哪张 |

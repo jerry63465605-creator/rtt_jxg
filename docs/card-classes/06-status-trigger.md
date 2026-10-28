@@ -63,6 +63,42 @@ STATUS_EFFECTS[id].trigger = { window, requires?, cost?, desc?, run }
 | 5 | `play_start` 上挤了 12 张卡 | 同窗口多卡 → 顺序问题；一次只结算一张，注意响应栈 LIFO |
 | 6 | `run` 返回 `{ok:false}` 但不写 `desc` | 玩家看到"点了没反应" |
 | 7 | 代价用 `discard` 却用 `attrition` 语义 | 见 README 铁律 7 |
+| 8 | **跨阵营窗口没进白名单** | 窗口亮了，但 `activate_status` 拒绝「不能触发非本方的状态卡」→ **点了永远无效**（17543 雷达） |
+| 9 | 还原类效果自己 `register_modifier` | 漏掉自动补字段（`turnNation` 等）；统一走 `protect_restored` |
+
+## 五之二、跨阵营门禁：`CROSS_NATION_STATUS_WINDOWS`（必看）
+
+`activate_status` 有一道「只能触发本方状态卡」的校验：
+
+```js
+if (!borrowed && !CROSS_NATION_STATUS_WINDOWS[tr.window] &&
+    delegate_of_nation(owner) !== delegate_of_nation(game.current_nation)) {
+    game.log.push('不能触发非本方的状态卡')   // ← 窗口亮着也点不动
+    return game
+}
+```
+
+**判据：这张卡的 `trigger.window` 会不会发生在「别人的回合」？**
+
+| 情况 | 是否需要进白名单 | 例子 |
+|---|---|---|
+| 效果由**自己回合的动作**触发 | ❌ 不需要 | `play_start`（自己的出牌阶段） |
+| 效果由**敌方动作**触发 | ✅ **必须** | **`piece_removed`**：谁打你，就是谁的行动轮 |
+| 效果由**同阵营友军**动作触发 | ✅ 必须 | `after_ally_battle`（15346 自由法国） |
+| 恒由事件驱动、无回合归属 | ✅ 已加 | `build_army`（`from_status` 专用通道） |
+
+现状（`rules.js`）：
+
+```js
+const CROSS_NATION_STATUS_WINDOWS = { after_ally_battle: 1, build_army: 1, piece_removed: 1 }
+```
+
+- `piece_removed` 是 2026-10-28 为 **17543《雷达》**（「美国海军被攻击时」）新增的 ——
+  不加它，这张卡**从来没生效过**（窗口亮、点了无效）
+- 该白名单**按窗口**放行，不是按卡：将来再加别国的 `piece_removed` 状态卡会一并放行
+  （这是期望行为，但要确认卡面没写「仅本国回合」）
+
+**自查一句话**：卡面出现「**被攻击 / 被移除 / 被消灭时**」→ 先想「这一定在敌方回合」→ 检查白名单。
 
 ## 六、参考实现
 

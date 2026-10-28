@@ -60,6 +60,8 @@
 | 7 | **弃牌 ≠ 损耗**：代价支付走 `discard`，牌库顶进弃牌堆走 `attrition_cards` | 两者混用 → 代价/结算全错 |
 | 8 | **棋子离场判据看 `game.location`**，`piece_nation` 删除后仍保留 | 用 `piece_nation` 判存活 → 假"没被消灭" |
 | 9 | **不要自己重写遍历**：建设/战斗/补给/连通都有原子（`rules.js` 的 `_internal`） | 边界条件漏（补给、载体、连通快照） |
+| 10 | **跨阵营窗口必须进 `CROSS_NATION_STATUS_WINDOWS`**：卡面写「被攻击/被移除时」的效果必然发生在敌方回合 | 窗口亮着但 `activate_status` 拒绝 → **点了永远无效**（17543 雷达，2026-10-28 修） |
+| 11 | **还原/保护部队统一用 `protect_restored`**，不要自己组合 `restore_piece` + `register_modifier` | 漏掉 `turnNation` 等自动补字段；且它的内部已含"撤退空军复原" |
 
 ## 四、索引
 
