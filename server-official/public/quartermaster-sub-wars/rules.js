@@ -6890,6 +6890,17 @@ function resolve_us_lend_lease_play(game, arg) {
 			   由 battle_reconcile_active 完成委托。 */
 			discard_card(game, nat, card)
 			game.delegate = {
+				/*
+				 * 【2026-10-28 #15 修复】必须保留 mode:'single'。
+				 *
+				 * 重建委托对象时漏了 mode，导致两处按 mode 分派的判定全部失效：
+				 *   ① battle_reconcile_active（本文件末尾）：`mode==='single' && resume_after_battle`
+				 *      才调 finish_us_lend_lease -> 漏 mode 就【永不归还】，战斗/飞机免死等
+				 *      交互结束后操作权停在被委托国（英/苏），而不是美国；
+				 *   ② build_actions：`game.delegate.mode === 'single'` 才登记
+				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
+				 */
+				mode: 'single',
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: true, nat: nat
@@ -6902,6 +6913,17 @@ function resolve_us_lend_lease_play(game, arg) {
 			/* 待玩家补选目标 / 多步：保留委托，卡放回手牌，等客户端重提 */
 			put_back_to_hand(game, nat, card)
 			game.delegate = {
+				/*
+				 * 【2026-10-28 #15 修复】必须保留 mode:'single'。
+				 *
+				 * 重建委托对象时漏了 mode，导致两处按 mode 分派的判定全部失效：
+				 *   ① battle_reconcile_active（本文件末尾）：`mode==='single' && resume_after_battle`
+				 *      才调 finish_us_lend_lease -> 漏 mode 就【永不归还】，战斗/飞机免死等
+				 *      交互结束后操作权停在被委托国（英/苏），而不是美国；
+				 *   ② build_actions：`game.delegate.mode === 'single'` 才登记
+				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
+				 */
+				mode: 'single',
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat
@@ -6913,6 +6935,17 @@ function resolve_us_lend_lease_play(game, arg) {
 		if (r0.armedPause) {
 			put_back_to_hand(game, nat, card)
 			game.delegate = {
+				/*
+				 * 【2026-10-28 #15 修复】必须保留 mode:'single'。
+				 *
+				 * 重建委托对象时漏了 mode，导致两处按 mode 分派的判定全部失效：
+				 *   ① battle_reconcile_active（本文件末尾）：`mode==='single' && resume_after_battle`
+				 *      才调 finish_us_lend_lease -> 漏 mode 就【永不归还】，战斗/飞机免死等
+				 *      交互结束后操作权停在被委托国（英/苏），而不是美国；
+				 *   ② build_actions：`game.delegate.mode === 'single'` 才登记
+				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
+				 */
+				mode: 'single',
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat
@@ -6939,6 +6972,17 @@ function resolve_us_lend_lease_play(game, arg) {
 		 */
 		if (game.pending_autobahn) {
 			game.delegate = {
+				/*
+				 * 【2026-10-28 #15 修复】必须保留 mode:'single'。
+				 *
+				 * 重建委托对象时漏了 mode，导致两处按 mode 分派的判定全部失效：
+				 *   ① battle_reconcile_active（本文件末尾）：`mode==='single' && resume_after_battle`
+				 *      才调 finish_us_lend_lease -> 漏 mode 就【永不归还】，战斗/飞机免死等
+				 *      交互结束后操作权停在被委托国（英/苏），而不是美国；
+				 *   ② build_actions：`game.delegate.mode === 'single'` 才登记
+				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
+				 */
+				mode: 'single',
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat,
@@ -6997,6 +7041,17 @@ function resolve_us_lend_lease_play(game, arg) {
 			   改留 resume_after_battle 标记，由 battle_reconcile_active 完成委托。 */
 			set_pending_battle(game, game.pending_battle)
 			game.delegate = {
+				/*
+				 * 【2026-10-28 #15 修复】必须保留 mode:'single'。
+				 *
+				 * 重建委托对象时漏了 mode，导致两处按 mode 分派的判定全部失效：
+				 *   ① battle_reconcile_active（本文件末尾）：`mode==='single' && resume_after_battle`
+				 *      才调 finish_us_lend_lease -> 漏 mode 就【永不归还】，战斗/飞机免死等
+				 *      交互结束后操作权停在被委托国（英/苏），而不是美国；
+				 *   ② build_actions：`game.delegate.mode === 'single'` 才登记
+				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
+				 */
+				mode: 'single',
 				nation: null, done: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: true, nat: nat
@@ -26177,7 +26232,20 @@ function battle_reconcile_active(game) {
 	/* 租借法案战斗委托收尾：战斗挂起清空且存在 resume 标记时，完成委托
 	   （被委托国摸 1 张、操作权归还美国、触发美国★国家技能窗口）。
 	   与 set_pending_battle 同款"清挂起即还原"范式；仅在本局确为租借委托时才触发。 */
-	if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle) {
+	/*
+	 * 【2026-10-28 #15 补充】预算还没打完时【不能】收尾。
+	 *
+	 * 被委托国打出的可能是"战斗预算"型事件卡（如 15349《萨宾行动》：
+	 * 预算 remaining=1，玩家还要点目标发起战斗）。若第一场战斗结束就
+	 * finish_us_lend_lease -> 操作权提前归还美国，而英国还欠着后续战斗，
+	 * 表现为"委托没做完就没了"。
+	 *
+	 * 与 6929-6948 对 pending_autobahn 的保护同型：**卡已结算 ≠ 委托可收尾**，
+	 * 必须等该卡的所有挂起（预算 / 分步建设）真正清空。
+	 * 预算打完后的收尾由 event_finish 补（见该函数末尾）。
+	 */
+	if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle &&
+		!(game.event_budget && game.event_budget.remaining > 0)) {
 		finish_us_lend_lease(game, game.delegate, game.delegate.nat)
 	}
 	/* 【2026-10-22】17729 卡佩里尼：经链打出的基本卡若进入战斗，战斗结算后续跑链 */
@@ -29086,6 +29154,17 @@ function do_action(state, current, action, arg) {
 			push_discard_direct(game, b.nation, b.card_id)
 		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
 		after_card_resolved(game, b.nation, b.card_id)
+		/*
+		 * 【2026-10-28 #15】租借法案委托的「预算型」收尾点。
+		 *
+		 * 被委托国打出的是战斗预算卡时，battle_reconcile_active 因"预算未打完"不归还
+		 * （见该函数的守卫）；必须等玩家点「结束」走到这里才真正收尾：
+		 * 摸 1 张 + 操作权归还美国 + 触发美国★国家技能。
+		 * 顺序放在 after_card_resolved 之后：finish_us_lend_lease 内部会按 return_nation（美国）
+		 * 再触发一次，英国自己那次属于代打，不为其开技能窗口。
+		 */
+		if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle)
+			finish_us_lend_lease(game, game.delegate, game.delegate.nat)
 		/*
 		 * 【2026-10-28 #13 修复】战斗预算卡收尾 = 卡牌生效（战斗已打完），同样派发 play_card。
 		 * 与 EVENT 分支、finish_event_card 三处对齐 —— 缺任何一处，

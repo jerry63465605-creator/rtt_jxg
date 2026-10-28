@@ -126,7 +126,8 @@ section('S6 源码守卫：三条事件卡收尾路径都派发 play_card')
 		ev.indexOf('discard_card(game, nation, card_id)') < ev.indexOf("request_responses(game, 'play_card'"))
 
 	/* 战斗预算卡收尾（cardResolved=true��*/
-	ok('战斗预算收尾有 play_card 派发', /after_card_resolved\(game, b\.nation, b\.card_id\)[\s\S]{0,400}request_responses\(game, 'play_card'/.test(src))
+	/* 窗口放宽到 1500：after_card_resolved 与该派发之间还插了租借法案委托收尾（#15） */
+	ok('战斗预算收尾有 play_card 派发', /after_card_resolved\(game, b\.nation, b\.card_id\)[\s\S]{0,1500}request_responses\(game, 'play_card'/.test(src))
 }
 
 /* ---------------- S7 全量：英国 9 张事件卡逐张验证 ---------------- */
