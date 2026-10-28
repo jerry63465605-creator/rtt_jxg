@@ -11722,11 +11722,16 @@ const ECHO_EFFECTS = {
 			when: 'after_build_army', actor: '美国',
 			desc: '建设陆军后：建设 1 支陆军',
 			ready(game, ctx) {
-				/* 必须同时满足 can_build_at 与 unit_slot_free（每国每格限 1 支） */
-				return us_build_candidates(game, ctx && ctx.space, 'army').length > 0
+				/*
+				 * 【2026-10-28 玩家口径】卡面无「相邻」字样 -> 候选取【全图】合法建设地。
+				 * 旧写法用 us_build_candidates(ctx.space)（base+相邻）：
+				 * ctx.space 就是刚建过陆军的那一格（已占满），且该函数写死美国，
+				 * 在既有美国陆军较少的局面下常算出 0 候选 -> 不弹窗。
+				 */
+				return armed_rebuild_candidates(game, '美国', 'army').length > 0
 			},
 			run(game, ctx, arg) {
-				const cands = us_build_candidates(game, ctx && ctx.space, 'army')
+				const cands = armed_rebuild_candidates(game, '美国', 'army')
 				if (!cands.length)
 					return { ok: true, skip: true, desc: '没有可再建设美国陆军的地区' }
 				/* 多步原子：给 1 个建设陆军预算，由玩家点选合法地区（不自动落到相邻） */
@@ -11849,10 +11854,11 @@ const ECHO_EFFECTS = {
 			when: 'after_build_navy', actor: '美国',
 			desc: '建设海军后：建设 1 支海军',
 			ready(game, ctx) {
-				return us_build_candidates(game, ctx && ctx.space, 'navy').length > 0
+				/* 【2026-10-28】卡面无「相邻」字样 -> 全图候选（同 16800） */
+				return armed_rebuild_candidates(game, '美国', 'navy').length > 0
 			},
 			run(game, ctx, arg) {
-				const cands = us_build_candidates(game, ctx && ctx.space, 'navy')
+				const cands = armed_rebuild_candidates(game, '美国', 'navy')
 				if (!cands.length)
 					return { ok: true, skip: true, desc: '没有可再建设美国海军的地区' }
 				/* 多步原子：给 1 个建设海军预算，由玩家点选合法地区（不自动落到相邻） */
@@ -12000,26 +12006,39 @@ const ECHO_EFFECTS = {
 			when: 'after_build_navy', actor: '日本',
 			cost: { discard: 1, filter: 'response' },
 			desc: '建设海军后：弃1张响应卡，建设1支海军',
+			/*
+			 * 【2026-10-28 玩家报「无法发动」修复】
+			 *
+			 * 旧写法把「目标地区」焊死成 ctx.space —— 而 after_build_navy 的 ctx.space
+			 * 正是【刚建完海军的那一格】，此时 can_build_at 必返回
+			 * 「X 已有本国单位（每国每格限 1 支）」：
+			 *   · ready 恒 false  -> 候选永远为空 -> 永不弹窗（玩家所见「无法发动」）
+			 *   · run  永远只往原格建 -> 即使绕过 ready 也是静默 skip
+			 *
+			 * 卡面只写「建设1支海军」，没有「相邻」/「同一地区」字样
+			 * -> 与 16800 / 16803 同口径：候选取【全图】合法海域，由玩家点选。
+			 */
 			ready(game, ctx) {
-				/* 预检：该地区还能建海军吗（用既有原子 can_build_at） */
-				const sp = ctx && ctx.space
-				if (sp == null) return false
-				/*
-				 * ⚠ 签名是 can_build_at(game, nation, space, type)
-				 *   —— 别写成 (game, nation, type, space)，那是 build_piece 的顺序。
-				 *   两者参数顺序【不同】，极易搞混（2026-10-06 踩过）。
-				 */
-				return !!can_build_at(game, '日本', sp, 'navy').ok
+				return armed_rebuild_candidates(game, '日本', 'navy').length > 0
 			},
-			run(game, ctx) {
-				const sp = ctx.space
-				if (sp == null) return { ok: true, skip: true, desc: '无建设地区' }
-				if (!can_build_at(game, '日本', sp, 'navy').ok)
-					return { ok: true, skip: true, desc: '该地区无法再建设海军' }
-				const r = build_piece(game, '日本', 'navy', sp)
+			run(game, ctx, arg) {
+				const cands = armed_rebuild_candidates(game, '日本', 'navy')
+				if (!cands.length)
+					return { ok: true, skip: true, desc: '没有可再建设日本海军的地区' }
+				/* 多步原子：由玩家点选合法海域（不自动落到原格） */
+				if (!arg || arg.space == null) {
+					return {
+						need: 'space', candidates: cands, pick: 1, pickMin: 1,
+						desc: '大日本帝国海军：请在合法海域建设 1 支日本海军',
+					}
+				}
+				const tgt = Number(space_id(arg.space))
+				if (cands.indexOf(tgt) < 0)
+					return { ok: false, reason: '该地区无法建设日本海军' }
+				const r = build_piece(game, '日本', 'navy', tgt)
 				return r.ok
-					? { ok: true, desc: '在' + data.name_of(sp) + '建设1支海军' }
-					: { ok: true, skip: true, desc: '建设失败：' + (r.reason || '') }
+					? { ok: true, desc: '在' + data.name_of(tgt) + '再建设 1 支日本海军' }
+					: { ok: false, reason: r.reason }
 			},
 		},
 	},
@@ -16478,6 +16497,27 @@ function us_build_candidates(game, base, type) {
 		if (out.indexOf(nb) < 0 && okAt(nb)) out.push(nb)
 	}
 	return out
+}
+
+/*
+ * 【2026-10-28 玩家口径】「建设后：再建设 1 支 X」类增强卡的【全图】候选。
+ *
+ * 适用：16800 艾森豪威尔（后建陆军）、16803 尼米兹（后建海军）、
+ *       15405 大日本帝国海军（后建海军）。
+ * 这三张卡面都只写「建设 1 支 X」，【没有】「相邻」字样
+ * -> 候选取全图合法建设地，与 17843 / 17550 / 17552 的 build_scope:'all' 同口径。
+ *
+ * ⚠ 为什么不能用 us_build_candidates：
+ *   ① 它把 me = '美国' 【写死】，跨国籍调用恒返回 0（日本调用实测 0 条）；
+ *   ② 它只取「base 自身 + base 相邻」，而 after_build_* 窗口的 ctx.space 就是
+ *      【刚建设过的那一格】—— 该格已有本国单位（每国每格限 1 支），
+ *      can_build_at 必拒。15405 因此永远算 0 候选、永不弹窗（玩家报「无法发动」）。
+ *
+ * 直接复用 build_candidate_spaces（按 nation 泛化的全图池，不传 near 即全图）。
+ * 单点校验请用 can_build_at(...).ok && unit_slot_free(...).ok —— 与本函数同源。
+ */
+function armed_rebuild_candidates(game, nation, type) {
+	return build_candidate_spaces(game, nation, type, {})
 }
 
 /* 17506：<太平洋>相邻的可建设地区（army=陆地 / navy=海域，同 su_air_adjacent_build_spaces） */
