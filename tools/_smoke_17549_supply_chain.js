@@ -1,27 +1,31 @@
 /*
- * 【2026-10-28】17549 / 15346 / 15356 / 15345 —— 补给链「光环当中继」验收
+ * 【2026-10-28】补给链「根集合」模型验收（17549 / 15345 / 15346 / 15356 / 17838 / 8601）
  *
- * 玩家口径（2026-10-28）：
- *   · 「只 17549 无问题，bug 出在 15346」
- *   · 「保留海军中继」—— 海军可以给陆军续链（不做兵种限制）
- *   · 光环不能凭空造源：孤立远洋的部队即使被「总是补给」覆盖，也不当中继
+ * 玩家口径（2026-10-28，多轮对齐后的最终版）：
+ *   1. 通用补给点归属 = 占上去的部队所在国；两国共占 -> 两国各自成源
+ *   2. 「仅对 XX」的补给点（15345）只有 XX 占上去才算源
+ *   3. 没有本国部队占着 -> 不能把该格当"潜在源"去连
+ *   4. 同国接根 -> 自己补给，继续传
+ *   5. 17549 组内跨国接根 -> 自己【不补给】，但继续传【原国籍】的根
+ *   6. 只有根国籍 = 自己国籍的部队才算补给
+ *   7. 无 17549 时同阵营友军不能传根（只有同国）
+ *   8. 光环只给自身补给，不产生根
+ *   9. 海军传根也要 A（相邻有根）+ B（相邻陆军），即 (a)
+ *  10. 本国大本营无条件给本国供源，但【需要有人站在上面承载】才传得出去
  *
- * 根因：compute_supply 的迭代段写成 `if (in_supply[pid]) continue`，
- *   把被光环罩住的部队（aura / granted）一起跳过 —— 它们永远失去
- *   「证明自己其实连得回真源」的机会，can_source 恒为 false，
- *   于是「加了全补给光环反而比不加更差」（法国海军在 15346 下不再是中继，
- *   巴尔干英国陆军因此断补）。
- *
- * 修复：只有 base / chain 才跳过迭代；aura / granted 若判定通过则升级为 chain。
+ * 实现要点：
+ *   · roots[pid] = { 国名: true }  根集合（可多根）
+ *   · 承载：站在有源格位上的部队收集该格全部源（supply_sources_at）
+ *   · 接根：只认【传递者国籍】= 同国 / 17549 组内（这条同时挡住敌方传根）
+ *   · 大本营：effective_home_base（兼容 15344 迁都 / 15346 自由法国动态改判）
  *
  * 地图事实（实测）：
- *   西欧(6)   陆地，补给点      邻 波罗的海/意大利/北海/德国/地中海
- *   意大利(13) 陆地，补给点
- *   地中海(46) 海域              邻 西欧/巴尔干/意大利/非洲北部/中东
- *   非洲北部(15) 陆地            邻 中东/北海/南大西洋/非洲南部/非洲东部/阿拉伯海/地中海
- *   非洲南部(31) 陆地            邻 非洲北部/南大西洋/非洲东部
- *   巴尔干(12) 陆地              邻 东欧/意大利/黑海/德国/乌克兰/地中海
- *   -> 西欧到巴尔干没有陆路，只能经「地中海」渡海：这正是「海军中继」的意义。
+ *   西欧(6)  = 通用补给点 + 【法国大本营】  邻 波罗的海/意大利/北海/德国/地中海
+ *   不列颠(2) = 英国大本营，只邻北海
+ *   意大利(13) = 通用补给点 + 意大利大本营
+ *   非洲南部(31) = 陆邻 非洲北部/南大西洋/非洲东部（非补给点）
+ *   南大西洋(29) = 海区，陆邻 亚速尔/非洲北部/拉丁美洲/非洲南部/马达加斯加
+ *   北海(17) / 阿拉伯海(34) / 中东(16)
  */
 const path = require('path')
 const M = path.join('server-official', 'public', 'quartermaster-sub-wars')
@@ -37,6 +41,10 @@ const MED = data.id_of('地中海')
 const NA = data.id_of('非洲北部')
 const SA = data.id_of('非洲南部')
 const NATL = data.id_of('北大西洋')
+const NS = data.id_of('北海')
+const SATL = data.id_of('南大西洋')
+const ARB = data.id_of('阿拉伯海')
+const ME = data.id_of('中东')
 const VVO = data.id_of('海参崴')
 
 const CARD_15345 = '15345'   /* 塞内加尔步兵团：非洲南部成为仅对法国的补给点 */
@@ -54,7 +62,6 @@ function ok(name, cond, extra) {
 }
 function section(t) { console.log('\n=== ' + t + ' ===') }
 
-/* 建局：清空盘面 -> 摆棋子 -> 开光环卡（走 apply_status_ongoing，与真实打出同源） */
 function make(pieces, cards) {
 	const g = rules.setup(20261028, rules.default_scenario, {})
 	g.opening = null
@@ -86,9 +93,12 @@ const sup = (g) => I.compute_supply(g)
 const on = (s, p) => !!s.in_supply[p]
 const src = (s, p) => s.sources[p] || '-'
 const cs = (s, p) => !!s.can_source[p]
+const hasRoot = (s, p, n) => !!(s.roots && s.roots[p] && s.roots[p][n])
+const rootStr = (s, p) => (s.roots && s.roots[p]) ? Object.keys(s.roots[p]).sort().join('+') : '-'
+const noRoot = (s, p) => !(s.roots && s.roots[p] && Object.keys(s.roots[p]).length)
 
 /* ---------------- S1 玩家原场景 ---------------- */
-section('S1 17549 + 15346：西欧英国陆军(源) -> 地中海法军海军 -> 巴尔干英国陆军')
+section('S1 17549 + 15346：西欧英军 / 地中海法军海军 / 巴尔干英军 / 非北法军')
 {
 	const g = make([
 		['uk_we', WE, '英国', 'army'],
@@ -97,17 +107,18 @@ section('S1 17549 + 15346：西欧英国陆军(源) -> 地中海法军海军 -> 
 		['fr_na', NA, '法国', 'army'],
 	], [CARD_17549, CARD_15346])
 	const s = sup(g)
-	ok('西欧英国陆军补给（种子 base）', on(s, 'uk_we') && src(s, 'uk_we') === 'base')
+	ok('西欧英军独自补给（base）', on(s, 'uk_we') && src(s, 'uk_we') === 'base')
+	ok('西欧英军同时承载【英国 + 法国】两根（西欧=法国大本营）',
+		hasRoot(s, 'uk_we', '英国') && hasRoot(s, 'uk_we', '法国'), rootStr(s, 'uk_we'))
 	ok('地中海法军海军补给', on(s, 'fr_med_n'))
-	ok('地中海法军海军【升级为 chain】并可作为中继', src(s, 'fr_med_n') === 'chain' && cs(s, 'fr_med_n'),
-		{ src: src(s, 'fr_med_n'), can_source: cs(s, 'fr_med_n') })
-	ok('非洲北部法国陆军补给', on(s, 'fr_na'))
-	ok('★ 巴尔干英国陆军补给（修复前断补）', on(s, 'uk_bal') && src(s, 'uk_bal') === 'chain',
-		{ in_supply: on(s, 'uk_bal'), src: src(s, 'uk_bal') })
+	ok('地中海法军海军拿到法国根', hasRoot(s, 'fr_med_n', '法国'), rootStr(s, 'fr_med_n'))
+	ok('★ 巴尔干英军补给', on(s, 'uk_bal'))
+	ok('★ 巴尔干英军拿到英国根', hasRoot(s, 'uk_bal', '英国'), rootStr(s, 'uk_bal'))
+	ok('非北法军补给', on(s, 'fr_na'))
 }
 
-/* ---------------- S2 只 17549（回归：本来就好） ---------------- */
-section('S2 只 17549（无 15346）：结果必须与修复前一致')
+/* ---------------- S2 只 17549 ---------------- */
+section('S2 只 17549（无 15346）：法国靠"英国陆军承载的法国大本营根"补给')
 {
 	const g = make([
 		['uk_we', WE, '英国', 'army'],
@@ -116,14 +127,30 @@ section('S2 只 17549（无 15346）：结果必须与修复前一致')
 		['fr_na', NA, '法国', 'army'],
 	], [CARD_17549])
 	const s = sup(g)
-	ok('西欧英国陆军 base', src(s, 'uk_we') === 'base')
-	ok('地中海法军海军 chain', src(s, 'fr_med_n') === 'chain' && cs(s, 'fr_med_n'))
-	ok('巴尔干英国陆军 chain', src(s, 'uk_bal') === 'chain')
-	ok('非洲北部法国陆军 chain', src(s, 'fr_na') === 'chain')
+	ok('西欧英军 base', src(s, 'uk_we') === 'base' && hasRoot(s, 'uk_we', '法国'))
+	ok('★ 地中海法军海军补给（经 17549 拿到法国大本营根）', on(s, 'fr_med_n'), src(s, 'fr_med_n'))
+	ok('★ 巴尔干英军补给', on(s, 'uk_bal'))
+	ok('非北法军补给', on(s, 'fr_na'))
 }
 
-/* ---------------- S3 光环不凭空造源 ---------------- */
-section('S3 孤立法军海军（北大西洋，四周无源）+ 15346：不许当中继')
+/* ---------------- S2b 无 17549：跨国断了 ---------------- */
+section('S2b 无 17549：异国根传不出去 -> 法军/巴尔干英军全断')
+{
+	const g = make([
+		['uk_we', WE, '英国', 'army'],
+		['fr_med_n', MED, '法国', 'navy'],
+		['uk_bal', BAL, '英国', 'army'],
+		['fr_na', NA, '法国', 'army'],
+	], [])
+	const s = sup(g)
+	ok('西欧英军 base', on(s, 'uk_we'))
+	ok('地中海法军海军断补（无 17549 不给异国根）', !on(s, 'fr_med_n'))
+	ok('非北法军断补', !on(s, 'fr_na'))
+	ok('巴尔干英军断补（法国海军接不到根，无法中继）', !on(s, 'uk_bal'))
+}
+
+/* ---------------- S3 光环不凭空造根 ---------------- */
+section('S3 15346 + 法军海军孤立北大西洋：自身补给但无根可传')
 {
 	const g = make([
 		['uk_we', WE, '英国', 'army'],
@@ -132,21 +159,21 @@ section('S3 孤立法军海军（北大西洋，四周无源）+ 15346：不许�
 	], [CARD_17549, CARD_15346])
 	const s = sup(g)
 	ok('孤立法军海军自身补给（15346 光环）', on(s, 'fr_n') && src(s, 'fr_n') === 'aura')
-	ok('孤立法军海军【不是中继】', !cs(s, 'fr_n'))
-	ok('巴尔干英国陆军断补', !on(s, 'uk_bal'))
+	ok('孤立法军海军【没有根】（光环不造根）', noRoot(s, 'fr_n'), rootStr(s, 'fr_n'))
+	ok('巴尔干英军断补', !on(s, 'uk_bal'))
 }
 
-/* ---------------- S4 只有 15356，没有源 ---------------- */
-section('S4 只 15356：地中海英国海军光环自身补给，但无陆军可依 -> 不当中继')
+/* ---------------- S4 只有 15356，没有陆军可依 ---------------- */
+section('S4 只 15356：地中海英军海军光环补给，但拿不到港口 -> 无根')
 {
 	const g = make([
 		['uk_n', MED, '英国', 'navy'],
 		['uk_bal', BAL, '英国', 'army'],
 	], [CARD_15356])
 	const s = sup(g)
-	ok('地中海英国海军补给（15356 光环）', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
-	ok('地中海英国海军不是中继（无据可依）', !cs(s, 'uk_n'))
-	ok('巴尔干英国陆军断补', !on(s, 'uk_bal'))
+	ok('地中海英军海军补给（15356 光环）', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
+	ok('该海军没有根（B 不满足）', noRoot(s, 'uk_n'))
+	ok('巴尔干英军断补', !on(s, 'uk_bal'))
 }
 
 /* ---------------- S5 17838 覆盖范围 ---------------- */
@@ -158,8 +185,7 @@ section('S5 17838 苏联陆军总是补给（卡面限陆军）')
 	], [CARD_17838])
 	const s = sup(g)
 	ok('苏联陆军被 17838 覆盖', on(s, 'su_a') && src(s, 'su_a') === 'aura')
-	ok('孤立苏联陆军不当中继', !cs(s, 'su_a'))
-	/* 卡面写「苏联陆军」，若配置缺 type:'army'，海军也会被覆盖 —— 已知偏差，只记录不判失败 */
+	ok('苏联陆军没有根', noRoot(s, 'su_a'))
 	if (on(s, 'su_n')) {
 		console.log('  WARN 17838 配置未限兵种，苏联海军也被覆盖（卡面仅写陆军）-> src=' + src(s, 'su_n'))
 	} else {
@@ -168,8 +194,8 @@ section('S5 17838 苏联陆军总是补给（卡面限陆军）')
 	}
 }
 
-/* ---------------- S6 15356 + 有源：海军升级为中继 ---------------- */
-section('S6 15356 + 17549：地中海英国海军靠西欧英国陆军连回源 -> 升级中继')
+/* ---------------- S6 15356 + 有源 ---------------- */
+section('S6 15356 + 17549（全英国）：西欧英军 -> 地中海英军海军 -> 巴尔干英军')
 {
 	const g = make([
 		['uk_we', WE, '英国', 'army'],
@@ -177,13 +203,13 @@ section('S6 15356 + 17549：地中海英国海军靠西欧英国陆军连回源 
 		['uk_bal', BAL, '英国', 'army'],
 	], [CARD_15356, CARD_17549])
 	const s = sup(g)
-	ok('地中海英国海军升级为 chain', src(s, 'uk_n') === 'chain' && cs(s, 'uk_n'),
-		{ src: src(s, 'uk_n'), can_source: cs(s, 'uk_n') })
-	ok('巴尔干英国陆军补给', on(s, 'uk_bal'))
+	ok('地中海英军海军补给', on(s, 'uk_n'))
+	ok('地中海英军海军拿到英国根', hasRoot(s, 'uk_n', '英国'), rootStr(s, 'uk_n'))
+	ok('巴尔干英军补给', on(s, 'uk_bal'))
 }
 
-/* ---------------- S7 8601 空间免移除不当中继 ---------------- */
-section('S7 8601 海参崴日本陆军：只免移除，不当中继')
+/* ---------------- S7 8601 ---------------- */
+section('S7 8601 海参崴日本陆军：只免移除，不产生根')
 {
 	const g = make([
 		['ja_a', VVO, '日本', 'army'],
@@ -191,12 +217,13 @@ section('S7 8601 海参崴日本陆军：只免移除，不当中继')
 	], [CARD_8601, CARD_17549])
 	const s = sup(g)
 	ok('海参崴日本陆军补给（8601 光环）', on(s, 'ja_a') && src(s, 'ja_a') === 'aura')
-	ok('海参崴日本陆军不是中继', !cs(s, 'ja_a'))
-	ok('意大利英国陆军 base 不受影响', src(s, 'uk_it') === 'base')
+	ok('海参崴日本陆军没有根', noRoot(s, 'ja_a'))
+	ok('意大利英军 base（意大利=意大利大本营，同时承载意大利根）',
+		src(s, 'uk_it') === 'base' && hasRoot(s, 'uk_it', '意大利'), rootStr(s, 'uk_it'))
 }
 
 /* ---------------- S8 裸盘基线 ---------------- */
-section('S8 无任何卡：裸盘补给基线')
+section('S8 无任何卡：裸盘基线（西欧承载法国大本营根，但无 17549 传不出去）')
 {
 	const g = make([
 		['uk_we', WE, '英国', 'army'],
@@ -204,43 +231,38 @@ section('S8 无任何卡：裸盘补给基线')
 		['fr_med_n', MED, '法国', 'navy'],
 	], [])
 	const s = sup(g)
-	ok('西欧英国陆军 base', src(s, 'uk_we') === 'base')
-	ok('巴尔干英国陆军断补（无 17549 时海军不能跨阵营中继）', !on(s, 'uk_bal'))
-	ok('地中海法国海军断补（无法国源）', !on(s, 'fr_med_n'))
+	ok('西欧英军 base，根 = 英国 + 法国',
+		src(s, 'uk_we') === 'base' && hasRoot(s, 'uk_we', '英国') && hasRoot(s, 'uk_we', '法国'), rootStr(s, 'uk_we'))
+	ok('巴尔干英军断补（西欧与巴尔干无陆路，且无 17549）', !on(s, 'uk_bal'))
+	ok('地中海法军海军断补（异国根不给）', !on(s, 'fr_med_n'))
 }
 
 /* ---------------- S9 四卡全开（玩家指定） ---------------- */
-section('S9 15345 + 15346 + 15356 + 17549：源「仅对法国」-> 英国全断补（玩家口径）')
+section('S9 15345 + 15346 + 15356 + 17549：源「仅对法国」-> 英国全断补')
 {
 	const g = make([
-		['fr_sa', SA, '法国', 'army'],      /* 非洲南部法军：15345 补给点（仅对法国） */
-		['uk_sa', SA, '英国', 'army'],      /* 非洲南部英军：站上去也拿不到 base */
-		['fr_na', NA, '法国', 'army'],      /* 非洲北部法军 */
-		['uk_na', NA, '英国', 'army'],      /* 非洲北部英军 */
-		['fr_n', MED, '法国', 'navy'],      /* 地中海法军 */
-		['uk_n', MED, '英国', 'navy'],      /* 地中海英军 */
-		['uk_bal', BAL, '英国', 'army'],    /* 巴尔干英军 */
+		['fr_sa', SA, '法国', 'army'],
+		['uk_sa', SA, '英国', 'army'],
+		['fr_na', NA, '法国', 'army'],
+		['uk_na', NA, '英国', 'army'],
+		['fr_n', MED, '法国', 'navy'],
+		['uk_n', MED, '英国', 'navy'],
+		['uk_bal', BAL, '英国', 'army'],
 	], [CARD_15345, CARD_15346, CARD_15356, CARD_17549])
 	const s = sup(g)
-	/* 法国：这条源是它自己的，全通 */
 	ok('非洲南部法军 base（15345 仅对法国）', on(s, 'fr_sa') && src(s, 'fr_sa') === 'base', src(s, 'fr_sa'))
-	ok('非洲北部法军 chain', on(s, 'fr_na') && src(s, 'fr_na') === 'chain')
-	ok('地中海法军海军 chain 且为中继', on(s, 'fr_n') && src(s, 'fr_n') === 'chain' && cs(s, 'fr_n'))
-	/* 英国：源只对法国有效 -> 种子层与链条层都不给 */
-	ok('非洲南部英军拿不到 base（种子层按国家过滤）', !(on(s, 'uk_sa') && src(s, 'uk_sa') === 'base'),
-		{ in_supply: on(s, 'uk_sa'), src: src(s, 'uk_sa') })
-	ok('★ 非洲北部英军断补（禁传「仅对法国」的源）', !on(s, 'uk_na'),
-		{ in_supply: on(s, 'uk_na'), src: src(s, 'uk_na') })
-	ok('地中海英军海军自身补给（15356 光环，与法国源无关）',
-		on(s, 'uk_n') && src(s, 'uk_n') === 'aura', src(s, 'uk_n'))
-	ok('★ 地中海英军海军不是中继（借不到「仅对法国」的源）', !cs(s, 'uk_n'))
-	ok('★ 巴尔干英军断补', !on(s, 'uk_bal'), { in_supply: on(s, 'uk_bal'), src: src(s, 'uk_bal') })
-	ok('法军海军的源国籍记为其专属国', s.src_owner && s.src_owner['fr_n'] === '法国',
-		s.src_owner && s.src_owner['fr_n'])
+	ok('非洲北部法军补给', on(s, 'fr_na'))
+	ok('地中海法军海军补给', on(s, 'fr_n'))
+	ok('★ 非洲南部英军拿不到 base', !(on(s, 'uk_sa') && src(s, 'uk_sa') === 'base'),
+		{ sup: on(s, 'uk_sa'), src: src(s, 'uk_sa') })
+	ok('★ 非洲北部英军断补（只收到法国根）', !on(s, 'uk_na') && hasRoot(s, 'uk_na', '法国'),
+		{ sup: on(s, 'uk_na'), roots: rootStr(s, 'uk_na') })
+	ok('地中海英军海军自身补给（15356 光环）', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
+	ok('★ 巴尔干英军断补', !on(s, 'uk_bal'), rootStr(s, 'uk_bal'))
 }
 
 /* ---------------- S10 无 15345 ---------------- */
-section('S10 无 15345（15346 + 15356 + 17549）：法国失去补给点，全德 aura 不当中继')
+section('S10 无 15345（15346 + 15356 + 17549）：法国失去补给点，西欧也没人 -> 无根')
 {
 	const g = make([
 		['fr_sa', SA, '法国', 'army'],
@@ -252,10 +274,9 @@ section('S10 无 15345（15346 + 15356 + 17549）：法国失去补给点，全�
 	], [CARD_15346, CARD_15356, CARD_17549])
 	const s = sup(g)
 	ok('非洲南部法军补给（15346 光环）', on(s, 'fr_sa') && src(s, 'fr_sa') === 'aura')
-	ok('非洲南部法军不是中继', !cs(s, 'fr_sa'))
-	ok('地中海法军海军不是中继', !cs(s, 'fr_n'))
-	ok('地中海英军海军不是中继', !cs(s, 'uk_n'))
-	ok('非洲北部英军断补（邻格无法国源）', !on(s, 'uk_na'))
+	ok('非洲南部法军没有根', noRoot(s, 'fr_sa'))
+	ok('地中海法军海军没有根', noRoot(s, 'fr_n'))
+	ok('非洲北部英军断补', !on(s, 'uk_na'))
 	ok('巴尔干英军断补', !on(s, 'uk_bal'))
 }
 
@@ -272,16 +293,14 @@ section('S11 无 15346（15345 + 15356 + 17549）：法国靠自己那条源，�
 	], [CARD_15345, CARD_15356, CARD_17549])
 	const s = sup(g)
 	ok('非洲南部法军 base', src(s, 'fr_sa') === 'base')
-	ok('非洲北部法军 chain', src(s, 'fr_na') === 'chain')
-	ok('地中海法军海军 chain', src(s, 'fr_n') === 'chain')
-	ok('★ 非洲北部英军断补（源仅对法国）', !on(s, 'uk_na'), { src: src(s, 'uk_na') })
-	ok('地中海英军海军自身补给（15356 光环）', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
-	ok('★ 地中海英军海军不是中继', !cs(s, 'uk_n'))
-	ok('★ 巴尔干英军断补', !on(s, 'uk_bal'), { src: src(s, 'uk_bal') })
+	ok('非洲北部法军补给', on(s, 'fr_na'))
+	ok('地中海法军海军补给', on(s, 'fr_n'))
+	ok('★ 非洲北部英军断补（源仅对法国）', !on(s, 'uk_na'))
+	ok('★ 巴尔干英军断补', !on(s, 'uk_bal'))
 }
 
 /* ---------------- S12 无 15345 也无 15346 ---------------- */
-section('S12 无 15345 也无 15346（15356 + 17549）：仅光环自身补给，链全断')
+section('S12 无 15345 也无 15346（15356 + 17549）：仅 15356 光环自身补给')
 {
 	const g = make([
 		['fr_sa', SA, '法国', 'army'],
@@ -292,37 +311,34 @@ section('S12 无 15345 也无 15346（15356 + 17549）：仅光环自身补给�
 		['uk_bal', BAL, '英国', 'army'],
 	], [CARD_15356, CARD_17549])
 	const s = sup(g)
-	ok('非洲南部法军断补', !on(s, 'fr_sa'))
+	ok('非洲南部法军断补（西欧无人，法国无源）', !on(s, 'fr_sa'))
 	ok('非洲北部法军断补', !on(s, 'fr_na'))
 	ok('非洲北部英军断补', !on(s, 'uk_na'))
 	ok('地中海法军海军断补', !on(s, 'fr_n'))
 	ok('地中海英军海军补给（15356 光环）', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
-	ok('地中海英军海军不是中继', !cs(s, 'uk_n'))
 	ok('巴尔干英军断补', !on(s, 'uk_bal'))
 }
 
-/* ---------------- S14 对照：普通补给点不受国籍限制 ---------------- */
-section('S14 普通补给点（意大利，无国籍限制）-> 17549 仍可跨国共享')
+/* ---------------- S14 普通补给点跨国 ---------------- */
+section('S14 意大利英军 / 地中海法军海军 / 巴尔干法军：法军拿不到英国根')
 {
 	const g = make([
-		['uk_it', IT, '英国', 'army'],       /* 意大利是地图标定补给点，通用 */
-		['fr_n', MED, '法国', 'navy'],       /* 法军海军靠英国陆军 */
-		['fr_bal', BAL, '法国', 'army'],     /* 巴尔干法军靠法军海军 */
+		['uk_it', IT, '英国', 'army'],
+		['fr_n', MED, '法国', 'navy'],
+		['fr_bal', BAL, '法国', 'army'],
 	], [CARD_17549])
 	const s = sup(g)
-	ok('意大利英国陆军 base', on(s, 'uk_it') && src(s, 'uk_it') === 'base')
-	ok('源无国籍限制（src_owner 为空）', !(s.src_owner && s.src_owner['uk_it']),
-		s.src_owner && s.src_owner['uk_it'])
-	ok('法军海军借英国源 -> chain', on(s, 'fr_n') && src(s, 'fr_n') === 'chain')
-	ok('巴尔干法军靠法军海军 -> chain', on(s, 'fr_bal') && src(s, 'fr_bal') === 'chain')
+	ok('意大利英军 base，根 = 英国 + 意大利', src(s, 'uk_it') === 'base' && hasRoot(s, 'uk_it', '意大利'))
+	ok('★ 地中海法军海军断补（只有英国/意大利根）', !on(s, 'fr_n') && hasRoot(s, 'fr_n', '英国'))
+	ok('★ 巴尔干法军断补', !on(s, 'fr_bal'))
 }
 
-/* ---------------- S15 西欧加一支法国陆军（玩家 2026-10-28 追加） ---------------- */
-section('S15 S9 布局 + 西欧法国陆军：普通补给点提供【通用源】-> 英国陆军全部补给')
+/* ---------------- S15 西欧法军 ---------------- */
+section('S15 S9 布局 + 西欧法国陆军：法国独占源，英国陆军全断')
 {
 	const g = make([
-		['fr_we', WE, '法国', 'army'],       /* 西欧是地图标定补给点，无国籍限制 */
-		['fr_sa', SA, '法国', 'army'],       /* 非洲南部：仅对法国的源 */
+		['fr_we', WE, '法国', 'army'],
+		['fr_sa', SA, '法国', 'army'],
 		['uk_sa', SA, '英国', 'army'],
 		['fr_na', NA, '法国', 'army'],
 		['uk_na', NA, '英国', 'army'],
@@ -331,36 +347,48 @@ section('S15 S9 布局 + 西欧法国陆军：普通补给点提供【通用源�
 		['uk_bal', BAL, '英国', 'army'],
 	], [CARD_15345, CARD_15346, CARD_15356, CARD_17549])
 	const s = sup(g)
-	/* 两个源并存：非洲南部（仅法国）+ 西欧（通用） */
-	ok('西欧法军陆军 base（普通补给点）', on(s, 'fr_we') && src(s, 'fr_we') === 'base', src(s, 'fr_we'))
-	ok('西欧这个源【无国籍限制】', !(s.src_owner && s.src_owner['fr_we']))
-	ok('非洲南部法军 base（仅对法国的源仍在）',
-		on(s, 'fr_sa') && src(s, 'fr_sa') === 'base' && s.src_owner['fr_sa'] === '法国')
-	/* 法国：两条源都能用 */
-	ok('非洲北部法军 chain', on(s, 'fr_na') && src(s, 'fr_na') === 'chain')
-	ok('地中海法军海军 chain', on(s, 'fr_n') && src(s, 'fr_n') === 'chain')
-	/* 英国：靠西欧那条通用链全部打通（不是借非洲南部的专属源） */
-	ok('★ 非洲南部英军补给（经通用链）', on(s, 'uk_sa') && src(s, 'uk_sa') === 'chain', src(s, 'uk_sa'))
-	ok('★ 非洲北部英军补给', on(s, 'uk_na') && src(s, 'uk_na') === 'chain', src(s, 'uk_na'))
-	ok('★ 地中海英军海军补给', on(s, 'uk_n') && src(s, 'uk_n') === 'chain', src(s, 'uk_n'))
-	ok('★ 巴尔干英军补给', on(s, 'uk_bal') && src(s, 'uk_bal') === 'chain', src(s, 'uk_bal'))
-	/* 关键：英军链条的源国籍必须为空 —— 证明走的是通用源，不是「仅法国」那条 */
-	ok('英军链条的源国籍为空（走通用源而非专属源）',
-		!s.src_owner['uk_na'] && !s.src_owner['uk_n'] && !s.src_owner['uk_bal'],
-		{ uk_na: s.src_owner['uk_na'], uk_n: s.src_owner['uk_n'], uk_bal: s.src_owner['uk_bal'] })
+	ok('西欧法军 base', on(s, 'fr_we') && src(s, 'fr_we') === 'base')
+	ok('西欧法军只有法国根（没有英国部队占着）', rootStr(s, 'fr_we') === '法国', rootStr(s, 'fr_we'))
+	ok('非洲南部法军 base', src(s, 'fr_sa') === 'base')
+	ok('非洲北部法军 / 地中海法军海军补给', on(s, 'fr_na') && on(s, 'fr_n'))
+	ok('★ 非洲南部英军断补', !on(s, 'uk_sa'))
+	ok('★ 非洲北部英军断补', !on(s, 'uk_na'))
+	ok('★ 巴尔干英军断补', !on(s, 'uk_bal'))
+	ok('地中海英军海军仅 15356 光环补给', on(s, 'uk_n') && src(s, 'uk_n') === 'aura')
+}
+
+/* ---------------- S16 纯海区传根（方案 a） ---------------- */
+section('S16 方案(a)：海军传根也要 A+B —— 孤悬海区的海军不能中继')
+{
+	const g = make([
+		['uk_we', WE, '英国', 'army'],
+		['uk_ns', NS, '英国', 'navy'],
+		['uk_satl', SATL, '英国', 'navy'],
+		['uk_arb', ARB, '英国', 'navy'],
+		['uk_me', ME, '英国', 'army'],
+	], [CARD_17549])
+	const s = sup(g)
+	ok('北海英军海军补给（邻西欧陆军，A+B 都成立）', on(s, 'uk_ns'), src(s, 'uk_ns'))
+	ok('南大西洋英军海军断补（陆邻全空 -> B 不满足）', !on(s, 'uk_satl'))
+	ok('南大西洋英军海军【没有根】（B 不满足就不接根）', noRoot(s, 'uk_satl'), rootStr(s, 'uk_satl'))
+	ok('阿拉伯海英军海军断补', !on(s, 'uk_arb'))
+	ok('中东英军陆军断补', !on(s, 'uk_me'))
 }
 
 /* ---------------- S13 源码守卫 ---------------- */
-section('S13 源码守卫：迭代跳过条件只认 base / chain')
+section('S13 源码守卫：根集合模型的关键约束')
 {
 	const fs = require('fs')
 	const srcText = fs.readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
-	ok('迭代里不再用 `if (in_supply[pid]) continue` 一刀切',
-		!/for \(const pid of allPieces\) \{\s*\n\s*if \(in_supply\[pid\]\) continue/.test(srcText))
-	ok('迭代按 sources 判定跳过（base / chain）',
-		/if \(sources\[pid\] === 'base' \|\| sources\[pid\] === 'chain'\) continue/.test(srcText))
+	ok('存在根集合 roots', /const roots = \{\}/.test(srcText))
+	ok('承载阶段用 supply_sources_at 收集该格全部源', /supply_sources_at\(game, Number\(loc\), pids\)/.test(srcText))
+	ok('接根要求"传递者同国或 17549 组内"',
+		/if \(!\(onat === nat \|\| supply_group_partner\(game, nat, onat\)\)\) continue/.test(srcText))
+	ok('自己补给只认"自己国的根"', /if \(mine\[nat\] && !in_supply\[pid\]\)/.test(srcText))
 	ok('海陆链未按兵种限制（保留海军中继）',
 		!/piece_type\[other\] === 'army' &&\s*\n?\s*supply_group_partner\(game, game\.piece_nation\[other\]/.test(srcText))
+	ok('大本营参与供源（effective_home_base 进 supply_sources_at）',
+		/effective_home_base\(game, n\)\) === sp/.test(srcText))
 }
 
 console.log('\n' + (fails.length ? 'FAILED' : 'ALL PASS') + '  ' + pass + ' ok, ' + fails.length + ' fail')

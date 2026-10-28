@@ -563,6 +563,38 @@ function supply_source_owner(game, space) {
 }
 
 /*
+ * 【2026-10-28 玩家口径】某格位上的【全部补给源归属国】。
+ *
+ * occupants = 该格上的部队 id 列表（调用方从 bySpace 取，空格位不会进来）。
+ * 返回 { 国名: true }。
+ *
+ * 三类源：
+ *   ① 通用补给点：归【占领国】—— 对每支占地部队按 (阵营, 国家) 查 is_supply_point，
+ *      成立则该国进集合。两国共占 -> 两国各自成源、各自归属（玩家口径："同时给 2 国
+ *      分别提供补给，归属两国，共同占领"）。
+ *   ② 「仅对 XX」的补给点（15345 非洲南部）：is_supply_point 只对 XX 成立 -> 只有 XX 进集合。
+ *   ③ 大本营：无条件归该国 —— 该格是某国大本营则该国进集合，
+ *      不看上面站的是谁（有没有人站是调用方的事）。
+ *
+ * ⚠ 大本营不判敌占（玩家 2026-10-28："不用加额外代码"）：
+ *   敌国部队占着也会承载该国大本营的根，但【传根】要求"传递者国籍同国或 17549 组内"，
+ *   敌方部队天然传不出去，所以不会真的把补给漏给敌国 / 盟友。
+ */
+function supply_sources_at(game, space, occupants) {
+	const out = {}
+	const sp = Number(space)
+	for (const pid of (occupants || [])) {
+		const nat = game.piece_nation[pid]
+		if (!nat) continue
+		if (is_supply_point(game, sp, faction_of_nation(nat), nat)) out[nat] = true
+	}
+	for (const n of Object.keys(NATION_FACTION)) {
+		if (Number(effective_home_base(game, n)) === sp) out[n] = true
+	}
+	return out
+}
+
+/*
  * 设置某地对某阵营【是否】为补给点（卡牌调用的主入口）。
  *
  * faction 传 null 表示【两个阵营一起设】。
@@ -722,22 +754,22 @@ function supply_aura_covers(game, nation, type, space) {
 
 function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 	const list = nbrs || (get_connections(game, space, faction_of_nation(nation)) || [])
+	/*
+	 * A（来源）：相邻部队是否持有【可传给本国】的根。
+	 *
+	 * 【2026-10-28 根集合模型】
+	 *   · 本国根           -> 可传
+	 *   · 异国根           -> 只有 17549 组内、且非建海军（build_mode）时才可传
+	 * 建海军维持 2026-10-23 口径：A 只认本国部队 / 本国根。
+	 */
 	const canSrc = (pid) => {
-		const basic = sup.can_source ? !!sup.can_source[pid] : !!sup.in_supply[pid]
-		if (!basic) return false
-		/*
-		 * 【2026-10-28 玩家口径】补给源的【国籍归属】必须随链条传播。
-		 *
-		 * 15345《塞内加尔步兵团》让<非洲南部>成为「仅对法国」的补给点。
-		 * 种子层已经按国家过滤（英国部队站上去拿不到 base），但链条层没管 ——
-		 * 于是法国陆军 base 之后，17549 让英国可以「用法国部队连接补给线」，
-		 * 英国就白拿了一条**只属于法国**的源的补给。
-		 * 玩家口径：「补给源只对法国有效，英国都应该断补」。
-		 *
-		 * src_owner[pid] = 这条链的根源所限定的国名（null = 通用源，谁都能继承）。
-		 */
-		const ow = sup.src_owner && sup.src_owner[pid]
-		return !ow || ow === nation
+		const r = sup.roots && sup.roots[pid]
+		if (!r) return false
+		for (const n of Object.keys(r)) {
+			if (n === nation) return true
+			if (!build_mode && supply_group_partner(game, nation, n)) return true
+		}
+		return false
 	}
 	/*
 	 * 【2026-10-23】港口光环（15444 丘克群岛「<硫磺岛>视为日本港口」）。
@@ -865,33 +897,75 @@ function compute_supply(game, conn_snap) {
 	 */
 	const can_source = {}
 	/*
-	 * 【2026-10-28】补给链的【根源归属】：src_owner[pid] = 该部队所连的源被限定的国名，
-	 * undefined / null 表示通用源（地图标定的普通补给点、整阵营补给点）。
+	 * 【2026-10-28 玩家口径 · 根集合模型】roots[pid] = 该部队【承载/接到】的补给根集合，
+	 * 键 = 根所属的国名。一支部队可以同时持有多个根。
 	 *
-	 * 只在"源本身限定某国"时才有值（15345 -> 非洲南部仅对法国）。
-	 * 链条传播时按此继承，别国不能借这条链（玩家口径：英国都应该断补）。
+	 * 为什么必须是"集合"而不是单一国籍：
+	 *   西欧同时是「通用补给点（归占领国）」和「法国大本营（无条件归法国）」。
+	 *   站上去的英国陆军同时承载 { 英国, 法国 }：
+	 *     · 英国根 -> 让英国链条往下走
+	 *     · 法国根 -> 经 17549 传给法国部队（玩家口径："只有盟军指挥部时才有用"）
+	 *
+	 * 三条判定：
+	 *   · 自己补给 = roots[pid][自己的国]（或光环/授予给的临时补给）
+	 *   · 接根：传递者国籍必须【同国 或 17549 组内】—— 这条同时挡住敌方部队传根
+	 *   · 异国根只有 17549 组内才能继续传（无 17549 时只能传本国根）
 	 */
-	const src_owner = {}
+	const roots = {}
 
 	/*
-	 * 2. 种子：站在★补给点上的部队（不需驻守）
+	 * 2. 承载：站在【有源】格位上的部队，把该格的全部源收进自己的根集合。
 	 *
-	 * 【按阵营判定】(2026-09-23)：
-	 * 补给点可以是"仅对某一阵营视为补给点"的，
-	 * 所以这里必须传该部队【所属阵营】去查，不能再用无阵营的宽松查询 ——
-	 * 否则轴心部队站到"仅对同盟国的补给点"上也会白拿补给。
+	 * 「有大本营但没人站上去」-> 源悬空，不起作用。不需要额外代码：
+	 * 本段按 bySpace 遍历，空格位根本不会进来（玩家口径 2026-10-28 第 2/3 点）。
+	 *
+	 * 一格多源示例（西欧）：
+	 *   · 通用补给点 -> 归【占领国】（英国陆军占着 -> 英国根）
+	 *   · 法国大本营 -> 无条件归法国（不管谁占着）
+	 *   => 该格上的每支部队都承载 { 英国, 法国 }
 	 */
 	for (const [loc, pids] of Object.entries(bySpace)) {
+		const srcSet = supply_sources_at(game, Number(loc), pids)
+		const srcNats = Object.keys(srcSet)
+		if (!srcNats.length) continue
 		for (const pid of pids) {
-			const f = faction_of_nation(game.piece_nation[pid])
-			/* 【国家维度】(2026-10-08)：同时传【国家名】，
-			 * 让"仅对某国"的补给点对同阵营他国【不】生效。 */
-			if (!is_supply_point(game, Number(loc), f, game.piece_nation[pid])) continue
+			roots[pid] = roots[pid] || {}
+			for (const n of srcNats) roots[pid][n] = true
+		}
+	}
+	/* 承载到【自己国】的源 -> 自身补给（★ 种子，与旧 base 等价） */
+	for (const pid of Object.keys(roots)) {
+		if (roots[pid][game.piece_nation[pid]]) {
 			in_supply[pid] = true
 			sources[pid] = 'base'
-			can_source[pid] = true          /* ★ = 唯一真正的源头 */
-			/* 【2026-10-28】标记该源的专属国（15345 非洲南部 -> '法国'；普通补给点 -> null） */
-			src_owner[pid] = supply_source_owner(game, Number(loc))
+			can_source[pid] = true
+		}
+	}
+
+	/*
+	 * 2a-2. 港口光环：某格「视为某国港口」时（15444 丘克群岛 -> 硫磺岛），
+	 *       该格该国的海军直接拿到【本国根】。
+	 *
+	 * 根集合模型下这步不能省：港口同时充当 B（靠港）与 A（来源）。
+	 * 硫磺岛是荒岛，周围没有任何己方根，若只给 B 则永远接不到根 -> 本卡等于无效
+	 * （这正是 2026-10-23 修过的老问题，换成根集合后必须在这里补回来）。
+	 */
+	const _portAs = (game.status_aura && game.status_aura.port_as) || {}
+	for (const [loc, pids] of Object.entries(bySpace)) {
+		const pn = _portAs[loc]
+		if (pn == null) continue
+		const owner = String(pn)
+		if (has_pieces(game, { space: Number(loc), enemyOf: owner })) continue   /* 敌占失效 */
+		for (const pid of pids) {
+			if (game.piece_nation[pid] !== owner) continue
+			if (game.piece_type[pid] !== 'navy') continue
+			roots[pid] = roots[pid] || {}
+			roots[pid][owner] = true
+			if (!in_supply[pid]) {
+				in_supply[pid] = true
+				sources[pid] = 'base'
+				can_source[pid] = true
+			}
 		}
 	}
 
@@ -1020,13 +1094,13 @@ function compute_supply(game, conn_snap) {
 			 * 连不回（孤立远洋）就保持 aura、can_source=false，【不当中继】——
 			 * 这样仍然遵守 2026-10-23「光环本身不是补给源」的口径。
 			 */
-			if (sources[pid] === 'base' || sources[pid] === 'chain') continue
-
 			const nat = game.piece_nation[pid]
 			const type = game.piece_type[pid]
 			const loc = Number(game.location[pid])
 			if (loc == null) continue
 
+			/* 根集合（可能已在承载阶段建立）；迭代的目标是把它【扩大】到不动点 */
+			const mine = roots[pid] || (roots[pid] = {})
 			const nbrs = get_connections(game, loc, faction_of_nation(nat), snap)
 
 			if (type === 'navy') {
@@ -1056,44 +1130,44 @@ function compute_supply(game, conn_snap) {
 				 *   也被判无补给。按玩家口径，B 只要"相邻有补给中的部队"即可，
 				 *   不必是陆军、更不必是 A 那一支。
 				 */
-				/* 【2026-10-23】统一走 navy_ab_check（build_mode=false：A 允许 17549 组内） */
-				const ab = navy_ab_check(game, nat, loc, { in_supply: in_supply, can_source: can_source, src_owner: src_owner }, false, nbrs)
-				if (ab.ok) {
-					in_supply[pid] = true
-					sources[pid] = 'chain'
-					can_source[pid] = true      /* 从源链下来的，可继续向下传 */
-					/* 【2026-10-28】继承 A 那支部队的源国籍（专属源不随 17549 扩散） */
-					if (ab.src_from) src_owner[pid] = src_owner[ab.src_from]
-					changed = true
-				}
-			} else {
 				/*
-				 * 陆军：与【can_source 且补给中】的【本国 / 共享补给组盟国】部队相邻（17549）
-				 * 【2026-10-23】只认 can_source —— 临时补给（光环/授予）不能给陆军续链。
-				 * 【2026-10-28】另需源国籍允许：源自「仅对法国」的补给点时，英国不能借这条链。
+				 * 海军：先过 B（靠港）—— 相邻有陆军（本国 / 17549 组内）或港口光环。
+				 * B 是硬条件：自己补给与"往下传根"都要它（玩家 2026-10-28 选 (a)）。
+				 * A（来源）由下面的通用接根逻辑统一处理，不再单独判。
 				 */
-				let ok = false
-				let from = null
-				for (const nb of nbrs) {
-					for (const other of (bySpace[nb] || [])) {
-						if (!supply_group_partner(game, game.piece_nation[other], nat)) continue
-						if (!can_source[other]) continue
-						const ow = src_owner[other]
-						if (ow && ow !== nat) continue        /* 专属源只给专属国继承 */
-						ok = true
-						from = other
-						break
+				const ab = navy_ab_check(game, nat, loc, { roots: roots }, false, nbrs)
+				if (!ab.hasLand) continue
+			}
+
+			/*
+			 * 接根：把相邻【同国 / 17549 组内】友军持有的根并进来。
+			 *
+			 * 只认"传递者国籍"，不判根的国籍 —— 这正好实现玩家口径：
+			 *   · 本国根           -> 自己补给，并继续传
+			 *   · 异国根（组内）   -> 自己【不补给】，但继续按原国籍传
+			 *   · 无 17549 时      -> supply_group_partner 只对同国成立，异国根进不来
+			 *   · 敌方部队         -> 国籍既非同国也非组内，天然传不进来
+			 */
+			let ch = false
+			for (const nb of nbrs) {
+				for (const other of (bySpace[nb] || [])) {
+					if (other === pid) continue
+					const onat = game.piece_nation[other]
+					if (!(onat === nat || supply_group_partner(game, nat, onat))) continue
+					const r = roots[other]
+					if (!r) continue
+					for (const n of Object.keys(r)) {
+						if (!mine[n]) { mine[n] = true; ch = true }
 					}
-					if (ok) break
 				}
-				if (ok) {
-					in_supply[pid] = true
-					sources[pid] = 'chain'
-					can_source[pid] = true
-					/* 【2026-10-28】继承源国籍，让"仅对法国"的源不会经链条扩散给英国 */
-					if (from) src_owner[pid] = src_owner[from]
-					changed = true
-				}
+			}
+			if (ch) changed = true
+
+			/* 自己国的根在手 -> 自身补给（异国根只传不补） */
+			if (mine[nat] && !in_supply[pid]) {
+				in_supply[pid] = true
+				if (!sources[pid]) sources[pid] = 'chain'
+				can_source[pid] = true
 			}
 		}
 	}
@@ -1112,10 +1186,10 @@ function compute_supply(game, conn_snap) {
 		delete in_supply[vid]
 		delete sources[vid]
 		delete can_source[vid]
-		delete src_owner[vid]
+		delete roots[vid]
 	}
 
-	return { in_supply, sources, can_source, src_owner }
+	return { in_supply, sources, can_source, roots }
 }
 
 /* 某个部队是否处于补给状态 */
