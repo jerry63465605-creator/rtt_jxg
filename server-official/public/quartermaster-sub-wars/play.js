@@ -2202,9 +2202,13 @@ function update_us_depression_discard_box() {
 
 /* 【2026-10-08】17732 德国军事顾问：借用德国状态卡。
  * pending：列出桌上德国状态卡供选择；否则展示已借用的卡并可激活。 */
+/* 【2026-10-28 #9②】已为哪张借来的卡弹过提示（避免每帧重复 toast） */
+let italy_borrow_toasted = null
+
 function update_italy_borrow_box() {
 	const ib = view && view.italy_borrow
 	if (!ib) {
+		italy_borrow_toasted = null
 		if (ask_state && ask_state.kind === 'italy_borrow') {
 			ask_state = null
 			render_ask_box(null, null, null)
@@ -2222,6 +2226,7 @@ function update_italy_borrow_box() {
 	 */
 	if (view.pending_trigger || view.response_choice) return
 	if (ib.pending) {
+		italy_borrow_toasted = null
 		const opt = (ib.options || []).map(o => ({
 			label: '借用《' + o.name + '》', cls: 'primary',
 			onClick: () => {
@@ -2235,27 +2240,30 @@ function update_italy_borrow_box() {
 			'点击下方一张【德国状态卡】借用（本回合内可激活其效果）：', opt)
 		return
 	}
-	const opt = [{
-		label: '激活《' + ib.name + '》', cls: 'primary',
-		onClick: () => {
-			ask_state = null
-			render_ask_box(null, null, null)
-			/*
-			 * 【2026-10-16 修复】借用卡按类型路由到对应客户端流程，
-			 * 而非只发裸 activate_status（那对战斗/建设/弃牌类卡是死路——
-			 * 服务端需要 space/from/victim 等参数却收不到，表现为"点了没反应/无法发起战斗"）。
-			 * 走与桌面点卡同款入口，发起方归属国由 status_effective_nation 改回借用方（意大利）。
-			 */
-			const ui = status_ui_of(ib.card_face)
-			if (ui && ui.battle) { start_status_battle(ib.card_face, ui, null); return }
-			if (ui && ui.sbuild) { start_status_build(ib.card_face, ui); return }
-			if (ui && ui.discard) { start_status_discard(ib.card_face, ui, ui.discard); return }
-			send_action('activate_status', { card: ib.card_face })
-		},
-	}]
-	ask_state = { kind: 'italy_borrow' }
-	render_ask_box('德国军事顾问：已借用《' + ib.name + '》',
-		'本回合内可激活该德国状态卡（不占名额）。', opt)
+	/*
+	 * 【2026-10-28 #9② 修复】「已借用」不再用 ask_box 常驻占用。
+	 *
+	 * 旧实现：只要 view.italy_borrow 存在（整条意大利回合都有效）就每帧
+	 * render_ask_box —— 于是玩家每进入一个新阶段（摸牌/补给/建设/出牌/计分…）
+	 * 都会重新弹一次「德国军事顾问：已借用《X》」，把该阶段应有的操作框盖掉。
+	 * 玩家原话：「每个阶段都弹『已借用』」。
+	 *
+	 * 这个框其实是【冗余】的：借用生效期间，那张德国卡在 view.table_status 里的
+	 * ready 已按借用方计算 —— 服务端 status_window_ready 有 borrowed 分支放行
+	 * （rules.js:7282），客户端桌面状态区会把它渲染成「可触发」并高亮，
+	 * on_click_table_status 的点击入口本来就有，且借用卡的类型路由
+	 * （battle / sbuild / discard）也在那边处理。
+	 *
+	 * 所以这里改成：只在【刚借用成功那一刻】toast 一次，之后不占 ask_box。
+	 */
+	if (ask_state && ask_state.kind === 'italy_borrow') {
+		ask_state = null
+		render_ask_box(null, null, null)
+	}
+	if (italy_borrow_toasted !== ib.card_face) {
+		italy_borrow_toasted = ib.card_face
+		toast('已借用《' + ib.name + '》：点击桌面状态区的它即可激活（不占名额）')
+	}
 }
 
 function update_armed_offer_box() {
