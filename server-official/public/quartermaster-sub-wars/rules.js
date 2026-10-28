@@ -24292,7 +24292,7 @@ exports.view = function (state, current) {
 						waiting_for: null,
 					}
 				})(),
-				/* 17531 现购自运政策：美国为友方英/苏/中/法征召陆军 */
+				/* 17531 现购自运政策：美国为友方英/苏/中/法/美征召部队 */
 				us_merchant: (function () {
 				const dg = game.us_merchant
 				if (!dg || dg.done) return null
@@ -24301,7 +24301,15 @@ exports.view = function (state, current) {
 				if (!dg.nation) {
 				return {
 					step: 'nation',
-					nation_candidates: ['英国', '苏联', '中国', '法国'],
+					/*
+					 * 【2026-10-28 #16 补齐】卡面是「选择 1 个【友方国家】」，没有"自己之外"字样
+					 * （对比 17535《租借法案》明写"自己之外"），所以美国自己也必须出现在候选里。
+					 *
+					 * 后端校验（resolve_us_merchant_select）早在批次 1 就加了美国，
+					 * 但这里【下发的候选没加】—— 客户端只画 4 个按钮，玩家根本点不到美国，
+					 * 属于 README 铁律 3「判定同源」的典型违反：后端允许、前端不给。
+					 */
+					nation_candidates: ['英国', '苏联', '中国', '法国', '美国'],
 					waiting_for: null,
 				}
 				}
