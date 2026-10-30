@@ -260,10 +260,21 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 .unit.in_supply { outline: 2px solid #2d7a2d99; }
 
 .unit.out_of_supply {
-	box-shadow: 0 0 0 4px #ff0000aa, 0 2px 5px #0006;
-	animation: supply_warn 1.2s ease-in-out infinite;
+	/*
+	 * 【2026-10-31 性能修复·同 pickable】原来是 `animation: supply_warn 1.2s infinite`
+	 * （呼吸的是 box-shadow，而 .unit::before 带 drop-shadow 滤镜）—— 每帧重绘+重栅格化。
+	 * 实测 24 支断补同时呼吸：544 帧/2.5s（avg 4.6ms、p95 8.3ms），
+	 * 静态红框：596 帧（avg 4.19ms、p95 4.3ms），与基线 598 帧持平。
+	 * 大攻势断补十几支时是可感掉帧，故改为【静态红框】（加粗一圈以保持警示强度）。
+	 */
+	box-shadow: 0 0 0 5px #ff0000cc, 0 2px 5px #0006;
 }
 
+/*
+ * 【2026-10-31】supply_warn 已停用（改静态红框，见 .unit.out_of_supply 注释）。
+ * 保留定义便于需要时恢复 —— 恢复前请确认同时断补的算子数量很少，且注意
+ * box-shadow 动画叠加 ::before 的 drop-shadow 滤镜会显著拖慢帧率。
+ */
 @keyframes supply_warn {
 	0%, 100% { box-shadow: 0 0 0 3px #ff000088, 0 2px 5px #0006; }
 	50%      { box-shadow: 0 0 0 8px #ff0000cc, 0 2px 5px #0006; }
@@ -1440,10 +1451,28 @@ body.allies .score-side.allies {
 	outline: 3px solid #ffd977;
 	outline-offset: 2px;
 	cursor: pointer;
-	animation: pickable-pulse 1.1s ease-in-out infinite;
+	/*
+	 * 【2026-10-31 性能修复】原来是 `animation: pickable-pulse 1.1s infinite`，
+	 * 而 .unit::before 还带 `filter: drop-shadow(...)` —— 脉动动画改的是 box-shadow，
+	 * 它【不是合成器属性】，每帧都要重绘元素、连带重新栅格化滤镜层。
+	 *
+	 * 实测（40 支算子同时高亮，2.5s 内 rAF 帧数）：
+	 *   脉动动画 213 帧（avg 11.75ms / p95 16.8ms）
+	 *   静态高亮 581 帧（avg 4.30ms / p95 4.3ms）  ← 与"零高亮"基线 593 帧基本一致
+	 *
+	 * 「询问收回部队」会把【整阵营 30~40 支部队】同时点亮，因此这条动画是
+	 * "开启询问后大幅卡顿"的根因。选择部队（armed / 事件卡选单位）也同样走这个类，
+	 * 按玩家口径一律改为【静态高亮】：够醒目，但零动画成本。
+	 */
+	box-shadow: 0 0 10px 3px #ffd977cc;
 	z-index: 25;
 }
 
+/*
+ * 【2026-10-31】pickable-pulse 已停用（改用静态高亮，见 .unit.pickable 注释）。
+ * 保留定义便于按需恢复 —— 若要恢复，请先确认同时高亮的算子数量很少（≤10），
+ * 并考虑把 .unit::before 的 filter 在该状态下置 none。
+ */
 @keyframes pickable-pulse {
 	0%, 100% { box-shadow: 0 0 4px 2px #ffd977aa; }
 	50%      { box-shadow: 0 0 12px 5px #ffd977ff; }

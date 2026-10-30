@@ -6472,3 +6472,73 @@ EFFECT / EVENT / STATUS / RESPONSE / ECON **全部每面 1 份**。
    且 `15223 V2 飞弹` 有「<西欧>有德国陆军」的地面前提，`debug_place` 会因为该格已有他国部队被拒，
    测试里换成无地面前提的 `15217 电动潜艇` 更稳。
 3. `game.score` 的键是**小写** `axis/allies`，断言分数要兼容大小写。
+
+---
+
+## 2026-10-31 · 「询问收回部队」开启后大幅卡顿 —— CSS 无限动画 × drop-shadow 滤镜
+
+### 现象与归因
+
+玩家报：开启「询问收回部队」后明显掉帧。服务端先被排除：
+`tools/_bench_ask_remove.js`（40 支部队、`view` 各 200 次）显示开关前后 **0.93ms vs 1.05ms**（噪声级），
+view 体积 33.8 → 34.8 KB，也没有变贵。
+
+真因在 CSS：
+
+```
+开启询问 -> phase_play 调 prepare_remove_ask -> view.pending_ask.pieces = 本阵营【全部】部队（实测 30~40 支）
+  -> 客户端给它们全部加 .unit.pickable
+  -> play.css 的 .unit.pickable 带 animation: pickable-pulse 1.1s infinite（动画的是 box-shadow）
+  -> .unit::before 还带 filter: drop-shadow(...)
+  -> box-shadow 非合成器属性，每帧强制重绘 + 连带重新栅格化滤镜层 × 30~40 个元素
+```
+
+对比：其它用 `.pickable` 的场景（armed 选部队、事件卡选单位）候选通常 3~10 个，所以一直没暴露；
+「收回部队」是**唯一会把整阵营几十支部队同时点亮**的功能，于是成为压垮点。
+
+### 实测数据（真浏览器，agent-browser + rAF 帧间隔，2.5s）
+
+| 场景 | 帧数 | avg 帧耗时 | p95 |
+|---|---|---|---|
+| 0 高亮（基线） | 602 | 4.15 ms | 4.3 ms |
+| **40 高亮 + 脉动动画（改前）** | **213（−64%）** | **11.75 ms** | **16.8 ms** |
+| **40 高亮 + 静态高亮（改后）** | **600** | **4.17 ms** | **4.3 ms** |
+
+复现脚本：`tmp/perf_pickable.html`（改前）/ `tmp/perf_pickable_after.html`（改后），
+`agent-browser eval "window.__setCount(40); window.__start(2500)"` 后读 `window.__runs`。
+
+### 修复（按玩家口径：选择部队也用静态高亮）
+
+- `.unit.pickable` 去掉 `animation`，改为静态 `box-shadow: 0 0 10px 3px #ffd977cc`（保留 outline / cursor）；
+- `@keyframes pickable-pulse` 保留但标注「已停用」，恢复前必须确认同时高亮 ≤10 个；
+- 两类场景共用同一个类（`highlight_pieces(ids, kind)` 只加 `.pickable`），所以改一处全覆盖；
+- 守卫：`tools/_verify_pickable_static.js`（11 项）—— 断言 `.unit.pickable` 无 animation、仍保留视觉提示、
+  并列出全表剩余无限动画（目前只剩 `.unit.out_of_supply`），防止以后被加回去。
+
+### 同类风险（未处理，待定）
+
+`.unit.out_of_supply` 仍带 `animation: supply_warn 1.2s infinite`（box-shadow 呼吸），
+实测 24 支断补时 544 帧 vs 基线 601 帧（−9%，p95 8.3 vs 4.3）——比 pickable 轻，但同族问题；
+大攻势断补十几支时会有可感掉帧，若要处理按同一手法改静态红框即可。
+
+**通用教训**：给"可能同时命中几十个元素"的状态加 CSS 动画，必须同时考虑该元素是否有 filter/backdrop；
+`box-shadow`/`filter` 动画不是合成器友好的，规模化后必然掉帧。优先静态描边/发光。
+
+### 同日追加：断补红框（out_of_supply）也改静态
+
+同一个根因的第二个实例：`.unit.out_of_supply` 原来带 `animation: supply_warn 1.2s infinite`（呼吸 box-shadow）。
+断补数量在大攻势里会一下子上到十几到二十几支，同样叠加 `::before` 的 drop-shadow 滤镜。
+
+实测（真浏览器，2.5s rAF）：
+
+| 场景 | 帧数 | avg | p95 |
+|---|---|---|---|
+| 0 断补（基线） | 598 | 4.18 ms | 4.3 ms |
+| **24 支断补 + 呼吸动画（改前）** | **544（−9%）** | **4.6 ms** | **8.3 ms** |
+| **24 支断补 + 静态红框（改后）** | **596** | **4.19 ms** | **4.3 ms** |
+
+改法：去掉 `animation`，红框由 4px 加粗到 `0 0 0 5px #ff0000cc`（警示强度不降）；
+`@keyframes supply_warn` 保留但标「已停用」。
+
+至此 `play.css` 里 **已无任何 infinite 动画**（守卫 `tools/_verify_pickable_static.js` 14 项会断言这一点，
+以后再想加"脉搏"类高亮会立刻被拦下）。复现脚本：`tmp/perf_supply.html`（改前）/ `tmp/perf_supply_after.html`（改后）。
