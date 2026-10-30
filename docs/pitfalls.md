@@ -6542,3 +6542,200 @@ view 体积 33.8 → 34.8 KB，也没有变贵。
 
 至此 `play.css` 里 **已无任何 infinite 动画**（守卫 `tools/_verify_pickable_static.js` 14 项会断言这一点，
 以后再想加"脉搏"类高亮会立刻被拦下）。复现脚本：`tools/perf/perf_supply.html`（改前）/ `tools/perf/perf_supply_after.html`（改后）。
+
+---
+
+## 2026-10-31 · 战区移动残留体检 + 17514《飞虎队》need 缺口（真实测试）
+
+脚本：`tools/_real_test_theater_cleanup_17514.js`（**21/21**，范式 B：debug_* 布阵 + 真实 action）。
+
+### ① 战区移动（17532）走完三步后状态是干净的
+
+走完 `remove -> build_navy -> build_army` 后逐项体检，全部为空：
+
+`pending_theater` / `armed_offers` / `pending_armed_use` / `pending_echo` /
+`event_budget` / `pending_event_step` / `pending_battle` / `response_stack` /
+`__echo_chain_depth` / `pending_ask` / `deploy_air` / `us_depression_discard`。
+
+另外核对：17532 进弃牌堆、陆军净 +0（移除 1 + 新建 1）、海军 +1、双方 `view.pending_theater` 均为空。
+
+### ② 飞虎队：服务端正确，**客户端缺"选地区"支持**（已确认）
+
+卡面：空军阶段开始时，中国部署 1 支空军 或 中国发起 1 次夺取制空权（17514；17815 Z 计划同构）。
+
+真实两步协议实测（服务端 OK）：
+
+```
+play_card {card:17514, choice:0}        -> 日志「需先选择目标地区」，r.need={need:"space", candidates:[22]}
+play_card {card:17514, choice:0, space} -> 「美国打出增强《飞虎队》—— 中国在中国东部部署1支空军」
+                                          中国空军 +1、卡进弃牌堆、无残留
+```
+
+但缺口在客户端/契约：
+
+1. `play_card` 的 ECHO 分支遇到 `r.pending` 只写一行日志，**不持久化挂起**：
+   `game.pending_echo` 仍为 `undefined`、`view.pending_echo` 为 `null`、`actions` 里也没有相关动作；
+2. `play.js` 里**完全没有** `17514` / `17815` 的引用 —— 没有 STATUS_UI/ECHO_UI 式的选地区流程；
+3. 于是玩家点完"部署 1 支中国空军"后：界面无高亮、无候选、无 ask_box，
+   只能靠"再点一次这张卡并带上 space"这种隐藏协议才能继续 —— 实际表现就是**点了没反应/卡打不出去**。
+
+同类：17815《Z 计划》共用同一段 need 逻辑（`faceId === '17514' || faceId === '17815'`），同样受影响。
+
+修复方向（待做）：
+
+- 服务端：ECHO 分支遇到 `r.need` 时把 `{card, need, candidates, title}` 写进 `game.pending_echo`（与 15214 同构），
+  并让第二次 `play_card` 带 `space` 时先清 `pending_echo`；
+- 客户端：`update_pending_echo_box` 增加"选地区"分支（复用 `highlight_targets` + `on_click_space`），
+  与状态卡选地 / 战区移动选地的优先级统一（玩家显式流程优先，见 2026-10-30 那条）。
+
+### ③ 顺手发现：服务端残留调试输出
+
+`rules.js` 的 ECHO 分支里有两处 `console.log('[ECHO server] ...')`（一条每条增强卡打出都打，
+另一条还会 `JSON.stringify(r).slice(0,300)`）—— 属调试遗留，建议删除，避免生产环境噪声与无谓开销。
+
+### 修复（2026-10-31）：增强卡多步 need 的「补参重发」通道
+
+**根因不是飞虎队独有的逻辑**，而是 `need` 协议缺了"第一次返回 need 之后"的那半截：
+服务端只写一行日志就 return，既不持久化、也不下发候选；客户端也没有补参重发的通道。
+
+改动（4 处）：
+
+| 位置 | 改动 |
+|---|---|
+| `rules.js` ECHO 分支 `if (r.pending)` | 写入 `game.pending_echo = {kind:'echo_need', step, options, cands, choice, title}` 并 `refresh` |
+| `rules.js` 门禁（`game.pending_echo`） | `kind==='echo_need'` 时只放行 `play_card`（补参重发）与 `log` |
+| `rules.js` `build_actions()` 外层 | need 期间补 `acts.play_card = 1`——否则客户端 `send_action` 因 `view.actions.play_card` 缺失而**静默不发**（与 peek / armed_offer 那两处同款防死锁） |
+| `play.js` `update_pending_echo_box()` | 新增 `kind==='echo_need'` 分支：`step='choice'` 渲染选项按钮；`step='space'` 调 `highlight_targets(cands)` 并置 `echo_need_pick`；另有「不发动」按钮 |
+| `play.js` `on_click_space()` | 新增 `echo_need_pick` 分支（排在状态卡选地之后、战区移动之前）：点高亮格即用**同一个 `play_card`** 带齐 `{card, choice, space}` 重发 |
+
+配套：
+
+- 「不发动」= `play_card {card, __cancel_need:true}`，服务端清挂起、卡留在手牌、不消耗名额；
+- **不能覆盖卡自己写的 pending_echo**：`17812/17813`（kind=`su`）、`15214` 由卡自己的 run 写 pending，
+  且 `su` 的 `pending_echo.card` 存的是【面 id】而非实例 id —— 判定要用 `inst_card_id()` 比较，否则选牌框 candidates 全丢（本次被 `_smoke_su_effect` 抓到）。
+
+顺带清理：删除了两处遗留调试输出 `console.log('[ECHO server] ...')`（其中一条每条增强卡打出都打印并 `JSON.stringify`）。
+
+回归：`tools/_verify_echo_need_flow.js`（**28 项**：持久化/客户端可见/补参重发/不发动/门禁/静态）、
+`tools/_real_test_theater_cleanup_17514.js`（21 项，飞虎队落地 + 战区移动残留体检）、`tools/_smoke_su_effect.js`（su 类多步卡不被覆盖）。
+
+### 2026-10-31 · 拦截询问先亮出"被拦截的卡"
+
+玩家口径：拦截方点开询问框时，必须知道自己在拦什么。
+例：德国打出 `14500 黄色方案` → 英国 15352 的询问应显示「【德国】打出《黄色方案》—— 是否拦截？」。
+
+实现：
+
+| 端 | 改动 |
+|---|---|
+| 服务端 `view.armed_offer` | 新增 `target: {card, name, nation, type, via, window, img, text}`（取自窗口 `ctx.card/nation/via`）；本函数已按 side 过滤，**只发给有权表态的一方** |
+| 客户端 `update_armed_offer_box` | 标题 = `【国】打出/触发《卡》—— 是否拦截？`；描述首行 = `被拦截：<卡面文本(截 90 字)>`，其下仍是拦截卡自身描述与「不打出则错过本次时机」 |
+| `play.css` `.ask_text` | 加 `white-space: pre-line`，让两行文本正常换行 |
+
+覆盖三种窗口：`enemy_echo_played`（15352/16700，打出与触发都带 via）、`enemy_status_effect`（15353）。
+
+回归：`tools/_verify_intercept_target_ui.js`（**18 项**）——真实 `play_card 14500` 开窗、target 名称/国家/via/文本、
+触发来源 `via=trigger`、状态卡 `target.type=STATUS`、保密（另一方 `armed_offer=null`）、客户端静态接线。
+
+### 补充（2026-10-31）：这是【类级修复】，覆盖全部拦截载体
+
+不是给 15352 单张开特判 —— 统一抽了一个 `view_intercept_target(ctx, fallbackWindow)`，
+三个拦截窗口都调它，客户端两处询问框都读它：
+
+| 载体 | 卡片 | 服务端字段 | 客户端渲染 |
+|---|---|---|---|
+| `enemy_echo_played` | 15352（英）、**16700（意）**、以及未来任何同窗口拦截卡 | `view.armed_offer.target` | `update_armed_offer_box()` |
+| `enemy_status_effect` | 15353（英） | `view.armed_offer.target` | 同上 |
+| 响应栈 `pre-cancel` | **15329（英·经济战）、17736（意·轰炸行动）** | `view.pending_trigger.target`（另 `response_choice.target` 备选目标阶段用） | `update_pending_trigger_box()` |
+
+`target` 形状统一为 `{card, name, nation, type, via, window, img, text}`：
+
+- `via`：`play`（主动打出）/ `trigger`（机会卡触发）；
+- `type`：`EFFECT` / `STATUS` / `ECON` —— 客户端文案可据此细分；
+- `text`：卡面原文（客户端截 90 字放在「被拦截：」那一行）。
+
+保密口径不变：只下发给【有权表态的那一方】——`armed_offer` 按 `faction_of_nation(w.nation) === side` 过滤，
+`pending_trigger` 按栈顶帧 `owner_side === side` 过滤；另一方拿到 `null`。
+
+回归：`tools/_verify_intercept_target_scope.js`（**14 项**，覆盖 15352 / 16700 / 15353 / 15329 / 17736 五条链路 + 客户端双处接线）
+与 `tools/_verify_intercept_target_ui.js`（18 项，含真实 `play_card 14500` 与保密断言）。
+
+⚠ 写这类测试注意：`15305 双十字系统` 是**计分阶段**卡，出牌阶段打不出；验证 16700 时要么换成当期可打的卡，
+要么直接调 `offer_armed_effects()` 派发窗口（与 `play_card` 同一入口），别误判成"窗口没开"。
+
+---
+
+## 2026-10-31 · 16701《意大利万岁》实现核查（真实测试）
+
+脚本：`tools/_real_test_16701_italy_viva.js`（**22/22**）。
+
+卡面：出牌阶段开始时：本回合出牌阶段【行动 2 次】，但只能打出[基本卡]。
+
+### 实现结构（正确）
+
+| 位点 | 作用 |
+|---|---|
+| `ECHO_EFFECTS['16701'].run` | `it_viva = true`、`it_viva_used = 0` |
+| `mark_play_done` | 名额用完时若 `it_italy_viva_left > 0` -> 不置 `play_done`、`it_viva_used++`（于是能打第 2 次） |
+| `check_play_phase` | `it_viva && 意大利 && card` 且非 BASIC -> 拒绝（明确文案） |
+| 清理 | 进入出牌阶段（`phase_play`，仅意大利）与 `next_phase` 两处清零 |
+| `view.it_viva` | 下发布尔值，客户端 `check_phase_for_card` 镜像 |
+
+实测：打出 16701 后 → 第 1 张基本卡后 `play_done` 仍 false、`it_viva_used=1`；
+第 2 张后 `play_done=true`；第 3 张被拒；STATUS/EVENT/ECON 在限制期被拒（文案「《意大利万岁》生效中：本回合出牌阶段只能打出[基本卡]」）；
+离开出牌阶段 `it_viva`/`it_viva_used` 清零；德国不受影响。
+
+### 发现：增强卡（时机卡）口径不一致（待玩家裁定）
+
+| 端 | 位置 | 行为 |
+|---|---|---|
+| 服务端 | `check_play_phase`：`if (is_timing_card(card)) return {ok:true}` 在 `it_viva` 判定**之前** | 限制期内【放行】增强卡/响应卡（实测 `check_phase_for_card(17706) = {ok:true}`） |
+| 客户端 | `play.js:2879`：`if (ph==="play" && view.it_viva && c.type!=="BASIC") return {ok:false}` 在时机卡分支**之前** | 限制期内【置灰】增强卡/响应卡 |
+
+两种读法都说得通：
+
+- **服务端口径**：卡面限制的是"行动 2 次"，而增强卡/响应卡是"按时机打出、不占名额"，不属于行动 -> 应放行；
+- **字面口径**："只能打出[基本卡]" -> 增强卡也不是基本卡 -> 应拦（则需把 `it_viva` 判定挪到 `is_timing_card` 之前）。
+
+无论选哪个，**两端必须同源**（现在客户端更严：玩家点不动，服务端其实允许）。
+
+### 附注
+
+- `view.it_viva` 是【按阵营 + 当前行动国】算的布尔值，没有"剩余次数"，客户端也无法提示「还剩 1 次行动」；如需提示要新增 `it_viva_left`。
+- 用 `debug_set_phase` 切阶段会经 `clear_all_pending_for_debug` 清掉 `it_viva`——验证"跨回合残留"时别用它。
+
+### 【更正】16701《意大利万岁》的"只能打基本卡"此前是**死代码**（已修）
+
+玩家实测反馈："我测试能打出事件和状态啊" —— 对的。上一版我的核查结论有误，原因有两个：
+
+1. **测试假阳性**：`check_play_phase(game, nation, card)` 的 `card` 要传【卡对象】，
+   我传了面 id 字符串（`'16702'`），`is_timing_card(c)` 里 `c.type` 为 undefined -> 恒 false，
+   于是 EVENT/STATUS/ECON 全被判"只能打基本卡"，看起来限制生效，其实是探针自己造出来的。
+2. **真正的 bug**：那条限制写在 `check_play_phase()`，而该函数全仓只被【非卡牌动作】调用
+   （"弃 1 张手牌"、"减 1 分"两处，`rules.js` 28764/28785）；**卡牌打出走的是**
+   `check_phase_for_card()` —— 根本不会经过它。所以「只能打出[基本卡]」对事件/状态/经济战完全无效，
+   实测 `check_phase_for_card(意大利, 16702事件) = {ok:true}`、真 `play_card` 也能打出。
+
+修复（两端同源）：
+
+| 端 | 改动 |
+|---|---|
+| 服务端 | `check_phase_for_card()` 的 `if (ph === 'play')` 分支开头加 it_viva 判定：非 BASIC 且 nation=意大利 -> 拒绝。位置在 EFFECT / extra_play 之后（时机卡不算行动；额外打出同样受限） |
+| 客户端 | `play.js` 的 it_viva 条件加 `c.type !== "EFFECT" && c.type !== "RESPONSE"` 例外，与服务端同源（旧版会把增强卡/响应卡也置灰） |
+
+修复后实测：
+
+- EVENT 16702 / STATUS 17739 / ECON 17712：`check_phase_for_card` 与**真实 `play_card`** 均被拒，
+  日志「《意大利万岁》生效中：本回合出牌阶段只能打出[基本卡]」；
+- BASIC 17700 仍放行；增强卡 17706（时机卡）放行；
+- 两次行动名额、离开出牌阶段清零、德国不受影响——原有行为不变。
+
+回归：`tools/_real_test_16701_italy_viva.js`（**27 项**，含"真打"与静态守卫）
++ `tools/_probe_16701_event_status.js`（分类打印 check_phase_for_card 与真打结果）。
+
+**两条通用教训**：
+
+1. **判据函数要看清它服务于谁**：`check_play_phase` 管"非卡牌动作"，`check_phase_for_card` 管"打出卡牌"；
+   把规则写进不被调用的那个 = 死代码（症状：玩家能做出规则禁止的操作，而代码看起来"有判断"）。
+2. **探针传参类型要与线上一致**：面 id 字符串 vs 卡对象，会让 `c.type` 判空 -> 结论反了。
+   验证"能不能打"最可靠的是**真的 `play_card` 一次**看日志，而不是只调判据函数。
