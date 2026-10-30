@@ -6504,7 +6504,7 @@ view 体积 33.8 → 34.8 KB，也没有变贵。
 | **40 高亮 + 脉动动画（改前）** | **213（−64%）** | **11.75 ms** | **16.8 ms** |
 | **40 高亮 + 静态高亮（改后）** | **600** | **4.17 ms** | **4.3 ms** |
 
-复现脚本：`tmp/perf_pickable.html`（改前）/ `tmp/perf_pickable_after.html`（改后），
+复现脚本：`tools/perf/perf_pickable.html`（改前）/ `tools/perf/perf_pickable_after.html`（改后），
 `agent-browser eval "window.__setCount(40); window.__start(2500)"` 后读 `window.__runs`。
 
 ### 修复（按玩家口径：选择部队也用静态高亮）
@@ -6541,4 +6541,4 @@ view 体积 33.8 → 34.8 KB，也没有变贵。
 `@keyframes supply_warn` 保留但标「已停用」。
 
 至此 `play.css` 里 **已无任何 infinite 动画**（守卫 `tools/_verify_pickable_static.js` 14 项会断言这一点，
-以后再想加"脉搏"类高亮会立刻被拦下）。复现脚本：`tmp/perf_supply.html`（改前）/ `tmp/perf_supply_after.html`（改后）。
+以后再想加"脉搏"类高亮会立刻被拦下）。复现脚本：`tools/perf/perf_supply.html`（改前）/ `tools/perf/perf_supply_after.html`（改后）。

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>out_of_supply 呼吸动画性能对照</title>
+<style>
+	body { margin: 0; background: #2b2b2b; font: 12px/1.4 sans-serif; color: #eee; }
+	#map { position: relative; width: 900px; height: 700px; }
+	:root { --piece-edge: drop-shadow(0 1px 2px rgba(0,0,0,.85)); }
+	.unit {
+		position: absolute; box-sizing: border-box; width: 46px; height: 46px;
+		margin: -23px 0 0 -23px; border-radius: 50%;
+		display: flex; align-items: center; justify-content: center;
+		color: #fff; font-weight: bold; text-shadow: 0 1px 2px #000;
+	}
+	.unit::before {
+		content: ""; position: absolute; inset: 0; z-index: 0;
+		background-color: #2b2b2b;
+		filter: var(--piece-edge);
+		clip-path: polygon(50% 4%, 96% 94%, 4% 94%);
+	}
+	/* 复刻 play.css 的断补呼吸动画 */
+	.unit.out_of_supply {
+		box-shadow: 0 0 0 4px #ff0000aa, 0 2px 5px #0006;
+		animation: supply_warn 1.2s ease-in-out infinite;
+	}
+	@keyframes supply_warn {
+		0%, 100% { box-shadow: 0 0 0 3px #ff000088, 0 2px 5px #0006; }
+		50%      { box-shadow: 0 0 0 8px #ff0000cc, 0 2px 5px #0006; }
+	}
+	.noanim .unit.out_of_supply { animation: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+	const N = 24
+	const map = document.getElementById('map')
+	for (let i = 0; i < N; i++) {
+		const d = document.createElement('div')
+		d.className = 'unit out_of_supply'
+		d.textContent = 'X'
+		d.style.left = (60 + (i % 6) * 130) + 'px'
+		d.style.top = (60 + Math.floor(i / 6) * 130) + 'px'
+		map.appendChild(d)
+	}
+	window.__setCount = function (n) {
+		document.querySelectorAll('.unit').forEach((el, i) =>
+			el.classList.toggle('out_of_supply', i < n))
+		return n
+	}
+	window.__setAnim = on => document.body.classList.toggle('noanim', !on)
+	window.__runs = []
+	window.__measure = function (ms) {
+		ms = ms || 2000
+		return new Promise(res => {
+			const t = []
+			let last = performance.now()
+			const end = last + ms
+			function f(now) {
+				t.push(now - last); last = now
+				if (now < end) requestAnimationFrame(f)
+				else {
+					const sorted = t.slice().sort((a, b) => a - b)
+					const sum = t.reduce((a, b) => a + b, 0)
+					res({
+						frames: t.length,
+						avg: +(sum / t.length).toFixed(2),
+						p95: +sorted[Math.floor(t.length * 0.95)].toFixed(2),
+						count: document.querySelectorAll('.unit.out_of_supply').length,
+						anim: !document.body.classList.contains('noanim'),
+					})
+				}
+			}
+			requestAnimationFrame(f)
+		})
+	}
+	window.__start = function (ms) {
+		window.__measure(ms || 2000).then(r => window.__runs.push(r))
+		return 'started'
+	}
+</script>
+</body>
+</html>

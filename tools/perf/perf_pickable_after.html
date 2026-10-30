@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>pickable 动画性能对照</title>
+<style>
+	body { margin: 0; background: #2b2b2b; font: 12px/1.4 sans-serif; color: #eee; }
+	#map { position: relative; width: 900px; height: 700px; }
+	/* 与 play.css 一致：--piece-edge 是 drop-shadow 滤镜（子层） */
+	:root {
+		--piece-edge: drop-shadow(0 1px 2px rgba(0,0,0,.85));
+	}
+	.unit {
+		position: absolute; box-sizing: border-box; width: 46px; height: 46px;
+		margin: -23px 0 0 -23px; border-radius: 50%;
+		display: flex; align-items: center; justify-content: center;
+		color: #fff; font-weight: bold; text-shadow: 0 1px 2px #000;
+	}
+	/* 形状层：真实页面用 ::before + filter（这里复刻，是"帧成本翻倍"的关键） */
+	.unit::before {
+		content: ""; position: absolute; inset: 0; z-index: 0;
+		background-color: #2b2b2b;
+		filter: var(--piece-edge);
+		clip-path: polygon(50% 4%, 96% 94%, 4% 94%);
+	}
+	/* ---- 复制 play.css 的 .unit.pickable 规则（本次被怀疑的热点） ---- */
+	.unit.pickable {
+		outline: 3px solid #ffd977;
+		outline-offset: 2px;
+		cursor: pointer;
+		box-shadow: 0 0 10px 3px #ffd977cc;
+		z-index: 25;
+	}
+	@keyframes pickable-pulse {
+		0%, 100% { box-shadow: 0 0 4px 2px #ffd977aa; }
+		50%      { box-shadow: 0 0 12px 5px #ffd977ff; }
+	}
+	/* 对照组：关掉动画 */
+	.noanim .unit.pickable { animation: none; box-shadow: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+	const N = 40
+	const map = document.getElementById('map')
+	for (let i = 0; i < N; i++) {
+		const d = document.createElement('div')
+		d.className = 'unit pickable'          /* 全部高亮 = 「询问收回部队」的情形 */
+		d.textContent = 'X'
+		d.style.left = (60 + (i % 8) * 100) + 'px'
+		d.style.top = (60 + Math.floor(i / 8) * 100) + 'px'
+		map.appendChild(d)
+	}
+
+	window.__measure = function (ms) {
+		ms = ms || 2000
+		return new Promise(res => {
+			const t = []
+			let last = performance.now()
+			const end = last + ms
+			function f(now) {
+				t.push(now - last); last = now
+				if (now < end) requestAnimationFrame(f)
+				else {
+					const sorted = t.slice().sort((a, b) => a - b)
+					const sum = t.reduce((a, b) => a + b, 0)
+					res({
+						frames: t.length,
+						avg: +(sum / t.length).toFixed(2),
+						p95: +sorted[Math.floor(t.length * 0.95)].toFixed(2),
+						max: +sorted[t.length - 1].toFixed(2),
+						count: document.querySelectorAll('.unit.pickable').length,
+						anim: !document.body.classList.contains('noanim'),
+					})
+				}
+			}
+			requestAnimationFrame(f)
+		})
+	}
+	window.__setAnim = on => document.body.classList.toggle('noanim', !on)
+	window.__setCount = function (n) {
+		const all = document.querySelectorAll('.unit')
+		all.forEach((el, i) => el.classList.toggle('pickable', i < n))
+		return n
+	}
+	window.__runs = []
+	window.__start = function (ms) {
+		window.__measure(ms || 2000).then(r => {
+			window.__runs.push(r)
+			console.log('MEASURE', JSON.stringify(r))
+		})
+		return 'started'
+	}
+	window.__ready = true
+</script>
+</body>
+</html>
