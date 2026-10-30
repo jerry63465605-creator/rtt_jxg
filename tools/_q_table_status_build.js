@@ -1,0 +1,7 @@
+const fs = require('fs')
+const path = require('path')
+const MOD = path.join(__dirname, '..', 'server-official', 'public', 'quartermaster-sub-wars')
+const t = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8').split('\n')
+const i = t.findIndex(l => /table_status\s*:/.test(l) || /function build_table_status/.test(l))
+console.log('first hit at ' + (i + 1))
+t.forEach((l, k) => { if (l.indexOf('table_status') >= 0) console.log((k + 1) + ': ' + l.trim().slice(0, 120)) })

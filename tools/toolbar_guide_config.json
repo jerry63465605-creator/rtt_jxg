@@ -1,0 +1,66 @@
+{
+  "outDir": "c:/Users/24968/Desktop/rtt/out/national_skills",
+  "fileName": "toolbar_guide.png",
+  "mode": "sections",
+  "pageTitle": "RTT 对局页 · 顶边栏图标指南",
+  "pageSubtitle": "quartermaster-sub-wars · 图标顺序以实际界面为准，功能以代码绑定为准",
+  "width": 1240,
+  "bg": "#D2AE9C",
+  "fg": "#1A1A1A",
+  "accent": "#7A2E2E",
+  "font": "Microsoft YaHei",
+  "iconDir": "c:/Users/24968/Desktop/rtt/out/toolbar_icons",
+  "items": [
+    {
+      "icon": "icon_0.png",
+      "title": "齿轮（cog）— 主菜单",
+      "accent": "#555555",
+      "lines": [
+        "下拉菜单：关于（about.html）｜规则（info/rules.html，新窗口）｜调试面板（开发用：摆子 / 发牌 / 查状态）"
+      ]
+    },
+    {
+      "icon": "icon_1.png",
+      "title": "羽笔卷轴（左）— 对局日志开关",
+      "accent": "#7A5230",
+      "lines": [
+        "展开 / 收起页面下方的「对局日志」面板；有新日志时会提示未读条数"
+      ]
+    },
+    {
+      "icon": "icon_2.png",
+      "title": "放大镜（magnifying-glass）— 地图缩放",
+      "accent": "#3A5A7A",
+      "lines": [
+        "在「适应宽度 / 适应窗口 / 100%」之间循环切换地图缩放；也可直接滚轮 / 拖拽地图"
+      ]
+    },
+    {
+      "icon": "icon_3.png",
+      "title": "对话气泡（chat-bubble）— 聊天",
+      "accent": "#2E7A4F",
+      "lines": [
+        "打开聊天窗口：与对局者 / 观察者实时聊天；窗口可拖动、右下角可调大小",
+        "有未读消息时，浏览器标签页标题会闪烁「➸」提醒"
+      ]
+    },
+    {
+      "icon": "icon_4.png",
+      "title": "木牌（wooden-sign）— 查询菜单",
+      "accent": "#8A6A2D",
+      "lines": [
+        "下拉菜单：海峡控制权一览（弹窗）｜查询海峡状态｜查询本方相邻关系（结果进日志）"
+      ]
+    },
+    {
+      "icon": "icon_5.png",
+      "title": "羽笔卷轴（右）— 行动记录抽屉",
+      "accent": "#7A2E2E",
+      "lines": [
+        "打开「行动记录」抽屉：最近 120 步行动流水，可展开看该步日志详情",
+        "抽屉内含「回退检查点」分区：点「回退到此处」发起时间回溯，需对方同意才生效"
+      ]
+    }
+  ],
+  "footnote": "两个羽笔卷轴图标长得一样：靠左的是平台「对局日志」开关，靠右的是模块「行动记录」抽屉，别点混。"
+}

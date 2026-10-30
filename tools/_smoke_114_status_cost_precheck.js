@@ -122,8 +122,17 @@ section('S4 源码守卫')
 	const src = fs.readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
 	ok('battle 效果参数预检存在',
 		/tr\.effect\.kind === 'battle' && \(\(arg \|\| \{\}\)\.from == null\)/.test(src))
-	ok('预检位于付代价之前（在 cost.discard 之前）',
-		src.indexOf("arg || {}).from == null") < src.indexOf('if (cost.discard && !borrowed)'))
+	/*
+	 * 【2026-10-31 S1】代价段已抽成 pay_event_cost()（文件靠前），
+	 * 所以不能再用 indexOf('if (cost.discard && !borrowed)') —— 会命中 pay_event_cost 里的那一处。
+	 * 改为：在 activate_status 的分支范围内比较"预检"与"状态卡代价"的先后。
+	 */
+	const _actIdx = src.indexOf("action === 'activate_status'")
+	const _fromIdx = src.indexOf('arg || {}).from == null', _actIdx)
+	const _costIdx2 = src.indexOf('if (cost.discard && !borrowed', _actIdx)
+	ok('预检位于付代价之前（在状态卡 cost.discard 之前）',
+		_actIdx > 0 && _fromIdx > _actIdx && _costIdx2 > _actIdx && _fromIdx < _costIdx2,
+		'act=' + _actIdx + ' from=' + _fromIdx + ' cost=' + _costIdx2)
 	ok('15255 候选含大本营自身',
 		/can_build_at\(game, '德国', home, 'army'\)\.ok\) cands\.push\(home\)/.test(src))
 }

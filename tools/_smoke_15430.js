@@ -131,7 +131,15 @@ console.log('\n=== 15430 奇袭：两步（海战→陆战），海战后响应�
 		if (!txCand) txCand = (rTx.candidates || []).find(c => conn.includes(Number(c.id))) || (rTx.candidates || [])[0]
 		const txLand = txCand.id
 		const rAsk = I.RESPONSE_EFFECT_IMPL['15426'](g3, 'axis', { nation: '日本', space: validSea, kind: 'sea' }, txLand, rTx.extra)
-		ok('T3 15426 建完陆军：继续下一步', rAsk && rAsk.pending === true, JSON.stringify(rAsk && { kind: rAsk.kind, step: rAsk.extra && rAsk.extra.step }))
+		/*
+		 * 【2026-10-28 新口径】第 2 支的候选也收窄到"真能建"：
+		 * 若相邻再无合法空位，就直接结束（ok + "无相邻地区可再建"），不再弹"是否再建"。
+		 * 故这里接受两种结果：可再建（pending option）或 无位可建（ok）。
+		 */
+		ok('T3 15426 建完陆军：继续下一步（可再建 -> pending；无位可建 -> ok）',
+			rAsk && (rAsk.pending === true ||
+				(rAsk.ok === true && /无相邻地区可再建/.test(rAsk.desc || ''))),
+			JSON.stringify(rAsk && { kind: rAsk.kind, ok: rAsk.ok, desc: rAsk.desc }))
 		ok('T3 15426 已在选定陆地建成日本陆军', jpArmyOn(g3, txLand), 'txLand=' + txLand)
 
 		// 15426 结算完 -> 按【引擎 trigger_response ok 路径】收尾：弹栈帧 + 清队列 -> promote 恢复。

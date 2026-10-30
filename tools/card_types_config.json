@@ -1,0 +1,59 @@
+{
+  "outDir": "c:/Users/24968/Desktop/rtt/out/national_skills",
+  "fileName": "card_types.png",
+  "mode": "iconTable",
+  "pageTitle": "卡牌类型说明（图标 · 打出时机 · 效果）",
+  "pageSubtitle": "quartermaster-sub-wars · 以 docs/card-icons.md 与规则文档为准",
+  "width": 1240,
+  "bg": "#D2AE9C",
+  "fg": "#1A1A1A",
+  "accent": "#7A2E2E",
+  "font": "Microsoft YaHei",
+  "iconDir": "c:/Users/24968/Desktop/rtt/out/card_type_icons",
+  "headers": ["图标", "类型", "打出与代价", "效果与要点"],
+  "rows": [
+    {
+      "icon": "type_event.png",
+      "name": "事件卡",
+      "play": "出牌阶段打出，占 1 个出牌名额",
+      "effect": "按卡面立即结算后进弃牌堆；部分卡多步选地区；带★的事件卡结算后可触发德/意/美国家技能"
+    },
+    {
+      "icon": "type_effect.png",
+      "name": "增强卡",
+      "play": "按卡面注明的时机打出（如「某事件后」），不占出牌名额",
+      "effect": "置入弃牌堆并执行效果（一次性增益/补强）"
+    },
+    {
+      "icon": "type_response.png",
+      "name": "响应卡",
+      "play": "出牌阶段打出后【背面向上】放桌面，占 1 个出牌名额",
+      "effect": "卡面时点触发时询问持有方「发动 / 不发动」；发动后结算并进弃牌堆；经国家技能等「额外打出」通道打出时不占名额"
+    },
+    {
+      "icon": "type_econ.png",
+      "name": "经济战卡",
+      "play": "出牌阶段打出，占 1 个出牌名额（与事件卡类似）",
+      "effect": "按 [轰炸行动] / [潜艇行动] 等标签让对手损耗手牌或移除单位；可被响应卡（反潜战术等）拦截"
+    },
+    {
+      "icon": "type_status.png",
+      "name": "状态卡",
+      "play": "出牌阶段打出，占 1 个出牌名额，正面向上留在桌面",
+      "effect": "光环持续生效；按卡面窗口（每回合）触发；卡被移除即失效"
+    },
+    {
+      "icon": "type_prelude_event.png",
+      "name": "前奏事件卡（暂未实装）",
+      "play": "规则：前奏期（Episode 2）专用，开局摸 2 张；以 [紧张度±N] / [弃置1张手牌] / [失去2分] 等为代价打出",
+      "effect": "规则：进前奏牌堆（牌堆顶对自己可见）；紧张度达到 10 → 前奏结束、进入正式对局。当前 rules.js 无实现"
+    },
+    {
+      "icon": "type_prelude_arm.png",
+      "name": "前奏军备卡（暂未实装）",
+      "play": "规则：由前奏卡打出后进入前奏牌堆，持续生效，不走 ops",
+      "effect": "规则：前奏期「正式牌无法触发，军备卡可以触发」；当前 rules.js 无实现"
+    }
+  ],
+  "footnote": "另有 5 张无图标的基本行动卡：建设陆军 / 发起陆战 / 建设海军 / 发起海战 / 空军力量（type = BASIC）"
+}

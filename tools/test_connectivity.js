@@ -70,11 +70,26 @@ ok(I.strait_controller(game, SPACE["北欧"]) === "axis", "撤走后，控制者
 const back = I.get_connections(game, NORTH_SEA, "axis").map(nm);
 ok(back.includes("波罗的海"), "轴心视角：北海 重新邻 波罗的海");
 
-console.log("\n=== 7. 有限连通（非海峡）：西欧-非洲北部 仅轴心 ===");
+console.log("\n=== 7. 西欧-非洲北部：默认不邻，仅 17747《西班牙控制直布罗陀》打出后才对轴心相邻 ===");
 const WE = SPACE["西欧"], NA = SPACE["非洲北部"];
+/*
+ * 【2026-10-29 修正】原先这条边被写死在 out/spaces_calibrated.json 的
+ * limited(axis) 里，导致"没打 17747 轴心也能西欧↔北非直达"。
+ * 现改为纯卡驱动：17747 的 ongoing(pair_adjacency) 写入 game.status_connections，
+ * get_connections 按 side 叠加。故默认三方视角都应【不相邻】。
+ */
 ok(!I.get_connections(game, WE, null).map(nm).includes("非洲北部"), "普通视角：西欧 不邻 非洲北部");
-ok(I.get_connections(game, WE, "axis").map(nm).includes("非洲北部"), "轴心视角：西欧 邻 非洲北部");
+ok(!I.get_connections(game, WE, "axis").map(nm).includes("非洲北部"), "轴心视角（未打 17747）：西欧 不邻 非洲北部");
 ok(!I.get_connections(game, WE, "allies").map(nm).includes("非洲北部"), "同盟视角：西欧 不邻 非洲北部");
+ok(!I.get_connections(game, NA, "axis").map(nm).includes("西欧"), "轴心视角（未打 17747）：非洲北部 不邻 西欧");
+{
+	/* 打出 17747 后：status_connections 出现 {6,15,side:'axis'} */
+	const g2 = JSON.parse(JSON.stringify(game))
+	I.apply_status_ongoing(g2, '17747#1', { nation: '意大利', card_id: '17747#1' })
+	I.refresh && I.refresh(g2)
+	ok(I.get_connections(g2, WE, "axis").map(nm).includes("非洲北部"), "打出 17747 后：轴心 西欧 邻 非洲北部");
+	ok(!I.get_connections(g2, WE, "allies").map(nm).includes("非洲北部"), "打出 17747 后：同盟仍不邻（仅对友方）");
+}
 
 console.log("\n=== 8. 邻接对称性（每方视角） ===");
 let asym = 0;
