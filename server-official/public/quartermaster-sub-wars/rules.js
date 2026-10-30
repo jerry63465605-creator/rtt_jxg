@@ -24078,6 +24078,54 @@ function start_opening_phase(game) {
  * 初始阶段：当前弃牌国放弃指定的 3 张手牌（恰好 3 张）。
  * 提交后推进到下一个国家；6 国全部弃完则进入正式第一回合。
  */
+/*
+ * 【2026-10-31】开局增强德国（创建对局页的可选项）。
+ *
+ * 卡面：15225《阿登闪击战》、15239《战略规划》都是德国 EVENT 卡。
+ * 规则（玩家口径）：T1 德国回合开始时，若德国【手牌与弃牌堆】都没有该牌，
+ * 且创建对局时勾选了对应开关，则从德国牌库把这张牌【直接加入手牌】。
+ *
+ * 细节：
+ *   · 幂等：game.ger_boosters_done 只做一次（do_opening_discard 是唯一入口，仍加保险）；
+ *   · 牌已在桌面/移出游戏也视为"已有"，不再补（避免同一实体牌两处存在）；
+ *   · 牌库里找不到（理论上不会，EVENT 各 1 份）就写日志说明，不静默。
+ */
+const GER_BOOSTERS = [
+	{ opt: 'ger_boost_ardennes', face: '15225', name: '阿登闪击战' },
+	{ opt: 'ger_boost_strategy', face: '15239', name: '战略规划' },
+]
+
+function grant_ger_boosters(game) {
+	if (game.ger_boosters_done) return
+	game.ger_boosters_done = true
+	const opt = game.options || {}
+	const want = GER_BOOSTERS.filter(b => opt[b.opt])
+	if (!want.length) return
+
+	const has = (list, face) =>
+		(list || []).some(x => String(inst_card_id(x)) === face)
+	const added = []
+	for (const b of want) {
+		if (has(game.hands['德国'], b.face) || has(game.discard['德国'], b.face) ||
+			has(game.table['德国'], b.face) || has(game.removed['德国'], b.face)) {
+			game.log.push('【开局增强】《' + b.name + '》已在德国手牌/弃牌堆/桌面，跳过')
+			continue
+		}
+		const deck = game.decks['德国'] || []
+		const i = deck.findIndex(x => String(inst_card_id(x)) === b.face)
+		if (i < 0) {
+			game.log.push('【开局增强】德国牌库中未找到《' + b.name + '》，跳过')
+			continue
+		}
+		const card = deck.splice(i, 1)[0]
+		game.hands['德国'] = game.hands['德国'] || []
+		game.hands['德国'].push(card)
+		added.push(b.name + '(' + card + ')')
+	}
+	if (added.length)
+		game.log.push('【开局增强】德国牌库直取入手：' + added.join('、'))
+}
+
 function do_opening_discard(game, current, arg) {
 	if (!game.opening) return game
 	const idx = game.opening.index
@@ -24126,6 +24174,11 @@ function do_opening_discard(game, current, arg) {
 	game.turn_phase = PHASES[0].key
 	game.nations_done = 0
 	game.phase_note = ''
+	/*
+	 * 【2026-10-31】T1 德国回合开始：按创建对局时的选项补发"开局增强德国"的牌。
+	 * 放在 turn_start 武装之前，保证补进来的牌在本回合任何窗口都已在手。
+	 */
+	grant_ger_boosters(game)
 	/* turn_start 武装卡窗口在正式首回合开始时触发（原 on_turn_start 的职责） */
 	offer_armed_effects(game, 'turn_start', {})
 	run_phase_entry(game, game.turn_phase, game.current_nation)
@@ -24836,6 +24889,14 @@ function refresh(game) {
 
 exports.setup = function (seed, scenario, options) {
 	const game = create_empty_game_state(seed, scenario)
+	/*
+	 * 【2026-10-31】把创建对局页的选项落到 game.options（参考 paths-of-glory 的 valiant 做法）。
+	 * 目前只有两个"开局增强德国"开关，见 grant_ger_boosters()。
+	 */
+	game.options = {
+		ger_boost_ardennes: !!(options && options.ger_boost_ardennes),
+		ger_boost_strategy: !!(options && options.ger_boost_strategy),
+	}
 
 	/* 开局：无部队，海峡全部按默认归属 */
 	refresh(game)
@@ -34081,6 +34142,9 @@ if (typeof module !== 'undefined') {
 		PHASES,
 		/* 【2026-10-31 S1】代价段（供回归脚本单元测 + play_card 前移复用） */
 		pay_event_cost,
+		/* 【2026-10-31】开局增强德国（创建对局页可选项），供回归脚本单元测 */
+		grant_ger_boosters,
+		GER_BOOSTERS,
 		ECHO_COST_FIRST,
 		arm_intercept_after_cost,
 		freq_key,

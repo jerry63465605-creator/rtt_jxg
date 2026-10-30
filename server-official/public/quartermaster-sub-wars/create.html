@@ -13,6 +13,20 @@
 </p>
 </div>
 
+<!--
+	【2026-10-31】开局增强（可选，模仿 PoG 的变体开关）：
+	勾选后，第一回合德国回合开始时，若德国【手牌与弃牌堆】都没有对应牌，
+	则从德国牌库直接把那张牌加入手牌（详见 rules.js 的 grant_ger_boosters）。
+-->
+<div id="ger_boosters">
+<p>
+<label><input type="checkbox" value="true" name="ger_boost_ardennes" />增强德国—阿登闪击战（开局保证 15225 入手）</label>
+</p>
+<p>
+<label><input type="checkbox" value="true" name="ger_boost_strategy" />增强德国—战略规划（开局保证 15239 入手）</label>
+</p>
+</div>
+
 <script>
 let scenario = document.querySelector("select[name='scenario']");
 if (scenario) {
