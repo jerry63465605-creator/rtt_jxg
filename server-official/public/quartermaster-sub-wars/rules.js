@@ -18446,6 +18446,26 @@ function event_card_needs(game, nation, card_id, arg) {
 						pick: 1, pickMin: 1,
 					}
 				}
+				/*
+				 * 【2026-10-31 修复】把"本步将要消灭的部队"记进影子盘面（pendingRemove）。
+				 *
+				 * 症状（15315 阿拉曼战役）：卡面"在<非洲北部>消灭1支敌方陆军。在<中东><非洲北部>之一征召陆军"，
+				 * 两个候选都合法，但【征召步没有任何选择、默认落在中东】。
+				 *
+				 * 根因：候选是【执行前】一次性算完的，那时<非洲北部>还有敌方陆军 ->
+				 * can_recruit_at 判"有敌方部队" -> 该格被过滤 -> 只剩中东 1 个候选 ->
+				 * `cands.length > minNeed(1)` 不成立 -> 服务端视为"不用选" -> 自动取第一个。
+				 * 而前面的 remove 步早已把"已指定移除的部队"记进 pendingRemove（影子盘面），
+				 * eliminate 步却没有 —— 于是后续步骤看不到"这支部队将离场"。
+				 *
+				 * 这里按执行口径（有 arg 用玩家指定的，否则取唯一候选 ec[0]）把将被消灭的部队记入影子，
+				 * 后续步骤的 can_recruit_at / can_build_at 就会按"它已不在"计算候选。
+				 */
+				const willRemove = (already != null)
+					? [String(already)]
+					: (ec.length === 1 ? [String(ec[0])] : [])
+				for (const id of willRemove)
+					if (pendingRemove.indexOf(id) < 0) pendingRemove.push(id)
 			}
 		}
 		/* 更新 prevSpaces：本 step 若产出单位，记下它的地区供后续 useNewPiece */
