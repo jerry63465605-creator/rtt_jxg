@@ -31443,6 +31443,21 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		/*
+		 * 【2026-10-31】run 明确失败（ok:false，如"所选单位不在候选内"）：
+		 * 此前没有任何分支处理 —— 会掉进下面的"付代价 + 卡进弃牌堆"，
+		 * 日志只剩一句 `打出《X》——`（desc 为空），玩家看到的是"点了、代价没了、什么也没发生"。
+		 * 现在：不付代价、不消耗卡，写清原因并从本窗口摘掉该卡（与 skip 分支同款），
+		 * 避免反复提交同一个非法参数。
+		 */
+		if (r && r.ok === false) {
+			game.log.push('【' + owner + '】《' + nm + '》未发动：' + (r.reason || '条件不满足'))
+			off.cards = off.cards.filter(x => x.card_id !== cardId)
+			if (!off.cards.length) removeArmedWindow(game, off)
+			else sync_armed_offer(game)
+			refresh(game)
+			return game
+		}
+		/*
 		 * 【2026-10-07】15205《JU-87》型：run 建立的是【战斗预算】而不是立即结算。
 		 *
 		 * 此时【不能】走下面的"付代价 + 卡进弃牌堆"—— 战斗还没打，
