@@ -1249,7 +1249,7 @@ button.primary {
 /* ================= 调试面板 ================= */
 
 /* 放在左下角，默认半透明，悬停/点击时变实心 */
-#debug_panel, #debug_card_panel, #debug_phase_panel {
+#debug_panel, #debug_card_panel, #debug_phase_panel, #debug_view_panel {
 	position: absolute;
 	left: 10px;
 	bottom: 34px;
@@ -1263,9 +1263,9 @@ button.primary {
 	transition: opacity .15s;
 }
 
-#debug_panel:hover, #debug_card_panel:hover, #debug_phase_panel:hover { opacity: 1; }
+#debug_panel:hover, #debug_card_panel:hover, #debug_phase_panel:hover, #debug_view_panel:hover { opacity: 1; }
 
-#debug_panel .panel-head, #debug_card_panel .panel-head, #debug_phase_panel .panel-head {
+#debug_panel .panel-head, #debug_card_panel .panel-head, #debug_phase_panel .panel-head, #debug_view_panel .panel-head {
 	background-color: #444;
 	color: #fff;
 	padding: 4px 8px;
@@ -1273,13 +1273,13 @@ button.primary {
 	font-size: 13px;
 }
 
-#debug_panel .panel-body, #debug_card_panel .panel-body, #debug_phase_panel .panel-body { padding: 6px 8px; font-size: 12px; }
-#debug_panel .panel-body p, #debug_card_panel .panel-body p, #debug_phase_panel .panel-body p { margin: 5px 0; }
-#debug_panel label, #debug_card_panel label, #debug_phase_panel label { display: block; margin: 4px 0; }
-#debug_panel select, #debug_card_panel select, #debug_phase_panel select { width: 100%; }
-#debug_panel button, #debug_card_panel button, #debug_phase_panel button { width: 100%; margin-top: 3px; }
-#debug_panel button.on, #debug_card_panel button.on, #debug_phase_panel button.on { background-color: #0a5; color: #fff; }
-#debug_panel .panel-body p.sep, #debug_card_panel .panel-body p.sep, #debug_phase_panel .panel-body p.sep {
+#debug_panel .panel-body, #debug_card_panel .panel-body, #debug_phase_panel .panel-body, #debug_view_panel .panel-body { padding: 6px 8px; font-size: 12px; }
+#debug_panel .panel-body p, #debug_card_panel .panel-body p, #debug_phase_panel .panel-body p, #debug_view_panel .panel-body p { margin: 5px 0; }
+#debug_panel label, #debug_card_panel label, #debug_phase_panel label, #debug_view_panel label { display: block; margin: 4px 0; }
+#debug_panel select, #debug_card_panel select, #debug_phase_panel select, #debug_view_panel select { width: 100%; }
+#debug_panel button, #debug_card_panel button, #debug_phase_panel button, #debug_view_panel button { width: 100%; margin-top: 3px; }
+#debug_panel button.on, #debug_card_panel button.on, #debug_phase_panel button.on, #debug_view_panel button.on { background-color: #0a5; color: #fff; }
+#debug_panel .panel-body p.sep, #debug_card_panel .panel-body p.sep, #debug_phase_panel .panel-body p.sep, #debug_view_panel .panel-body p.sep {
 	margin: 8px 0 3px;
 	padding-top: 6px;
 	border-top: 1px dashed #999;
@@ -2077,7 +2077,8 @@ aside::-webkit-scrollbar-thumb:hover {
 /* 【2026-10-29】三个调试面板的标题栏关闭按钮（×） */
 #debug_panel .panel-close,
 #debug_card_panel .panel-close,
-#debug_phase_panel .panel-close {
+#debug_phase_panel .panel-close,
+#debug_view_panel .panel-close {
 	float: right;
 	width: auto;
 	margin: -2px -4px 0 0;
@@ -2094,8 +2095,11 @@ aside::-webkit-scrollbar-thumb:hover {
 
 #debug_panel .panel-close:hover,
 #debug_card_panel .panel-close:hover,
-#debug_phase_panel .panel-close:hover {
+#debug_phase_panel .panel-close:hover,
+#debug_view_panel .panel-close:hover {
 	background: #c33;
 }
 #debug_card_panel #dbg_card_hint { color: #a33; min-height: 16px; }
 #debug_phase_panel #dbg_phase_hint { color: #a33; min-height: 16px; }
+#debug_view_panel #dbg_view_hint { color: #a33; min-height: 16px; }
+#debug_view_panel .dbg-note { color: #666; font-size: 11px; }

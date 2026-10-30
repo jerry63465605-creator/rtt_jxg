@@ -25011,6 +25011,15 @@ exports.view = function (state, current) {
 		}
 		const ao = (game.armed_offers || []).find(w => w.nation && faction_of_nation(w.nation) === side)
 		if (ao) return ao.nation
+		/*
+		 * 【2026-10-31 调试】手牌视角：默认等待时显示哪个国家的手牌。
+		 *
+		 * 只影响这一层【兜底】（即"没有任何窗口/让权在等我"的静置状态），
+		 * 上面那些"此刻真正该谁行动"的判定优先，避免调试开关把窗口态搞乱。
+		 * 值由 debug_set_view_nation 写入 game.debug_view_nation[side]，按阵营存。
+		 */
+		const dv = (game.debug_view_nation || {})[side]
+		if (dv && faction_of_nation(dv) === side) return dv
 		return nation_of_player(game, current)
 	})()
 	/* 【2026-10-12】17510 我们的政治哲学：挂起给英国期间，本方（同盟）视角下把
@@ -26584,6 +26593,8 @@ exports.view = function (state, current) {
 
 		/* ---- 手牌 ---- */
 		my_nation: my_nation,
+		/* 【2026-10-31 调试】手牌视角 override（按阵营），供调试面板回显当前选择 */
+		debug_view_nation: (game.debug_view_nation || {})[side] || null,
 		hands: hands,
 		deck_counts: (() => {
 			const m = {}
@@ -27694,6 +27705,7 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 		debug_draw: 1,
 		debug_add_card: 1,      /* 调试卡牌：把一张牌加入当前行动国手牌 */
 		debug_set_phase: 1,     /* 调试阶段：清空挂起态并跳到指定国家的指定阶段 */
+		debug_set_view_nation: 1, /* 调试手牌视角：默认等待时显示哪个国家的手牌 */
 		resolve_supply: 1,
 		next_nation: 1,
 		log: 1,
@@ -28200,6 +28212,42 @@ function do_action(state, current, action, arg) {
 		if (typeof fn === 'function') {
 			try { fn(game, nation) } catch (e) { game.log.push('【调试】阶段入口出错：' + e.message) }
 		}
+		refresh(game)
+		return game
+	}
+
+	/*
+	 * 【2026-10-31 调试】手牌视角：默认等待时显示哪个国家的手牌。
+	 *
+	 * 用途：调试/试玩时本方多国（英/法/美 或 德/意/日），非本方回合时
+	 * 手牌区默认只显示"本阵营排最前"的国家，想临时看另一国的手牌只能等它的回合。
+	 * 这里按【阵营】记一个 override，view 的兜底分支优先用它。
+	 *
+	 * arg: { nation } —— 必须是本方阵营的国家；空/native 传 null 表示清除（恢复默认）。
+	 */
+	if (action === 'debug_set_view_nation') {
+		const nat = (arg && arg.nation) || null
+		/*
+		 * 阵营取【请求方角色 side】（do_action 的第 2 参），不能取 current_nation ——
+		 * 敌方回合时本方仍要能切自己的手牌视角（否则同盟在德国回合设置会被判成 axis 而忽略）。
+		 */
+		const reqSide = (String(side || '').toLowerCase() === 'allies') ? 'allies' : 'axis'
+		const wantSide = (arg && arg.side) || reqSide
+		game.debug_view_nation = game.debug_view_nation || {}
+		if (!nat) {
+			delete game.debug_view_nation[wantSide]
+			game.log.push('【调试】手牌视角已恢复默认（' + wantSide + '）')
+			refresh(game)
+			return game
+		}
+		if (faction_of_nation(nat) !== wantSide) {
+			game.log.push('【调试】手牌视角：' + nat + ' 不属于【' +
+				(wantSide === 'allies' ? '同盟' : '轴心') + '】，已忽略')
+			return game
+		}
+		game.debug_view_nation[wantSide] = nat
+		game.log.push('【调试】手牌视角：' + (wantSide === 'allies' ? '同盟' : '轴心') +
+			' 默认显示【' + nat + '】的手牌')
 		refresh(game)
 		return game
 	}
@@ -33367,6 +33415,28 @@ exports.query = function (state, current, query, params) {
 		}
 		out.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
 		return out
+	}
+
+	/*
+	 * 【2026-10-31 调试手牌视角】本方阵营可选国家 + 当前 override。
+	 * 阵营归属只在服务端有（NATION_FACTION / faction_of_nation），客户端不硬编码，
+	 * 避免以后加国/改阵营时两边不一致。
+	 */
+	if (query === 'debug_view_options') {
+		const nations = ORDER_OF_NATIONS.filter(n => faction_of_nation(n) === side)
+		return {
+			side: side,
+			nations: nations.map(n => ({ nation: n, cards: (game.hands[n] || []).length })),
+			current: (game.debug_view_nation || {})[side] || null,
+			/* 默认（未设置 override 时）会显示谁 —— 供面板提示"当前默认" */
+			default_nation: nation_of_player(game, current),
+			my_nation: (function () {
+				/* 与 view 同口径：当前行动国属于本方则用它，否则走默认 */
+				const cur = game.current_nation
+				if (cur && faction_of_nation(cur) === side) return cur
+				return nation_of_player(game, current)
+			})(),
+		}
 	}
 
 	if (query === 'adjacency') {

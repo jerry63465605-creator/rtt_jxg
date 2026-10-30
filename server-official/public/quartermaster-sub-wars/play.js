@@ -9927,6 +9927,11 @@ function on_reply(q, params) {
 		render_debug_cards()
 		return
 	}
+	/* 【2026-10-31】调试手牌视角：本方阵营可选国家 + 当前 override */
+	if (q === "debug_view_options") {
+		populate_debug_view_nations(params || {})
+		return
+	}
 	if (q === "straits") {
 		const txt = (params || []).map(s =>
 			`${s.name}: ${s.a} ↔ ${s.b} → ${s.controller === "axis" ? "轴心" : "同盟"}控制`
@@ -10418,7 +10423,7 @@ function close_debug_panel(id) {
 		set_debug_hint("")
 	}
 	/* 三个面板都收起时，退出 debug 布局模式 */
-	const anyOpen = ["debug_panel", "debug_card_panel", "debug_phase_panel"]
+	const anyOpen = ["debug_panel", "debug_card_panel", "debug_phase_panel", "debug_view_panel"]
 		.some(x => {
 			const e = document.getElementById(x)
 			return e && !e.classList.contains("hide")
@@ -10427,8 +10432,72 @@ function close_debug_panel(id) {
 }
 
 /* 三个调试面板互斥：打开一个就把另外两个收起来，避免叠在左下角 */
+/*
+ * 【2026-10-31】调试：手牌视角。
+ *
+ * 用途：本方阵营有多国（同盟 英/法/美/苏/中、轴心 德/意/日），
+ * 非自己回合时手牌区默认只显示"本阵营排最前"的国家；这里可以让它固定显示某一国的手牌，
+ * 便于本地调试/试玩时查看另一国的手牌。
+ *
+ * 服务端：game.debug_view_nation[side]（只作用于 view 的【兜底】分支，
+ * 即"没有任何窗口/让权在等我"的静置状态，不会覆盖正在等表态的国家）。
+ */
+function toggle_debug_view() {
+	const el = document.getElementById("debug_view_panel")
+	if (!el) return
+	const willOpen = el.classList.contains("hide")
+	close_other_debug_panels("debug_view_panel")
+	el.classList.toggle("hide", !willOpen)
+	document.body.classList.toggle("debug", willOpen)
+	if (!willOpen) return
+	set_dbg_view_hint("")
+	/* 国家列表由服务端按阵营给（客户端不硬编码阵营归属） */
+	send_query("debug_view_options")
+}
+
+function set_dbg_view_hint(text) {
+	const el = document.getElementById("dbg_view_hint")
+	if (el) el.textContent = text
+}
+
+function populate_debug_view_nations(data) {
+	const sel = document.getElementById("dbg_view_nation")
+	if (!sel) return
+	sel.innerHTML = ""
+	const list = (data && data.nations) || []
+	list.forEach(x => {
+		const o = document.createElement("option")
+		o.value = x.nation
+		o.textContent = x.nation + "（手牌 " + (x.cards || 0) + " 张）"
+		sel.appendChild(o)
+	})
+	const cur = (data && data.current) || (data && data.my_nation) || ""
+	if (cur && list.some(x => x.nation === cur)) sel.value = cur
+	const dflt = (data && data.default_nation) || ""
+	const sideZh = (data && data.side) === "allies" ? "同盟" : "轴心"
+	set_dbg_view_hint(data && data.current
+		? ("当前固定为【" + data.current + "】（" + sideZh + "）")
+		: ("当前为默认：" + sideZh + " 显示【" + (dflt || "—") + "】"))
+}
+
+function debug_do_set_view(reset) {
+	const sel = document.getElementById("dbg_view_nation")
+	if (reset) {
+		send_action("debug_set_view_nation", { nation: null })
+		set_dbg_view_hint("已恢复默认（按回合/窗口自动切换）")
+		return
+	}
+	const nation = sel ? sel.value : ""
+	if (!nation) {
+		set_dbg_view_hint("请选择国家")
+		return
+	}
+	send_action("debug_set_view_nation", { nation: nation })
+	set_dbg_view_hint("已固定为【" + nation + "】（静置时生效）")
+}
+
 function close_other_debug_panels(keep) {
-	["debug_panel", "debug_card_panel", "debug_phase_panel"].forEach(id => {
+	["debug_panel", "debug_card_panel", "debug_phase_panel", "debug_view_panel"].forEach(id => {
 		if (id === keep) return
 		const el = document.getElementById(id)
 		if (el && !el.classList.contains("hide")) el.classList.add("hide")
