@@ -3,7 +3,7 @@
  *
  * 由 tools/gen_module_data.js 从 out/adjacency.json 自动生成，请勿手改。
  * 人工标定源: out/spaces_calibrated.json
- * 生成时间: 2026-09-21T14:15:43.084Z
+ * 生成时间: 2026-10-29T03:26:13.524Z
  *
  * 邻接建模沿用 PoG 约定:
  *   space.connections            普通连通（双方都通），完整邻居列表
@@ -26,8 +26,8 @@ data.map = {
   "land": 38,
   "sea": 15,
   "links": 139,
-  "normal": 134,
-  "limited": 1,
+  "normal": 135,
+  "limited": 0,
   "strait": 4,
   "straitSpaces": 4,
   "straitCovered": 4
@@ -195,17 +195,7 @@ data.spaces = [
    17,
    44,
    46
-  ],
-  "limited_connections": {
-   "axis": [
-    8,
-    13,
-    15,
-    17,
-    44,
-    46
-   ]
-  }
+  ]
  },
  {
   "id": 7,
@@ -301,7 +291,7 @@ data.spaces = [
    16,
    45
   ]
-},
+ },
  {
   "id": 12,
   "name": "巴尔干",
@@ -368,19 +358,7 @@ data.spaces = [
    32,
    34,
    46
-  ],
-  "limited_connections": {
-   "axis": [
-    6,
-    16,
-    17,
-    29,
-    31,
-    32,
-    34,
-    46
-   ]
-  }
+  ]
  },
  {
   "id": 16,
@@ -945,7 +923,7 @@ data.spaces = [
    14,
    16
   ]
-},
+ },
  {
   "id": 46,
   "name": "地中海",

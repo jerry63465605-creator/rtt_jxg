@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261028d">
+	<link rel="stylesheet" href="play.css?v=20261030e">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261028d"></script>
-	<script defer src="layout.js?v=20261028d"></script>
-	<script defer src="play.js?v=20261028d"></script>
+	<script defer src="data.js?v=20261030e"></script>
+	<script defer src="layout.js?v=20261030e"></script>
+	<script defer src="play.js?v=20261030e"></script>
 </head>
 <body>
 
@@ -25,7 +25,10 @@
 				<li><a href="info/rules.html" target="_blank">规则</a>
 				<li class="separator">
 				<!-- 【2026-10-22】调试面板从顶栏按钮移进本菜单，顶栏位置让给「回退」 -->
-				<li onclick="toggle_debug()">调试面板</li>
+				<!-- 【2026-10-29】拆成三项：调试单位（原面板）/ 调试卡牌 / 调试阶段 -->
+				<li onclick="toggle_debug()">调试单位</li>
+				<li onclick="toggle_debug_cards()">调试卡牌</li>
+				<li onclick="toggle_debug_phase()">调试阶段</li>
 			</menu>
 		</details>
 		<details id="info_menu">
@@ -504,7 +507,7 @@
 
 	<div id="debug_panel" class="hide">
 		<div class="panel">
-			<div class="panel-head">调试：放置部队</div>
+			<div class="panel-head">调试：放置部队<button class="panel-close" title="关闭" onclick="close_debug_panel('debug_panel')">×</button></div>
 			<div class="panel-body">
 				<p>
 					<label>国家
@@ -534,6 +537,76 @@
 				<p><button class="action" onclick="debug_resolve_supply()">结算当前国补给</button></p>
 				<p><button class="action" onclick="debug_next_nation()">下一个行动国</button></p>
 				<p id="dbg_hint"></p>
+			</div>
+		</div>
+	</div>
+
+	<!-- 【2026-10-29】调试卡牌：只列【当前行动国】的牌，点一张即加入本国手牌 -->
+	<div id="debug_card_panel" class="hide">
+		<div class="panel">
+			<div class="panel-head">调试：卡牌（当前国家）<button class="panel-close" title="关闭" onclick="close_debug_panel('debug_card_panel')">×</button></div>
+			<div class="panel-body">
+				<p id="dbg_card_nation">当前国家：—</p>
+				<p>
+					<label>类型
+						<!-- 【2026-10-29 修复】选项由 populate_debug_card_types() 按【目录里真实存在的 type】动态生成
+						     （原先写死了 ECHO 这个类型名，但卡库里的增强卡 type 是 EFFECT → 增强卡筛选恒为空） -->
+						<select id="dbg_card_type" onchange="render_debug_cards()">
+							<option value="">全部</option>
+						</select>
+					</label>
+					<label>搜索
+						<input id="dbg_card_kw" type="text" size="12" placeholder="名称/文本" oninput="render_debug_cards()">
+					</label>
+				</p>
+				<p>
+					<label>去向
+						<select id="dbg_card_dest">
+							<option value="hand">手牌</option>
+							<option value="deck_top">牌库顶</option>
+							<option value="deck_bottom">牌库底</option>
+							<option value="discard">弃牌堆</option>
+						</select>
+					</label>
+				</p>
+				<p id="dbg_card_hint"></p>
+				<div id="dbg_card_grid" class="card-grid" style="max-height:360px;overflow:auto"></div>
+			</div>
+		</div>
+	</div>
+
+	<!-- 【2026-10-29】调试阶段：选国家 + 阶段 1-7，清空挂起态后直接跳过去（会执行阶段入口） -->
+	<div id="debug_phase_panel" class="hide">
+		<div class="panel">
+			<div class="panel-head">调试：阶段<button class="panel-close" title="关闭" onclick="close_debug_panel('debug_phase_panel')">×</button></div>
+			<div class="panel-body">
+				<p>
+					<label>国家
+						<select id="dbg_phase_nation">
+							<option value="德国">德国</option>
+							<option value="英国">英国</option>
+							<option value="日本">日本</option>
+							<option value="苏联">苏联</option>
+							<option value="意大利">意大利</option>
+							<option value="美国">美国</option>
+							<option value="法国">法国</option>
+							<option value="中国">中国</option>
+						</select>
+					</label>
+					<label>阶段
+						<select id="dbg_phase_key">
+							<option value="resource">1 资源再分配</option>
+							<option value="play">2 出牌阶段</option>
+							<option value="airforce">3 空军阶段</option>
+							<option value="supply">4 补给阶段</option>
+							<option value="scoring">5 计分阶段</option>
+							<option value="discard">6 弃牌阶段</option>
+							<option value="draw">7 抓牌阶段</option>
+						</select>
+					</label>
+				</p>
+				<p><button class="action" onclick="debug_do_set_phase()">清空状态并跳过去</button></p>
+				<p id="dbg_phase_hint"></p>
 			</div>
 		</div>
 	</div>

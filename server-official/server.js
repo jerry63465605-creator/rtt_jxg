@@ -2595,6 +2595,15 @@ function rewind_game_to_snap(game_id, snap_id) {
 	let snap = SQL_SELECT_SNAP.get(game_id, snap_id)
 	let game_state = JSON.parse(SQL_SELECT_GAME_STATE.get(game_id))
 	let snap_state = JSON.parse(snap.state)
+	/*
+	 * 【2026-10-28 P0-a】快照不再存 rollback，这里把【仍然有效】的回退点捡回来：
+	 *   · 只保留 log_len 不超过快照日志长度的点（其余指向被截掉的未来日志）；
+	 *   · 待确认的回退提议一律作废（它引用的是未来某一步的快照）。
+	 * 必须在下面把 snap_state.log 换成数组之前读它的数值。
+	 */
+	snap_state.rollback = (game_state.rollback || [])
+		.filter(p => (p.log_len == null ? 0 : p.log_len) <= snap_state.log)
+	snap_state.rollback_proposal = null
 	snap_state.undo = []
 	snap_state.log = game_state.log.slice(0, snap_state.log)
 
@@ -4236,13 +4245,26 @@ function sync_client_state_for_title(title_id) {
 
 function snap_from_state(state) {
 	// return JSON of game state without undo and with log replaced by log length
+	/*
+	 * 【2026-10-28 P0-a】同时剔掉 rollback（回退检查点数组）。
+	 *
+	 * 为什么：rollback 里是 60 份 deflate 压缩的整状态快照，后期一个存档里它是
+	 * 363 KB / 共 388 KB（占 94%）；而每个回放快照都把它整份复制一遍，
+	 * 导致单局 game_snap 能到 39 MB，也让每次"换手存快照"多写 0.3 MB。
+	 * 回放只需要盘面，不需要"还能退回哪几步"，故剔除。
+	 *
+	 * 兼容：恢复时 rewind_game_to_snap 会把当前仍有效的回退点捡回来（见该函数）。
+	 */
 	let save_undo = state.undo
 	let save_log = state.log
+	let save_rollback = state.rollback
 	state.undo = undefined
 	state.log = save_log.length
+	state.rollback = undefined
 	let snap = JSON.stringify(state)
 	state.undo = save_undo
 	state.log = save_log
+	state.rollback = save_rollback
 	return snap
 }
 

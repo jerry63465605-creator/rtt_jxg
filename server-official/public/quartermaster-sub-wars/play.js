@@ -92,6 +92,9 @@ const ui = {
 	spaces: {},      // id -> element
 	piece_el: {},    // piece id -> element
 	marker_el: {},   // space id -> 计分标记胶囊 element
+	/* 【2026-10-28 性能】card id -> 手牌卡元素：同一张牌复用上一帧的 DOM，
+	 * 不再每帧 innerHTML="" 全量重建（卡图 probe + 事件绑定都在重建里） */
+	hand_el: {},
 	placed: {},      // piece id -> space id（上次渲染的位置，用于增量更新）
 	built: false,
 	selected: null,  // 当前选中的格位 id
@@ -956,9 +959,15 @@ function build_card_elt(c) {
 
 	d.title = c.name + "\n" + (view.card_types && view.card_types[c.type]
 		? view.card_types[c.type].zh : c.type) + "\n" + c.text
+	/*
+	 * 【2026-10-28 性能】记住"原始"标题：手牌元素改为复用之后，
+	 * 置灰原因（hr.reason）会写进 title，恢复可用时必须能还原回原始文案
+	 * （以前每帧重建元素，天然还原）。
+	 */
+	d.__base_title = d.title
 
 	/* 悬停：在 #tooltip 显示放大卡图（仿 PoG） */
-	d.addEventListener("mouseenter", () => on_focus_card(c))
+	d.addEventListener("mouseenter", () => on_focus_card(d.__card))
 	d.addEventListener("mouseleave", on_blur_card)
 
 	/*
@@ -977,9 +986,14 @@ function build_card_elt(c) {
 	 * 点击时再调用 on_click_hand_card() 现算当前该做什么。
 	 */
 	d.__card = c
+	/*
+	 * 【2026-10-28 性能】点击/悬停一律取元素上的 __card，而不是闭包里的 c：
+	 * 手牌元素现在是复用的，牌对象每帧由服务端重新下发，
+	 * 闭包里的 c 会变成"上一帧的旧对象"，而 __card 每帧都刷新。
+	 */
 	d.addEventListener("click", (ev) => {
 		ev.stopPropagation()
-		on_click_hand_card(c, d)
+		on_click_hand_card(d.__card, d)
 	})
 
 	return d
@@ -2454,7 +2468,12 @@ function update_armed_offer_box() {
 		const dis = (c.cost && c.cost.discard) || 0
 		const costLabel = att ? '（损耗 ' + att + '）' : (dis ? '（弃 ' + dis + ' 张）' : '')
 		return {
-			label: '打出《' + c.name + '》' + costLabel,
+			/*
+			 * 【2026-10-31】拦截窗口来源区分：via='trigger' = 敌方机会卡【触发】，
+			 * via='play' = 敌方【打出】。文案区分，避免玩家以为对方是主动出牌。
+			 */
+			label: (ao.via === 'trigger' ? '拦截《' : '打出《') + c.name + '》' +
+				(ao.via === 'trigger' ? '（敌方触发）' : '') + costLabel,
 			cls: 'primary',
 			onClick: () => {
 				armed_resolving_card = c.card   /* 记住正在结算的卡，供多步第一步回传 */
@@ -2838,7 +2857,7 @@ function check_phase_for_card(c) {
 
 	/*
 	 * 【2026-10-09 16701 意大利万岁】本回合出牌阶段行动 2 次，
-	 * 但只能打出[战略卡]（玩家口径 = 基本卡 BASIC）。
+	 * 但只能打出[基本卡]（玩家口径 = 基本卡 BASIC）。
 	 *
 	 * ⚠ 必须镜像服务端 rules.js:check_play_phase 的同名判定（通用教训 3：
 	 *   服务端与客户端判定同源），否则会出现"服务端拒绝、客户端却可点"。
@@ -3762,6 +3781,22 @@ function on_blur_card() {
 		tip.hidden = true
 }
 
+/*
+ * 【2026-10-28 性能】手牌区增量刷新状态。
+ *
+ *   hand_mode : "mine" | "opp" —— 上一次渲染的是本方手牌还是对手牌背，
+ *               分支切换时必须整体清空（两套 DOM 不通用）
+ *   hand_sig  : 上一次渲染的"状态签名"。签名不变 = 外观输出必然完全相同，
+ *               直接 return，连一次 DOM 写都不做。
+ */
+let hand_mode = null
+let hand_sig = null
+
+/* 选中类集合 -> 参与签名的短字符串（顺序敏感：弃牌序号会显示在角标上） */
+function hand_pick_sig(arr) {
+	return arr && arr.length ? arr.join(",") : ""
+}
+
 function update_hand_panel() {
 	const n = view.my_nation
 
@@ -3849,11 +3884,27 @@ function update_hand_panel() {
 	const note = document.getElementById("hand_limit_note")
 	if (!box)
 		return
-	box.innerHTML = ""
 
 	/* 非本方回合：只显示对手手牌张数（牌背） */
 	if (!n) {
 		const hands = view.hands || {}
+		if (note)
+			note.textContent = ""
+
+		/*
+		 * 【2026-10-28 性能】对手牌背同样走签名比对：
+		 * 张数没变就整块跳过（原来每帧清空 + 重建）。
+		 */
+		let osig = "opp"
+		for (const k of Object.keys(hands))
+			osig += "|" + k + "×" + (hands[k].count || 0)
+		if (hand_mode === "opp" && osig === hand_sig)
+			return
+		hand_mode = "opp"
+		hand_sig = osig
+		box.innerHTML = ""
+		ui.hand_el = {}
+
 		let any = false
 		for (const k of Object.keys(hands)) {
 			if (!hands[k].count)
@@ -3866,8 +3917,6 @@ function update_hand_panel() {
 		}
 		if (!any)
 			box.innerHTML = '<div class="hand_empty">（对手无手牌）</div>'
-		if (note)
-			note.textContent = ""
 		return
 	}
 
@@ -3907,11 +3956,108 @@ function update_hand_panel() {
 	}
 
 	/*
+	 * 【2026-10-28 性能】先算"状态签名"，签名不变就直接返回。
+	 *
+	 * 签名只包含【本函数会读到的所有输入】（阶段、配额、各选择集、
+	 * 服务端 hand_ready 判定、armed_offer、额外打出权…）。
+	 * 输入完全相同 -> 输出必然完全相同 -> 一个 DOM 都不用碰。
+	 *
+	 * 注：只要有任意一张牌缺 hand_ready（此时会兜底走本地
+	 * check_phase_for_card()，而它读的 view 字段未全部纳入签名），
+	 * 就放弃跳过（sig=null），宁可多绘一次也不能画出旧状态。
+	 */
+	let sig = null
+	{
+		const parts = [n, handLen, view.turn_phase,
+			quotaUsed ? 1 : 0,
+			discard_mode ? 1 : 0, discard_playmode ? 1 : 0,
+			openingMine ? 1 : 0,
+			view.opening ? (view.opening.current_nation || "") : "",
+			pending_card ? pending_card.id : "",
+			/*
+			 * 注意：这里是"有没有"而不是"选了什么"。
+			 * 基本卡角标的分支条件是 `!pending_resource && !air_move`，
+			 * 所以 pending_resource 由 null 变成 {drop:[]} 也要算变化
+			 * （否则角标摘不掉，出现"画面和状态不一致"）。
+			 */
+			pending_resource ? 1 : 0,
+			air_move ? 1 : 0,
+			hand_pick_sig(pending_resource && pending_resource.drop),
+			hand_pick_sig(pending_skill_discard && pending_skill_discard.drop),
+			air_move ? air_move.card : "",
+			hand_pick_sig(discard_pick),
+			hand_pick_sig(pending_echo_discard && pending_echo_discard.drop),
+			hand_pick_sig(status_discard_sel && status_discard_sel.picked),
+			hand_pick_sig(pending_depression_discard && pending_depression_discard.drop),
+			((view.armed_offer && view.armed_offer.cards) || []).map(x => x.card).join(","),
+			view.extra_play
+				? (view.extra_play.phase + "/" + view.extra_play.source_name + "/" +
+					(view.extra_play.filter || "") + "/" +
+					(view.extra_play.cards || []).join(","))
+				: ""]
+		let allHr = true
+		for (const c of cards) {
+			const hr = view.hand_ready && view.hand_ready[c.id]
+			if (!hr)
+				allHr = false
+			parts.push(c.id + ":" + c.type + ":" + c.name + ":" +
+				(hr ? ((hr.ok ? "1" : "0") + (hr.reason || "")) : "") + ":" +
+				(extra_play_allows_card(c) ? 1 : 0) +
+				(is_airforce_only(c) ? 1 : 0) +
+				(is_timing_card(c) ? 1 : 0))
+		}
+		sig = allHr ? parts.join("|") : null
+	}
+
+	if (hand_mode !== "mine") {
+		/* 从"对手牌背"切回本方手牌：两套 DOM 不通用，整体清空 */
+		box.innerHTML = ""
+		ui.hand_el = {}
+		hand_mode = "mine"
+	}
+	if (sig && sig === hand_sig)
+		return
+	hand_sig = sig
+
+	if (!cards.length) {
+		box.innerHTML = '<div class="hand_empty">（无手牌）</div>'
+		ui.hand_el = {}
+		return
+	}
+	/* 上一帧留下的"（无手牌）"占位，本帧已经有牌了，先摘掉 */
+	{
+		const empty = box.querySelector(".hand_empty")
+		if (empty)
+			empty.remove()
+	}
+
+	/*
 	 * 这里【只负责外观】，点击行为一律由 on_click_hand_card() 在点击时
 	 * 现算（原因见 build_card_elt 的注释：渲染时机与异步 query 会错开）。
 	 */
 	for (const c of cards) {
-		const d = build_card_elt(c)
+		/*
+		 * 【2026-10-28 性能】元素复用：同一张牌沿用上一帧的 DOM，
+		 * 只有本帧新出现的牌才 build_card_elt()。
+		 * 原来每帧 box.innerHTML = "" 后重建全部卡元素 —— 卡图 probe、
+		 * 事件绑定、背景图样式全部重做，点一次牌就是一次全量销毁重建，
+		 * 这是"点牌延迟"的主要来源之一。
+		 *
+		 * 元素复用后必须【显式复位】那些以前靠"重建"天然复位的状态：
+		 * 置灰 reason 写进 title、disabled/pending_card 类、角标 span。
+		 */
+		let d = ui.hand_el[c.id]
+		if (d) {
+			d.__card = c
+			d.card = c
+			for (const b of Array.prototype.slice.call(d.querySelectorAll(".badge")))
+				b.remove()
+			d.classList.remove("disabled")
+			d.title = d.__base_title || ""
+		} else {
+			d = build_card_elt(c)
+			ui.hand_el[c.id] = d
+		}
 
 		/*
 		 * 选中的牌高亮（共用 .sel 边框）：
@@ -4040,15 +4186,23 @@ function update_hand_panel() {
 			d.appendChild(b)
 		}
 
-		/* 正在等待选目标的卡加高亮描边 */
-		if (pending_card && pending_card.id === c.id)
-			d.classList.add("pending_card")
+		/* 正在等待选目标的卡加高亮描边（元素复用 -> 必须 toggle，否则上一帧的高亮摘不掉） */
+		d.classList.toggle("pending_card", !!(pending_card && pending_card.id === c.id))
 
+		/* appendChild 对已在父节点下的元素是"移动"，顺手完成重排，不重建 */
 		box.appendChild(d)
 	}
 
-	if (!cards.length)
-		box.innerHTML = '<div class="hand_empty">（无手牌）</div>'
+	/* 已不在手牌里的元素（打出了 / 被弃了）要销毁，否则会残留 */
+	const alive = {}
+	for (const c of cards)
+		alive[c.id] = true
+	for (const id of Object.keys(ui.hand_el)) {
+		if (!alive[id]) {
+			ui.hand_el[id].remove()
+			delete ui.hand_el[id]
+		}
+	}
 }
 
 /* ============================================================
@@ -6619,17 +6773,46 @@ function update_pending_theater_box() {
 	title.textContent = '《' + (pa.card_name || '战区移动') + '》第 ' + pa.step + ' / ' + pa.total + ' 步'
 	box.appendChild(title)
 
+	/*
+	 * 【2026-10-30】本步"可先发动"的状态卡：直接用服务端算好的 ready，
+	 * 客户端不二次判断（与 #event_step_box 的 offers 同款口径）。
+	 * 每个都给一个「发动《X》」按钮，点它进入该卡既有的选地/选目标流程。
+	 */
+	const offers = (view.table_status || []).filter(t => t.ready === true)
 	const hint = document.createElement('div')
 	hint.className = 'eb-hint'
-	hint.textContent = pa.can_act
-		? (pa.label + '：' + (pa.stage === 'remove'
-			? '点地图上高亮的美国陆军或海军算子'
-			: '点地图上高亮的地区'))
-		: ('等待【' + pa.actor + '】操作：' + pa.label)
+	if (!pa.can_act) {
+		hint.textContent = '等待【' + pa.actor + '】操作：' + pa.label
+	} else {
+		const todo = pa.stage === 'remove'
+			? '点地图上高亮的美国陆军或海军算子，移除 1 支'
+			: ('点地图上高亮的地区，建设 1 支' + (pa.stage === 'build_navy' ? '海军' : '陆军'))
+		hint.textContent = todo + (offers.length
+			? '（可先发动 ' + offers.map(o => '《' + o.name + '》').join('、') +
+				'；不发动就直接点「下一步」）'
+			: '')
+	}
 	box.appendChild(hint)
 
+	/*
+	 * 【2026-10-31 玩家口径】本面板只留「下一步」一个按钮：
+	 *   发动 -> 直接点桌面上的状态卡（沿用 17550 既有的选地流程）；
+	 *   不发动 -> 点「下一步」。
+	 * 不在右上角 UI 里再列「发动《X》」按钮，避免和桌面卡重复入口。
+	 */
+
+	const btn = document.createElement('button')
+	btn.className = 'action primary'
+	btn.textContent = '下一步'
+	btn.disabled = !pa.can_act
+	btn.onclick = () => {
+		if (!pa.can_act) { toast('等待【' + pa.actor + '】操作《战区移动》'); return }
+		send_action('theater_next', {})
+	}
+	box.appendChild(btn)
+
 	const order = document.createElement('div')
-	order.className = 'eb-hint'
+	order.className = 'eb-log'
 	const doneList = [pa.built.navy ? '海军' : null, pa.built.army ? '陆军' : null].filter(Boolean)
 	order.textContent = '顺序：' +
 		pa.order.map(t => (t === 'navy' ? '海军' : '陆军')).join(' → ') +
@@ -7071,6 +7254,17 @@ const STATUS_UI = {
 	 *   且候选【含空地】以支持空打（空打用以触发闪电战等后续窗口）。
 	 */
 	'15247': { battle: 'land', attacker_owner: true, spaces_from_window: true },
+	/*
+	 * 【2026-10-29 修复】17746 耀武：跳过出牌阶段行动 + 损耗2张牌 -> 发起1次陆战。
+	 *
+	 * 漏登记的后果（玩家截图：「《耀武》请先选择发起战斗的单位与地区（未支付代价）」）：
+	 *   status_ui_of('17746#1') 拿到 {} -> 点击【发动】落到下面的"通用确认框"，
+	 *   只发 activate_status{card}、不带 from；而服务端 2026-10-28 新增的
+	 *   battle 参数预检（rules.js:29867）在付代价前就拒绝 -> 玩家看到的就是"点了没反应"。
+	 * 卡面没有限定地区，故不配 spaces / spaces_from_window：
+	 * 玩家先在地图点任意地区（status_start_battle_space），再选发起单位，最后带 space+from 提交。
+	 */
+	'17746': { battle: 'land', attacker_owner: true },
 	/* 17842 喀秋莎：弃1张手牌后对战斗地区再发起1次陆战 */
 	'17842': { discard: 1, battle: 'land', attacker_owner: true },
 	/* 17846 坦克运输：弃1张[建设陆军]或[发起陆战]后以此陆军发起1次陆战
@@ -7316,6 +7510,9 @@ function start_status_build(cardId, ui, preDiscard) {
 	status_build_pending = true
 	status_build_cands = []
 	status_act_phase = 'space'
+	/* 【2026-10-30】进入状态卡选地：先清掉战区移动的高亮/候选缓存，避免两套高亮叠在一起 */
+	clear_target_highlight()
+	theater_query_sig = null
 	send_query('status_build_spaces', { card: cardId, nation: owner, type: type })
 	render_ask_box('建设地区',
 		'请点击地图上的高亮地区，建设' + (type === 'navy' ? '海军' : '陆军') +
@@ -7627,6 +7824,11 @@ function cancel_status_act() {
 	clear_target_highlight()
 	render_ask_box(null)
 	update_hand_panel()
+	/*
+	 * 【2026-10-30】取消状态卡后，若《战区移动》仍在进行，让它重算候选并恢复面板
+	 * （期间地图可能已变，旧候选缓存不可再用）。
+	 */
+	after_status_space_done()
 }
 
 /*
@@ -8177,7 +8379,15 @@ function move_resp_order(i, d) {
 	const t = resp_ui.order[i]; resp_ui.order[i] = resp_ui.order[j]; resp_ui.order[j] = t
 }
 function send_resp_reorder() {
-	send_action('response_reorder', { order: resp_ui.order.slice(), skip: Object.keys(resp_ui.skip || {}) })
+	/*
+	 * order = 结算先后；skip = 本次要移出本组的卡（「跳过」按钮）。
+	 * 服务端把 skip 存成帧上的 f.skipped，确认顺序时这些帧直接移出本组，
+	 * 后续逐张询问不会再到它们（卡仍留在桌面、不消耗）。
+	 */
+	send_action('response_reorder', {
+		order: resp_ui.order.slice(),
+		skip: Object.keys(resp_ui.skip || {}),
+	})
 }
 function update_pending_trigger_box() {
 	const pt = view.pending_trigger
@@ -8198,14 +8408,27 @@ function update_pending_trigger_box() {
 		}
 		return
 	}
-	const multi = (pt.candidates || []).length > 1 && !pt.ordered
+	const cands = pt.candidates || []
+	const multi = cands.length > 1 && !pt.ordered
 	if (!multi) {
-		/* 单卡 / 已确认：沿用既有 发动/不发动 流程 */
-		const names = pt.candidates.map(c => '《' + c.name + '》').join('、')
+		/*
+		 * 单卡 / 已确认顺序：逐张询问"是否发动这一张"。
+		 *
+		 * 【2026-10-28 玩家口径】确认顺序后，服务端一次只执行一张，
+		 * 所以这里必须只显示【当前这一张】（pt.current，服务端算好下发），
+		 * 不能像旧版那样把整组名字拼成一句"是否发动《A》、《B》？"
+		 * —— 那样点一次发动只结算一张，读起来完全对不上。
+		 */
+		const curId = pt.current || (pt.order && pt.order[0]) ||
+			(cands[0] && cands[0].card_id)
+		const cur = cands.find(c => c.card_id === curId) || cands[0]
+		const names = '《' + (cur ? cur.name : '?') + '》'
+		const rest = cands.length > 1
+			? ('（本组共 ' + cands.length + ' 张，逐张询问）') : ''
 		const where = pt.space ? ('（于 ' + (data.name_of(pt.space) || pt.space) + '）') : ''
 		const kind = pt.pre ? '——可令对方该行动无效' : ''
 		const title = '响应卡等待决定'
-		const text = '是否发动 ' + names + '？' + where + kind
+		const text = '是否发动 ' + names + '？' + where + kind + rest
 		ask_state = { kind: 'response', pt: pt }
 		render_ask_box(title, text, [
 			{ label: '发动响应', cls: 'primary', onClick: () => send_action('trigger_response', {}) },
@@ -8213,10 +8436,13 @@ function update_pending_trigger_box() {
 		])
 		return
 	}
-	/* 多卡未确认：排序 / 跳过（一次选择） */
-	const sig = JSON.stringify(pt.candidates) + '|' + JSON.stringify(pt.order) + '|' + JSON.stringify(pt.skip)
+	/* 多卡未确认：排序 + 逐行「跳过/恢复」（跳过 = 本次移出本组，不再询问） */
+	const sig = JSON.stringify(cands) + '|' + JSON.stringify(pt.order) + '|' + JSON.stringify(pt.skip)
 	if (!resp_ui || resp_ui_sig !== sig) {
-		resp_ui = { order: (pt.order || pt.candidates.map(c => c.card_id)).slice(), skip: Object.assign({}, pt.skip || {}) }
+		resp_ui = {
+			order: (pt.order || cands.map(c => c.card_id)).slice(),
+			skip: Object.assign({}, pt.skip || {}),
+		}
 		resp_ui_sig = sig
 	}
 	ask_state = { kind: 'response_order' }
@@ -8227,15 +8453,17 @@ function update_pending_trigger_box() {
 	const h = document.createElement('div'); h.className = 'ask_head'
 	h.textContent = '响应卡结算顺序（请排序后确认）'; box.appendChild(h)
 	const tip = document.createElement('div'); tip.className = 'ask_text'
-	tip.textContent = '多张响应卡同时触发，决定先后结算顺序；可跳过不发动的卡。'; box.appendChild(tip)
+	tip.textContent = '多张响应卡同时触发，决定先后结算顺序；确认后逐张询问是否发动。' +
+		'「跳过」= 本次不发动、确认后不再询问（卡留在桌面）。'; box.appendChild(tip)
 	const list = document.createElement('div'); list.style.margin = '6px 0'; box.appendChild(list)
-	const byId = {}; for (const c of pt.candidates) byId[c.card_id] = c
+	const byId = {}; for (const c of cands) byId[c.card_id] = c
 	resp_ui.order.forEach((id, i) => {
 		const c = byId[id]; if (!c) return
 		const row = document.createElement('div')
 		row.style.cssText = 'display:flex;align-items:center;gap:6px;margin:3px 0'
 		const name = document.createElement('span'); name.style.flex = '1'
-		name.textContent = (i + 1) + '. ' + c.name + ((resp_ui.skip && resp_ui.skip[id]) ? '（跳过）' : '')
+		name.textContent = (i + 1) + '. ' + c.name +
+			((resp_ui.skip && resp_ui.skip[id]) ? '（跳过）' : '')
 		row.appendChild(name)
 		const up = document.createElement('button'); up.className = 'action'; up.textContent = '↑'
 		up.onclick = () => { move_resp_order(i, -1); send_resp_reorder() }
@@ -8243,20 +8471,30 @@ function update_pending_trigger_box() {
 		const down = document.createElement('button'); down.className = 'action'; down.textContent = '↓'
 		down.onclick = () => { move_resp_order(i, 1); send_resp_reorder() }
 		row.appendChild(down)
+		/*
+		 * 【2026-10-28 玩家口径】跳过 = 本次移出本组：确认顺序后不再询问这一张，
+		 * 卡仍留在桌面、不消耗。可随时「恢复」。
+		 */
 		const sk = document.createElement('button'); sk.className = 'action'
 		sk.textContent = (resp_ui.skip && resp_ui.skip[id]) ? '恢复' : '跳过'
-		sk.onclick = () => { if (resp_ui.skip[id]) delete resp_ui.skip[id]; else resp_ui.skip[id] = true; send_resp_reorder() }
+		sk.onclick = () => {
+			resp_ui.skip = resp_ui.skip || {}
+			if (resp_ui.skip[id]) delete resp_ui.skip[id]
+			else resp_ui.skip[id] = true
+			send_resp_reorder()
+		}
 		row.appendChild(sk)
 		list.appendChild(row)
 	})
 	const btnRow = document.createElement('div'); btnRow.style.cssText = 'margin-top:8px;display:flex;gap:8px'
 	const okB = document.createElement('button'); okB.className = 'action primary'
-	okB.textContent = '确认顺序并结算'
+	okB.textContent = '确认顺序'
 	okB.onclick = () => send_action('response_confirm', {})
 	btnRow.appendChild(okB)
+	/* 逃生口：整组一起放弃（pass_response all:true，服务端整组丢弃） */
 	const skipAll = document.createElement('button'); skipAll.className = 'action'
 	skipAll.textContent = '全部跳过'
-	skipAll.onclick = () => send_action('pass_response', {})
+	skipAll.onclick = () => send_action('pass_response', { all: true })
 	btnRow.appendChild(skipAll)
 	box.appendChild(btnRow)
 }
@@ -8497,24 +8735,40 @@ function update_markers() {
 			elt.appendChild(who)
 			wrap.appendChild(elt)
 			ui.marker_el[space_id] = elt
+			/* 【2026-10-28 性能】子元素缓存，省掉每帧两次 querySelector */
+			elt.__num = num
+			elt.__who = who
 		}
 
 		/*
 		 * 位置：地块右上角。
 		 * data.spaces 只有 x/y（左上角），宽高在 layout 里，
 		 * 所以用固定偏移把胶囊摆在格子右上外侧，避免压住地区名。
+		 * 【2026-10-28 性能】位置没变就不写 style。
 		 */
 		const sp = data.spaces[space_id]
 		if (sp) {
-			elt.style.left = (sp.x + 6) + "px"
-			elt.style.top = (sp.y - 16) + "px"
+			const l = (sp.x + 6) + "px"
+			const t = (sp.y - 16) + "px"
+			if (elt.style.left !== l)
+				elt.style.left = l
+			if (elt.style.top !== t)
+				elt.style.top = t
 		}
 
-		elt.querySelector(".num").textContent = total
-		elt.querySelector(".who").textContent = owners.length ? owners.join("/") : ""
-		elt.classList.toggle("owned", owners.length > 0)
-		elt.title = data.name_of(space_id) + "：" + total + " 个计分标记" +
+		const totalTxt = String(total)
+		const whoTxt = owners.length ? owners.join("/") : ""
+		if (elt.__num && elt.__num.textContent !== totalTxt)
+			elt.__num.textContent = totalTxt
+		if (elt.__who && elt.__who.textContent !== whoTxt)
+			elt.__who.textContent = whoTxt
+		const wantOwned = owners.length > 0
+		if (elt.classList.contains("owned") !== wantOwned)
+			elt.classList.toggle("owned", wantOwned)
+		const tip = data.name_of(space_id) + "：" + total + " 个计分标记" +
 			(owners.length ? "（仅 " + owners.join("/") + " 可计分）" : "")
+		if (elt.title !== tip)
+			elt.title = tip
 	}
 
 	/* 清掉已无标记的 */
@@ -8577,9 +8831,18 @@ function update_supply_classes() {
 	for (const s of Object.keys(ui.spaces)) {
 		const elt = ui.spaces[s]
 		const d = byId[s]
-		elt.classList.toggle("supply", !!d)
+		/*
+		 * 【2026-10-28 性能】先比对再 toggle。
+		 * classList.toggle() 即使"结果没变"也可能走一次属性写入 + 样式失效，
+		 * 而这里每帧要遍历【全部格位】（上百个），累积开销不明。
+		 */
+		const want_supply = !!d
+		const want_half = !!(d && d.axis !== d.allies)
+		if (elt.classList.contains("supply") !== want_supply)
+			elt.classList.toggle("supply", want_supply)
 		/* 仅对单一阵营有效的补给点用 half 标记，视觉上区分 */
-		elt.classList.toggle("half", !!(d && d.axis !== d.allies))
+		if (elt.classList.contains("half") !== want_half)
+			elt.classList.toggle("half", want_half)
 	}
 }
 
@@ -8784,16 +9047,30 @@ function build_piece(p) {
 	return elt
 }
 
+/*
+ * 【2026-10-28 性能】只在内容真的变了才写 DOM。
+ *
+ * 原来每帧无条件重写 className / title / label。其中 className 是致命的：
+ * .unit::before 的 filter（9 层 drop-shadow 描边，见 play.css）由类名决定，
+ * 一次赋值就会让全场每个算子的 9 层阴影全部重新栅格化 —— 一次 view 刷新
+ * 等于几十个算子 × 9 次阴影合成，这是"点牌延迟"的最大来源。
+ */
 function update_piece_face(elt, p) {
 	const nation = p.nation || "?"
-	elt.className = "unit " + (p.type || "army") +
+	const cls = "unit " + (p.type || "army") +
 		" " + (NATION_CLS[nation] || "") +
 		(p.in_supply ? " in_supply" : " out_of_supply")
-	elt.title = nation + " " + (TYPE_LABEL[p.type] || p.type) +
+	if (elt.className !== cls)
+		elt.className = cls
+	const tip = nation + " " + (TYPE_LABEL[p.type] || p.type) +
 		(p.in_supply ? "（补给正常）" : "（断补，补给阶段将被移除）")
-	const label = elt.querySelector(".unit_label")
-	if (label)
-		label.textContent = TYPE_LABEL[p.type] || "?"
+	if (elt.title !== tip)
+		elt.title = tip
+	/* 子元素缓存：每帧 querySelector 本身也是一次遍历，顺手省掉 */
+	const label = elt.__label || (elt.__label = elt.querySelector(".unit_label"))
+	const text = TYPE_LABEL[p.type] || "?"
+	if (label && label.textContent !== text)
+		label.textContent = text
 }
 
 /*
@@ -8828,8 +9105,13 @@ function position_piece(elt, space_id, dx, dy) {
 	const sp = data.spaces[space_id]
 	if (!sp)
 		return
-	elt.style.left = (sp.x + dx) + "px"
-	elt.style.top = (sp.y + dy) + "px"
+	/* 【2026-10-28 性能】位置没变就不写（每帧无谓写 style 会触发样式重算） */
+	const l = (sp.x + dx) + "px"
+	const t = (sp.y + dy) + "px"
+	if (elt.style.left !== l)
+		elt.style.left = l
+	if (elt.style.top !== t)
+		elt.style.top = t
 }
 
 /*
@@ -8889,12 +9171,74 @@ document.addEventListener("contextmenu", (e) => {
 function space_elt(id) { return ui.spaces[id] || null }
 function piece_elt(id) { return ui.piece_el[id] || null }
 
+/*
+ * 【2026-10-30】状态卡"选地"点击的处理（从 on_click_space 抽出并上移）。
+ *
+ * 优先级原则：**玩家显式点某张桌面卡发起的流程** > 任何隐式流程
+ * （战区移动 / 高速公路 / 让权委托 …），因为隐式流程不需要玩家先做选择、随时可继续。
+ *
+ * 为什么必须这样：战区移动（17532）在建设步会把地图点击直接提交给 resolve_theater，
+ * 而状态卡（17550 先进造船厂等）此时正等玩家点地建海军 —— 点击被战区移动吃掉后，
+ * 玩家看到的提示还在，但怎么点都不生效（#4 的真实原因）。
+ */
+function handle_status_space_pick(s) {
+	/* 状态卡"建设预算"：玩家点选合法空格（17547/17550/15248/17843…） */
+	if (status_build_pending) {
+		if (status_build_cands.indexOf(Number(s)) < 0) { toast('请在合法高亮地区中选择'); return true }
+		status_build_pending = false
+		highlight_targets(null)
+		const cid = status_act_card
+		const hadDiscard = status_build_discard
+		render_ask_box(null)
+		const sArg = { card: cid, space: s }
+		if (hadDiscard && hadDiscard.length) sArg.discard = hadDiscard
+		status_build_discard = null
+		send_action('activate_status', sArg)
+		toast('发动《' + status_name(cid) + '》')
+		after_status_space_done()
+		return true
+	}
+	/*
+	 * 状态卡"战斗选地"（15247 贵在行动 / 17544 等）-> 进入选发起单位流程。
+	 * 仅当【当前这张卡】确实用服务端动态候选时才按候选校验，
+	 * 否则（17544/15338 等静态 spaces 或无 spaces）不能用上一张卡的残留候选去拦。
+	 */
+	if (status_act_ui && status_act_ui.spaces_from_window &&
+		status_battle_cands.length && status_battle_cands.indexOf(Number(s)) < 0) {
+		toast('请在合法高亮地区中选择（须是建设地点的相邻陆地）')
+		return true
+	}
+	const allow = (status_act_ui && status_act_ui.spaces)
+		? status_act_ui.spaces.map(space_id_of_name).filter(x => x != null).map(Number)
+		: null
+	if (allow && allow.indexOf(s) < 0) {
+		toast('该地区不在《' + status_name(status_act_card) + '》可攻击范围内')
+		return true
+	}
+	status_start_battle_space(s)
+	return true
+}
+
+/* 状态卡选地结束后：让战区移动的面板/候选重新算一遍（期间地图可能变了） */
+function after_status_space_done() {
+	theater_query_sig = null
+	theater_space_cands = null
+	if (typeof update_pending_theater_box === 'function') update_pending_theater_box()
+}
+
 function on_click_space(evt) {
 	const s = evt.currentTarget.space_id
 
 	/*
-	 * 【2026-10-25】战区移动（17532）：建设步点地区即提交，优先级最高。
+	 * 【2026-10-30】最高优先级：玩家已点开状态卡、正在等选地
+	 * （见 handle_status_space_pick 的注释）。
+	 */
+	if (status_act_phase === 'space') return handle_status_space_pick(s)
+
+	/*
+	 * 【2026-10-25】战区移动（17532）：建设步点地区即提交。
 	 * 候选来自 RPC 缓存（本步现算），不在候选内直接提示，不发请求。
+	 * 【2026-10-30】降为"次级"—— 状态卡选地已在上面拦下。
 	 */
 	if (view && view.pending_theater &&
 		(view.pending_theater.stage === 'build_navy' || view.pending_theater.stage === 'build_army')) {
@@ -9013,47 +9357,12 @@ function on_click_space(evt) {
 	 * （原本此分支写在下方 status_act_phase==='space' 里，故被 autobahn 抢先；
 	 *   现整体上移到这里，下面不再保留重复实现。）
 	 */
-	if (status_act_phase === 'space') {
-		/* 状态卡"建设预算"：玩家点选相邻合法空格（17547/17550/15248/17843…） */
-		if (status_build_pending) {
-			if (status_build_cands.indexOf(Number(s)) < 0) { toast('请在合法高亮地区中选择'); return }
-			status_build_pending = false
-			highlight_targets(null)
-			const cid = status_act_card
-			render_ask_box(null)
-			const sArg = { card: cid, space: s }
-			if (status_build_discard && status_build_discard.length)
-				sArg.discard = status_build_discard
-			status_build_discard = null
-			send_action('activate_status', sArg)
-			toast('发动《' + status_name(cid) + '》')
-			return
-		}
-		/*
-		 * 状态卡"战斗选地"（15247 贵在行动 / 17544 等）-> 进入选发起单位流程。
-		 * 候选若是服务端动态下发的（spaces_from_window），先本地校验给明确提示，
-		 * 而不是等服务端返回"只能对允许的战斗地区发起"。
-		 */
-		/*
-		 * 仅当【当前这张卡】确实用服务端动态候选时才按候选校验；
-		 * 否则（17544/15338 等静态 spaces 或无 spaces）不能用上一张卡的
-		 * 残留候选去拦 —— 那会误伤后续其它状态卡（踩坑通用教训：状态要复位）。
-		 */
-		if (status_act_ui && status_act_ui.spaces_from_window &&
-			status_battle_cands.length && status_battle_cands.indexOf(Number(s)) < 0) {
-			toast('请在合法高亮地区中选择（须是建设地点的相邻陆地）')
-			return
-		}
-		const allow = (status_act_ui && status_act_ui.spaces)
-			? status_act_ui.spaces.map(space_id_of_name).filter(x => x != null).map(Number)
-			: null
-		if (allow && allow.indexOf(s) < 0) {
-			toast('该地区不在《' + status_name(status_act_card) + '》可攻击范围内')
-			return
-		}
-		status_start_battle_space(s)
-		return
-	}
+	/*
+	 * 【2026-10-30】状态卡"选地"分支已上移到 on_click_space 的最前面
+	 * （改为 handle_status_space_pick），因为它必须优先于战区移动/高速公路等
+	 * 隐式流程 —— 否则玩家点开状态卡后，点地图会被隐式流程吃掉，
+	 * 表现为"分步机中间无法触发状态卡"（#4）。
+	 */
 
 	/*
 	 * 战斗卡 / 状态卡战斗：点地区 = 选目标地区（须先选好发起单位）。
@@ -9143,9 +9452,16 @@ function on_click_space(evt) {
 			toast("请先点 1 支本国空军算子")
 			return
 		}
-		const okT = air_move.targets.some(t => t.id === s)
+		/*
+		 * 【2026-10-30】优先用"该空军自己的合法目标表"（targets_by_air），
+		 * 这样"原地调度"（落到自己当前格）能点，而"落到已有别的本国空军的格"仍然点不了。
+		 */
+		const perAir = air_move.targetsByAir && air_move.targetsByAir[air_move.air]
+		const okT = perAir
+			? (perAir || []).some(x => Number(x) === Number(s))
+			: air_move.targets.some(t => t.id === s)
 		if (!okT) {
-			toast("该地区没有处于补给状态的本国陆军或海军")
+			toast("该地区没有处于补给状态的本国陆军或海军（或已有本国空军）")
 			return
 		}
 		air_move.target = s
@@ -9604,6 +9920,13 @@ function show_straits() {
  */
 function on_reply(q, params) {
 	console.log("[REPLY] on_reply called, q=", q, "params=", params ? JSON.stringify(params).slice(0, 200) : null)
+	/* 【2026-10-29】调试卡牌：当前国的牌面目录 */
+	if (q === "debug_card_catalog") {
+		dbg_catalog = Array.isArray(params) ? params : []
+		populate_debug_card_types()   /* 先按真实 type 重建下拉，再渲染 */
+		render_debug_cards()
+		return
+	}
 	if (q === "straits") {
 		const txt = (params || []).map(s =>
 			`${s.name}: ${s.a} ↔ ${s.b} → ${s.controller === "axis" ? "轴心" : "同盟"}控制`
@@ -9706,6 +10029,8 @@ function on_reply(q, params) {
 			return
 		air_move.airs = (params && params.airs) || []
 		air_move.targets = (params && params.targets) || []
+		/* 【2026-10-30】按空军逐支的合法目标（支持"原地调度"）；旧服务端不带此字段则回退并集 */
+		air_move.targetsByAir = (params && params.targets_by_air) || null
 		update_air_box()
 		toast("调度空军：先点 1 张手牌作为代价，再点空军算子与目标地区")
 		return
@@ -10000,6 +10325,8 @@ function toggle_debug() {
 	const el = document.getElementById("debug_panel")
 	if (!el)
 		return
+	/* 【2026-10-29】三个调试面板互斥（与 toggle_debug_cards 一致） */
+	close_other_debug_panels("debug_panel")
 	el.classList.toggle("hide")
 	document.body.classList.toggle("debug", !el.classList.contains("hide"))
 	if (el.classList.contains("hide")) {
@@ -10074,6 +10401,165 @@ function set_debug_hint(text) {
 	const el = document.getElementById("dbg_hint")
 	if (el)
 		el.textContent = text
+}
+
+/* ============================================================
+ * 【2026-10-29】调试：卡牌 / 阶段（与「调试单位」并列的两个面板）
+ * ============================================================ */
+
+/* 面板右上角的 × 关闭按钮（三个调试面板通用） */
+function close_debug_panel(id) {
+	const el = document.getElementById(id)
+	if (!el) return
+	el.classList.add("hide")
+	document.querySelectorAll("#" + id + " button").forEach(b => b.classList.remove("on"))
+	if (id === "debug_panel") {
+		ui.debug_mode = null
+		set_debug_hint("")
+	}
+	/* 三个面板都收起时，退出 debug 布局模式 */
+	const anyOpen = ["debug_panel", "debug_card_panel", "debug_phase_panel"]
+		.some(x => {
+			const e = document.getElementById(x)
+			return e && !e.classList.contains("hide")
+		})
+	if (!anyOpen) document.body.classList.remove("debug")
+}
+
+/* 三个调试面板互斥：打开一个就把另外两个收起来，避免叠在左下角 */
+function close_other_debug_panels(keep) {
+	["debug_panel", "debug_card_panel", "debug_phase_panel"].forEach(id => {
+		if (id === keep) return
+		const el = document.getElementById(id)
+		if (el && !el.classList.contains("hide")) el.classList.add("hide")
+	})
+}
+
+let dbg_catalog = null
+
+function toggle_debug_cards() {
+	const el = document.getElementById("debug_card_panel")
+	if (!el) return
+	const willOpen = el.classList.contains("hide")
+	close_other_debug_panels("debug_card_panel")
+	el.classList.toggle("hide", !willOpen)
+	document.body.classList.toggle("debug", willOpen)
+	if (!willOpen) return
+	const nation = (view && view.current_nation) || ""
+	const lab = document.getElementById("dbg_card_nation")
+	if (lab) lab.textContent = "当前国家：" + (nation || "—")
+	dbg_catalog = null
+	const grid = document.getElementById("dbg_card_grid")
+	if (grid) grid.innerHTML = ""
+	set_dbg_card_hint("正在加载牌面…")
+	/* 只拉【当前行动国】的牌面（服务端按 nation 过滤） */
+	send_query("debug_card_catalog", { nation: nation })
+}
+
+function set_dbg_card_hint(text) {
+	const el = document.getElementById("dbg_card_hint")
+	if (el) el.textContent = text
+}
+
+/*
+ * 【2026-10-29 修复】类型下拉按【目录里真实出现的 type】动态生成。
+ * 起因：面板原先写死 `<option value="ECHO">增强卡</option>`，但卡库里的增强卡
+ * type 是 "EFFECT"（view.card_types 也只有 EFFECT/EVENT/ECON/… 八种），
+ * 于是「增强卡」筛选恒为空（德国 13 张增强卡全看不到）。
+ * 现在只列该国真实存在的类型，标签取 view.card_types[t].zh，并附带张数。
+ */
+const DBG_TYPE_ORDER = ["BASIC", "EVENT", "EFFECT", "RESPONSE", "ECON",
+	"STATUS", "PRELUDE", "ARMAMENT"]
+function populate_debug_card_types() {
+	const sel = document.getElementById("dbg_card_type")
+	if (!sel || !dbg_catalog) return
+	const prev = sel.value || ""
+	const count = {}
+	dbg_catalog.forEach(c => { count[c.type] = (count[c.type] || 0) + 1 })
+	const types = Object.keys(count).sort((a, b) => {
+		const ia = DBG_TYPE_ORDER.indexOf(a), ib = DBG_TYPE_ORDER.indexOf(b)
+		return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+	})
+	const zhOf = t => {
+		const m = (view && view.card_types) || {}
+		return (m[t] && m[t].zh) || t
+	}
+	sel.innerHTML = ""
+	const all = document.createElement("option")
+	all.value = ""
+	all.textContent = "全部（" + dbg_catalog.length + "）"
+	sel.appendChild(all)
+	types.forEach(t => {
+		const o = document.createElement("option")
+		o.value = t
+		o.textContent = zhOf(t) + "（" + count[t] + "）"
+		sel.appendChild(o)
+	})
+	/* 保留原选择；若该类型这次不存在则回落到全部 */
+	sel.value = types.indexOf(prev) >= 0 ? prev : ""
+}
+
+function render_debug_cards() {
+	const grid = document.getElementById("dbg_card_grid")
+	if (!grid) return
+	grid.innerHTML = ""
+	if (!dbg_catalog) return
+	const tyEl = document.getElementById("dbg_card_type")
+	const kwEl = document.getElementById("dbg_card_kw")
+	const ty = tyEl ? tyEl.value : ""
+	const kw = kwEl ? (kwEl.value || "").trim() : ""
+	const list = dbg_catalog.filter(c =>
+		(!ty || c.type === ty) &&
+		(!kw || (c.name || "").indexOf(kw) >= 0 || (c.text || "").indexOf(kw) >= 0))
+	const destEl = document.getElementById("dbg_card_dest")
+	const dest = destEl ? destEl.value : "hand"
+	const DEST_ZH = { hand: "手牌", deck_top: "牌库顶", deck_bottom: "牌库底", discard: "弃牌堆" }
+	list.forEach(c => {
+		grid.appendChild(card_elt(c, () => {
+			send_action("debug_add_card", {
+				face: c.face,
+				nation: (view && view.current_nation) || undefined,
+				dest: dest,
+			})
+			set_dbg_card_hint("已加入" + (DEST_ZH[dest] || "手牌") + "：《" + c.name + "》")
+		}))
+	})
+	set_dbg_card_hint("共 " + list.length + " 张（点卡图加入手牌）")
+}
+
+function toggle_debug_phase() {
+	const el = document.getElementById("debug_phase_panel")
+	if (!el) return
+	const willOpen = el.classList.contains("hide")
+	close_other_debug_panels("debug_phase_panel")
+	el.classList.toggle("hide", !willOpen)
+	document.body.classList.toggle("debug", willOpen)
+	if (!willOpen) return
+	const sel = document.getElementById("dbg_phase_nation")
+	if (sel && view && view.current_nation) sel.value = view.current_nation
+	set_dbg_phase_hint("")
+}
+
+function set_dbg_phase_hint(text) {
+	const el = document.getElementById("dbg_phase_hint")
+	if (el) el.textContent = text
+}
+
+function debug_do_set_phase() {
+	const nEl = document.getElementById("dbg_phase_nation")
+	const pEl = document.getElementById("dbg_phase_key")
+	const nation = nEl ? nEl.value : ""
+	const phase = pEl ? pEl.value : ""
+	if (!nation || !phase) {
+		set_dbg_phase_hint("请选择国家与阶段")
+		return
+	}
+	const zh = pEl && pEl.selectedIndex >= 0 ? pEl.options[pEl.selectedIndex].text : phase
+	if (!window.confirm("清空所有挂起状态，并把对局直接推到【" + nation + "·" + zh +
+		"】？\n（进入该阶段的入口逻辑会真的执行：补给会移除断补部队、计分会结算、抓牌会摸牌）"))
+		return
+	send_action("debug_set_phase", { nation: nation, phase: phase })
+	set_dbg_phase_hint("已跳转：" + nation + " · " + zh)
 }
 
 /* ============================================================

@@ -29,3 +29,19 @@ pog.zip
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# ---- 2026-10-31 会话清理：临时脚本 / 大体积资源不入库 ----
+# 根目录 scratch（探针、截图、一次性脚本）
+/_*.js
+/_*.png
+/_*.ps1
+/_*.txt
+/Desktop/
+/tmp/
+/.codebuddy/
+# 模块内历史临时脚本（正式回归统一放 tools/）
+server-official/public/quartermaster-sub-wars/_test*.js
+server-official/public/quartermaster-sub-wars/_verify_*.js
+# 大体积资源（卡图原图 / 对局 sqlite）
+server-official/public/quartermaster-sub-wars/cards_tts/
+server-official/db/
