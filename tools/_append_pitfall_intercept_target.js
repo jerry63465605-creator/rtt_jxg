@@ -1,0 +1,28 @@
+/* 追加：拦截询问显示"被拦截的卡" */
+const fs = require('fs')
+const path = require('path')
+const p = path.join(__dirname, '..', 'docs', 'pitfalls.md')
+
+const L = []
+L.push('')
+L.push('### 2026-10-31 · 拦截询问先亮出"被拦截的卡"')
+L.push('')
+L.push('玩家口径：拦截方点开询问框时，必须知道自己在拦什么。')
+L.push('例：德国打出 `14500 黄色方案` → 英国 15352 的询问应显示「【德国】打出《黄色方案》—— 是否拦截？」。')
+L.push('')
+L.push('实现：')
+L.push('')
+L.push('| 端 | 改动 |')
+L.push('|---|---|')
+L.push('| 服务端 `view.armed_offer` | 新增 `target: {card, name, nation, type, via, window, img, text}`（取自窗口 `ctx.card/nation/via`）；本函数已按 side 过滤，**只发给有权表态的一方** |')
+L.push('| 客户端 `update_armed_offer_box` | 标题 = `【国】打出/触发《卡》—— 是否拦截？`；描述首行 = `被拦截：<卡面文本(截 90 字)>`，其下仍是拦截卡自身描述与「不打出则错过本次时机」 |')
+L.push('| `play.css` `.ask_text` | 加 `white-space: pre-line`，让两行文本正常换行 |')
+L.push('')
+L.push('覆盖三种窗口：`enemy_echo_played`（15352/16700，打出与触发都带 via）、`enemy_status_effect`（15353）。')
+L.push('')
+L.push('回归：`tools/_verify_intercept_target_ui.js`（**18 项**）——真实 `play_card 14500` 开窗、target 名称/国家/via/文本、')
+L.push('触发来源 `via=trigger`、状态卡 `target.type=STATUS`、保密（另一方 `armed_offer=null`）、客户端静态接线。')
+L.push('')
+
+fs.appendFileSync(p, L.join('\n'), 'utf8')
+console.log('已追加，行数=' + fs.readFileSync(p, 'utf8').split('\n').length)
