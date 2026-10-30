@@ -5,7 +5,7 @@ GameMode: QuarterMG: Sub Wars   Version: v14.2.2
 
 ## 数量汇总
 - 算子 Custom_Token: 84
-- 卡牌/卡组行: 1214
+- 卡牌/卡组行: 1218
 - 格位 SnapPoints: 229
 - 其他对象: 28
 - 对象总数 ObjectStates: 160

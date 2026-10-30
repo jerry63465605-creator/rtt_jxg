@@ -2,9 +2,9 @@
 
 === 雪碧图（spritesheet）清单: 25 张 ===
 [1] 10 x 7 = 70 张卡
-     face: https://steamusercontent-a.akamaihd.net/ugc/17541927520195381536/E18A48CD6C516DDFB5A36A9EBEFFA9479AAC3D86/
+     face: https://steamusercontent-a.akamaihd.net/ugc/17875124258557834658/46FA6F7357DA1AECBA026E62B92C0EA01840EB79/
      back: https://steamusercontent-a.akamaihd.net/ugc/13257287814674214894/A8B620529EAB9437DCF00B895F3368FF0AB2FBD6/
-     用于: DeckCustom#4a816b, Card#b248c6, Card#a7030a, Card#e17fcc 等27处
+     用于: DeckCustom#4a816b, Card#2c235f, Card#79aba8, Card#4c2cac 等27处
 
 [2] 10 x 7 = 70 张卡
      face: https://steamusercontent-a.akamaihd.net/ugc/17051544059856308019/D89300C17A161033C5ED508A7F0DA159CCA83E62/
@@ -130,29 +130,29 @@
 === 卡牌明细（CardID 解码） ===
 共解析出 164 张卡牌
 
-  DeckCustom #1 | 名=(空) | CardID=15400 -> sheet154 行-1 列-1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15400 -> sheet154 行-1 列-1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15400 -> sheet154 行-1 列-1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15400 -> sheet154 行-1 列-1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15401 -> sheet154 行0 列0 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15401 -> sheet154 行0 列0 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15401 -> sheet154 行0 列0 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15402 -> sheet154 行0 列1 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15403 -> sheet154 行0 列2 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15403 -> sheet154 行0 列2 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15403 -> sheet154 行0 列2 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15403 -> sheet154 行0 列2 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15404 -> sheet154 行0 列3 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15404 -> sheet154 行0 列3 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15404 -> sheet154 行0 列3 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15404 -> sheet154 行0 列3 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15404 -> sheet154 行0 列3 (10x7)
-  DeckCustom #1 | 名=(空) | CardID=15447 -> sheet154 行4 列6 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18500 -> sheet185 行-1 列-1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18500 -> sheet185 行-1 列-1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18500 -> sheet185 行-1 列-1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18500 -> sheet185 行-1 列-1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18501 -> sheet185 行0 列0 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18501 -> sheet185 行0 列0 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18501 -> sheet185 行0 列0 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18502 -> sheet185 行0 列1 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18503 -> sheet185 行0 列2 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18503 -> sheet185 行0 列2 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18503 -> sheet185 行0 列2 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18503 -> sheet185 行0 列2 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18504 -> sheet185 行0 列3 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18504 -> sheet185 行0 列3 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18504 -> sheet185 行0 列3 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18504 -> sheet185 行0 列3 (10x7)
+  DeckCustom #1 | 名=(空) | CardID=18504 -> sheet185 行0 列3 (10x7)
   DeckCustom #25 | 名=(空) | CardID=17700 -> sheet177 行-1 列-1 (10x7)
   DeckCustom #25 | 名=(空) | CardID=17700 -> sheet177 行-1 列-1 (10x7)
   DeckCustom #25 | 名=(空) | CardID=17700 -> sheet177 行-1 列-1 (10x7)

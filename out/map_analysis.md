@@ -6,12 +6,12 @@ Name: Custom_Model   Nickname: (无)
 
 Name: Custom_Board   Nickname: (无)
   CustomBoard 键: 
-  CustomImage.ImageURL: https://steamusercontent-a.akamaihd.net/ugc/14990199862012073024/15DCABABA4B7EF61F6744BF68F89B7A3A5D88514/
+  CustomImage.ImageURL: https://steamusercontent-a.akamaihd.net/ugc/16107230840837072612/8D50E1A4241B6A382861E31B39D779C9013FCBE2/
   Transform: pos=(0,0.9220247,0) scale=(1.75,1.75,1.75)
 
 === 本地文件匹配 ===
-  CustomImage.ImageURL -> httpssteamusercontentaakamaihdnetugc1499019986201207302415DCABABA4B7EF61F6744BF68F89B7A3A5D88514.png
-     文件: httpssteamusercontentaakamaihdnetugc1499019986201207302415DCABABA4B7EF61F6744BF68F89B7A3A5D88514.png  2.5MB  4835x1612
+  CustomImage.ImageURL -> httpssteamusercontentaakamaihdnetugc161072308408370726128D50E1A4241B6A382861E31B39D779C9013FCBE2.png
+     文件: httpssteamusercontentaakamaihdnetugc161072308408370726128D50E1A4241B6A382861E31B39D779C9013FCBE2.png  2.5MB  4835x1612
 
 === SnapPoints 坐标范围 (共 229) ===
   x: -49.000248 .. 49.000042  (跨度 98.00029)

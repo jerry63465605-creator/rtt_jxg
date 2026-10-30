@@ -15,7 +15,7 @@
      face: https://steamusercontent-a.akamaihd.net/ugc/14653291809336036797/D94B46C3826993EE2A6F3712EC78A31FDC54D501/
      back: https://steamusercontent-a.akamaihd.net/ugc/10308772209284172160/1A5B01BB0AF1BC37D33AD587DC1909C8749C5281/
 [6] 10x7
-     face: https://steamusercontent-a.akamaihd.net/ugc/17541927520195381536/E18A48CD6C516DDFB5A36A9EBEFFA9479AAC3D86/
+     face: https://steamusercontent-a.akamaihd.net/ugc/17875124258557834658/46FA6F7357DA1AECBA026E62B92C0EA01840EB79/
      back: https://steamusercontent-a.akamaihd.net/ugc/13257287814674214894/A8B620529EAB9437DCF00B895F3368FF0AB2FBD6/
 [7] 10x7
      face: https://steamusercontent-a.akamaihd.net/ugc/17051544059856308019/D89300C17A161033C5ED508A7F0DA159CCA83E62/
@@ -91,8 +91,8 @@
      back: https://steamusercontent-a.akamaihd.net/ugc/12636033598014099589/E8FD1C6098B58ED175C428F35F375807E91D890D/
 
 === Mods/Images 目录 ===
-文件总数: 2486
-扩展名分布: {".png":1162,".jpg":1324}
+文件总数: 3191
+扩展名分布: {".png":1863,".jpg":1327,".webp":1}
 
 === 文件名样例 (前 30) ===
   httpcloud3steamusercontentcomugc10014315269603304341E258791ECCFB810237BEBA73BF9E461B0BD1D27.png  (406202 bytes)

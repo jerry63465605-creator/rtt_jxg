@@ -5967,3 +5967,508 @@ const onlyF = og.only
 
 **回归**：`check_reuse` B/C 无告警；`test_connectivity` 48/3、`test_basic_cards` 294/3，
 均与既有基线一致。服务器已重启（HTTP=200）。
+
+---
+
+## 2026-10-30 · `seize_air` 卡效果消灭 ≠ 攻击（中立国参战误触发）
+
+**症状**：日本打出 15407《秋水火箭战斗机》（弃牌阶段开始时，消灭 1 支相邻日本空军的敌方空军），
+消灭的是**美军**空军，日志却出现
+
+```
+【美国】结束中立，参战！（被日本攻击）
+【大萧条的余波】发动延迟：美国下个回合开始时再弃置并增加计分标记
+```
+
+**玩家口径（2026-10-30 确认）**：**被卡消灭的美军不算被攻击**，美国应保持中立。
+
+**根因**：夺取制空权原子 `seize_air(game, nation, space, air_piece)` 里有一段无条件调用
+
+```js
+/* 夺取制空权也是"攻击"，被打的一方照常触发参战 */
+maybe_end_neutral_by_attack(game, game.piece_nation[enemies[0]], nation)
+```
+
+而"卡效果消灭敌机"的卡**都复用了这个原子**（因为 `eliminate_piece` 的 enemy 过滤排除空军，
+见该卡 run 里的注释），于是卡效果也被当成攻击：
+15407 秋水（日）、15355 特种空勤团（英）、中国两张同类卡。
+
+**修复**：给原子加第 5 参 `opts.by`
+
+```js
+function seize_air(game, nation, space, air_piece, opts) {
+	const by = (opts && opts.by) || 'action'
+	...
+	if (by === 'action')      // 只有玩家动作才算攻击
+		maybe_end_neutral_by_attack(game, game.piece_nation[enemies[0]], nation)
+```
+
+4 处卡效果调用点改传 `{ by: 'card' }`；玩家动作入口（`air_support` 夺取制空权分支）
+保持不传 → 仍算攻击（对照组验证：同盘面直接调 `seize_air` 美国照常参战）。
+
+**不动的地方**：`note_removed`（17512《战俘》：被夺取制空权消灭也算移除）、
+`axis_pact_register`（17749 轴心协定：被消灭也计分）——这两处与"是否算攻击"无关。
+
+**回归**：`tools/_probe_15407_us_entry.js`
+- 甲（卡效果）：美军空军被消灭 ✓ / 美国仍中立 ✓ / 日志无"结束中立" ✓
+- 乙（动作对照）：美军空军被消灭 ✓ / 美国参战 ✓
+- 丙（静态覆盖）：`seize_air` 调用点共 5 处 = 1 动作 + 4 卡效果（都带 `by:'card'`），
+  以后新增"卡效果消灭"的卡漏标记会被这条直接拦下
+
+---
+
+## 2026-10-30 · 空军「原地调度」与"候选按空军逐支"（targets_by_air）
+
+**需求**（zjr）：空军允许**原地调度**，用来触发 `after_deploy_air` 类增强/响应卡
+（15205 JU-87、15406 南云忠一、17511 美国陆军游骑兵、17806 空降部队）。
+
+**两处卡点**（都在 `air_support` 路径上）：
+
+1. 执行端：`air_support` 的「同一地区只能有 1 支同国空军」把**正在调度的这支自己**也算进去了
+   → target == 原地区时恒被判 `已有 1 支X空军`。修法：`p !== air`。
+2. 候选端：`query air_options` 里 `hasArmyNavy && !hasAir`
+   → 空军所在格永远不进 targets，客户端（`play.js` `on_click_space` 用 `air_move.targets` 校验）
+   根本点不到原地。
+
+**为什么改成"按空军逐支"**：一旦允许原地，"某格能不能落"就取决于**哪支空军在动**
+（自己那格可以，别人占着那格不行）。全局一份 `targets` 表达不了，会出现
+"能点但不能成功"。所以 query 现在同时返回：
+
+```js
+{ airs, targets, targets_by_air: { 空军id: [地区id...] } }
+```
+
+客户端优先用 `targets_by_air[选中空军]`，服务端不带该字段时回退旧的 `targets` 并集。
+
+**顺带对齐**：候选与执行端统一为「目标格须有**处于补给状态**的本国陆/海军」
+（原来候选只看"有陆/海军"，不看补给，也是"能点不能成功"的一类）。
+
+**原地调度仍算一次调度**：照常弃 1 张手牌、置 `air_done`、上报
+`offer_armed_effects('after_deploy_air', ...)`，日志写「在原地 X 调度空军（不移动…）」。
+
+**回归**：`tools/_probe_air_move_same_space.js` 12/12 ——
+A 候选含自身格 / B 原地调度成功且扣代价 / C 15205 窗口出现 /
+D `targets_by_air` 逐支区分（别的空军的格点不到，执行端也拒且不扣代价）/ E 无载体不进候选。
+
+---
+
+## 2026-10-30 · recruit 的 `grantSupply` 必须有卡面依据（17824 苏德友好条约）
+
+**症状**（zjr 报）：打 17824《苏德友好条约》后，日志多出一句
+「（本回合内始终处于补给状态）」，两支新陆军凭空获得补给。
+
+**排查结论**：确实送了。`recruit` 步骤带 `grantSupply: true` 时，框架在征召后调用
+`grant_supply(game, piece, game.turn)`（rules.js:19374），写入
+`game.supply_granted[部队id] = 到期回合`；`compute_supply` 开头
+（rules.js:1005-1011）会把 `supply_granted[pid] >= game.turn` 的部队**直接当补给源**。
+日志后缀「（本回合内始终处于补给状态）」也是 `grantSupply` 自动拼的（rules.js:19380）。
+
+**判断依据（既定约定）**：卡面**必须有**「该部队始终处于补给状态」字样才能带
+`grantSupply`。17821《华西列夫斯基出兵远东》当年就是因为卡面没写而**去掉**了它
+（rules.js:10007 注释）。17824 卡面只有「在<罗斯><东欧>征召陆军。」→ 属于超额实现。
+
+另外两点佐证：
+- `can_recruit_at` **不检查补给**，征召不依赖补给链，不需要靠 grantSupply 才能执行；
+- 罗斯/东欧 正常局面本就在苏联补给链上（莫斯科→罗斯→东欧），所以这条 grant 多数时候是
+  no-op，只在断补时才会"多送"一整轮 —— 更难被发现。
+
+**修法（方案 A，已实施）**：删掉 17824 的 `grantSupply: true`，并在配置处留注释说明依据。
+
+**注意 `game.turn` 口径**：它是**整轮 6 国序号**（整轮才 +1），所以 `grant_supply(..., game.turn)`
+实际有效到**本整轮结束**；若将来某张卡确实需要"本回合（单国）内"，不能直接用 `game.turn`。
+
+**回归**：`tools/_smoke_17824_no_supply.js` 10/10 —— 配置无 `grantSupply` / 仍各 +1 支陆军 /
+`supply_granted` 为空 / 日志无补给后缀 / 断补场景不会凭空补给。
+
+---
+
+## 2026-10-30 · `grantSupply` 全量审计（5 张）与 A1 清理后的场景矩阵
+
+**审计范围**：全库真正写在卡片配置里的 `grantSupply: true`（不含注释/框架代码）共 **5 张**。
+
+| 卡 | 卡面是否有"始终处于补给状态" | 第 2 步依赖 |
+|---|---|---|
+| 15317 史末资加强对英关系 | ✅ 有（保留） | `battle useNewPiece` |
+| 17828 百团大战 | ❌ | `battle useNewPiece`（战斗须发起单位补给） |
+| 17533 珍珠港部署舰队 | ❌ | `build navy around 夏威夷`（建设须相邻有补给的本方部队） |
+| 17527 瓜达尔卡纳尔岛 | ❌ | 同 17533（新西兰） |
+| 17536 滇缅公路 | ❌ | 无（recruit 分支到此为止） |
+
+另有直调 `grant_supply()` 的两处：**15411 夜间运输**（卡面明写"本回合内总是处于补给状态" ✅ 合规）、
+`recruit` 步骤通用实现（当卡声明 `grantSupply` 时才生效）。
+
+**为什么不能简单删**：这三张卡都是**分步停机**型 —— `recruit` 之后还要
+`battle`/`build`，而这两步分别卡在
+「发起单位必须 `supply.in_supply`」（rules.js ~19965）与
+「建设须相邻有补给的本方部队」（`can_build_at`）。`grantSupply` 正是跨过停机点的桥。
+
+**玩家裁定（2026-10-30）：A1 —— 四张全删，以卡面为准。** 已实施。
+场景矩阵见 `tools/_probe_a1_grant_removed.js`：
+
+| 卡 / 落点 | 第 1 步 | 第 2 步 |
+|---|---|---|
+| 17533 @夏威夷（补给点） | 陆军 ✓ | 海军 ✓（**无影响**） |
+| 17527 @新西兰（非补给点） | 陆军 ✓ | ❌「部分效果未执行：建设 1 支海军 — 海域相邻还须有【本国】且连回补给源的部队」 |
+| 17527 有补给链（澳大利亚驻美军） | ✓ | ✓ |
+| 17828 @中国东部（补给点） | ✓ | 战斗**能打**（实测移除日军） |
+| 17828 @中国东北 / 中国西部（非补给点） | ✓ | 战斗**打不出**（「…须相邻且处于补给状态」） |
+| 17536 @中国西部 | ✓ | 无第 2 步 |
+| 15317 @非洲南部（保留） | ✓ | 战斗 ✓（`supply_granted` 仍写入） |
+
+**踩坑记录（写探针时的教训）**：驱动 `resolve_event_card` 时
+`arg.spaces[step]` 必须是**地区 id 标量**；传数组会让 `recruit/build` 把
+`game.location[p]` 存成 `[22]`，于是 `pieces_on()` 的 `===` 严格比较永远不命中，
+表现为"看起来有补给却打不出战斗"的假故障。
+
+**回归**：全量 108 脚本仍全绿（`_smoke_us_event_a.js` 58/58，因为它的盘面本来就有补给链）。
+
+---
+
+## 2026-10-30 · 分步机中间插入状态卡（战区移动 + 先进造船厂）
+
+**症状**（zjr 报）：17532《战区移动》第 2 步建设海军后，桌面 17550《先进造船厂》的窗口
+在提示里看得见，但**点不出效果**——点地图没反应，或被"不是《战区移动》的合法建设目标"拦掉。
+
+**排查结论（关键：先分清是哪一段坏了）**：
+
+1. **窗口武装**没问题：建完海军后 `status_instant` 里有
+   `{card_id:'17550#1', window:'after_build_navy', space:<刚建的海>}`，
+   `view.table_status[17550].ready === true`。
+   ⚠ 武装发生在 **view/build_actions 那一遍**（读 `game.last_built` 后写 `status_instant` 并清空 last_built），
+   所以**探针若在 view 之前断言 status_instant 会读到空** —— 别误判成"没武装"。
+2. **服务端协议**没问题：`query status_build_spaces` → 选另一格海域 → `activate_status{card,space}`
+   实测扣 1 张损耗、海军 +1、窗口消耗、`status_used` 写入、ready 归 false。
+3. **真因在客户端点击优先级**：`on_click_space()` 里战区移动建设分支排在**最前**且 `return`
+   （`view.pending_theater.stage === 'build_navy'/'build_army'` → `resolve_theater`），
+   状态卡"选地"分支（`status_act_phase === 'space'`）在它后面 → 永远收不到点击。
+
+**修复（A + 弱严格）**：
+
+- 客户端：把状态卡选地抽成 `handle_status_space_pick(s)`，并在 `on_click_space` **最前面**拦下
+  （原则：**玩家显式点某张卡发起的流程 > 隐式流程**，同 2026-10-15 把高速公路让位给状态卡选地）；
+- 客户端 UI：`#theater_box` 改用 `#event_step_box` 同款视觉（`.eb-title/.eb-hint/.eb-log` + 边框底色，
+  CSS 7 组选择器都加上 `#theater_box`），并给「发动《X》」与「下一步」两个按钮；
+- 服务端：新增 `theater_next`（`build_actions` 与 `pending_theater` 门禁都要放行）：
+  - 有候选 → 清掉上一步的状态窗口并提示继续点地图；
+  - **无候选 → 跳过该步**（否则全图海域占满时会永久卡死）；
+- 服务端弱严格：`theater_resolve` 入口调用 `discard_theater_status_windows(actor)`——
+  推进即视为放弃上一步的窗口并记「【X】放弃发动《Y》」。
+  为什么必须显式清：action 入口只在 `hasSuspended` 为假时清 `status_instant`，而它**包含
+  `pending_theater`**，所以窗口在整个分步期间都不会被自动清 → 不清就能"建完陆军再回头点海军那刻的窗口"。
+
+**回归**：`tools/_verify_theater_next_ui.js`（26 项：静态优先级/CSS 分组/actions 可见性/
+theater_next 放弃窗口/弱严格清窗/无候选跳过）、`tools/_sim_17550_client.js`（14 项：完整客户端协议）。
+
+**通用教训**：新增任何"等玩家点地图"的分步机（theater / autobahn / delegate / 战斗预算…）时，
+必须把它排在 `status_act_phase === 'space'` **之后**，否则玩家的显式选地会被静默吞掉。
+
+---
+
+## 2026-10-30 · S1「代价照付、只拦效果」（拦截窗口 vs 付代价 的顺序）
+
+**玩家口径**：代价属于"打出/发动"的一部分，被拦截时**代价不退**，被取消的只有**效果**。
+旧实现（D1）把拦截窗口派发在"付代价 + 执行效果"**之前**，于是被拦时：
+卡进弃牌堆、代价一分没付、效果也没发生 —— 与"代价照付"相反。
+
+### 两条轴与各自改法
+
+| 轴 | 派发点 | 付代价点（旧→新） | 关键实现 |
+|---|---|---|---|
+| 增强卡打出 → `enemy_echo_played` | `play_card` ECHO 分支 | `resolve_event_card` 内 → **提前到派发前** | 抽 `pay_event_cost()`；`__echo_cost_paid[cardId]=freq_key` 防重扣；付不起则整张卡打不出 |
+| 状态卡发动 → `enemy_status_effect` | `activate_status` | 窗口之后 → **移到窗口之前** | 代价段整体前移；`_costPaidNow`（一次性令牌 `__status_cost_resume`）；`skip_play` 例外 |
+
+### 分批范围（玩家要求）
+
+1. **批 1**：`15214 战术革新`（代价写在自己的两步 run 里，不在通用 cost 段）——
+   新增 `ECHO_COST_FIRST = new Set(['15214'])`：`play_card` 对它**不派发**窗口；
+   由 `run_effect_tactics` 在"弃置桌面状态卡"之后调 `arm_intercept_after_cost()` 才开窗；
+   开窗期间用 `pending_echo.wait_intercept` 冻结效果（`resolve_effect` 拒收），
+   拦截成功由 `use_armed_offer` 清 `pending_echo`（日志写明"代价不退"），放弃则解除冻结继续。
+2. **批 2**：20 张"打出时付代价"的增强卡（损耗 6 + 需选牌弃置 14）——框架前移即可，无 UI 改动。
+3. **批 3**：32 张带代价的状态卡 —— 代价段前移；**同时修了一个既有 bug**：
+   `skip_armed_offer` 放弃 15353 拦截时只记放行标记+关窗，**不续跑 activate_status** →
+   状态卡效果永远不执行（S1 之后就变成"付了代价没效果"）。现改为用 `ctx.arg` 原样续跑，
+   并以一次性令牌 `game.__status_cost_resume` 保证续跑那次不重复扣代价。
+4. **批 4（未做，待定）**：35 张 armed 触发型增强卡 —— 它们的代价在**触发时**付，
+   被拦发生在"打出"那一刻（尚未装载），故现状"无代价可退"是正确的；第四批要议的是
+   "装载被拦后是否允许重新打同一张"等口径。
+
+### 两个待议口径（当前默认值）
+
+- **`skip_play`（跳过出牌阶段）**：**玩家 2026-10-30 裁定：照付** —— 已移到窗口之前
+  （`if (cost.skip_play && !borrowed && !_costPaidNow)`），被 15353 拦截时出牌阶段照样被跳过。
+- **付代价后能否取消**：当前**不能**（代价付完就进入效果/等拦截）。若要支持，
+  需新增 `cancel_echo_cost`/`cancel_status_cost` 动作 + 客户端按钮。
+
+### 踩坑记录
+
+- **不要用"整段剪切-粘贴"改这类长函数**：我第一次用脚本按"注释块起点"定位，结果把
+  一段代码插进了 `module.exports`（require 即 ReferenceError）。教训：
+  (a) 定位要用**唯一的代码行**而不是注释块首行；(b) 大改后必须 `node -e "require(...)"` 实跑；
+  (c) 改完先跑全量冒烟再重启服务器。
+- **"已付代价"标记不能按回合记**：初版用 `__status_cost_paid[cardId]=freq_key`，
+  导致同一回合第二次发动同一张状态卡（如 15348 殖民帝国可发动 3 次）被误判"已付"而不再扣分
+  —— 被 `_smoke_15348` 抓住。正确做法是**一次性令牌**，只对"放弃拦截后的那次续跑"生效。
+- **静态守卫会因代码搬移误报**：`_smoke_114` 用 `src.indexOf('if (cost.discard...'))` 比较行号，
+  而该串在 `pay_event_cost()` 里也出现 → 断言失败。凡"顺序断言"都要先定位所属函数范围再比较。
+
+### 回归
+
+| 脚本 | 项数 | 覆盖 |
+|---|---|---|
+| `tools/_probe_15214_intercept.js` | 19 | 15214 代价前移 / 拦截只取消效果 / 放弃后续跑 |
+| `tools/_smoke_s1_cost_before_intercept.js` | 24 | 增强卡 4 张代表（损耗/弃置/限定响应牌）+ 代价单元 + 防重扣 |
+| `tools/_smoke_s1_status_cost.js` | 17 | 状态卡（15245）代价前移 / 拦与不拦 / 放弃续跑 / skip_play 默认 |
+| 全量 | 111 脚本 | 全绿（含 `_smoke_15348`、`_smoke_114`） |
+
+---
+
+## 2026-10-30 · 批 4：机会卡（armed 触发型）也可被 15352/16700 拦截
+
+### 排查结论：这类卡此前【完全不可拦】，不是"漏了某个环节"
+
+三道门叠在一起：
+
+| # | 门 | 位置 | 后果 |
+|---|---|---|---|
+| 1 | **不能主动打出** | `trigger_ready`：`CARD_TRIGGERS[face].kind === 'load'/'any'` → 直接拒绝「机会卡」 | 35 张里 **0 张**能走 `play_card`；`play_card` 里的 `enemy_echo_played` 派发点永不执行 |
+| 2 | **触发时不派发** | `suspend_armed_use_for_counter` 首行 `if (!off || off.when !== 'enemy_echo_played') return false` | 只服务「反制别人拦截」，普通触发窗口（after_deploy_air / after_battle…）直接早退 |
+| 3 | **按 when 精确匹配** | `scan_armed_cards` 按 `ar.when` 匹配 | 即使有窗口，触发型 when 也匹配不到 15352/16700 |
+
+⚠ 另外一条实测更正：装载型卡在「装载」后**仍在手牌**（不在弃牌堆），所以 15352 的 `discard_card(owner, cardId)` 在触发时**能**生效 —— 这是纯逻辑门控，不是结构不可行。
+
+### 实现（玩家 2026-10-30 裁定：扩展为「打出 + 触发」）
+
+- 窗口**复用** `enemy_echo_played`，用 `ctx.via` 区分来源：
+  - `via='play'` = 敌方主动打出/装载（原反制链）
+  - `via='trigger'` = 敌方机会卡触发（新增）
+- `suspend_armed_use_for_counter` → **`suspend_armed_use_for_intercept`**（旧名保留别名）：
+  - 删掉 `off.when !== 'enemy_echo_played'` 早退；
+  - `CHAIN_CAP = 3`（触发层 +1），超限写「拦截链已达上限（3 层）」；
+  - 触发侧防抖 `__trigger_intercept_done[cardId|when] = freq_key`（同一张卡同一触发每回合只问一次）；
+  - 派发 ctx 追加 `via / srcWhen / triggerCtx`；`pending_armed_use` 记 `via / srcWhen`。
+- `void_pending_armed_use` 分来源：
+  - `via='play'`：原逻辑（代价照付 + 卡进弃牌 + 放行被压住的出牌）；
+  - `via='trigger'`：代价照付（attrition/discard）+ 卡进弃牌 + **本次触发作废**（丢弃 gathered、清 `pending_echo`、摘掉残留窗口），日志「触发《X》—— 被《Y》无效（代价照付）」「本次触发作废（已选目标全部放弃）」。
+- `use_armed_offer` **开窗前代价预检**：`attrition` 付不起就不开窗（`discard` 张数早已由 `_discNeed0` 预检），避免"对方白表一次态、随后才报付不起"。
+- **未做**「代价前置到 run 之前」：`r.skip`（条件不满足）与 `r.budget`（15205 等延后到 event_finish 付）依赖"先 run 后付"，硬前置会破坏既有口径；被拦时的"代价照付"由 `void_pending_armed_use` 补付，玩家可见结果等价。
+- `16700 一日之狮` 代价改声明式 `cost:{attrition:1}`（从 run 里删掉 `attrition_cards('意大利',1)`，否则双扣）——顺带修好客户端按钮不显示「（损耗 1）」。
+- 视图：`view.armed_offer.via / src_when` 下发；客户端按钮文案 `via='trigger'` 时写「拦截《X》（敌方触发）」，否则「打出《X》」。
+
+### 语义约定（易混，务必记住）
+
+卡面写「敌方**打出**增强卡时」——口语里「触发」也算「打出」，**卡面文案不改**；
+代码/日志用 `via` 区分：主动打出/装载 = 打出，机会卡生效 = 触发。
+
+### 回归
+
+`tools/_smoke_armed_trigger_intercept.js`（**29 项**）：触发被拦（效果不发生/卡进弃牌/代价照付/无预算）、放弃后照常、无拦截方不问、多步卡（16803 need:'space'）被拦后 gathered 作废、层级上限 3、16700 声明式代价、静态结构。
+全量冒烟 **112 脚本全绿**；已重启 8091；客户端 `?v=20261030e`。
+
+---
+
+## 2026-10-30 · 真实测试范式（调试面板布阵 + 真实 action 驱动）
+
+### 范式（后续所有真实测试照抄）
+
+1. **布阵只用调试动作**：`debug_set_phase`（切国家/阶段并清挂起）、`debug_add_card`（face + 国家 + 去向）、
+   `debug_place`（放部队）。**禁止手改** `game.hands/location` —— 会绕过 `card_inst`、`refresh`、
+   补给与窗口计数，测出来的行为不可信。
+2. **驱动只用真实动作**：`play_card` / `use_armed_offer` / `skip_armed_offer` / `activate_status` /
+   `resolve_effect` / 阶段动作。不直接调内部函数"作弊"。
+3. **断言三层**：服务端状态（手牌/弃牌堆/牌库/挂起字段）＋ 客户端视角（`R.view(g,'Allies'|'Axis')`
+   的 `armed_offer.via` / `actions` / `table_status`）＋ 日志文案。
+4. **必查残留**：`pending_armed_use`、`armed_offers`、`__echo_chain_depth`。
+5. **每步打印日志** `logSince()`：真实测试的价值在可读、能人工核对。
+6. ⚠ 窗口类断言要放在 `R.view()` **之后**：`status_instant` 是在 view/build_actions 那一遍才武装的。
+
+### 已建成的两组（可作模板）
+
+| 脚本 | 链路 | 断言 |
+|---|---|---|
+| `tools/_real_test_paradigm_15208.js` | 德国建设海军 → 15208 触发 → 英国 15352 拦 → 意大利 16700 反制 → 15208 生效 | 25 项 |
+| `tools/_real_test_paradigm_17841.js` | 德国 15248 上桌 → 建设陆军武装 after_build_army → 发动 15248 → 英国 15353 拦 → 意大利 16700 反制 → 15248 生效 | 23 项 |
+
+### 这两组真实测试当场抓到的两个真 bug（已修）
+
+1. **反制成功后，被"压住"的那次若是【触发】，恢复时却走 `play_card`** →
+   日志「《齐柏林伯爵号》未被打断，直接生效」紧跟「不能主动打出」，效果丢失。
+   修法：`pending_armed_use` 增加 `outer`（链式保存上一级）；新增 `resume_suspended_use()`
+   统一"放回原窗口 + 重跑 `use_armed_offer`"；`void_pending_armed_use` 按 `outer.via` 分流。
+2. **反制掉拦截卡后，它本要拦的【状态卡】永远不恢复**（15248 抓到的）：
+   15353 自己的 `when` 是 `enemy_status_effect` → 它的 `pending_armed_use.via` 也是 `trigger`，
+   于是被"本级是触发、被拦则作废"的分支误吞。
+   修法：给两类窗口 ctx 打 `window` 标记（`enemy_echo_played` / `enemy_status_effect`），
+   `void_pending_armed_use` 的**恢复逻辑排到"作废"之前**，并按 `pu.orig.window` 分流：
+   `enemy_status_effect` → 续跑 `activate_status`（一次性令牌 `__status_cost_resume` 免重扣代价）；
+   `enemy_echo_played` → 有 outer 走 `resume_suspended_use`，否则 `release_echo_entry`。
+
+**通用教训**：`via` 只能表达"这张卡是怎么被用起来的"，**不能**表达"这一级到底是拦截者还是被拦者"。
+判断后者要看 `pu.outer`（有没有压住东西）与 `pu.orig.window`（它应答的是哪类窗口）。
+
+### 第 3 组：S1「代价不退」真实测试（15214 战术革新）
+
+`tools/_real_test_paradigm_15214.js`（20 项，两支对照）：
+
+| 支 | 链路 | 结果 |
+|---|---|---|
+| A | 德国 play 15214 → `resolve_effect{discard_status}` 弃桌面状态卡（**代价照付**）→ 英国 15352 拦 → 意大利 16700 反制窗口 → **放弃** → 15352 成立 | 15214 进弃牌堆；**桌面状态卡仍在弃牌堆（代价不退）**；手里状态卡未被免费打出（效果取消）；`pending_echo` 清空 |
+| B | 同上但英国**直接放弃**拦截 | 效果照常：手里状态卡免费打到桌面；代价同样已付 |
+
+日志关键行（可直接对照）：
+
+```
+【英国】可打出 1 张增强卡
+【德国】已付代价，等待【英国】的拦截应答（拦截只取消效果，代价不退）
+《战术革新》效果被拦截：德国已付代价不退，剩余效果不发生
+```
+
+**顺带补全**：`via` 标记此前只打在"触发"来源上，三处"打出"来源
+（`play_card` 主路径 / `arm_intercept_after_cost` / `resume_echo_queue`）漏了
+→ `view.armed_offer.via` 为 null，客户端按钮会误显示"打出/拦截"分支。
+现三处统一补 `via: 'play', window: 'enemy_echo_played'`。
+
+**教训**：新增窗口字段（via/window）时，必须**搜全部派发点**（`offer_armed_effects(game,'enemy_echo_played'` 共 4 处），
+漏一处就会出现"某些卡显示不对、其它卡正常"的局部 bug —— 这类最适合用真实测试断言 `view.armed_offer.via` 兜住。
+
+### 第 4 组：双拦截方 + 层级上限真实测试 —— 结论与一个【已知边角】
+
+`tools/_real_test_paradigm_two_interceptors.js`（16 项通过 + 4 项 KNOWN）：
+
+**已验证通过（稳定）**
+
+1. **同一窗口多候选只发生在"同一张卡的多份"**：英国两张 15352 → 窗口写「可打出 2 张增强卡」。
+   **15352 与 16700 永远不会同窗** —— 15352 只拦轴心、16700 只拦同盟，阵营互斥（实测确认）。
+2. 逐层反制：`15352#a → 16700#a → 15352#b → 16700#b`，每层 `chain_depth` 1→2→3 递增；
+3. 第 4 层使用后 **CHAIN_CAP 生效**，日志「拦截链已达上限（3 层），本次不再询问拦截」，不再开第 5 层；
+4. 全程无崩溃、`pending_armed_use` 最终为 null、`chain_depth` 归零。
+
+**已知边角（未修，4 项 KNOWN）**
+
+现象：撞上限后，最后一级恢复链里 `release_echo_entry(15209)` 报「手中没有这张牌」，
+随后又给英国开出一个 `enemy_echo_played` 窗口（英国第二张 15352 仍在手），
+最终残留：窗口 1 个、英国第二张 15352 与第二张代价牌未消耗。
+
+根因：现在的"恢复"是**按层递归**（`void` → `resume_suspended_use` → 又触发 `void` …），
+层数 ≥3 时同一件事会被恢复两次（一次来自 `outer`，一次来自 `pu.orig`），
+第二次拿到的牌已不在手牌 → 报"手中没有这张牌"并重新派发窗口。
+
+**建议修法（下一步）**：把恢复改成**栈式单循环**——一次只为"最外层未被处理者"做恢复，
+恢复后重新入栈再判定，不再互相递归；同时给每个 `pending_armed_use` 打 `recovered:true` 标记防重复恢复。
+（本组 4 项 KNOWN 已用 `known()` 标记，不算失败，便于持续跟踪。）
+
+**教训**：递归恢复在 2 层内没问题（S1 之前的所有用例都是 ≤2 层），
+但 `CHAIN_CAP=3` 打通后必须改成栈式恢复，否则会出现"重复恢复 + 过期窗口"。
+
+---
+
+## 2026-10-30 · 【规则】禁止构造"违规盘面"的测试（同卡多份）
+
+### 事故
+
+第 4 组真实测试（`_real_test_paradigm_two_interceptors.js` 初版）为了构造 4 层拦截链，
+给英国发了 **两张 15352**、意大利 **两张 16700** —— 这在真实牌组里**不可能发生**：
+
+```
+实测（setup 后统计每面实例数）：
+  德国 74 张：重复面 = 15200/15201/15202/15203/15204（BASIC 5 张）
+  英国 75 张：重复面 = 15300..15304（BASIC 5 张）
+  意大利 65 张：重复面 = 17700..17704（BASIC 5 张）
+  美国/苏联/日本同样只有 BASIC 重复
+```
+
+即 **只有 BASIC（建设陆军 / 发起陆战 / 发起海战 / 建设海军 / 空军力量）有同名多份**，
+EFFECT / EVENT / STATUS / RESPONSE / ECON **全部每面 1 份**。
+
+### 两条由此得出的结论
+
+1. **拦截链最长 2 层**：15352 ↔ 16700 各 1 张、且阵营互斥（15352 只拦轴心、16700 只拦同盟），
+   所以「15352 → 16700」是唯一可能的链，`CHAIN_CAP = 3` 在合法对局中 **不可达**，
+   仅作防御性上限保留（不可删，防将来新增拦截卡时失控）。
+2. **同窗多候选只可能来自"不同卡共享同一 when"**（如德国 after_build_navy 的 15208 与 15210），
+   且两张都要各自 `ready()` 通过；同卡多份凑数属于违规布阵。
+
+### 处置
+
+- 初版测试及其 4 项 `KNOWN` **全部作废**（那 4 项是违规布阵造出来的假问题）；
+- 第 4 组已按合法盘面重建（`ALL PASS 24 项`）：德国建设海军 → 15208 触发 → 英国 15352 拦
+  → 意大利 16700 反制（第 2 层 = 合法上限）→ 15208 生效（代价照付 + 空军落地）；
+  同组还记录了「15210 未入列原因：`ready=false`」，避免把"未 ready"误判成 bug。
+
+### 规则（后续所有测试必须遵守）
+
+1. **只用真实存在的牌组组合**：非 BASIC 每种卡最多 1 份；需要"多张"时必须换成不同面 id。
+2. **需要多份时先验证**：`setup` 后统计 `decks+hands` 的每面实例数，确认无误再布阵。
+3. **断言前先 ask"这个局面在真实对局里能出现吗"**：不能出现的局面，测出来的 bug 优先怀疑布阵。
+4. 若要测"多候选窗口"，用**同 when 的不同卡**（15208 + 15210 若都 ready）或 BASIC 多份（合法）。
+
+### 第 5 组：状态卡侧「拦截成立」真实测试（15353 成功 → 本回合无效）
+
+`tools/_real_test_paradigm_status_void.js`（18 项，一次通过）：
+
+链路（合法单份，含 16700 在场但**放弃反制**）：
+
+```
+德国 15248 上桌 → 建设陆军武装 after_build_army
+→ 德国 发动 15248（代价：损耗 2，前置）
+→ 英国 15353 拦截窗口（enemy_status_effect）
+→ 英国 use 15353（弃 1）→ 自身是增强卡 → 意大利 16700 反制窗口
+→ 意大利【放弃反制】→ 15353 成立 → 15248 本回合无效
+```
+
+实测日志：
+
+```
+【德国】损耗 2 张牌 | 【英国】可打出 1 张增强卡
+【意大利】可打出 1 张增强卡 | 【英国】触发增强《保持冷静·继续前进》—— 等待【意大利】的拦截应答
+【意大利】放弃打出增强卡 | 【英国】弃置 1 张手牌 | 英国打出《保持冷静·继续前进》
+  —— 英国弃置 1 张手牌：敌方状态卡《合成燃料》本回合效果无效
+```
+
+断言要点（与第 2 组形成对照）：
+
+| 项 | 第 2 组（15353 被反制） | 第 5 组（15353 成立） |
+|---|---|---|
+| 状态卡效果 | **照常执行**（陆军 +1） | **不发生**（陆军数量不变） |
+| 代价（损耗 2） | 已付、不退 | 已付、**同样不退**（S1 口径） |
+| 压制记录 | 无 | `status_suppressed_this_turn` 命中 |
+| 之后 `table_status.ready` | 已消耗 | **false（本回合失效）** |
+| 15353 的代价 | 照付（被反制也要付） | 照付 |
+
+至此状态卡侧的两种终局（拦截成功 / 拦截被反制）都有真实测试覆盖。
+
+### 第 6 组：经济战侧 pre-cancel 真实测试（15329 反潜战术）
+
+`tools/_real_test_paradigm_econ_cancel.js`（15 项）。这是第三种拦截范式（响应栈 pre=true），
+与增强卡（enemy_echo_played）/ 状态卡（enemy_status_effect）完全不同：
+
+| 范式 | 载体 | 卡是否需暗置 | 拦截动作 |
+|---|---|---|---|
+| 增强卡 | armed_offers | 否（握在手牌） | use_armed_offer |
+| 状态卡 | armed_offers | 否 | use_armed_offer |
+| **经济战** | response_stack（pre） | **是**（table_responses） | trigger_response / pass_response |
+
+链路（合法单份）：
+
+    ① 英国出牌阶段：play 15329 -> 暗置到桌面（占名额，table_responses 追加 {card_id, owner_side, nation}）
+    ② 切回德国出牌阶段：debug_add_card 15217《电动潜艇》（[潜艇行动]）
+    ③ 德国 play_card 15217 {target:"英国"} -> 响应栈 pre-cancel 窗口给英国
+    ④ 英国 trigger_response {card} -> 15217 效果不发生
+
+实测日志：
+
+    【响应】《反潜战术》触发：使《电动潜艇》无效
+    《电动潜艇》被《15329 反潜战术》拦截，进弃牌堆（效果无效）
+
+断言要点：
+- 拦截成立：英国牌库**不变**、德国分数**不变**、15217 进弃牌堆（照常打出）、15329 消耗、栈清空；
+- 对照（pass_response）：英国 **-3 张**、德国 **+2 分**、15217 进弃牌堆、15329 **仍在桌面**（未发动）。
+
+### 布阵踩到的三个坑（写测试时会再遇到）
+
+1. `game.table_responses` 是【数组】，元素形如 `{card_id, owner_side, nation, id}`，
+   不是 `table_responses[nation]` 字典 —— 断言要用 `.some(x => x.card_id === card)`。
+2. 经济战目标国的参数键是 **`target`**（`play_card {card, target:"英国"}`），不是 `to`；
+   且 `15223 V2 飞弹` 有「<西欧>有德国陆军」的地面前提，`debug_place` 会因为该格已有他国部队被拒，
+   测试里换成无地面前提的 `15217 电动潜艇` 更稳。
+3. `game.score` 的键是**小写** `axis/allies`，断言分数要兼容大小写。
