@@ -22257,6 +22257,23 @@ function check_phase_for_card(game, nation, c, arg) {
 	/* ② 出牌阶段：打 1 张（名额由 play_done 管） */
 	if (ph === 'play') {
 		/*
+		 * 【2026-10-31 修复 16701 意大利万岁】"本回合出牌阶段只能打出[基本卡]"。
+		 *
+		 * ⚠ 这条限制【必须】写在这里（check_phase_for_card）：
+		 *   旧实现写在 check_play_phase()，而那个函数只被"弃 1 张手牌 / 减 1 分"这类
+		 *   【非卡牌动作】调用（全仓仅 2 处），卡牌打出根本不经过它 ——
+		 *   于是限制形同虚设：实测限制期内 EVENT / STATUS / ECON 都能照打（用户反馈）。
+		 *
+		 * 位置在 EFFECT / extra_play 之后：
+		 *   · 增强卡（EFFECT）属"按时机打出、不占名额"，不算出牌阶段行动 -> 不受此限；
+		 *   · 额外打出（如 15211 授予）同样受"只能打基本卡"约束 -> 放在 extra 判定之前拦。
+		 */
+		if (game.it_viva && nation === '意大利' && c && c.type !== 'BASIC')
+			return {
+				ok: false,
+				reason: '《意大利万岁》生效中：本回合出牌阶段只能打出[基本卡]',
+			}
+		/*
 		 * 《空军力量》的特殊说明限定它在空军阶段使用，
 		 * 因此出牌阶段不能打它。
 		 */
@@ -25238,6 +25255,12 @@ exports.view = function (state, current) {
 			on: tf.on,
 			pre: tf.pre,
 			owner_side: tf.owner_side,
+			/*
+			 * 【2026-10-31】把"被拦截/被响应的那张卡"一并下发：
+			 * 15329《反潜战术》栏经济战、17736《王牌飞行员》栏轰炸行动时，
+			 * 询问框要能显示「【德国】打出《电动潜艇》」，不能只问"是否发动"。
+			 */
+			target: view_intercept_target(tf.ctx, tf.on),
 			candidates: cands,
 			order: cands.map(c => c.card_id),
 			/*
@@ -25992,6 +26015,8 @@ exports.view = function (state, current) {
 				name: pc.name,
 				kind: pc.kind,
 				prompt: pc.prompt,
+				/* 【2026-10-31】被拦截的卡（15329 反潜战术 / 17736 王牌飞行员 等 pre-cancel 响应卡） */
+				target: view_intercept_target(pc.ctx, pc.on),
 				candidates: (pc.candidates || []).map(x =>
 					(x && typeof x === 'object')
 						? { id: x.id, name: x.name || '' }
@@ -26016,6 +26041,14 @@ exports.view = function (state, current) {
 				 */
 				via: (off.ctx && off.ctx.via) || null,
 				src_when: (off.ctx && off.ctx.srcWhen) || null,
+				/*
+				 * 【2026-10-31 玩家口径】拦截询问时必须先让拦截方看见【被拦截的是哪张卡】：
+				 * 例如德国打出 14500《黄色方案》，英国 15352 的询问框要显示"德国 打出《黄色方案》"。
+				 *
+				 * 数据来自窗口 ctx（enemy_echo_played / enemy_status_effect 都带 {nation, card}）；
+				 * 只下发给【有权表态的那一方】（本函数本身已按 side 过滤），不泄给第三人。
+				 */
+				target: view_intercept_target(off.ctx, off.when),
 				/* 多步交互待收集信息（need='piece'/'space'/'choice'），客户端据此高亮选点 */
 				pending: off.pending ? {
 					need: off.pending.need,
@@ -27792,11 +27825,46 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
  * 归属方判定：被摊开的牌所属国家 = game.peek.card 的卡面归属国
  * （注意不能用 game.peek.nation —— 15305 那里存的是"被看牌的一方"）。
  */
+/*
+ * 【2026-10-31】拦截询问的"被拦截对象"统一描述。
+ *
+ * 三类拦截载体（增强卡窗口 / 状态卡窗口 / 响应栈）都把被拦的卡放在 ctx 里
+ * `{nation, card, via, window}`，这里统一转成客户端可渲染的形状，
+ * 避免每个窗口各写一遍（16700 之类同族卡因此自动获得同样能力）。
+ */
+function view_intercept_target(ctx, fallbackWindow) {
+	if (!ctx || !ctx.card) return null
+	const cid = ctx.card
+	const tc = inst_card(String(inst_card_id(cid)))
+	return {
+		card: cid,
+		name: tc ? tc.name : String(cid),
+		nation: ctx.nation || '',
+		type: tc ? tc.type : '',
+		via: ctx.via || null,
+		window: ctx.window || fallbackWindow || '',
+		img: tc ? (tc.img || null) : null,
+		text: tc ? (tc.text || '') : '',
+	}
+}
+
 function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	const acts = build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigger)
 	if (game.peek && (game.peek.cards || []).length && game.peek.card) {
 		const cd = CARD_BY_ID[String(inst_card_id(game.peek.card))]
 		if (cd && faction_of_nation(cd.nation) === side) acts.play_card = 1
+	}
+	/*
+	 * 【2026-10-31】多步增强卡 need 期间的补参重发（17514 飞虎队 / 17815 Z 计划）。
+	 *
+	 * 玩家第一次 play_card 只选了 option，服务端把 need 存进 pending_echo；
+	 * 客户端选完地区要用【同一个 play_card】再发一次。若这里不放行 play_card，
+	 * 客户端 send_action 会因为 `view.actions.play_card` 缺失而【静默不发】——
+	 * 玩家看到的就是"点了没反应"（与 peek / armed_offer 那两处同款防死锁）。
+	 */
+	if (game.pending_echo && game.pending_echo.kind === 'echo_need' && game.pending_echo.card) {
+		const pd = CARD_BY_ID[String(inst_card_id(game.pending_echo.card))]
+		if (pd && faction_of_nation(pd.nation) === side) acts.play_card = 1
 	}
 	/*
 	 * 【2026-10-22】回退（时间回溯）动作统一在【外层】追加。
@@ -28546,17 +28614,28 @@ function do_action(state, current, action, arg) {
 	 * 否则拦截方点了没反应、永远推不动（与战斗预算 BUDGET_ALLOWED 同款口径）。
 	 */
 	if (game.pending_echo &&
-		(!game.pending_echo.wait_intercept
-			? (action !== 'resolve_effect' &&
-				!(arg && arg.__debug) && !String(action).startsWith('debug_'))
-			: (action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
-				action !== 'trigger_response' && action !== 'pass_response' &&
-				action !== 'resolve_response_choice' && action !== 'response_reorder' &&
-				action !== 'response_confirm' && action !== 'log' &&
-				!(arg && arg.__debug) && !String(action).startsWith('debug_')))) {
-		game.log.push(game.pending_echo.wait_intercept
-			? '《战术革新》已付代价，等待敌方拦截应答（此时只能由拦截方表态）'
-			: '《战术革新》结算中：请选择要弃置/免费打出的状态卡，期间不能进行其它操作')
+		(
+			/*
+			 * 【2026-10-31】kind='echo_need'：多步增强卡在等"补参重发"——
+			 * 此时必须放行 play_card（客户端用同一张卡再发一次，带上 space/choice），
+			 * 否则玩家选完地区也提交不了（17514 飞虎队 / 17815 Z 计划）。
+			 */
+			game.pending_echo.kind === 'echo_need'
+				? (action !== 'play_card' && action !== 'log' &&
+					!(arg && arg.__debug) && !String(action).startsWith('debug_'))
+				: (!game.pending_echo.wait_intercept
+					? (action !== 'resolve_effect' &&
+						!(arg && arg.__debug) && !String(action).startsWith('debug_'))
+					: (action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+						action !== 'trigger_response' && action !== 'pass_response' &&
+						action !== 'resolve_response_choice' && action !== 'response_reorder' &&
+						action !== 'response_confirm' && action !== 'log' &&
+						!(arg && arg.__debug) && !String(action).startsWith('debug_'))))) {
+		game.log.push(game.pending_echo.kind === 'echo_need'
+			? '《' + (game.pending_echo.name || '增强卡') + '》等待你选择目标（请点地图高亮地区）'
+			: (game.pending_echo.wait_intercept
+				? '《战术革新》已付代价，等待敌方拦截应答（此时只能由拦截方表态）'
+				: '《战术革新》结算中：请选择要弃置/免费打出的状态卡，期间不能进行其它操作'))
 		return game
 	}
 
@@ -32144,10 +32223,19 @@ function do_action(state, current, action, arg) {
 			game.log.push('【美国】《战时生产委员会》：选择 1 张[状态卡]重置为未发动（损耗1张牌）')
 			return game
 		}
+		/*
+		 * 【2026-10-31】放弃多步增强卡（客户端 pending_echo 面板的「不发动」按钮）：
+		 * 卡没被消耗（还滞留 need 阶段），清掉挂起即可，不进弃牌堆、不占名额。
+		 */
+		if (arg && arg.__cancel_need && game.pending_echo &&
+			game.pending_echo.kind === 'echo_need' && game.pending_echo.card === card_id) {
+			game.pending_echo = null
+			game.log.push('【' + nation + '】放弃发动《' + c.name + '》')
+			refresh(game)
+			return game
+		}
 		/* ① 时点校验 */
 			const tr = trigger_ready(game, card_id, nation)
-			console.log('[ECHO server] card_id=', card_id, 'nation=', nation,
-				'trigger_ok=', tr.ok, 'reason=', tr.reason)
 			if (!tr.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》现在不能打出：' + tr.reason)
 				return game
@@ -32245,15 +32333,51 @@ function do_action(state, current, action, arg) {
 			delete game.__skip_echo_intercept
 
 			/* ② 执行（与事件卡同一个执行器） */
+			/*
+			 * 【2026-10-31】本次是"补参重发"（同一个 play_card 第二次发）-> 先清掉上一次的 need 挂起，
+			 * 由下面的 resolve 决定是继续要参数还是直接结算。
+			 */
+			if (game.pending_echo && game.pending_echo.kind === 'echo_need' &&
+				String(inst_card_id(game.pending_echo.card)) === String(inst_card_id(card_id)))
+				game.pending_echo = null
 			const r = resolve_event_card(game, nation, card_id, arg || {}, 0, extra)
-			console.log('[ECHO server] resolve r=', JSON.stringify(r).slice(0, 300))
 			if (!r.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
 				return game
 			}
-			/* ③ 还缺玩家选择 -> 不弃牌不结算 */
+			/* ③ 还缺玩家选择 -> 不弃牌不结算，但要把"缺什么/候选是什么"持久化下发 */
 			if (r.pending) {
+				/*
+				 * 【2026-10-31】修 17514《飞虎队》/ 17815《Z 计划》"点了没反应"：
+				 * 旧实现只写一行日志就 return —— 既不持久化、也不下发候选，
+				 * 客户端无从高亮、也没有"补参重发"的通道。
+				 * 现在把 need 存进 game.pending_echo（客户端 update_pending_echo_box 渲染选项/高亮），
+				 * 玩家选完后用【同一个 play_card + 完整参数】重发（见门禁对 echo_need 的放行）。
+				 */
+				const nd = r.need || {}
+				/*
+				 * ⚠ 有些卡的 run 会【自己】写 pending_echo（17812/17813 的 kind='su'、
+				 * 15214 的 kind 未设置）。那些卡返回的 need 只是给客户端看的提示，
+				 * 不能被我这里覆盖成 echo_need —— 否则选牌框的 candidates 全丢。
+				 */
+				/* 注意：su 类卡的 pending_echo.card 存的是【面 id】（'17812'），这里要按面比较 */
+				const _ownPe = game.pending_echo && game.pending_echo.card &&
+					String(inst_card_id(game.pending_echo.card)) === String(inst_card_id(card_id))
+				if (!_ownPe) game.pending_echo = {
+					card: card_id, nation: nation, kind: 'echo_need',
+					name: c.name,
+					step: nd.need || 'choice',
+					title: '《' + c.name + '》：' + (r.desc || '请继续选择'),
+					/* choice 阶段：选项按钮（label/disabled/reason） */
+					options: nd.options || null,
+					/* space 阶段：地区候选（数字 id 列表） */
+					cands: (nd.need === 'space' && Array.isArray(nd.candidates)) ? nd.candidates.slice() : null,
+					pick: nd.pick || 1,
+					/* 已选定的 choice（重发时要带上） */
+					choice: (arg && arg.choice != null) ? arg.choice : null,
+				}
 				game.log.push('【' + nation + '】《' + c.name + '》：' + r.desc)
+				refresh(game)
 				return game
 			}
 			discard_card(game, nation, card_id)

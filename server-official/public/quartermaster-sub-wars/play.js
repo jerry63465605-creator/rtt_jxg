@@ -2502,9 +2502,21 @@ function update_armed_offer_box() {
 			send_action('skip_armed_offer', {})
 		},
 	})
+	/*
+	 * 【2026-10-31 玩家口径】拦截询问先亮出"被拦截的卡"：
+	 * 标题写「【德国】打出《黄色方案》—— 是否拦截？」，描述里带上该卡卡面文本，
+	 * 拦截方不用猜自己在拦什么（14500 / 触发型增强卡 / 状态卡都走这条）。
+	 */
+	const tgt = ao.target || null
+	const tgtLine = tgt
+		? ('【' + (tgt.nation || '敌方') + '】' +
+			(tgt.via === 'trigger' ? '触发' : '打出') + '《' + tgt.name + '》')
+		: ''
+	const tgtText = tgt && tgt.text ? String(tgt.text).replace(/\s+/g, ' ').slice(0, 90) : ''
 	render_ask_box(
-		'打出增强卡？',
-		(ao.cards[0].desc || '') + '\n（不打出则错过本次时机）',
+		tgtLine ? (tgtLine + ' —— 是否拦截？') : '打出增强卡？',
+		(tgtText ? ('被拦截：' + tgtText + '\n') : '') +
+			(ao.cards[0].desc || '') + '\n（不打出则错过本次时机）',
 		opts)
 }
 
@@ -2864,7 +2876,14 @@ function check_phase_for_card(c) {
 	 * 数据来源是服务端下发的 view.it_viva —— 客户端不自己猜（教训 R26）。
 	 */
 	/* view.it_viva 服务端已按【当前行动国】算好，客户端不再二次判断国别 */
-	if (ph === "play" && view && view.it_viva && c.type !== "BASIC")
+	/*
+	 * 【2026-10-31 修复】与服务端 check_phase_for_card 同源：
+	 * 增强卡(EFFECT)/响应卡(RESPONSE) 属"按时机打出、不占名额"，不算出牌阶段行动，
+	 * 不受《意大利万岁》的"只能打基本卡"限制（服务端在 it_viva 判定之前就 return 了）。
+	 * 旧版这里写 `c.type !== "BASIC"` 一律置灰 -> 增强卡点不动，与服务端不一致。
+	 */
+	if (ph === "play" && view && view.it_viva && c.type !== "BASIC" &&
+		c.type !== "EFFECT" && c.type !== "RESPONSE")
 		return {
 			ok: false,
 			reason: "《意大利万岁》生效中：本回合出牌阶段只能打出[基本卡]",
@@ -5146,11 +5165,74 @@ function cancel_peek() {
  *   step 'discard'：选择德国场上的 1 张[状态卡]弃置
  *   step 'play'   ：选择手牌中的 1 张[状态卡]免费打出（不占出牌名额）
  */
+/*
+ * 【2026-10-31】增强卡"多步 need"的补参重发通道（17514 飞虎队 / 17815 Z 计划 等）。
+ *
+ * 服务端在 play_card 遇到 r.need 时会把 {kind:'echo_need', step, options, cands, choice}
+ * 写进 pending_echo；客户端这里：
+ *   · step='choice' -> 渲染选项按钮，点选后重发 play_card {card, choice}
+ *   · step='space'  -> 高亮 cands 里的地区，玩家点地图后重发 play_card {card, choice, space}
+ * 这与 15214 的 pending_echo（kind 未设置）/ 苏联 kind='su' 分支互不干扰。
+ */
+let echo_need_pick = null   /* { card, choice, cands } —— 等待玩家点地图 */
+
+function clear_echo_need_pick() {
+	if (!echo_need_pick) return
+	echo_need_pick = null
+	highlight_targets(null)
+}
+
 function update_pending_echo_box() {
 	const modal = document.getElementById("pending_echo_modal")
 	if (!modal) return
 	const pe = view.pending_echo
-	if (!pe) { modal.style.display = "none"; return }
+	if (!pe) { modal.style.display = "none"; clear_echo_need_pick(); return }
+	if (pe.kind !== 'echo_need') clear_echo_need_pick()
+	if (pe.kind === 'echo_need') {
+		modal.style.display = "block"
+		const box = modal.querySelector(".modal-box")
+		box.innerHTML = ""
+		const h = document.createElement("h3")
+		h.textContent = pe.title || ("《" + (pe.name || "增强卡") + "》：请继续选择")
+		box.appendChild(h)
+
+		/* ① 选项阶段：每个 option 一个按钮 */
+		if (pe.step === 'choice' && Array.isArray(pe.options) && pe.options.length) {
+			pe.options.forEach(o => {
+				const b = document.createElement("button")
+				b.className = "btn"
+				b.textContent = o.label || ("选项 " + (o.index + 1))
+				if (o.disabled) {
+					b.disabled = true
+					if (o.reason) b.title = o.reason
+				}
+				b.onclick = () => {
+					send_action("play_card", { card: pe.card, choice: o.index })
+				}
+				box.appendChild(b)
+			})
+		}
+
+		/* ② 选地区阶段：高亮候选，等玩家点地图 */
+		if (pe.step === 'space' && Array.isArray(pe.cands) && pe.cands.length) {
+			const p = document.createElement("p")
+			p.textContent = "请点击地图上的高亮地区（共 " + pe.cands.length + " 个候选）"
+			box.appendChild(p)
+			echo_need_pick = { card: pe.card, choice: (pe.choice != null ? pe.choice : null), cands: pe.cands.slice() }
+			highlight_targets(pe.cands)
+		}
+
+		/* ③ 允许放弃（卡未消耗，清掉挂起即可） */
+		const cancel = document.createElement("button")
+		cancel.className = "btn"
+		cancel.textContent = "不发动"
+		cancel.onclick = () => {
+			clear_echo_need_pick()
+			send_action("play_card", { card: pe.card, __cancel_need: true })
+		}
+		box.appendChild(cancel)
+		return
+	}
 	/*
 	 * 【2026-10-07 苏联增强】kind:'su' = 通用多步选牌框（17812/17813）。
 	 * pe 自带 title / candidates（卡对象数组，每项有 id），
@@ -8427,8 +8509,21 @@ function update_pending_trigger_box() {
 			? ('（本组共 ' + cands.length + ' 张，逐张询问）') : ''
 		const where = pt.space ? ('（于 ' + (data.name_of(pt.space) || pt.space) + '）') : ''
 		const kind = pt.pre ? '——可令对方该行动无效' : ''
+		/*
+		 * 【2026-10-31 玩家口径】拦截询问先亮出"被拦的是哪张卡"：
+		 * 15329 拦经济战 / 17736 拦轰炸行动时，显示「被拦截：【德国】打出《电动潜艇》」，
+		 * 拦截方不用靠记忆判断要不要用这张响应卡。
+		 */
+		const tgt = pt.target || null
+		const tgtLine = tgt
+			? ('被拦截：【' + (tgt.nation || '敌方') + '】' +
+				(tgt.via === 'trigger' ? '触发' : '打出') + '《' + tgt.name + '》')
+			: ''
+		const tgtText = tgt && tgt.text ? String(tgt.text).replace(/\s+/g, ' ').slice(0, 90) : ''
 		const title = '响应卡等待决定'
-		const text = '是否发动 ' + names + '？' + where + kind + rest
+		const text = (tgtLine ? (tgtLine + '\n') : '') +
+			(tgtText ? ('　' + tgtText + '\n') : '') +
+			'是否发动 ' + names + '？' + where + kind + rest
 		ask_state = { kind: 'response', pt: pt }
 		render_ask_box(title, text, [
 			{ label: '发动响应', cls: 'primary', onClick: () => send_action('trigger_response', {}) },
@@ -9234,6 +9329,24 @@ function on_click_space(evt) {
 	 * （见 handle_status_space_pick 的注释）。
 	 */
 	if (status_act_phase === 'space') return handle_status_space_pick(s)
+
+	/*
+	 * 【2026-10-31】增强卡"多步 need"选地区（17514 飞虎队 / 17815 Z 计划 等）：
+	 * 玩家已选完 option，正在等点地图 -> 用【同一个 play_card】带齐参数重发。
+	 * 优先级与状态卡同级（也是玩家显式发起的流程），都排在战区移动这类隐式流程之前。
+	 */
+	if (echo_need_pick) {
+		const sid = Number(s)
+		if ((echo_need_pick.cands || []).indexOf(sid) < 0) {
+			toast('请在合法高亮地区中选择')
+			return
+		}
+		const arg = { card: echo_need_pick.card, space: s }
+		if (echo_need_pick.choice != null) arg.choice = echo_need_pick.choice
+		clear_echo_need_pick()
+		send_action('play_card', arg)
+		return
+	}
 
 	/*
 	 * 【2026-10-25】战区移动（17532）：建设步点地区即提交。
