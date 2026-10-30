@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261030e">
+	<link rel="stylesheet" href="play.css?v=20261030d">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261030e"></script>
-	<script defer src="layout.js?v=20261030e"></script>
-	<script defer src="play.js?v=20261030e"></script>
+	<script defer src="data.js?v=20261030d"></script>
+	<script defer src="layout.js?v=20261030d"></script>
+	<script defer src="play.js?v=20261030d"></script>
 </head>
 <body>
 
@@ -29,6 +29,7 @@
 				<li onclick="toggle_debug()">调试单位</li>
 				<li onclick="toggle_debug_cards()">调试卡牌</li>
 				<li onclick="toggle_debug_phase()">调试阶段</li>
+				<li onclick="toggle_debug_view()">调试手牌视角</li>
 			</menu>
 		</details>
 		<details id="info_menu">
@@ -607,6 +608,26 @@
 				</p>
 				<p><button class="action" onclick="debug_do_set_phase()">清空状态并跳过去</button></p>
 				<p id="dbg_phase_hint"></p>
+			</div>
+		</div>
+	</div>
+
+	<!-- 【2026-10-31】调试手牌视角：选本方阵营的一个国家，让"默认等待时"的手牌区显示它的手牌 -->
+	<div id="debug_view_panel" class="hide">
+		<div class="panel">
+			<div class="panel-head">调试：手牌视角<button class="panel-close" title="关闭" onclick="close_debug_panel('debug_view_panel')">×</button></div>
+			<div class="panel-body">
+				<p>
+					<label>显示哪个国家的手牌
+						<select id="dbg_view_nation"></select>
+					</label>
+				</p>
+				<p class="dbg-note">只影响"没有待表态窗口/让权"的静置状态；该国有窗口在等你时，仍会自动切到它。</p>
+				<p>
+					<button class="action" onclick="debug_do_set_view()">应用</button>
+					<button class="action" onclick="debug_do_set_view(true)">恢复默认</button>
+				</p>
+				<p id="dbg_view_hint"></p>
 			</div>
 		</div>
 	</div>
