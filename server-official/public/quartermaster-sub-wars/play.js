@@ -8322,7 +8322,12 @@ let su_purge_sel = null
 function update_su_17817_box() {
 	const modal = document.getElementById('su_purge_modal')
 	if (!modal) return
-	const show = view && (view.su_17817_pending || (view.actions && view.actions.su_purge_play))
+	/*
+	 * 【2026-10-31 修复】再加一道"本国"闸：即使服务端字段哪天又漏了阵营过滤，
+	 * 也不会把《大清洗》选牌框弹到对手屏幕上（该框只属于苏联）。
+	 */
+	const show = view && view.my_nation === '苏联' &&
+		(view.su_17817_pending || (view.actions && view.actions.su_purge_play))
 	if (!show) { modal.classList.add('hide'); const _b = modal.querySelector('.modal-box'); if (_b) _b.innerHTML = ''; su_purge_sel = null; return }
 	modal.classList.remove('hide')
 	const box = modal.querySelector('.modal-box')

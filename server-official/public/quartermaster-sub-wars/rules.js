@@ -25418,10 +25418,19 @@ exports.view = function (state, current) {
 			'苏联': neutral_status(game, '苏联'),
 			'美国': neutral_status(game, '美国'),
 		},
-		/* 17850 大清洗：苏联结束中立给出的一次性出牌机会（客户端据此展示按钮） */
-		su_purge_offer: !!(game.su_purge_offer && table_has(game, '苏联', 17850)),
-		/* 17555 大萧条的余波：美国结束中立给出的一次性机会（弃此牌 -> <美国>+1 计分标记） */
-		us_depression_offer: !!(game.us_depression_offer && table_has(game, '美国', 17555)),
+		/*
+		 * 17850 大清洗：苏联结束中立给出的一次性出牌机会（客户端据此展示按钮）。
+		 *
+		 * 【2026-10-31 修复·阵营过滤】原实现没有 `faction_of_nation('苏联') === side`，
+		 * 轴心也能拿到 true。同文件里 `waiting_for`（su_17817_pending 那段）本来就按阵营判，
+		 * 两处判定不同源 = 典型"信息漏给对手"。
+		 */
+		su_purge_offer: !!(game.su_purge_offer && table_has(game, '苏联', 17850) &&
+			faction_of_nation('苏联') === side),
+		/* 17555 大萧条的余波：美国结束中立给出的一次性机会（弃此牌 -> <美国>+1 计分标记）
+		 * 同一类字段，同步加阵营过滤（原实现同样漏给轴心）。 */
+		us_depression_offer: !!(game.us_depression_offer && table_has(game, '美国', 17555) &&
+			faction_of_nation('美国') === side),
 		/* 17555 大萧条的余波 ①：美国打出事件/状态卡后须自选弃 1 张手牌（仅美国阵营可见） */
 		/*
 		 * 【2026-10-26 保密】17555 大萧条的余波"须自选弃 1 张手牌"—— 这是【美国】的义务，
@@ -25744,8 +25753,17 @@ exports.view = function (state, current) {
 				hand_count: (game.hands['日本'] || []).length,
 			}
 		})(),
-		/* 17817 进攻是最好的防守：已打出、待大清洗结算后建立对德战斗预算（客户端据此展示"继续进攻"按钮） */
-		su_17817_pending: !!game.su_17817_pending,
+		/*
+		 * 17817 进攻是最好的防守：已打出、待大清洗结算后建立对德战斗预算
+		 * （客户端据此展示"继续进攻"按钮 / 与 actions.su_purge_play 一起决定是否弹《大清洗》框）。
+		 *
+		 * 【2026-10-31 修复·阵营过滤】原实现 `!!game.su_17817_pending` 没有按阵营判 ——
+		 * 苏联打出 17817 后,【轴心客户端也弹出了《大清洗》选牌框】（玩家实测反馈）。
+		 * 客户端判据是 `view.su_17817_pending || view.actions.su_purge_play`，
+		 * actions 侧本来就只给苏联阵营，字段侧漏了这一道，等于自己把窗口送给对手。
+		 * 现在与同文件 `waiting_for` 分支（`faction_of_nation('苏联') === side`）同源。
+		 */
+		su_17817_pending: !!(game.su_17817_pending && faction_of_nation('苏联') === side),
 
 		/*
 		 * 补给点（走动态层，按阵营分别给出）。
@@ -33059,7 +33077,15 @@ function do_action(state, current, action, arg) {
 		 * 苏联结束中立时若 17850《大清洗》在其桌面，玩家可一次性：
 		 * 弃置《大清洗》并打出 1 张[状态卡]（不占出牌名额、不查出牌阶段）。
 		 * arg = { card: <状态卡实体 id> }
+		 *
+		 * 【2026-10-31 修复·权限】原实现只查 su_purge_offer，不查阵营 ——
+		 * 轴心即便客户端没有按钮，直接发这个动作也能替苏联消费《大清洗》并打出苏联的状态卡
+		 * （测试实测：轴心提交后日志出现"苏联打出状态卡…大清洗被弃置"）。
 		 */
+		if (faction_of_nation('苏联') !== side) {
+			game.log.push('只有苏联阵营可以处理《大清洗》的出牌机会')
+			return game
+		}
 		if (!game.su_purge_offer) {
 			game.log.push('当前没有「大清洗」出牌机会（苏联尚未结束中立或已用过）')
 			return game
@@ -33168,6 +33194,11 @@ function do_action(state, current, action, arg) {
 
 	/* ---------- 17850 大清洗：跳过（仅被攻击 / 压力参战路径，无 17817 待结算） ---------- */
 	if (action === 'su_purge_skip') {
+		/* 【2026-10-31 修复·权限】同 su_purge_play：只有苏联阵营能放弃这个机会 */
+		if (faction_of_nation('苏联') !== side) {
+			game.log.push('只有苏联阵营可以处理《大清洗》的出牌机会')
+			return game
+		}
 		if (!game.su_purge_offer) {
 			game.log.push('当前没有「大清洗」出牌机会（苏联尚未结束中立或已用过）')
 			return game
@@ -33405,7 +33436,13 @@ function do_action(state, current, action, arg) {
 		/*
 		 * 美国结束中立时若 17555《大萧条的余波》在其桌面，玩家可一次性：
 		 * 弃置此牌 -> <美国>增加 1 个计分标记（owner=美国 / faction=allies）。
+		 *
+		 * 【2026-10-31 修复·权限】与 su_purge_play 同类：补阵营门禁，防对手直接发动作代打。
 		 */
+		if (faction_of_nation('美国') !== side) {
+			game.log.push('只有美国阵营可以处理《大萧条的余波》的机会')
+			return game
+		}
 		if (!game.us_depression_offer) {
 			game.log.push('当前没有「大萧条的余波」机会（美国尚未结束中立或已用过）')
 			return game
@@ -33477,6 +33514,11 @@ function do_action(state, current, action, arg) {
 	 * 由本动作建立对德战斗预算。arg 为空。
 	 * 若玩家尚未使用大清洗机会（game.su_purge_offer 仍为真），视为放弃。 */
 	if (action === 'su_17817_proceed') {
+		/* 【2026-10-31 修复·权限】只有苏联阵营能推进《进攻是最好的防守》的待结算 */
+		if (faction_of_nation('苏联') !== side) {
+			game.log.push('只有苏联阵营可以继续《进攻是最好的防守》')
+			return game
+		}
 		if (!game.su_17817_pending) {
 			game.log.push('当前没有待结算的《进攻是最好的防守》')
 			return game

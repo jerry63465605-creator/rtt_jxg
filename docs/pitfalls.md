@@ -7131,3 +7131,73 @@ win.send_action = (name, arg) => {
    任何"执行时会消失/新增的东西"都必须在影子盘面里同步，否则表现为"没得选 / 选不了"。
 2. **快照的 `log` 是长度数字不是数组**（`game_snap.state.log = 297`）。拿快照直接喂真实 action 会
    `game.log.push is not a function`；测试里先 `st.log = []` 再 `debug_set_phase` 归一即可。
+
+---
+
+## 2026-10-31 · 《大清洗》选牌框弹到轴心屏幕上（view 字段缺阵营过滤 + 动作缺权限门禁）
+
+测试：`tools/_verify_17850_modal_scope.js`（18 项）+ `tools/_dom_test_17850_modal.js`（6 项，真 DOM）。
+
+### 症状
+
+苏联打出 17817《进攻是最好的防守》结束中立、《大清洗》机会开启时，**轴心客户端也弹出了《大清洗》选牌框**。
+
+### 根因一：view 字段没按阵营过滤（弹窗条件直接成立）
+
+客户端判据（`play.js` `update_su_17817_box`）：
+
+```js
+const show = view.su_17817_pending || (view.actions && view.actions.su_purge_play)
+```
+
+| 字段 | 改前 | 问题 |
+|---|---|---|
+| `su_17817_pending`（~L25748） | `!!game.su_17817_pending` | **无阵营过滤** → 轴心也 true → 弹窗 |
+| `su_purge_offer`（~L25422） | `!!(game.su_purge_offer && table_has(...))` | 同样漏（客户端暂未用，信息泄露） |
+| `us_depression_offer`（17555 同类） | 同样无过滤 | 同类问题，一并修 |
+| `view.actions.su_*` | ✅ 本来就只给苏联阵营 | 说明"判定不同源"：动作侧对、字段侧漏 |
+
+同文件 `waiting_for` 分支本来就写了 `faction_of_nation('苏联') === side` —— 修法就是对齐这一口径。
+
+### 根因二（排查时顺手发现，更严重）：`su_purge_play` 等动作没有阵营门禁
+
+测试里用 **`Axis` 角色**提交 `su_purge_play`，服务端照单执行：
+
+```
+log: 【苏联】打出状态卡《坦克运输》—— 已放置在桌面 | （大清洗）苏联结束中立：弃置《大清洗》…
+```
+
+即：对手可以直接发动作替苏联消费《大清洗》、打出苏联的状态卡（客户端没按钮，但协议层没有 gate）。
+同类四支全部补门禁（写法照抄已在 `su_status_play` 用的那句）：
+
+| 动作 | 门禁 |
+|---|---|
+| `su_purge_play` / `su_purge_skip` | `faction_of_nation('苏联') === side` |
+| `su_17817_proceed` | 同上 |
+| `us_depression_use` | `faction_of_nation('美国') === side` |
+| `su_status_play` / `su_status_skip` | ✅ 原本就有（`只有苏联可操作`） |
+
+### 客户端防御（第二道闸）
+
+```js
+const show = view && view.my_nation === '苏联' &&
+    (view.su_17817_pending || (view.actions && view.actions.su_purge_play))
+```
+
+即使服务端字段哪天又漏，对手屏幕也不会弹框。
+
+### 实测（真 DOM）
+
+```
+[Allies / 苏联] hide=false  弹窗内卡片数=2      ← 正常弹
+[Axis   / 德国] hide=true   弹窗内卡片数=0      ← 修复后不再弹
+切回苏联      hide=false                     ← 不会"弹过一次再也不弹"
+```
+
+### 类级教训
+
+1. **"某国专属的待表态窗口"要有两份门禁**：view 字段按阵营过滤 **且** 对应 action 按阵营 gate。
+   只做前者 = 协议层仍能被代打；只做后者 = 对手屏幕照样弹框。
+2. 判断有没有漏，最快的办法是**拿另一侧的 view/role 跑一遍同一动作**（本项目 `_verify_17850_modal_scope.js` 的 B 段就是这么抓出权限洞的）。
+3. 同类字段审计清单：`su_purge_offer` / `su_17817_pending` / `us_depression_offer` 已修；
+   `us_political` 用的是 `{waiting_for}` 形态（对手只看到"等待英国"）—— 这是正确范式，可照抄。
