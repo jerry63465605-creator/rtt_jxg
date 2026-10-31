@@ -1,16 +1,16 @@
 /*
- * 真实测试（rtt-realboard-test §7 范式 B）：云雾下的"救回陆军"不应把空军一起复原
+ * 真实测试（rtt-realboard-test §7 范式 B）：云雾 × 复原卡的交互
  *
- * 疑问（用户 2026-10-31）：15213《云雾》生效时，若防守方用 15330《防御姿态》或
- * 15311《马奇诺防线》救回陆军，被云雾【原地移除】的空军会不会跟着复原？
- * 期望：**不会** —— 云雾下空军是被消灭，不是"撤离"，不存在"归位"。
+ * 玩家口径（2026-10-31 最终裁定）：**空军应该可以复原** ——
+ * 云雾只限制"不能代受、不能撤离、只能原地移除"，并不禁止复原类卡把它救回来。
+ * 15330《防御姿态》/ 15311《马奇诺防线》等救陆军时，同场空军一并归位（与无云雾时一致）。
  *
  * 断言：
- *   A. 云雾 + 15330：陆军复原，空军【不】复原（本次修复点）
- *   B. 云雾 + 15311 马奇诺（法国陆军@西欧）：法国陆军复原，法国空军【不】复原
- *   C. 对照（无云雾）+ 15330：陆军复原，空军**也**复原（保留 2026-10-28 既有口径）
- *   D. 静态守卫：do_battle 三处 retreated_airs 都受 retreatAirsRestorable 约束
- *   E. 纪律：不重复发同一张非 BASIC 卡（15311 用开局手牌，不 debug_add）
+ *   A. 云雾 + 15330：陆军复原、**空军也复原到<西欧>**
+ *   B. 云雾 + 15311 马奇诺（法国陆军@西欧）：法国陆军复原、**法国空军也复原**
+ *   C. 对照（无云雾）+ 15330：陆军复原、空军先撤<北海>再归位<西欧>
+ *   D. 静态守卫：三处 retreated_airs 派发【不】受 air_no_defend 约束（口径一致）
+ *   E. 纪律：不重复发同一张非 BASIC 卡（15311 用开局手牌）
  *
  * 用法：node tools/_real_test_15213_restore.js
  */
@@ -32,7 +32,6 @@ const ok = (m, c, extra) => {
 const W = d.id_of('西欧')
 const DE_HOME = d.id_of('德国')
 
-/* 发起一场陆战：德国陆军@德国 -> 指定 space 的敌方 victim */
 function attack(g, space, victim) {
 	const card = (g.hands['德国'] || []).find(x => faceOf(x) === '15201')
 	const atk = Object.keys(g.location).find(p =>
@@ -42,12 +41,11 @@ function attack(g, space, victim) {
 	return logSince(g, n0)
 }
 
-console.log('\n=== A. 云雾 + 15330《防御姿态》：陆军复原，空军不复原 ===')
+console.log('\n=== A. 云雾 + 15330《防御姿态》：陆军与空军都复原 ===')
 {
 	const g = R.setup(7)
 	g.opening = null
 	I.refresh(g)
-	/* 英国出牌阶段暗置 15330（响应卡必须先暗置） */
 	R.action(g, 'Allies', 'debug_set_phase', { nation: '英国', phase: 'play' })
 	R.action(g, 'Allies', 'debug_add_card', { face: '15330', nation: '英国', dest: 'hand' })
 	I.refresh(g)
@@ -55,10 +53,8 @@ console.log('\n=== A. 云雾 + 15330《防御姿态》：陆军复原，空军�
 		const c = (g.hands['英国'] || []).find(x => faceOf(x) === '15330')
 		R.action(g, 'Allies', 'play_card', { card: c })
 	}
-	ok('15330 已暗置到桌面', (g.table_responses || []).some(x => faceOf(x.card_id) === '15330'),
-		JSON.stringify((g.table_responses || []).map(x => faceOf(x.card_id))))
+	ok('15330 已暗置到桌面', (g.table_responses || []).some(x => faceOf(x.card_id) === '15330'))
 
-	/* 布阵 + 德国云雾 */
 	R.action(g, 'Axis', 'debug_set_phase', { nation: '德国', phase: 'resource' })
 	R.action(g, 'Allies', 'debug_place', { piece: 'uk_def', nation: '英国', type: 'army', space: W })
 	R.action(g, 'Allies', 'debug_place', { piece: 'uk_air', nation: '英国', type: 'air', space: W })
@@ -88,7 +84,7 @@ console.log('\n=== A. 云雾 + 15330《防御姿态》：陆军复原，空军�
 	R.action(g, 'Allies', 'trigger_response', {})
 	console.log('  trigger: ' + logSince(g, n0))
 	ok('★ 陆军被救回（西欧）', g.location['uk_def'] === W, String(g.location['uk_def']))
-	ok('★★ 空军【不】被复原（云雾下它是被消灭的）', g.location['uk_air'] == null,
+	ok('★★ 空军【也】复原（玩家 2026-10-31 口径）', g.location['uk_air'] === W,
 		'air loc=' + String(g.location['uk_air']))
 }
 
@@ -97,9 +93,8 @@ console.log('\n=== B. 云雾 + 15311《马奇诺防线》（法国陆军@西欧�
 	const g = R.setup(7)
 	g.opening = null
 	I.refresh(g)
-	/* 15311 用开局手牌（V1：非 BASIC 每面只有 1 份，不能 debug_add） */
 	const sasInHand = (g.hands['英国'] || []).filter(x => faceOf(x) === '15311')
-	ok('15311 在开局英国手牌里（无需 debug_add）', sasInHand.length === 1,
+	ok('15311 在开局英国手牌里（V1：不能 debug_add 第二份）', sasInHand.length === 1,
 		JSON.stringify(sasInHand))
 
 	R.action(g, 'Axis', 'debug_set_phase', { nation: '德国', phase: 'resource' })
@@ -107,10 +102,8 @@ console.log('\n=== B. 云雾 + 15311《马奇诺防线》（法国陆军@西欧�
 	R.action(g, 'Allies', 'debug_place', { piece: 'fr_air', nation: '法国', type: 'air', space: W })
 	R.action(g, 'Axis', 'debug_add_card', { face: '15213', nation: '德国', dest: 'hand' })
 	R.action(g, 'Axis', 'debug_add_card', { face: '15201', nation: '德国', dest: 'hand' })
-	R.action(g, 'Allies', 'debug_add_card', { face: '15300', nation: '英国', dest: 'hand' })
-	R.action(g, 'Allies', 'debug_add_card', { face: '15301', nation: '英国', dest: 'hand' })
-	R.action(g, 'Allies', 'debug_add_card', { face: '15302', nation: '英国', dest: 'hand' })
-	R.action(g, 'Allies', 'debug_add_card', { face: '15303', nation: '英国', dest: 'hand' })
+	for (const f of ['15300', '15301', '15302', '15303'])
+		R.action(g, 'Allies', 'debug_add_card', { face: f, nation: '英国', dest: 'hand' })
 	I.refresh(g)
 	R.action(g, 'Axis', 'debug_set_phase', { nation: '德国', phase: 'play' })
 	I.refresh(g)
@@ -131,16 +124,18 @@ console.log('\n=== B. 云雾 + 15311《马奇诺防线》（法国陆军@西欧�
 		JSON.stringify(ao && { when: ao.when, cards: (ao.cards || []).map(c => faceOf(c.card)) }))
 	{
 		const cd = (ao.cards || []).find(c => faceOf(c.card) === '15311')
-		const pay = (g.hands['英国'] || []).filter(x => ['15300', '15301', '15302', '15303'].indexOf(faceOf(x)) >= 0).slice(0, 4)
+		const pay = (g.hands['英国'] || []).filter(x =>
+			['15300', '15301', '15302', '15303'].indexOf(faceOf(x)) >= 0).slice(0, 4)
 		const n0 = (g.log || []).length
 		R.action(g, 'Allies', 'use_armed_offer', { card: cd.card, drop: pay })
 		console.log('  15311: ' + logSince(g, n0))
 	}
 	ok('★ 法国陆军被救回（西欧）', g.location['fr_def'] === W, String(g.location['fr_def']))
-	ok('★★ 法国空军【不】被复原', g.location['fr_air'] == null, 'air loc=' + String(g.location['fr_air']))
+	ok('★★ 法国空军【也】复原（与 15330 同口径）', g.location['fr_air'] === W,
+		'air loc=' + String(g.location['fr_air']))
 }
 
-console.log('\n=== C. 对照（无云雾）+ 15330：空军应被一并复原（既有口径）===')
+console.log('\n=== C. 对照（无云雾）+ 15330：空军先撤离再归位 ===')
 {
 	const g = R.setup(7)
 	g.opening = null
@@ -166,20 +161,19 @@ console.log('\n=== C. 对照（无云雾）+ 15330：空军应被一并复原（
 		(pb.airs || []).length > 0 && (pb.retreats || []).length > 0,
 		JSON.stringify({ airs: pb.airs, retreats: (pb.retreats || []).map(r => r && r.name) }))
 	R.action(g, 'Allies', 'resolve_battle', { declined: true })
-	ok('无云雾：空军撤离到<北海>（未被消灭）', g.location['uk_air'] === d.id_of('北海'),
-		String(g.location['uk_air']))
+	ok('无云雾：空军撤离到<北海>', g.location['uk_air'] === d.id_of('北海'), String(g.location['uk_air']))
 	R.action(g, 'Allies', 'trigger_response', {})
 	ok('★ 陆军被救回（西欧）', g.location['uk_def'] === W, String(g.location['uk_def']))
-	ok('★ 无云雾时空军一并归位（西欧）', g.location['uk_air'] === W, String(g.location['uk_air']))
+	ok('★ 空军归位（西欧）', g.location['uk_air'] === W, String(g.location['uk_air']))
 }
 
-console.log('\n=== D. 静态守卫：三处 retreated_airs 都受云雾约束 ===')
+console.log('\n=== D. 静态守卫：三处派发不受云雾约束（口径一致）===')
 {
 	const src = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8')
-	const n = (src.match(/retreated_airs: \(victimProtected \|\| !retreatAirsRestorable\)/g) || []).length
-	ok('★ do_battle 的 3 处派发都已加约束', n === 3, String(n))
-	ok('retreatAirsRestorable 由 air_no_defend 推导',
-		/const retreatAirsRestorable = !echo_mod_active\(game, 'air_no_defend'\)/.test(src))
+	const plain = (src.match(/retreated_airs: victimProtected \? \[\] : guardAirs\.slice\(\)\.sort\(\),/g) || []).length
+	ok('★ do_battle 的 3 处派发均为原样（不按 air_no_defend 置空）', plain === 3, String(plain))
+	ok('★ 不存在 retreatAirsRestorable 这类"云雾禁复原"分支',
+		src.indexOf('retreatAirsRestorable') < 0)
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
