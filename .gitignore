@@ -48,3 +48,6 @@ server-official/db/
 # 测试脚本临时输出（跑冒烟时产生，不入库）
 tools/*.out
 tools/_push_err.txt
+# 本地开发依赖（jsdom 等，仅供 tools/_dom_test_*.js 使用，不入库）
+node_modules/
+package-lock.json

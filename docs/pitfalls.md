@@ -7029,3 +7029,56 @@ retreated_airs: (victimProtected || !retreatAirsRestorable) ? [] : guardAirs.sli
 **教训（已写进 skill）**：拿到"应该/不应该"这类口径时，先确认它约束的**边界**
 （这里是"能不能动" vs "能不能被救回"两件事），别把一条限制外扩成另一条限制；
 实现后立刻拿"交叉场景"（限制项 × 复原/取消类卡）跟玩家确认，而不是只测单卡。
+
+---
+
+## 2026-10-31 · 「带着客户端」的真 DOM 闭环测试（15315 选地区）
+
+脚本：`tools/_dom_test_15315.js`（**14 项**）。前置：`npm i jsdom --no-save`（node_modules 已 gitignore）。
+
+### 为什么要这一层
+
+前面 6+ 组真实测试都只到「服务端 view 里有候选」+「镜像客户端闸门」；
+玩家反馈的是**界面上点不出来**。所以这次把真实 `play.html + play.js` 用 jsdom 加载，
+并把网络层接回**真引擎**（不是回放固定文本）：
+
+```js
+win.send_query = (q, params) => {
+  const res = R.query(g, "Allies", q, params || {})     // 真查
+  setTimeout(() => win.on_reply(q, res), 0)              // 真回
+}
+win.send_action = (name, arg) => {
+  R.action(g, "Allies", name, arg || {})                 // 真提交
+  I.refresh(g); win.view = R.view(g, "Allies")           // 真广播
+  setTimeout(() => win.on_update(), 0)                   // 真重渲染
+}
+```
+
+平台层 `common/client.js` 用最小 stub 顶掉：必须提供 `player`（`is_my_turn()` 要它）、`view`、
+`send_action`、`send_query`、`send_chat`、`update_log`；否则会抛 `player is not defined`。
+
+### 实测动作链与结果
+
+```
+点手牌 15315#77        -> 客户端发 event_targets{card:"15315#77"}
+服务端回 need:space step=1 total=2 candidates=[中东16, 非洲北部15]
+地图出现 2 个 .space.target（space_id 15 / 16）
+点<非洲北部>            -> 客户端先带 spaces=[,15] 再查一次（total>1 的多步协议）
+                      -> 服务端回 need:null -> 客户端派发
+                         play_card{card:"15315#77", spaces:[null,15], space:15}
+点侧栏「下一步」        -> event_step_next{}
+最终：中东=[] 非洲北部=[英国/army]，15315 进弃牌堆，pending_event_step 清空
+```
+
+即：**客户端点击链真的能把「非洲北部」这一步传出去并落地**，不是只有服务端说得对。
+
+### 两个实现坑（写给下一个写 DOM 测试的人）
+
+1. **多步卡会二次查询**：`total>1` 时点地区不会立刻提交，而是 `send_query(event_targets, {card, spaces})`
+   再问一次；服务端回 `need:null` 才发 `play_card`。所以 stub 若"永远回同一个 need"，
+   就会陷入无限查询、`send_action` 永远为空 —— 我第一次就是这么假失败的。
+2. **别用假 event 驱动 `on_click_space`**：它读 `evt.currentTarget.space_id`，而该属性是渲染时挂在
+   真实 `.space` 元素上的；应从 DOM 里取到那个元素再传 `{currentTarget: el}`（或直接 `el.click()`）。
+
+另：`let pending_event_targets` 是脚本顶层 `let`，**不挂在 window 上**，测试里读 `win.pending_event_targets`
+永远是 undefined —— 要看状态就断言 DOM（高亮/按钮）或断言引擎侧。
