@@ -18466,6 +18466,29 @@ function event_card_needs(game, nation, card_id, arg) {
 					: (ec.length === 1 ? [String(ec[0])] : [])
 				for (const id of willRemove)
 					if (pendingRemove.indexOf(id) < 0) pendingRemove.push(id)
+				/*
+				 * 【2026-10-31 修复二 · 连带空军】影子盘面也要把"随陆军一起被消灭的空军"扣掉。
+				 *
+				 * 规则：空军不能脱离本国陆/海军单独存在 -> 消灭陆军时，同格同国空军一并被消灭。
+				 * 执行层 `eliminate_piece` 早就这么做了（killedAirs：同格 + 同国 + air）；
+				 * 但候选阶段的影子盘面只扣了 victim 自己，漏了 killedAirs —— 于是：
+				 *
+				 *   实测（game 8 snap 31）：<非洲北部> = 德国陆军 dbg_1 + 德国空军 dbg_2
+				 *   15315 第 1 步只消灭陆军 -> 影子盘面里 dbg_2 还在 -> can_recruit_at(北非) 判
+				 *   「非洲北部 有敌方部队」-> 征召候选只剩<中东> -> 1 个候选 -> 客户端不弹框、
+				 *   静默落在中东。把 dbg_2 从盘面拿掉后立刻恢复成 2 个候选（对照实验已证）。
+				 *
+				 * 判定口径与 eliminate_piece 的 killedAirs 完全同源（同格 / 同国 / air），不新造第二套。
+				 */
+				for (const vid of willRemove.slice()) {
+					const vNat = game.piece_nation[vid]
+					for (const p of pieces_on(game, targetSp)) {
+						if (p === vid) continue
+						if (game.piece_type[p] !== 'air') continue
+						if (game.piece_nation[p] !== vNat) continue
+						if (pendingRemove.indexOf(String(p)) < 0) pendingRemove.push(String(p))
+					}
+				}
 			}
 		}
 		/* 更新 prevSpaces：本 step 若产出单位，记下它的地区供后续 useNewPiece */

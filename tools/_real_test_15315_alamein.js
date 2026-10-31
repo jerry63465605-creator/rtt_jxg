@@ -117,5 +117,36 @@ console.log('\n=== D. 选 非洲北部 ===')
 	ok('15315 进弃牌堆', (g.discard['英国'] || []).indexOf(card) >= 0)
 }
 
+console.log('\n=== E. 北非 = 德国陆军 + 德国空军（连带消灭，仍要有选择框）===')
+{
+	/* 这是玩家 game 8 的真实形态：消灭陆军时同格同国空军一并消灭 -> 北非仍可征召 */
+	function setupAir() {
+		const g = setup()
+		R.action(g, 'Axis', 'debug_place', { piece: 'de_air_na', nation: '德国', type: 'air', space: NA })
+		I.refresh(g)
+		return g
+	}
+	const g0 = setupAir()
+	const card0 = (g0.hands['英国'] || []).find(x => faceOf(x) === '15315')
+	ok('盘面就位：北非有德国陆军 + 德国空军',
+		at(g0, '非洲北部').length === 2 && at(g0, '非洲北部').some(p => g0.piece_type[p] === 'air'),
+		JSON.stringify(at(g0, '非洲北部')))
+	const nd = I.event_card_needs(g0, '英国', card0, {})
+	ok('★ need=space（不能因为残留敌机就不问）', !!(nd && nd.need === 'space'), JSON.stringify(nd && nd.need))
+	ok('★ 候选含 非洲北部（敌机随陆军一起消失）',
+		!!(nd && (nd.candidates || []).indexOf(NA) >= 0), JSON.stringify(nd && nd.candidates))
+
+	const g = setupAir()
+	const card = (g.hands['英国'] || []).find(x => faceOf(x) === '15315')
+	console.log('  log: ' + playAndResume(g, card, [null, NA]))
+	ok('★ 德国陆军与德国空军都被消灭（连带）',
+		g.location['de_na'] == null && g.location['de_air_na'] == null,
+		JSON.stringify({ army: g.location['de_na'], air: g.location['de_air_na'] }))
+	ok('★★ 英国陆军落在非洲北部',
+		at(g, '非洲北部').some(p => g.piece_nation[p] === '英国' && g.piece_type[p] === 'army'),
+		JSON.stringify(at(g, '非洲北部')))
+	ok('无残留挂起', !g.pending_event_step && !g.pending_armed_use)
+}
+
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' pass'))
 process.exitCode = fail ? 1 : 0

@@ -7082,3 +7082,52 @@ win.send_action = (name, arg) => {
 
 另：`let pending_event_targets` 是脚本顶层 `let`，**不挂在 window 上**，测试里读 `win.pending_event_targets`
 永远是 undefined —— 要看状态就断言 DOM（高亮/按钮）或断言引擎侧。
+
+---
+
+## 2026-10-31 · 15315「消灭陆军须连带消灭同格同国空军」——候选盘面漏算（已修）
+
+测试：`tools/_real_test_15315_alamein.js`（**21 项**，新增 E 段）+ `tools/_real_test_15315_game8.js`（11 项，真盘面回归）。
+
+### 症状（玩家 game 8 实测）
+
+`<非洲北部> = 德国陆军 + 德国空军`、`<中东> = 空` 时打出《阿拉曼战役》，**没有征召选择框**，直接落在〈中东〉。
+（北非没有敌军时反而有选择框 —— 这条反差是定位关键。）
+
+### 根因：执行层带走了空军，候选层没带走
+
+| 层 | 行为 |
+|---|---|
+| 规则 | 空军不能脱离本国陆/海军单独存在 -> **消灭陆军时同格同国空军一并消灭** |
+| 执行 `eliminate_piece` | ✅ 早有 `killedAirs`（同格/同国/air），日志也写了「并连带消灭同地区 1 支同国空军」 |
+| 候选 `event_card_needs` 的影子盘面 | ❌ 只把 victim 塞进 `pendingRemove`，没带 `killedAirs` -> 该格仍判「有敌方部队」 -> 候选只剩 1 个 -> 视为"无需选择" |
+
+实测对照（game 8 snap 31，原样 vs 拿掉德军空军）：
+
+```
+原样（陆军+空军）      -> need:null                       ← 无选择框
+去掉德国空军后        -> need:space cands=[中东,非洲北部]  ← 立刻正常
+```
+
+### 修法（一处，与执行层同源）
+
+`event_card_needs` 的 eliminate 分支，在把 victim 记入 `pendingRemove` 后，**连带把它的同格同国空军也记入**
+（判定口径照抄 `eliminate_piece` 的 `killedAirs`：同格 / 同国 / `air`，不新造第二套）。
+
+只对"确定的 victim"做连带（`arg.pieces[i]` 或唯一候选）；玩家还没选目标时本来就会返回 `need:'piece'`。
+
+### 回归
+
+| 脚本 | 结果 |
+|---|---|
+| `_real_test_15315_alamein.js`（含新 E 段：陆军+空军） | 21 项全过 |
+| `_real_test_15315_game8.js`（game 8 snap 31 真盘面，fixture 已落盘） | 11 项全过 |
+| `_dom_test_15315.js`（真 DOM，盘面改为"陆军+空军"） | 14 项全过 |
+| 全量冒烟 | 112 脚本全绿 |
+
+### 顺带沉淀的两条经验
+
+1. **"执行对"不等于"候选对"**：这类分步卡有两套盘面 —— 真盘面（执行）与影子盘面（算候选）。
+   任何"执行时会消失/新增的东西"都必须在影子盘面里同步，否则表现为"没得选 / 选不了"。
+2. **快照的 `log` 是长度数字不是数组**（`game_snap.state.log = 297`）。拿快照直接喂真实 action 会
+   `game.log.push is not a function`；测试里先 `st.log = []` 再 `debug_set_phase` 归一即可。

@@ -42,6 +42,8 @@ I.refresh(g)
 const AF = d.id_of('非洲北部'), ME = d.id_of('中东')
 R.action(g, 'Allies', 'debug_set_phase', { nation: '英国', phase: 'play' })
 R.action(g, 'Axis', 'debug_place', { piece: 'de_na', nation: '德国', type: 'army', space: AF })
+/* 与玩家 game 8 一致：北非还有 1 支德国空军（消灭陆军会连带消灭它，不该因此丢失选择框） */
+R.action(g, 'Axis', 'debug_place', { piece: 'de_air_na', nation: '德国', type: 'air', space: AF })
 R.action(g, 'Allies', 'debug_add_card', { face: '15315', nation: '英国', dest: 'hand' })
 I.refresh(g)
 
