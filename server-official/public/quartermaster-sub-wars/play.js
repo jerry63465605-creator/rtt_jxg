@@ -6610,6 +6610,27 @@ function update_pending_battle_box() {
 	ask_state = { kind: "defend", space: pb.space }
 
 	/*
+	 * 【2026-10-31 玩家口径·15213 云雾】空军"无法防御战斗"= 既不能代受、也不能撤离，
+	 * 只能【原地移除】。服务端此时 airs / retreats 都是空、并给 air_no_retreat=true，
+	 * 客户端只渲染一个按钮，避免玩家点"不代受"再掉进空撤退列表（体验上像"没选项可选"）。
+	 */
+	if (pb.air_no_retreat) {
+		const boxes = view.pieces_by_id || {}
+		const vi = boxes[pb.victim]
+		render_ask_box(
+			"【" + pb.defender_nation + "】《云雾》生效中",
+			"受攻击地区：" + ((view.spaces[pb.space] || {}).name || "?") +
+				"　受创部队：" + (vi ? (vi.type_zh + "@" + vi.space_name) : "部队") +
+				"\n本回合空军无法防御战斗：既不能代受、也不能撤离 —— 同地区空军只能原地移除",
+			[{
+				label: "确认（部队与同地区空军原地移除）",
+				cls: "primary",
+				onClick: () => send_action("resolve_battle", { declined: true }),
+			}])
+		return
+	}
+
+	/*
 	 * 【不要】用 view.pieces 过滤 pb.airs（2026-09-22 踩坑）。
 	 *
 	 * pb.airs 是服务端算好的、可代受的空军实例 id 列表，

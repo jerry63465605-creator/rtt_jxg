@@ -20557,7 +20557,16 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			 */
 			airs: echo_mod_active(game, 'air_no_defend') ? [] : guardAirs.slice().sort(),
 			air_defend_disabled: echo_mod_active(game, 'air_no_defend'),
-			retreats: retreat_options(game, vNation, space),
+			/*
+			 * 【2026-10-31 玩家口径·15213 云雾】空军"无法防御战斗"同时意味着
+			 * 【不能撤离】—— 那一支空军只能【原地移除】。
+			 * 故云雾生效时不给任何撤退候选，并打 air_no_retreat 让客户端只渲染
+			 * 「原地移除空军」一个选项（否则玩家会点"不代受"再进一个空撤退列表）。
+			 */
+			air_no_retreat: echo_mod_active(game, 'air_no_defend'),
+			retreats: echo_mod_active(game, 'air_no_defend')
+				? []
+				: retreat_options(game, vNation, space),
 		})
 		return {
 			ok: true, pending: true, removed: null, space: space,
@@ -20594,7 +20603,15 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	 */
 	let retreatTo = null
 	let retreatRemoved = []
-	if (defend_air == null && guardAirs.length) {
+	/*
+	 * 【2026-10-31 玩家口径·15213 云雾】空军无法防御战斗 = 也不能撤离，只能原地移除。
+	 * 这里整段跳过（含显式 air_retreat），把 retreatTo 留空 -> 下方循环 delete 空军。
+	 * 客户端就算传了 air_retreat 也不会生效（防"前端旧缓存绕过规则"）。
+	 */
+	const _airNoRetreat = echo_mod_active(game, 'air_no_defend')
+	if (_airNoRetreat && opt.air_retreat != null)
+		game.log.push('【云雾】生效中：空军不能撤离，' + data.name_of(space) + ' 的空军只能原地移除')
+	if (defend_air == null && guardAirs.length && !_airNoRetreat) {
 		const want = opt.air_retreat
 		if (want != null) {
 			/* 显式指定了撤离目标：必须与该地区相邻、且空位合法 */
