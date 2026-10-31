@@ -7266,3 +7266,66 @@ if (game.us_political && faction_of_nation('美国') === side)
    `game.us_depression_discard`（不是 `us_political`），必须用动作 `us_depression_discard{card}` 走完才会真正落桌。
 2. **"征召后立刻用它开战"需要补给**：本卡第 2 步 `useNewPiece` 依赖新征召的陆军处于补给，
    否则 `event_budget.targets = 0`（不是 bug，是布阵缺补给）。用户的真实局面有补给，所以能打。
+
+---
+
+## 2026-11-01 · 17543《雷达》在"同盟非美国"部队被移除时也高亮（附带修好幽灵部队）
+
+测试：`tools/_real_test_17543_radar.js`（**25 项**）+ `tools/_dom_test_17543_highlight.js`（4 项，真 DOM）。
+
+### 症状
+
+美国桌面有《雷达》时，**英国/苏联部队被移除**也会让《雷达》高亮；点下去先**损耗 2 张牌**，
+才报「仅当美国海军被移除后发动」= 白亏。
+
+### 根因：`piece_removed` 系列里只有它没写条件
+
+审计 21 张 `piece_removed` 触发卡：
+
+| 载体 | 数量 | 条件范式 |
+|---|---|---|
+| RESPONSE | 16 | `trigger.filter(game, ctx, owner_side)`（派发窗口时就用 ctx 过滤） |
+| ECHO armed | 4 | `armed.ready(game, ctx)`（15351/17808/17811）、`filter`（15311） |
+| **STATUS** | **1（17543）** | ❌ 无 ready/filter，条件写在 `run()` 里（代价已扣之后） |
+
+而 `arm_status_instant` 按【同阵营】武装、`status_window_ready` 的 `piece_removed` 分支只判"窗口在不在"，
+两处都不看"被移除的是谁"—— 于是任何同盟部队被移除，美国桌面的雷达都亮。
+
+### 修法（范式统一，三处同源）
+
+1. 状态卡 `trigger` 支持 **`ready(game, ctx)`**（与 `ECHO_EFFECTS[].armed.ready` 同款约定，boolean）：
+   - `arm_status_instant` 武装前调用，`false` 就**不入窗口**；
+   - 窗口条目新存 `ctx`（piece/piece_nation/piece_type/space/was_supplied/retreated_airs）；
+   - `status_window_ready` 的 `piece_removed` 分支用同一份 ctx 复核，**置灰与窗口同源**。
+2. 17543 加 `ready`：只有 **美国 + navy** 被移除才为 true。
+
+### 顺带修掉：`restore_piece` 生产"幽灵部队"
+
+`restore_piece(game, ctx)` 只读 `ctx.piece_nation / ctx.piece_type`，
+而 `eliminate_piece` 写的 `game.last_piece_removed` 用的是 `nation / type` ——
+于是走 eliminate 路径的还原（雷达救回被消灭的美国海军）只补回 `location`，
+`piece_nation / piece_type` 变成 `undefined`：
+
+```
+还原后：piece_nation=undefined  piece_type=undefined  loc=17
+=> has_modifier 认不出它 -> protect 失效；补给/计分/再次移除也全都认不出
+```
+
+修法：`restore_piece` 兼容两套字段名（`piece_nation ?? nation`、`piece_type ?? type`）。
+
+### 实测
+
+| 场景 | 武装/高亮 | 强制提交 |
+|---|---|---|
+| ① 英国陆军被移除 | ❌ 不武装，`ready=false` | 被拒，**牌库张数不变**（不白亏） |
+| ② 美国海军被移除 | ✅ 武装，`ready=true` | 发动 → **海军还原且受 protect** |
+| ③ 德国陆军被移除 | ❌ 不武装 | — |
+| ④ 同回合第二次美国海军 | ❌ 不再武装（once_per_turn） | — |
+
+真 DOM：`[data-card=17543#..]` 在 ① 场景 class=`card t-STATUS ts-card ts-disabled`（无 ready），
+② 场景 class 含 `ready` ✓。
+
+### 待办
+
+`piece_removed` 系列（21 张）**逐张核对条件是否写全**（国家 / 兵种 / 地区三问），
+已登记到 `docs/todo-2026-10-29.md`「待办：piece_removed 系列统一到声明式条件范式」。

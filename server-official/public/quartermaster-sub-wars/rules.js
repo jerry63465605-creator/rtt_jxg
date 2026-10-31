@@ -4646,6 +4646,22 @@ const STATUS_EFFECTS = {
 			once_per_turn: true,
 			cost: { attrition: 2 },
 			desc: '一回合一次，美国海军被移除时：损耗2张牌，使其本回合内不会被移除（还原）',
+			/*
+			 * 【2026-11-01 修复·范式对齐】声明式条件（与 17808/17811/15351 的 armed.ready 同款）。
+			 *
+			 * 此前没有 ready/filter，而 arm_status_instant 按【同阵营】武装，
+			 * 于是英国/苏联部队被移除时美国桌面的《雷达》也会被武装 -> 客户端高亮；
+			 * 点下去先损耗 2 张牌，run 里才报「仅当美国海军被移除后发动」= 白亏。
+			 *
+			 * 现在：只有【美国海军】被移除的那一刻才武装/置亮。
+			 */
+			ready(game, ctx) {
+				const nat = (ctx && ctx.piece_nation) || (ctx && ctx.nation)
+				const typ = (ctx && ctx.piece_type) || (ctx && ctx.type)
+				if (nat !== '美国') return false
+				if (typ !== 'navy') return false
+				return true
+			},
 			run(game, ctx) {
 				const lp = game.last_piece_removed
 				if (!lp || lp.nation !== '美国' || lp.type !== 'navy' || lp.piece == null)
@@ -7661,6 +7677,22 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 				const e = (game.status_instant || []).find(x => x.card_id === card_id && x.window === 'piece_removed')
 				if (!e)
 					return { ok: false, reason: '仅能在「部队被移除后立刻」手动发动，此刻已不可发动' }
+				/*
+				 * 【2026-11-01 范式统一】与武装阶段同源：卡若声明了 trigger.ready，
+				 * 置灰判定也用它（ctx 取窗口条目里存的那份，回退 last_piece_removed）。
+				 * 17543《雷达》：此前窗口亮了就 ready=true，任何同盟部队被移除都会高亮。
+				 */
+				if (typeof tr.ready === 'function') {
+					const lp = game.last_piece_removed
+					const ctx = e.ctx || (lp ? {
+						piece: lp.piece, piece_id: lp.piece, piece_nation: lp.nation,
+						piece_type: lp.type, space: lp.space,
+					} : {})
+					let okReady = true
+					try { okReady = !!tr.ready(game, ctx) }
+					catch (err) { okReady = false }
+					if (!okReady) return { ok: false, reason: '当前事件不满足《' + (tr.desc || card_id) + '》的发动条件' }
+				}
 				return { ok: true, space: e.space }
 			}
 
@@ -7702,6 +7734,32 @@ function freq_key(game) {
 }
 function arm_status_instant(game, window, nation, space) {
 	game.status_instant = game.status_instant || []
+	/*
+	 * 【2026-11-01 范式统一】给状态卡的 trigger 补上 `ready(game, ctx)` —— 与增强卡
+	 * `ECHO_EFFECTS[f].armed.ready(game, ctx)`（15351 敦刻尔克 / 17808 莫斯科战役 /
+	 * 17811 雅科夫列夫）**同一套约定**：ctx 里带 piece_nation / piece_type / space / piece。
+	 *
+	 * 背景（17543《雷达》bug）：本函数只按【同阵营 + 窗口名】武装，
+	 * 于是英国/苏联部队被移除时，美国桌面的《雷达》也被武装 -> 客户端高亮 ->
+	 * 玩家点下去先付代价、run 里才报「仅当美国海军被移除后发动」= 白亏。
+	 *
+	 * 现在：卡只要声明了 trigger.ready，就在【武装这一刻】判定；不满足直接不入窗口。
+	 * 未声明 ready 的卡完全不受影响（行为与改前一致）。
+	 */
+	const readyCtx = (function () {
+		const lp = game.last_piece_removed
+		if (!lp) return { nation: nation, piece_nation: nation, piece_type: null, space: space }
+		return {
+			nation: lp.nation,
+			piece: lp.piece != null ? lp.piece : null,
+			piece_id: lp.piece != null ? lp.piece : null,
+			piece_nation: lp.nation,
+			piece_type: lp.type != null ? lp.type : null,
+			space: lp.space != null ? lp.space : space,
+			was_supplied: lp.was_supplied,
+			retreated_airs: lp.retreated_airs,
+		}
+	})()
 	const fac = faction_of_nation(nation)
 	for (const own of Object.keys(game.table || {})) {
 		if (faction_of_nation(own) !== fac) continue
@@ -7710,6 +7768,13 @@ function arm_status_instant(game, window, nation, space) {
 			if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
 			if (!status_active(game, cid, own)) continue
 			if (cfg.trigger.once_per_turn && (game.status_used || {})[cid] === freq_key(game)) continue
+			/* 声明式条件（缺省视为满足） */
+			if (typeof cfg.trigger.ready === 'function') {
+				let okReady = true
+				try { okReady = !!cfg.trigger.ready(game, readyCtx) }
+				catch (e) { okReady = false; game.log.push('status ready 判定异常(' + cid + ')：' + e.message) }
+				if (!okReady) continue
+			}
 			/* 【2026-10-18 修复】已武装的窗口被同事件内【嵌套战斗/建设】再次武装时
 			 * （如 15245 发起陆战 → 再武装 15253《闪电战》），【不应跳过】——
 			 * 否则 activate_status 的"保留嵌套新窗口、清掉战前窗口"过滤器（下方 L~24079）
@@ -7722,8 +7787,13 @@ function arm_status_instant(game, window, nation, space) {
 			 * 而本函数按【同阵营】武装所有持有国的卡（6706 注释），
 			 * 于是英国发起海战也会武装美国 17540 —— 由 after_naval 分支按 by 拦掉。
 			 */
-			if (exist) { exist.space = space; exist.by = nation; exist.rearmed = true; continue }
-			game.status_instant.push({ card_id: cid, nation: own, window: window, space: space, by: nation })
+			if (exist) { exist.space = space; exist.by = nation; exist.rearmed = true; exist.ctx = readyCtx; continue }
+			game.status_instant.push({
+				card_id: cid, nation: own, window: window, space: space, by: nation,
+				/* 【2026-11-01】把事件上下文一并存进窗口条目：
+				 * status_window_ready 的置灰判定要用同一份 ctx，避免"窗口关了按钮还亮"。 */
+				ctx: readyCtx,
+			})
 		}
 	}
 }
@@ -17823,8 +17893,17 @@ function restore_piece(game, ctx) {
 	const pid = ctx && ctx.piece
 	if (pid != null && game.location[pid] == null) {
 		game.location[pid] = ctx.space
-		game.piece_nation[pid] = ctx.piece_nation
-		game.piece_type[pid] = ctx.piece_type
+		/*
+		 * 【2026-11-01 修复·幽灵部队】ctx 有两套字段名，必须都兼容：
+		 *   · 响应卡 / do_battle 派发的 ctx 用 piece_nation / piece_type；
+		 *   · eliminate_piece 写的 game.last_piece_removed 用 nation / type。
+		 * 旧实现只读 piece_nation/piece_type —— 走 eliminate 路径的还原（如 17543《雷达》
+		 * 救回被 `eliminate_piece` 消灭的美国海军）会把 location 补回来，
+		 * 但 piece_nation / piece_type 变成 undefined => "幽灵部队"：
+		 *   后续 has_modifier 判不到它（protect 失效）、补给/计分/再次移除也全都认不出。
+		 */
+		game.piece_nation[pid] = (ctx.piece_nation != null) ? ctx.piece_nation : ctx.nation
+		game.piece_type[pid] = (ctx.piece_type != null) ? ctx.piece_type : ctx.type
 		refresh(game)
 	}
 	/*
