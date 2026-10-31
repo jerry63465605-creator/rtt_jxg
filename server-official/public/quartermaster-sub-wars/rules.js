@@ -20868,6 +20868,18 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	const rmvNation = game.piece_nation[victim]
 	const rmvType = game.piece_type[victim]
 	const rmvSupplied = !!compute_supply(game).in_supply[victim]
+	/*
+	 * 【2026-10-31 玩家口径·15213 云雾】是否允许"同场空军被救回"。
+	 *
+	 * 平时（不代受）：同场空军是【撤离】的（或无处置则原地删除），所以还原类卡
+	 * （15330/15332/15334/15337/15311 马奇诺/17543 雷达…）救回陆军时，
+	 * 按玩家 2026-10-28 口径要把这些飞机一起拉回原地区 -> ctx.retreated_airs。
+	 *
+	 * 但【云雾 air_no_defend】生效时，空军是"不能代受也不能撤离，只能原地移除"，
+	 * 也就是【被消灭】—— 它不是撤退单位，绝不能因为陆军被救回而复活。
+	 * 实测（修复前）：15330《防御姿态》触发后陆军回到 西欧，已被消灭的英国空军也跟着复活。
+	 */
+	const retreatAirsRestorable = !echo_mod_active(game, 'air_no_defend')
 	if (victimProtected) {
 		game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的' +
 			piece_type_zh(game.piece_type[victim]) + '受保护，本回合无法被移除')
@@ -20887,7 +20899,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			reason: 'piece_removed',
 			was_supplied: rmvSupplied,
 			/* 同场英国空军因"不代受"将撤离的棋子集，供 15334 响应触发时一并归位 */
-			retreated_airs: guardAirs.slice().sort(),
+			retreated_airs: (victimProtected || !retreatAirsRestorable) ? [] : guardAirs.slice().sort(),
 		}, false)
 		/*
 		 * 【2026-10-07 苏联增强卡】增强卡(ECHO)的 'piece_removed' 窗口。
@@ -20900,7 +20912,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			reason: 'piece_removed', piece: victim, piece_id: victim,
 			/* 【2026-10-28】17543《雷达》等状态卡从本对象取 ctx 做 restore_piece，
 			 * 因此这里也必须带 retreated_airs，否则它们救回海军后飞机留在撤退地。 */
-			retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
+			retreated_airs: (victimProtected || !retreatAirsRestorable) ? [] : guardAirs.slice().sort(),
 		}
 		arm_status_instant(game, 'piece_removed', rmvNation, space)
 		/* 16304 中国远征军：让权美国选相邻地区征召 */
@@ -20917,7 +20929,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 				/* 【2026-10-28】增强卡路径也要带撤退信息：
 				 * 15311《马奇诺防线》在 armed.run 里调 restore_piece 救法国陆军，
 				 * 没有这个字段它救不回同场撤走的法国空军。 */
-				retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
+				retreated_airs: (victimProtected || !retreatAirsRestorable) ? [] : guardAirs.slice().sort(),
 			})
 		} catch (e) { game.log.push('arm piece_removed 错误：' + e.message) }
 		/* 【2026-10-16】17749 轴心协定：登记真实击杀信用并尝试落账（无窗口则立即 +1） */
@@ -32489,10 +32501,7 @@ function do_action(state, current, action, arg) {
 			/* 【2026-10-25 保密】卡面背面向上，写卡名等于公开手牌 -> 走统一文案 */
 			game.log.push('【' + nation + '】' + FACEDOWN_DESC.play +
 				(chk.extra ? '（额外打出，不占名额）' : ''))
-			console.log('[RESPONSE] nation=', nation, 'card=', card_id,
-				'table_responses len=', game.table_responses.length,
-				'hand len=', (game.hands[nation] || []).length,
-				'play_done=', !!(game.play_done && game.play_done[nation]))
+			/* 【2026-10-31】删除遗留调试 print（每次暗置响应卡都刷屏，生产环境无意义） */
 			return game
 		}
 
