@@ -2318,7 +2318,21 @@ function update_armed_offer_box() {
 		pending_armed = {
 			card: card,
 			need: ao.pending.need,
-			candidates: ao.pending.candidates || [],
+			/*
+			 * 【2026-10-31 修复】候选统一归一成【id】。
+			 *
+			 * 服务端 need:'piece' 有两种下发形态：
+			 *   · 纯 id 数组（15406 等）；
+			 *   · `{id, name}` 对象数组（15355「消灭1支相邻英国空军的敌方空军」需要带
+			 *     国家名区分"德国空军@德国 / 意大利空军@意大利"）。
+			 * 而点击判定写的是 `String(c) === String(id)` —— 面对对象会得到
+			 * "[object Object]"，于是【点了敌方空军没反应】、提示"不在候选内"，
+			 * 卡就永远发动不了（玩家实测反馈）。
+			 * 这里在入口处把对象归一成 id，高亮与点击判定就都对得上；
+			 * 卡面名称仍由服务端下发（不影响文案）。
+			 */
+			candidates: (ao.pending.candidates || []).map(c =>
+				(c && typeof c === 'object') ? c.id : c),
 			pick: ao.pending.pick || 1,
 			pickMin: ao.pending.pickMin || 1,
 			/* 【2026-10-17】need:'piece' 时可附带的空白合法地块（空打目标，15406） */
@@ -2423,7 +2437,8 @@ function update_armed_offer_box() {
 					return
 				}
 				if (isPiece) {
-					highlight_pieces(ao.pending.candidates, 'armed')
+					/* 用归一后的 id 列表高亮（服务端可能下发 {id,name} 对象，见 pending_armed 注释） */
+					highlight_pieces(pending_armed.candidates, 'armed')
 					/*
 					 * 【2026-10-17】同时高亮可空打的空白合法地块（15406）：
 					 * 敌方单位(算子) + 空白地块(地区)一起作为目标，点单位打单位、点空白地块空打。
@@ -2433,7 +2448,15 @@ function update_armed_offer_box() {
 						highlight_targets({ spaces: spaceCands.map(id => ({ id: id })) })
 						toast('点击高亮的敌方单位发起战斗，或点高亮空白地块空打（' + (ao.cards[0] ? ao.cards[0].name : '') + '）')
 					} else {
-						toast('请点击一支高亮的部队（' + (ao.cards[0] ? ao.cards[0].name : '') + '）')
+						/*
+						 * 【2026-10-31】候选若带名字（多国空军等），文案里列出来，
+						 * 玩家不点也知道有哪些可选项。
+						 */
+						const names = (ao.pending.candidates || [])
+							.filter(c => c && typeof c === 'object' && c.name)
+							.map(c => c.name)
+						toast('请点击一支高亮的部队（' + (ao.cards[0] ? ao.cards[0].name : '') + '）' +
+							(names.length ? '：' + names.join(' / ') : ''))
 					}
 				} else if (isSpace) {
 			highlight_targets({ spaces: (ao.pending.candidates || []).map(id => ({ id: id })) })

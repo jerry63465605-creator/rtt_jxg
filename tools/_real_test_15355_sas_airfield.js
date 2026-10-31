@@ -197,5 +197,27 @@ console.log('\n=== E. 非法目标（不在候选内）被明确拒绝 ===')
 		JSON.stringify({ pu: !!g.pending_armed_use, ao: (g.armed_offers || []).length }))
 }
 
+console.log('\n=== F. 客户端点击链镜像（能"点中"吗？）===')
+{
+	const g = setup()
+	playToPiece(g)
+	const v = R.view(g, 'Allies')
+	const raw = (v.armed_offer && v.armed_offer.pending && v.armed_offer.pending.candidates) || []
+	/* 镜像 play.js：① pending_armed.candidates 归一成 id ② on_click_piece 用 String 比较 */
+	const ids = raw.map(c => (c && typeof c === 'object') ? c.id : c)
+	const gate = (id) => ids.some(c => String(c) === String(id))
+	console.log('  服务端原始 candidates=' + JSON.stringify(raw.map(c => (c && typeof c === 'object') ? c.name : c)))
+	console.log('  归一后 ids=' + JSON.stringify(ids))
+	ok('★ 客户端能点中德国空军', gate('de_air_home'), JSON.stringify(ids))
+	ok('★ 客户端能点中意大利空军', gate('it_air_home'), JSON.stringify(ids))
+	ok('自己的英国空军不在可点集内', !gate('uk_air_w') && !gate('uk_air_h'), JSON.stringify(ids))
+	/* 静态守卫：客户端必须在入口把对象归一成 id（否则又会"点了没反应"） */
+	const pj = require('fs').readFileSync(path.join(MOD, 'play.js'), 'utf8')
+	ok('★ play.js 归一化候选（对象 -> id）',
+		/candidates: \(ao\.pending\.candidates \|\| \[\]\)\.map\(c =>\s*\n?\s*\(c && typeof c === 'object'\) \? c\.id : c\)/.test(pj),
+		'未找到归一行')
+	ok('高亮用的是归一后的列表', /highlight_pieces\(pending_armed\.candidates, 'armed'\)/.test(pj))
+}
+
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
 process.exitCode = fail ? 1 : 0

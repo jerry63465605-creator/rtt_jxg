@@ -6846,3 +6846,43 @@ event_card_needs = { need:"space", step:1, candidates:[16,15] }   // 中东 / �
 | 本组（15355 多空军/多目标 + 非法目标） | 31 项全过 |
 | 六组拦截真实测试 + 15315 阿拉曼 + armed 触发拦截 | 25/23/20/24/18/15/15/29 全过 |
 | 全量冒烟 | 112 脚本全绿 |
+
+### 修复（2026-10-31）：15355《特种空勤团突袭机场》在客户端"点不中敌方空军"
+
+玩家反馈：打出后无法选中目标，卡因此无法发动。
+
+**这是"只断言了 view、没断言客户端点击链"的漏检** —— 我上一版测试只验证了
+`view.armed_offer.pending.candidates` 有 2 个候选，却没验证客户端能不能把这两支点中。
+
+根因：服务端 `need:'piece'` 的候选有两种形态
+
+| 形态 | 谁在用 | 客户端点击判定 |
+|---|---|---|
+| 纯 id 数组 `["p1","p2"]` | 15406 等 | `String(c) === String(id)` ✅ |
+| `{id, name}` 对象数组 | **15355**（需要"德国空军@德国 / 意大利空军@意大利"区分多国） | `String({...})` = `"[object Object]"` ❌ |
+
+于是 `on_click_piece` 的 `candidates.some(c => String(c) === String(id))` 永不成立：
+玩家点了敌方空军 -> 提示"不在候选内" -> 卡永远发不出去；
+`highlight_pieces(ao.pending.candidates)` 也把对象当 id，连高亮都没有。
+
+修法（客户端一处归一，服务端不动）：
+
+- `update_armed_offer_box` 里 `pending_armed.candidates` 统一 `.map(c => typeof c === "object" ? c.id : c)`；
+- 高亮改用归一后的 `pending_armed.candidates`；
+- `need:"piece"` 的提示文案把服务端给的 `name` 列出来（多国空军时玩家知道有哪些目标）。
+
+新增长期守卫（写进 `_real_test_15355_sas_airfield.js` F 段）：
+
+```js
+/* 镜像客户端两道闸：① 归一成 id ② String 比较 */
+const ids = raw.map(c => (c && typeof c === "object") ? c.id : c)
+const gate = id => ids.some(c => String(c) === String(id))
+ok("能点中德国空军", gate("de_air_home"))
+```
+
+外加静态断言：`play.js` 必须存在这行归一、`highlight_pieces` 必须用归一后的列表 —— 
+以后谁把归一删了，测试立刻红。
+
+**通用教训（已进 skill §7.1）**：真实测试的"客户端断言"不能只看 `view` 字段有没有值，
+必须**镜像客户端那两道闸**（高亮 + 点击判定）算出"点击会不会派发 action"；
+结构不一致（对象 vs 裸 id）正是这类"服务端对、客户端点不动"的典型来源。
