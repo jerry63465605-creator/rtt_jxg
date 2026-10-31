@@ -7201,3 +7201,68 @@ const show = view && view.my_nation === '苏联' &&
 2. 判断有没有漏，最快的办法是**拿另一侧的 view/role 跑一遍同一动作**（本项目 `_verify_17850_modal_scope.js` 的 B 段就是这么抓出权限洞的）。
 3. 同类字段审计清单：`su_purge_offer` / `su_17817_pending` / `us_depression_offer` 已修；
    `us_political` 用的是 `{waiting_for}` 形态（对手只看到"等待英国"）—— 这是正确范式，可照抄。
+
+---
+
+## 2026-10-31 · 17553《抗日义勇军》让权 × 17828《百团大战》战斗预算 = 双向死锁（已修）
+
+测试：`tools/_real_test_17828_yiyongjun.js`（**26 项**）。
+
+### 症状（玩家实测）
+
+美国桌面有《抗日义勇军》时，苏联打《百团大战》：**没有跳转到轴心（日本）弃牌，而是卡死** —— 双方都点不动。
+
+### 根因：两个"必须回答的挂起"互锁
+
+```
+17828 第 1 步：中国在<中国>征召 1 支陆军
+  -> recruit_piece 触发 offer_us_japan_delegate（17553）
+  -> game.us_japan_delegate 建立、current_nation=日本、active=Axis     ← 挂起 A（必须回答）
+苏联玩家点「下一步」推进分步机
+  -> 第 2 步 battle 建立 game.event_budget                            ← 挂起 B（可发起/可结束）
+此后：
+  build_actions 的 event_budget 分支对【非预算国】只 return { log: 1 }
+      -> 日本拿不到 resolve_japan_delegate（客户端无按钮）
+  do_action 的 BUDGET_ALLOWED 也不含 resolve_japan_delegate
+      -> 就算硬发也被拒「战斗预算进行中…」
+  active 又在日本手里 -> 苏联也动不了 = 死锁
+```
+
+关键点：**让权是"必须回答"的挂起，预算只是"可选发兵机会"**，优先级被写反了。
+（同类隐患：`us_depression_discard`（17555 前置弃牌）、`resolve_us_political_play`（美国政治）也会与预算撞。）
+
+### 修法（两处同步放行，一一对应）
+
+1. `build_actions` 的 `event_budget` 分支：**在"是否预算国"判定之前**先给让权动作 ——
+
+```js
+if (game.us_japan_delegate && faction_of_nation('日本') === side)
+    return { log: 1, resolve_japan_delegate: 1 }
+if (game.us_depression_discard && game.us_depression_discard.pending &&
+    faction_of_nation('美国') === side)
+    return { log: 1, us_depression_discard: 1 }
+if (game.us_political && faction_of_nation('美国') === side)
+    return { log: 1, resolve_us_political_play: 1 }
+```
+
+2. `do_action` 的 `BUDGET_ALLOWED` 白名单加同样三个动作（否则客户端有按钮也会被服务端拒）。
+
+口径：让权结算完成后归还操作权，预算**保留**给原玩家继续发起/结束 —— 不做丢弃。
+
+### 实测
+
+```
+修复前：Axis actions = []                    -> 卡死
+修复后：Axis actions = ["resolve_japan_delegate"]
+        日本结算 -> 【日本】弃置 1 张手牌 | 损耗 1 张 | 操作权归还苏联
+        active=Allies / current_nation=苏联，event_budget 仍在（remaining 1）
+        苏联 event_finish -> 预算清空、无残留
+```
+
+### 顺带记下的两个"测试陷阱"（都真实踩了）
+
+1. **17553 开局就在美国手牌里** —— 我又 `debug_add_card` 发了一张，造成同卡多份（V1 违规）。
+   正确做法：直接用开局那张；且美国打 STATUS 会先被 17555《大萧条的余波》拦成
+   `game.us_depression_discard`（不是 `us_political`），必须用动作 `us_depression_discard{card}` 走完才会真正落桌。
+2. **"征召后立刻用它开战"需要补给**：本卡第 2 步 `useNewPiece` 依赖新征召的陆军处于补给，
+   否则 `event_budget.targets = 0`（不是 bug，是布阵缺补给）。用户的真实局面有补给，所以能打。

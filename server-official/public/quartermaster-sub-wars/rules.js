@@ -27726,6 +27726,24 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 响应卡窗口由 pendingTrigger 的更早分支处理，不受影响。
 	 */
 	if (game.event_budget) {
+		/*
+		 * 【2026-10-31 修复·死锁】"必须回答"的让权/代价挂起，优先级【高于】预算冻结。
+		 *
+		 * 场景（玩家实测）：17553《抗日义勇军》在桌面时，苏联打 17828《百团大战》——
+		 * 第 1 步「中国征召」就触发 offer_us_japan_delegate，active 已翻给日本；
+		 * 但分步机随后仍建立了 event_budget，而预算分支对非预算国只返回 { log: 1 }，
+		 * 于是日本拿不到 resolve_japan_delegate、苏联又不是当前操作方 —— 双方都点不动 = 卡死。
+		 *
+		 * 口径：让权是【必须回答】的挂起，预算只是可选的发兵机会；先答让权，预算留着等它归还。
+		 */
+		if (game.us_japan_delegate && faction_of_nation('日本') === side)
+			return { log: 1, resolve_japan_delegate: 1 }
+		if (game.us_depression_discard && game.us_depression_discard.pending &&
+			faction_of_nation('美国') === side)
+			return { log: 1, us_depression_discard: 1 }
+		if (game.us_political && faction_of_nation('美国') === side)
+			return { log: 1, resolve_us_political_play: 1 }
+
 		if (faction_of_nation(game.event_budget.nation) !== side) {
 			game.block_reason = 'event_budget: 等待【' + game.event_budget.nation + '】完成战斗预算'
 			return { log: 1 }
@@ -28660,6 +28678,11 @@ function do_action(state, current, action, arg) {
 		resolve_battle: 1, clear_ask: 1, toggle_ask_remove: 1, air_support: 1,
 		trigger_response: 1, pass_response: 1,
 		resolve_response_choice: 1, response_confirm: 1, response_reorder: 1,
+		/*
+		 * 【2026-10-31 修复·死锁】必须回答的让权/代价挂起，不能被预算冻结挡住
+		 * （与 build_actions 预算分支的放行一一对应）。
+		 */
+		resolve_japan_delegate: 1, us_depression_discard: 1, resolve_us_political_play: 1,
 		log: 1,
 	}
 	if (game.event_budget && !BUDGET_ALLOWED[action] &&
