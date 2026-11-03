@@ -51,3 +51,17 @@ tools/_push_err.txt
 # 本地开发依赖（jsdom 等，仅供 tools/_dom_test_*.js 使用，不入库）
 node_modules/
 package-lock.json
+# 临时/草稿产物（合并外部交付时曾误入 214 个，见 8bd7587 的清理提交）
+out/_*
+out/*.txt
+out/*.bin
+out/*.py
+cards_diff.txt
+rtt_server.out
+rtt_server.err
+server-official/rtt_server.out
+server-official/rtt_server.err
+server-official/tools/_rtt_server.out
+server-official/public/quartermaster-sub-wars/_harness_*
+tools/fixtures/gid*.json
+tmp/
