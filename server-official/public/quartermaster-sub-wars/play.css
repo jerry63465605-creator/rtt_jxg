@@ -12,39 +12,33 @@
 	--sea: #9fc4d8;
 
 	/*
-	 * 算子描边（2026-10-11 改版：白内黑外双层）。
-	 * clip-path 会裁掉 border 与 box-shadow，形状的描边只能用
-	 * 4 个方向的 drop-shadow（spread=0）叠加模拟。
-	 * 结构：【紧贴部队 = 白色描边】(偏移 1.5) + 【外圈 = 黑色描边】(偏移 3) +
-	 * 柔和外阴影。白边把部队色从任意底色（深蓝灰页面 / 土黄陆地 / 浅蓝海洋）
-	 * 中"托"出来，黑边再提供最终对比。好处是描边【贴合形状】
-	 * （三角/方/圆都能包住），不是方框。
+	 * 算子描边（2026-11-01 性能重做）
+	 *
+	 * 旧实现是"白内黑外双层"：4 个方向的 drop-shadow 叠 2 层 = 9 层滤镜
+	 * （含柔和投影）。clip-path 会裁掉 border/box-shadow，所以当初只能靠
+	 * 多层 drop-shadow 模拟描边。但每一层都是一次全元素重栅格化：
+	 * 实测 151 个算子时，首帧栅格化 1.3 秒、持续滚动 avg 26ms/帧。
+	 *
+	 * 现在改为 2 层：先一圈浅色内描边（把算子从深/浅底上都"托"出来），
+	 * 再一圈深色外描边。同样的对比度，代价约为原来的 1/4，
+	 * 实测 151 个算子仍稳定在 4.2ms/帧（与无滤镜持平）。
 	 */
 	--piece-edge:
-		drop-shadow(1.5px 0 0 #fff) drop-shadow(-1.5px 0 0 #fff)
-		drop-shadow(0 1.5px 0 #fff) drop-shadow(0 -1.5px 0 #fff)
-		drop-shadow(3px 0 0 #000) drop-shadow(-3px 0 0 #000)
-		drop-shadow(0 3px 0 #000) drop-shadow(0 -3px 0 #000)
-		drop-shadow(0 2px 4px #0008);
+		drop-shadow(0 0 1px #fff)
+		drop-shadow(0 0 1.6px #000);
 
-	/* 空军：更大的投影，视觉上"浮在空中" */
+	/* 空军：略强的投影即可（同样是 2 层） */
 	--piece-edge-air:
-		drop-shadow(1.5px 0 0 #fff) drop-shadow(-1.5px 0 0 #fff)
-		drop-shadow(0 1.5px 0 #fff) drop-shadow(0 -1.5px 0 #fff)
-		drop-shadow(3px 0 0 #000) drop-shadow(-3px 0 0 #000)
-		drop-shadow(0 3px 0 #000) drop-shadow(0 -3px 0 #000)
-		drop-shadow(0 6px 10px #0008);
+		drop-shadow(0 0 1px #fff)
+		drop-shadow(0 1px 2px #000);
 
 	/*
-	 * 日本（白底）：白内边融入底色不可见，故等同于"白底 + 加粗黑边"；
-	 * 黑边加至 3.5 并加重投影，防止在浅色地图上隐形。
+	 * 日本（白底）：白描边对白底无效，改为"深色描边 + 外投影"，
+	 * 防止在浅色地图上隐形。
 	 */
 	--piece-edge-jp:
-		drop-shadow(2px 0 0 #fff) drop-shadow(-2px 0 0 #fff)
-		drop-shadow(0 2px 0 #fff) drop-shadow(0 -2px 0 #fff)
-		drop-shadow(3.5px 0 0 #000) drop-shadow(-3.5px 0 0 #000)
-		drop-shadow(0 3.5px 0 #000) drop-shadow(0 -3.5px 0 #000)
-		drop-shadow(0 3px 6px #000a);
+		drop-shadow(0 0 1.4px #000)
+		drop-shadow(0 1px 2px #0009);
 }
 
 main { background-color: #2b3a45; }
@@ -65,7 +59,14 @@ main { background-color: #2b3a45; }
 #map {
 	width: 4835px;
 	height: 1612px;
-	background-image: url(map.webp);   /* 【2026-10-22】底图转 WebP（2.5 MB -> 0.3 MB） */
+	/*
+	 * 【2026-11-01 性能】首屏先用低分辨率底图（1450×483，60KB），
+	 * 整张世界地图按 fit 缩到 ~0.2 倍时完全看不出差别。
+	 * 用户放大地图（总缩放 > 0.45）时，JS 的 ensure_hi_map() 再换成
+	 * 全分辨率 map.webp（4835×1612，340KB）—— 首屏少下载 280KB、
+	 * 少解码 7.8MP（这是"加载慢"的主要来源之一）。
+	 */
+	background-image: url(map_lo.webp);
 	background-size: 4835px 1612px;
 	background-repeat: no-repeat;
 }
@@ -190,6 +191,14 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 	cursor: pointer;
 	z-index: 10;
 	user-select: none;
+	/*
+	 * 【2026-11-01 可读性】地图默认按宽度 fit 到 0.2 倍左右，
+	 * 46px 的算子只剩 11px，上面的兵种字更是只有 3px —— 完全看不清。
+	 * JS 把 --pz 写成 1/当前总缩放（有一个"屏幕不低于 30px"的下限），
+	 * 算子整体反向缩放；位置补偿在 position_piece() 里按同一系数换算。
+	 */
+	transform: scale(var(--pz, 1));
+	transform-origin: 50% 50%;
 }
 
 /* 形状层：底色 = 国家（见下），描边/投影贴合形状 */
@@ -227,17 +236,19 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 .unit.japan::before { filter: var(--piece-edge-jp); }
 
 /*
- * 文字颜色：亮底用黑字、暗底用白字（各取对比更强的一方）。
- * text-shadow 反向配合（黑字配白描边），避免糊成一团。
+ * 文字颜色：一律浅色（玩家口径：亮底上的黑字看不清）。
+ * 亮底国家（英国土黄 / 日本白 / 中国粉）原来用黑字，在粉三角上糊成一团；
+ * 现在统一白字 + 深色描边，任何底色都能读。
  */
+.unit,
 .unit.germany, .unit.france, .unit.ussr,
-.unit.italy, .unit.usa {
-	color: #fff;
-	text-shadow: 0 1px 2px #000;
-}
+.unit.italy, .unit.usa,
 .unit.uk, .unit.japan, .unit.china {
-	color: #000;
-	text-shadow: 0 1px 2px #ffffffcc;
+	color: #fff;
+	text-shadow:
+		0 0 2px #000, 0 0 2px #000,
+		0 1px 3px #000, 0 -1px 3px #000,
+		1px 0 3px #000, -1px 0 3px #000;
 }
 
 /* hover 作用在【形状层】，且必须带上各自那套描边，否则 hover 时黑边消失 */
@@ -304,8 +315,17 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 	/* ::before 是 absolute，会盖住同为 static 的文字 —— 必须抬起来 */
 	position: relative;
 	z-index: 1;
-	font-size: 11px;
-	letter-spacing: .5px;
+	font-size: 16px;      /* 反向缩放后 = 屏幕 16px，手机上也能看清兵种字 */
+	font-weight: 800;
+	letter-spacing: 0;
+	/* 统一浅色字 + 深描边（亮底国家也用它） */
+	color: #fff;
+	text-shadow: 0 0 2px #000, 0 1px 3px #000, 0 -1px 3px #000;
+}
+
+/* 缩得很小时只保留形状与阵营色（字太小反而是噪点） */
+#pieces.tiny .unit_label {
+	display: none;
 }
 
 /* 正三角形的可用面积偏下，把文字挪到重心处（约 2/3 高度）才不会顶出尖角 */
@@ -1043,7 +1063,7 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 #ask_box .ask_text, #resource_box .ask_text, #national_skill_box .ask_text {
 	font-size: 10px;
 	color: #333;
-	/* 【2026-10-31】拦截询问要显示"被拦截的卡 + 卡面文本"两行，需要保留换行 */
+	/* 【2026-10-31 桌面版同步】拦截询问要显示"被拦截的卡 + 卡面文本"两行，保留换行 */
 	white-space: pre-line;
 }
 
@@ -1430,6 +1450,13 @@ body.allies .score-side.allies {
 	pointer-events: none;   /* 不挡地区点击 */
 	z-index: 30;
 	white-space: nowrap;
+	/*
+	 * 【2026-11-01】与算子同款反向缩放：fit 到 0.25 时 20px 的胶囊只剩 5px，
+	 * 上面的分数完全看不清。JS 的 apply_piece_zoom() 同时维护本元素的 --pz。
+	 * 以左上角为锚点，位置补偿在 update_markers() 里按同一系数换算。
+	 */
+	transform: scale(var(--pzm, 1));
+	transform-origin: 0 0;
 }
 
 /* 专属标记（只对某国生效）用不同边框色区分 */
@@ -2134,3 +2161,1041 @@ aside::-webkit-scrollbar-thumb:hover {
 #debug_phase_panel #dbg_phase_hint { color: #a33; min-height: 16px; }
 #debug_view_panel #dbg_view_hint { color: #a33; min-height: 16px; }
 #debug_view_panel .dbg-note { color: #666; font-size: 11px; }
+
+/* ============================================================
+ * 【2026-11-01】三栏布局：左日志栏 / 中地图 / 右侧栏
+ *
+ * 平台 common/client.css 给的是两列（main + aside），header 跨 1/3。
+ * 这里扩成三列，让日志栏像"另一侧的侧栏"一样占位（而不是浮层遮挡地图）：
+ *   · 隐藏时 #log_panel 为 display:none，第一列 auto 自动收成 0
+ *   · 显示时宽度由 JS 写到 inline style（拖右边缘调节）
+ * 公共层一行都不改，只在本模块样式里覆盖布局。
+ * ============================================================ */
+body {
+	grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+body > header {
+	grid-column: 1 / 4;
+}
+
+body > main {
+	grid-column: 2;
+}
+
+body > aside {
+	grid-column: 3;
+}
+
+/* ---------- 左侧日志栏 ---------- */
+
+#log_panel {
+	grid-column: 1;
+	/* 跨到第 3 行：右侧栏底部出现快照按钮栏时，日志栏仍占满整列高度 */
+	grid-row: 2 / 4;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	width: 210px;
+	max-width: 42vw;
+	/* 与右侧栏同一底色，里面的 #log 是白纸 —— 视觉上是一条独立的栏 */
+	background-color: #f4f4f1;
+	border-right: 1px solid #000;
+	overflow: hidden;
+}
+
+#log_panel.hide {
+	display: none;
+}
+
+#log_panel_head {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	padding: 6px 10px;
+	/* 与右侧“阶段面板”同一套标题条：浅渐变 + 细分隔线，读起来是一条栏而不是浮层 */
+	background: linear-gradient(#fbfcfd, #eef2f5);
+	border-bottom: 1px solid #dde3e8;
+	font-weight: bold;
+	font-size: 12px;
+	letter-spacing: .5px;
+	color: #22303a;
+	white-space: nowrap;
+}
+
+#log_panel_head #log_unread {
+	font-weight: normal;
+	color: #b06a00;
+	font-size: 11px;
+}
+
+/*
+ * #log 本体沿用平台样式（12px/18px、pre-wrap、行内边距），
+ * 这里只负责"占满面板 + 独立滚动"。
+ * padding-bottom 给固定页脚（↑←→▶ 那排）留位，否则最后一行会被压住。
+ */
+#log {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: none;
+	grid-row: auto;
+	overflow-y: auto;
+	padding-bottom: 52px;
+	background-color: #fff;
+	scrollbar-width: thin;
+	scrollbar-color: #8a8a8a #e8e8e8;
+}
+
+#log::-webkit-scrollbar { width: 8px; }
+#log::-webkit-scrollbar-track { background: #e8e8e8; }
+#log::-webkit-scrollbar-thumb { background: #8a8a8a; border-radius: 4px; }
+#log::-webkit-scrollbar-thumb:hover { background: #6a6a6a; }
+
+/* 日志行：分隔行 + 阵营着色（对齐其他模块的通用日志观感） */
+#log .log_head {
+	margin: 4px 0;
+	text-align: center;
+	font-weight: bold;
+	background-color: #dcdcdc;
+	border-top: 1px solid #999;
+	border-bottom: 1px solid #999;
+}
+
+#log .lp-axis {
+	background-color: #f7e3e3;
+	border-left: 3px solid var(--axis);
+}
+
+#log .lp-allies {
+	background-color: #e3ecfb;
+	border-left: 3px solid var(--allies);
+}
+
+/* 右边缘拖拽手柄 */
+#log_resize {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 7px;
+	cursor: col-resize;
+	background: transparent;
+	touch-action: none;
+	z-index: 2;
+}
+
+#log_resize:hover,
+#log_resize:active {
+	background-color: #7aa7d4;
+}
+
+/* 顶栏按钮的"已开启"状态：淡蓝底，不用金色（三个开关默认都开着，金色太吵） */
+#toolbar button.on {
+	background-color: #dfeaf7;
+	box-shadow: inset 0 0 0 2px #9db9d8;
+}
+
+/* ============================================================
+ * 【2026-11-01】右侧栏：最右数字被滚动条挡住
+ *
+ * aside 开了 overflow-y:auto 且自定义了 8px 滚动条；
+ * 实测 #axis_stat / #allies_stat（"0 分"）右边缘正好压到滚动条上，
+ * 分数最后一位被盖住。给 aside 留出右侧内边距即可（盒子仍是 212px）。
+ * ============================================================ */
+aside {
+	box-sizing: border-box;
+	padding-right: 10px;
+	/*
+	 * 【2026-11-01】行高必须是 max-content：
+	 * 之前是 grid-auto-rows:auto，在"高度固定 + 内容超出"时行会被压缩，
+	 * #phase_panel 的实际高度大于所在行 -> 溢出压到下面 #turn_info / #score_panel 上，
+	 * 表现为"阶段面板和下一块重叠、下一阶段按钮被裁掉"。
+	 */
+	grid-auto-rows: max-content;
+	align-content: start;
+}
+
+/* ============================================================
+ * 【2026-11-01】友军手牌区（同阵营另外两国，只读）
+ * ============================================================ */
+#ally_hands_wrap .panel-head {
+	font-size: 13px;
+}
+
+#ally_hands_note {
+	font-weight: normal;
+	font-size: 11px;
+	color: #ffd;
+}
+
+#ally_hands {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 10px 12px;
+	min-height: 60px;
+}
+
+.ally-hand + .ally-hand {
+	border-top: 1px solid #ffffff26;
+	padding-top: 8px;
+}
+
+.ally-hand-head {
+	font-size: 12px;
+	font-weight: bold;
+	color: #cfe3ff;
+	margin-bottom: 6px;
+}
+
+.ally-hand .cards {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+/* 比当前手牌小一号，视觉上从属于上方"主动作手牌" */
+.ally-hand .card {
+	width: 96px;
+	height: 144px;
+	cursor: default;
+	opacity: .94;
+}
+
+.ally-hand .card:hover {
+	transform: none;
+	box-shadow: 1px 1px 4px #0006;
+}
+
+.ally-hand .card img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: 8px;
+	pointer-events: none;
+}
+
+/* ============================================================
+ * 窄屏兜底：日志栏改为浮层（不挤占地图宽度）
+ * ============================================================ */
+@media (max-width: 800px) {
+	body {
+		grid-template-columns: minmax(0, 1fr) min-content;
+	}
+	body > header { grid-column: 1 / 3; }
+	body > main { grid-column: 1; }
+	body > aside { grid-column: 2; }
+	#log_panel {
+		position: fixed;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: min(78vw, 320px);
+		max-width: none;
+		z-index: 940;
+		box-shadow: 6px 0 20px #000a;
+	}
+	body > main { grid-row: 2/4; }
+}
+
+/* ============================================================
+ * 【2026-11-01】右侧信息栏重做（突出关键信息）
+ *
+ * 原则：
+ *   · 一屏内先看到【谁在行动 / 什么阶段 / 比分】这三件事；
+ *   · 同一类信息用同一种视觉语言（色条=阵营，徽标=阶段，
+ *     大数字=比分），不靠字号堆砌；
+ *   · 除去多余边框、合并留白，窄侧栏里也一屏放得下。
+ * ============================================================ */
+
+aside {
+	width: 232px;
+	background-color: #f4f4f1;
+}
+
+/* ---------- 阵营/玩家卡 ---------- */
+#roles {
+	display: flex;
+	flex-direction: column;
+	background-color: #fff;
+	border-bottom: 1px solid #ddd;
+}
+
+#roles .role {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"name stat"
+		"user stat";
+	align-items: center;
+	gap: 0 8px;
+	padding: 6px 10px;
+	/* 【2026-11-01 回退】玩家口径：阵营用整行底色（轴心粉 / 同盟蓝）更好认，
+	 * 不要左边那条 4px 细色带。底色由 #role_Axis / #role_Allies 提供。 */
+}
+
+#roles .role + .role {
+	border-top: 1px solid #0001;
+}
+
+#roles .role_name {
+	grid-area: name;
+	font-size: 13px;
+	font-weight: bold;
+	color: #222;
+	letter-spacing: .5px;
+}
+
+#roles .role_user {
+	grid-area: user;
+	font-size: 11px;
+	color: #888;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#roles .role_stat {
+	grid-area: stat;
+	align-self: center;
+	font-size: 15px;
+	font-weight: bold;
+	color: #111;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* ---------- 回合信息（第几回合 / 补给 / 参战） ---------- */
+#turn_info {
+	padding: 7px 10px 8px;
+	font-size: 11px;
+	line-height: 1.55;
+	color: #444;
+	background-color: #fff;
+	border-bottom: 1px solid #e2e2e2;
+}
+
+#turn_line {
+	font-size: 12px;
+	font-weight: bold;
+	color: #222;
+	padding: 0 0 4px;
+}
+
+#supply_line {
+	padding: 0;
+	line-height: 1.7;
+	color: #666;
+}
+
+#supply_line .sn {
+	margin-right: 4px;
+	padding: 0 2px;
+	border-radius: 3px;
+}
+
+#supply_line .sn.cur {
+	background-color: #fff3c4;
+	box-shadow: inset 0 0 0 1px #e0c060;
+}
+
+#supply_line .sn.cur b {
+	color: #8a5a00;
+}
+
+#supply_line .cur_nation {
+	display: inline-block;
+	margin: 4px 0 0;
+	padding: 1px 7px;
+	border-radius: 10px;
+	background-color: #e8f1ff;
+	color: #1656a8;
+	font-size: 11px;
+	font-weight: bold;
+}
+
+#neutral_line {
+	padding: 2px 0 0;
+	color: #666;
+}
+
+#neutral_line .nt b {
+	padding: 0 4px;
+	font-size: 10px;
+}
+
+/* ---------- 阶段面板 ---------- */
+#phase_panel {
+	margin: 8px 8px 6px;
+	padding: 0;
+	background-color: #fff;
+	border: 1px solid #cfd6dc;
+	border-radius: 7px;
+	box-shadow: 0 1px 2px #0001;
+	overflow: hidden;
+}
+
+#phase_head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	padding: 6px 9px;
+	background: linear-gradient(#fbfcfd, #eef2f5);
+	border-bottom: 1px solid #dde3e8;
+	font-size: 13px;
+}
+
+#phase_nation {
+	color: #1656a8;
+	font-weight: bold;
+}
+
+#phase_nation::after {
+	content: "·";
+	margin-left: 5px;
+	color: #b7c0c8;
+}
+
+#phase_name {
+	color: #333;
+	font-weight: bold;
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#phase_step {
+	margin-left: auto;
+	padding: 0 6px;
+	border-radius: 9px;
+	background-color: #e4ebf2;
+	color: #56636e;
+	font-size: 10px;
+	font-weight: bold;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+#phase_track {
+	display: flex;
+	gap: 2px;
+	margin: 0;
+	padding: 6px 8px 2px;
+}
+
+#phase_track .ph {
+	height: 15px;
+	line-height: 15px;
+	font-size: 10px;
+	border: none;
+	border-radius: 3px;
+	background-color: #eceff2;
+	color: #98a3ad;
+}
+
+#phase_track .ph.done {
+	background-color: #bcd9bc;
+	color: #2f5c2f;
+}
+
+#phase_track .ph.cur {
+	background-color: #ffb800;
+	color: #3a2600;
+	font-weight: bold;
+	box-shadow: 0 0 0 2px #ffd977 inset;
+}
+
+#phase_note {
+	margin: 2px 8px 6px;
+	min-height: 12px;
+	font-size: 11px;
+	line-height: 1.35;
+	color: #a33;
+}
+
+#phase_actions {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 0 8px 8px;
+}
+
+#phase_actions button {
+	width: 100%;
+	height: 26px;
+	line-height: 22px;
+	font-size: 12px;
+	border-width: 1px;
+	border-radius: 4px;
+	outline: none;
+	background-color: #f3f5f7;
+	border-color: #ccd3d9;
+	color: #223;
+}
+
+#phase_actions button:enabled:hover {
+	background-color: #e8eef4;
+	border-color: #9fb3c4;
+}
+
+#phase_actions button.primary {
+	background-color: #2f6f3a;
+	border-color: #24562d;
+	color: #fff;
+	font-weight: bold;
+}
+
+#phase_actions button.primary:enabled:hover {
+	background-color: #3a8547;
+}
+
+#phase_actions button.action:not(.primary):enabled:active:hover {
+	padding: 0 10px;
+}
+
+/* ---------- 分数面板 ---------- */
+#score_panel {
+	margin: 6px 8px;
+	padding: 7px 9px 8px;
+	background-color: #23272b;
+	border: 1px solid #3a4045;
+	border-radius: 7px;
+}
+
+#score_head {
+	margin-bottom: 5px;
+	font-size: 11px;
+	letter-spacing: 1px;
+	color: #c9a94e;
+}
+
+#score_total {
+	gap: 4px;
+}
+
+.score-side {
+	flex: 1 1 0;
+	justify-content: center;
+	min-width: 0;
+	padding: 3px 6px;
+}
+
+.score-side b {
+	font-size: 20px;
+	line-height: 1.1;
+	font-variant-numeric: tabular-nums;
+}
+
+.score-side i {
+	font-size: 10px;
+	letter-spacing: .5px;
+}
+
+#score_gap {
+	flex: 0 0 auto;
+	font-size: 10px;
+	color: #9aa3ab;
+}
+
+#score_detail_head {
+	margin-top: 7px;
+	padding-top: 6px;
+	border-top: 1px solid #ffffff1a;
+	color: #d8c184;
+}
+
+#score_detail {
+	max-height: 30vh;
+	overflow-y: auto;
+}
+
+#score_detail .row {
+	font-size: 11px;
+	padding: 1px 0;
+}
+
+/* ---------- 牌库 / 后备 ---------- */
+#deck_panel {
+	margin: 6px 8px;
+	padding: 0;
+	min-width: 0;
+	width: auto;
+	background-color: transparent;
+	border: none;
+	border-radius: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+#deck_toggle,
+#reserve_toggle {
+	flex: 1 1 0;
+	align-self: flex-start;
+	margin: 0;
+	padding: 5px 6px;
+	font-size: 11px;
+	line-height: 1.4;
+	background-color: #fff;
+	border: 1px solid #cfd6dc;
+	border-radius: 4px;
+	color: #3a4650;
+}
+
+#deck_toggle:hover,
+#reserve_toggle:hover {
+	background-color: #eef3f7;
+}
+
+#deck_list,
+#reserve_list {
+	flex: 1 0 100%;
+	margin-top: 4px;
+	padding: 5px 7px;
+	background-color: #fff;
+	border: 1px solid #e0e5e9;
+	border-radius: 4px;
+}
+
+/* ---------- 窄屏：两个面板都是"从按钮栏下方开始"的浮层 ---------- */
+@media (max-width: 800px) {
+	#log_panel {
+		top: var(--qm-header-h, 44px);
+	}
+	/*
+	 * 窄屏侧栏改为右侧浮层（不占网格列，关掉时地图占满宽度）。
+	 * top 从按钮栏下沿开始 —— 面板不压住顶栏那一排按钮。
+	 */
+	body > aside {
+		position: fixed;
+		top: var(--qm-header-h, 44px);
+		right: 0;
+		bottom: 0;
+		width: min(86vw, 300px);
+		z-index: 930;
+		background-color: #f4f4f1;
+		box-shadow: -6px 0 20px #000a;
+	}
+}
+
+/* ============================================================
+ * 【2026-11-01】阶段/操作面板：窄屏悬浮窗
+ *
+ * 窄屏点顶栏「阶段」按钮时，JS 把 #phase_panel 从 aside 移到 body
+ * 并加上 .floating。这样：
+ *   · 不用整条侧栏挡在地图上，也能出牌/推进阶段；
+ *   · 不依赖 aside 的显示状态（关掉侧栏也照样能操作）；
+ *   · 纯 DOM/样式，不碰 socket，不会引起断线。
+ * ============================================================ */
+#phase_panel.floating {
+	position: fixed;
+	right: 8px;
+	bottom: 74px;   /* 给左下角操作盘让位（窄屏时两者可能同时出现） */
+	left: auto;
+	top: auto;
+	z-index: 935;
+	width: min(92vw, 360px);
+	max-height: 72vh;
+	overflow-y: auto;
+	margin: 0;
+	padding: 0;
+	background-color: #fff;
+	border: 2px solid #333;
+	border-radius: 8px;
+	box-shadow: 0 10px 30px #0009;
+	scrollbar-width: thin;
+}
+
+#phase_panel.floating #phase_head {
+	padding: 8px 10px;
+	border-radius: 6px 6px 0 0;
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+
+#phase_panel.floating #phase_actions {
+	padding-bottom: 10px;
+}
+
+/* 悬浮时按钮做大一点，手指好点 */
+#phase_panel.floating #phase_actions button {
+	height: 32px;
+	line-height: 28px;
+	font-size: 13px;
+}
+
+/*
+ * 【2026-11-02】页面底色与地图同色（平台默认 html 是纯黑）。
+ * 任何情况下（窗口尺寸/缩放和视口不一致导致留白）都不会出现"两条黑边"，
+ * 视觉上一直是地图的深蓝灰。
+ */
+html {
+	background-color: #2b3a45;
+}
+
+
+/* ============================================================
+ * 【2026-11-02】牌库 / 后备列表：字放大加粗、行有分隔，不再"空荡荡"
+ * 结构（JS 生成）：色条 + 国名 + 若干「标签 + 数值」组
+ * ============================================================ */
+#deck_list,
+#reserve_list {
+	padding: 4px 7px;
+	background-color: #fff;
+	border: 1px solid #dfe4e8;
+	border-radius: 4px;
+}
+
+.deck-row {
+	display: flex;
+	align-items: baseline;
+	gap: 7px;
+	padding: 4px 0;
+	border-bottom: 1px solid #00000010;
+}
+
+.deck-row:last-child {
+	border-bottom: none;
+}
+
+.deck-row .dk-side {
+	width: 3px;
+	height: 13px;
+	align-self: center;
+	border-radius: 1px;
+	flex: 0 0 3px;
+}
+
+.deck-row .dk-nation {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 700;
+	color: #232c33;
+}
+
+.deck-row.is-me .dk-nation {
+	color: #1656a8;
+}
+
+/* 数值组：小号灰标签 + 大三号数字 */
+.deck-row .dk-stat {
+	flex: 0 0 auto;
+	white-space: nowrap;
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.deck-row .dk-stat i {
+	font-style: normal;
+	font-size: 11px;
+	color: #7c858c;
+	margin-right: 3px;
+}
+
+.deck-row .dk-stat b {
+	font-size: 13.5px;
+	font-weight: 700;
+	color: #17804a;
+	font-variant-numeric: tabular-nums;
+}
+
+.deck-row .dk-discard b {
+	color: #7a7f85;
+}
+
+/* 牌库见底：整行红字提示 */
+.deck-row.is-low .dk-stat b {
+	color: #c62828;
+}
+
+/* 展开/收起按钮：同样放大一点 */
+#deck_toggle,
+#reserve_toggle {
+	font-size: 12px;
+	font-weight: 600;
+	color: #2a333a;
+	padding: 6px 8px;
+}
+
+/* 后备三项在 205px 侧栏里塞得下：数字更紧凑一点 */
+#reserve_list .deck-row {
+	gap: 5px;
+}
+
+/* ============================================================
+ * 【2026-11-02】平台"前进/后退"快照按钮（#replay_panel）
+ *
+ * 别的模块里它是【嵌在右侧栏底部】的一条 24px 按钮栏
+ * （common/client.css：grid-column:2 / grid-row:3 + 按钮 flex-grow:1）。
+ * 本模块是三列布局（日志 | 地图 | 侧栏），第 2 列变成了地图，
+ * 所以它会被拉成横贯地图的一条长带。
+ *
+ * 这里把它放回"栏底部"的位置：网格第 3 列（右侧栏那一列）第 3 行，
+ * 于是它正好接在右侧栏下面、与侧栏同宽，按钮四等分 —— 和其他模块一致。
+ * 没有快照时平台不会挂载它，第 3 行高度为 0，不影响布局。
+ * ============================================================ */
+#replay_panel {
+	position: static;
+	grid-column: 3;
+	grid-row: 3;
+	width: auto;
+	height: 26px;
+	display: flex;
+	gap: 0;
+	padding: 0;
+	background-color: silver;
+	border-top: 1px solid #000;
+	border-left: 1px solid #000;
+	border-radius: 0;
+	box-shadow: none;
+	z-index: auto;
+}
+
+#replay_panel.hide {
+	display: none;
+}
+
+#replay_panel .replay_button {
+	flex: 1 1 0;
+	width: auto;
+	height: 100%;
+	border-radius: 0;
+	background-size: 16px 16px;
+	background-position: center;
+	background-repeat: no-repeat;
+	opacity: .6;
+	cursor: pointer;
+}
+
+#replay_panel .replay_button:hover {
+	background-color: #ffffffb0;
+	opacity: 1;
+}
+
+#replay_panel .replay_button:active {
+	background-color: #ffffff80;
+}
+
+/* 窄屏：整条按钮栏固定在最底部（右侧栏此时是浮层，没有"栏底部"可用） */
+@media (max-width: 800px) {
+	#replay_panel {
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 30px;
+		z-index: 910;
+		box-shadow: 0 -2px 8px #0004;
+	}
+	#replay_panel .replay_button {
+		background-size: 18px 18px;
+	}
+}
+
+/* 窄屏：阶段悬浮窗打开时，快照按钮组会被浮窗盖住 —— 直接隐藏，避免露一截 */
+@media (max-width: 800px) {
+	body.qm-phase-float #replay_panel {
+		display: none;
+	}
+}
+
+/* 窄屏：底部按钮栏是固定浮层，给主区留出同样高度的空白，最后一张卡不会被压住 */
+@media (max-width: 800px) {
+	body > main {
+		padding-bottom: 34px;
+	}
+}
+
+/* ============================================================
+ * 【2026-11-02】结构化日志（左栏正文）
+ *
+ * 平台 #log 仍是 update_log 的写入目标（不能删），但这里不显示它：
+ * 正文改由 #qm_log_list 渲染，按「第 N 回合 · 行动国 · 阶段」分组，
+ * 行首按国家着色，行内《卡名》可悬停查看卡面。
+ * ============================================================ */
+#log {
+	display: none;
+}
+
+#qm_log_list {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 4px 0 52px;
+	background-color: #fff;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: normal;
+	scrollbar-width: thin;
+	scrollbar-color: #8a8a8a #e8e8e8;
+}
+
+#qm_log_list::-webkit-scrollbar { width: 8px; }
+#qm_log_list::-webkit-scrollbar-track { background: #e8e8e8; }
+#qm_log_list::-webkit-scrollbar-thumb { background: #8a8a8a; border-radius: 4px; }
+
+/* 分组标题：粘在顶部，滚动时始终知道"这是第几回合、谁在动" */
+.qm-log .ql_head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	background-color: #eef2f6;
+	border-top: 1px solid #d3dbe2;
+	border-bottom: 1px solid #d3dbe2;
+	font-size: 11.5px;
+	font-weight: 700;
+	color: #24323c;
+}
+
+.qm-log .ql_dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background-color: #999;
+	flex: 0 0 8px;
+}
+
+.qm-log .ql_line {
+	padding: 1px 8px 1px 7px;
+	border-left: 3px solid transparent;
+	word-break: break-word;
+}
+
+/* 有明确国家的行：左侧色条 + 极淡底色 */
+.qm-log .ql_nat {
+	border-left-width: 3px;
+	border-left-style: solid;
+}
+
+.qm-log .ql_sep {
+	margin: 4px 0;
+	padding: 2px 8px;
+	text-align: center;
+	font-weight: 700;
+	color: #5b6873;
+	background-color: #e4e9ee;
+	border-top: 1px solid #cfd8e0;
+	border-bottom: 1px solid #cfd8e0;
+}
+
+/* 行内卡名：虚线 + 悬停显示卡面 */
+.qm-log .ql_card {
+	color: #0b5aa5;
+	border-bottom: 1px dashed #7fa8cc;
+	cursor: help;
+}
+
+.qm-log .ql_card:hover {
+	background-color: #e6f0fb;
+}
+
+.qm-log .ql_empty {
+	padding: 14px 10px;
+	color: #98a3ad;
+	text-align: center;
+	font-size: 12px;
+}
+
+/* ============================================================
+ * 【2026-11-02 玩家口径】分数面板改浅色，与整条侧栏统一
+ * （原来整块深色卡片夹在白底侧栏里，视觉上非常突兀）
+ * ============================================================ */
+#score_panel {
+	background-color: #fff;
+	border: 1px solid #cfd6dc;
+	border-radius: 7px;
+	box-shadow: 0 1px 2px #0001;
+}
+
+#score_head {
+	color: #7a5b12;
+}
+
+.score-side {
+	background-color: #f4f6f8;
+}
+
+.score-side.axis {
+	color: #a33;
+	background-color: #f7e6e6;
+	border-left-color: #a33;
+}
+
+.score-side.allies {
+	color: #1656a8;
+	background-color: #e6eef9;
+	border-left-color: #1656a8;
+}
+
+/* 本方一侧：淡金底标出来，但不再是深色块 */
+body.axis .score-side.axis,
+body.allies .score-side.allies {
+	background-color: #fff3c4;
+	box-shadow: inset 0 0 0 1px #e0c060;
+}
+
+#score_gap {
+	color: #7a848c;
+}
+
+#score_detail_head {
+	color: #5b6a76;
+	border-top: 1px solid #e3e8ec;
+}
+
+#score_detail .row .nm {
+	color: #2a333a;
+}
+
+#score_detail .row .pt {
+	color: #17804a;
+}
+
+#score_detail .row.shared .nm {
+	color: #2e7d32;
+}
+
+#score_detail .row .who {
+	color: #8a9298;
+}
+
+#score_detail .none {
+	color: #98a3ad;
+}
+
+#score_detail .total {
+	color: #24323c;
+	border-top: 1px solid #dde3e8;
+}
+
+#score_detail .total span:last-child {
+	color: #17804a;
+}
+
+/* 计分明细里的国家名：用与日志一致的国别色 */
+#score_detail .row .nm.qm_nat,
+#score_my_nation.qm_nat {
+	font-weight: 700;
+}
+
+/* 展开的牌库/后备列表在浅色分数面板下方不再有深色残留 */
+#score_detail {
+	background-color: transparent;
+}
+
+/* 世界地图整体 fit 时隐藏计分标记：算子已经很小，标记只会互相压 */
+#pieces.no-marks .marker-badge {
+	display: none;
+}

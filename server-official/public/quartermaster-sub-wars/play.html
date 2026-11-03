@@ -1,6 +1,143 @@
 ﻿<!DOCTYPE html>
 <html>
-<head>
+<head><script data-site-prefix="1">window.SITE_PREFIX="/pre";(function(){
+var P=window.SITE_PREFIX||"";
+if(!P)return;
+function fix(u){
+  if(typeof u!=="string"||u.charAt(0)!=="/")return u;
+  if(u.charAt(1)==="/")return u;
+  if(u===P||u.indexOf(P+"/")===0)return u;
+  return P+u;
+}
+var _f=window.fetch;
+if(_f)window.fetch=function(i,init){
+  try{
+    if(typeof i==="string")i=fix(i);
+    else if(i&&typeof i.url==="string"&&fix(i.url)!==i.url)i=new Request(fix(i.url),i);
+  }catch(e){}
+  return _f.call(this,i,init);
+};
+// 注意：location.replace/assign/href 在浏览器里是 LegacyUnforgeable，
+// 无法被页面脚本包装（实测 writable:false, configurable:false），
+// 因此这类跳转只能在其源码处保证带前缀（如 pug_ai_waiting.js）。
+var _o=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(){
+  try{arguments[1]=fix(arguments[1]);}catch(e){}
+  return _o.apply(this,arguments);
+};
+if(window.WebSocket){
+  var W=window.WebSocket;
+  var NW=function(u,p){return p===undefined?new W(fix(u)):new W(fix(u),p);};
+  NW.prototype=W.prototype;
+  window.WebSocket=NW;
+}
+if(window.EventSource){
+  var E=window.EventSource;
+  var NE=function(u,c){return new E(fix(u),c);};
+  NE.prototype=E.prototype;
+  window.EventSource=NE;
+}
+function fixlist(v){
+  if(typeof v!=="string")return v;
+  var parts=v.split(",");var dirty=false;
+  for(var i=0;i<parts.length;i++){
+    var t=parts[i].trim();
+    var sp=t.split(" ").filter(function(z){return z!=="";});
+    if(!sp.length)continue;
+    var n=fix(sp[0]);
+    if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
+  }
+  return dirty?parts.join(", "):v;
+}
+var _sa=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){
+  var name=n;
+  try{
+    // 只对**比较**用一个小写副本，绝不能改动真正的属性名：
+    //   SVG 属性名大小写敏感，setAttribute("viewBox", ...) 一旦被写成 "viewbox"
+    //   就会被渲染器忽略 → SVG 失去坐标系缩放 → 手机上只见地图左上角、
+    //   底图正常但叠加的文字被整体拉糊（Hannibal-Rome-vs-Carthage 实测）。
+    //   原生 setAttribute 本身对 HTML 属性名不区分大小写，所以这里也不需要小写化。
+    var k=String(n).toLowerCase();
+    if(k==="src"||k==="href"||k==="action"||k==="poster"||k==="data")v=fix(v);
+    else if(k==="srcset")v=fixlist(v);
+  }catch(e){}
+  return _sa.call(this,name,v);
+};
+function patchProp(proto,prop,isList){
+  try{
+    if(!proto)return;
+    var d=Object.getOwnPropertyDescriptor(proto,prop);
+    if(!d||!d.set)return;
+    var st=d.set,gt=d.get;
+    Object.defineProperty(proto,prop,{configurable:true,enumerable:d.enumerable,
+      get:gt,set:function(v){return st.call(this,isList?fixlist(v):fix(v));}});
+  }catch(e){}
+}
+patchProp(window.HTMLScriptElement&&HTMLScriptElement.prototype,"src");
+patchProp(window.HTMLLinkElement&&HTMLLinkElement.prototype,"href");
+patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"src");
+patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"srcset",true);
+patchProp(window.HTMLIFrameElement&&HTMLIFrameElement.prototype,"src");
+patchProp(window.HTMLFormElement&&HTMLFormElement.prototype,"action");
+patchProp(window.HTMLAnchorElement&&HTMLAnchorElement.prototype,"href");
+patchProp(window.HTMLAreaElement&&HTMLAreaElement.prototype,"href");
+patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"src");
+patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"srcset",true);
+patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"src");
+patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"poster");
+patchProp(window.HTMLAudioElement&&HTMLAudioElement.prototype,"src");
+patchProp(window.HTMLEmbedElement&&HTMLEmbedElement.prototype,"src");
+patchProp(window.HTMLTrackElement&&HTMLTrackElement.prototype,"src");
+patchProp(window.HTMLObjectElement&&HTMLObjectElement.prototype,"data");
+var T={A:"href",AREA:"href",LINK:"href",IMG:"src",SCRIPT:"src",IFRAME:"src",SOURCE:"src",TRACK:"src",EMBED:"src",AUDIO:"src",VIDEO:"src",FORM:"action",USE:"href"};
+function fixel(el){
+  if(!el||el.nodeType!==1)return;
+  var a=T[el.tagName];
+  if(a){
+    var v=el.getAttribute(a);
+    if(v){var n=fix(v);if(n!==v)el.setAttribute(a,n);}
+  }
+  var ss=el.getAttribute&&el.getAttribute("srcset");
+  if(ss){
+    var parts=ss.split(",");var dirty=false;
+    for(var i=0;i<parts.length;i++){
+      var t=parts[i].trim();
+      var sp=t.split(" ").filter(function(z){return z!=="";});
+      if(!sp.length)continue;
+      var n=fix(sp[0]);
+      if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
+    }
+    if(dirty)el.setAttribute("srcset",parts.join(", "));
+  }
+}
+function scan(root){
+  if(!root||root.nodeType!==1)return;
+  fixel(root);
+  if(root.querySelectorAll){
+    var list=root.querySelectorAll("*");
+    for(var i=0;i<list.length;i++)fixel(list[i]);
+  }
+}
+function start(){
+  scan(document.documentElement);
+  try{
+    new MutationObserver(function(ms){
+      for(var i=0;i<ms.length;i++){
+        var m=ms[i];
+        if(m.type==="attributes"){fixel(m.target);}
+        else{
+          for(var j=0;j<m.addedNodes.length;j++){
+            var n=m.addedNodes[j];
+            if(n&&n.nodeType===1)scan(n);
+          }
+        }
+      }
+    }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["href","src","action","srcset"]});
+  }catch(e){}
+}
+start();
+})();</script>
 	<meta name="viewport" content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
 	<meta name="theme-color" content="#444">
 	<meta charset="UTF-8">
@@ -8,18 +145,18 @@
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261101a">
+	<link rel="stylesheet" href="play.css?v=20261103a">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261101a"></script>
-	<script defer src="layout.js?v=20261101a"></script>
-	<script defer src="play.js?v=20261101a"></script>
+	<script defer src="data.js?v=20261103a"></script>
+	<script defer src="layout.js?v=20261103a"></script>
+	<script defer src="play.js?v=20261103a"></script>
 </head>
 <body>
 
 <header>
 	<div id="toolbar">
 		<details>
-			<summary><img src="/images/cog.svg"></summary>
+			<summary><img src="/pre/images/cog.svg"></summary>
 			<menu>
 				<li><a href="about.html" target="_blank">关于</a>
 				<li><a href="info/rules.html" target="_blank">规则</a>
@@ -33,7 +170,7 @@
 			</menu>
 		</details>
 		<details id="info_menu">
-			<summary><img src="/images/wooden-sign.svg"></summary>
+			<summary><img src="/pre/images/wooden-sign.svg"></summary>
 			<menu>
 				<li onclick="show_straits()"> 海峡控制权</li>
 				<li class="separator">
@@ -42,13 +179,24 @@
 			</menu>
 		</details>
 		<!--
-			【2026-10-24 玩家口径】顶部只保留「行动记录」一个入口。
-			原先后退/行动记录两个按钮打开的是同一个抽屉（回退只是滚到
-			#rb_section），容易被误认为两个独立功能；#btn_rollback 已删除，
-			回退区作为抽屉内的一个分区保留（点「回退到此处」仍需对方同意）。
+			【2026-11-02】四个模块开关放回顶栏（玩家口径：上一版误移到左下角的
+			是"平台快照按钮"，模块按钮要保持原位）：
+			  · #btn_log      左侧日志栏开关（可拖拽调宽）
+			  · #btn_rollback 回退 / 出牌流水
+			  · #btn_aside    右侧信息栏开关
+			  · #btn_phase    阶段面板开关（窄屏为悬浮窗）
 		-->
-		<button id="btn_history" onclick="toggle_history()" title="行动记录（含可回退的检查点）">
-			<img src="/images/scroll-quill.svg">
+		<button id="btn_log" onclick="toggle_log()" title="日志（左侧栏，可拖拽调宽）">
+			<img src="/pre/images/scroll-quill.svg">
+		</button>
+		<button id="btn_rollback" onclick="toggle_history()" title="回退 / 出牌流水">
+			<img src="/pre/images/sands-of-time.svg">
+		</button>
+		<button id="btn_aside" onclick="toggle_aside()" title="信息栏（右侧）">
+			<img src="/pre/images/stack.svg">
+		</button>
+		<button id="btn_phase" onclick="toggle_phase_panel()" title="阶段操作面板">
+			<img src="/pre/images/flying-flag.svg">
 		</button>
 	</div>
 </header>
@@ -182,13 +330,8 @@
 	</div>
 
 	<!--
-		【2026-10-24】日志可折叠：默认收起，标题点开。
-		注意 #log 元素【不能删】—— 平台 common/client.js 的 update_log() 会
-		document.getElementById("log") 后直接读 children/lastChild，
-		元素缺失就抛 TypeError、日志渲染直接断。这里只加折叠 class。
+		【2026-11-01 日志已移到左侧 #log_panel，本处不再放日志按钮/日志本体】
 	-->
-	<button id="log_toggle" type="button">日志 ▾</button>
-	<div id="log" class="collapsed"></div>
 </aside>
 
 <div id="tooltip" hidden></div>
@@ -467,6 +610,27 @@
 	</div>
 </div>
 
+	<!--
+		【2026-11-01】左置常驻日志栏。
+		  · 结构对齐右侧 aside：标题条 + 可滚动正文，占 body 网格第 1 列。
+		  · #log 元素【必须保留原名】：平台 common/client.js 的 update_log()
+		    会 document.getElementById("log") 后直接读 children/lastChild，
+		    元素缺失就抛 TypeError、日志渲染整条链断。它原先在 aside 里，
+		    现在搬到这里，平台逻辑无需改动。
+		  · 宽度由 JS 写入 --log-w（拖右边缘调节），localStorage 记住。
+	-->
+	<div id="log_panel" class="hide">
+		<div id="log_panel_head">
+			<span>日志</span>
+			<span id="log_unread"></span>
+		</div>
+		<!-- 平台原始日志：继续接收 update_log 的写入，但显示由结构化列表负责 -->
+		<div id="log"></div>
+		<!-- 【2026-11-02】结构化日志：按回合/行动国/阶段分组，行内卡名可悬停看卡面 -->
+		<div id="qm_log_list" class="qm-log"></div>
+		<div id="log_resize" title="拖拽调节日志栏宽度（双击恢复默认）"></div>
+	</div>
+
 <main data-max-zoom="2">
 	<div id="mapwrap">
 		<div id="map">
@@ -484,6 +648,20 @@
 				Hand <span id="hand_limit_note"></span>
 			</div>
 			<div class="panel-body" id="hand_cards"></div>
+		</div>
+
+		<!--
+			【2026-11-01】友军手牌区。
+			一个玩家同时操控同阵营的 3 个国家（轴心：德/日/意，同盟：英/苏/美），
+			原先只显示"当前行动国"一家，另外两国必须靠调试开关逐个切换。
+			这里在下方常驻显示另外两国的手牌（只读），并随行动国更替自动换人。
+			内容由 update_ally_hands() 渲染（view.hands 里同阵营国家带 cards）。
+		-->
+		<div class="panel" id="ally_hands_wrap">
+			<div class="panel-head">
+				友军手牌 <span id="ally_hands_note"></span>
+			</div>
+			<div class="panel-body" id="ally_hands"></div>
 		</div>
 
 		<div class="panel" id="response_wrap">
@@ -667,6 +845,7 @@
 </div>
 
 <footer id="status"></footer>
+
 
 </body>
 </html>

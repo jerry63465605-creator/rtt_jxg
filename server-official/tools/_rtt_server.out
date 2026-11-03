@@ -1,0 +1,40 @@
+Webhook notifications disabled.
+Mail notifications disabled.
+Loading rules for paths-of-glory
+Loading rules for quartermaster-sub-wars
+Listening to HTTP on localhost:8091
+09:35:17 ::1             guest                GET /
+09:56:14 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Allies OPEN 336
+09:56:22 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Allies CLOSE 1000
+09:56:22 ::1             yz1968               GET /games/active
+09:56:22 ::1             yz1968               GET /quartermaster-sub-wars/thumbnail.jpg
+09:56:22 ::1             yz1968               GET /quartermaster-sub-wars/thumbnail.jpg
+09:56:24 ::1             yz1968               GET /join/19
+09:56:24 ::1             yz1968               GET /quartermaster-sub-wars/cover.2x.jpg
+09:56:25 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Axis OPEN 318
+09:56:32 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Axis ACTION resolve_response_choice {"choice":37}
+09:56:37 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Axis ACTION trigger_response {}
+>>> games=1 sockets=1
+09:57:11 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Axis ACTION trigger_response {}
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+>>> games=1 sockets=1
+10:12:20 ::1             ---------- yz1968               WS quartermaster-sub-wars 19 Axis CLOSE 1000
+*** RELOAD quartermaster-sub-wars ***
+*** RELOAD quartermaster-sub-wars ***
+*** RELOAD quartermaster-sub-wars ***
+*** RELOAD quartermaster-sub-wars ***
+*** RELOAD quartermaster-sub-wars ***
+*** RELOAD quartermaster-sub-wars ***

@@ -191,21 +191,28 @@ const gC = (function () {
 		vX.hands['德国'].cards.length > 0)
 }
 
-/* ========== D. 无挂起基线 ========== */
-console.log('\n=== D. 无挂起时：任何国家都只给张数 ===')
+/* ========== D. 无挂起基线（合并后的口径） ==========
+ * 【2026-11-03 合并】外部交付引入了「同阵营 3 国由同一玩家操控、互相可见牌面」的口径：
+ *   本方阵营内所有国家都给牌面；敌对阵营一律只给张数。
+ */
+console.log('\n=== D. 无挂起基线：同阵营可见 / 敌对阵营只给张数 ===')
 {
 	const g = fresh()
 	const vA = R.view(g, 'Allies'), vX = R.view(g, 'Axis')
-	const only = v => Object.keys(v.hands || {}).every(n => v.hands[n].cards === null)
-	ok('★ Allies 侧只有自己（my_nation）有牌面',
-		faceNations(vA).length === 1 && faceNations(vA)[0] === vA.my_nation,
+	const allies = ['英国', '苏联', '美国', '法国', '中国']
+	console.log('  Allies 侧可见牌面 = ' + JSON.stringify(faceNations(vA)))
+	console.log('  Axis   侧可见牌面 = ' + JSON.stringify(faceNations(vX)))
+	ok('★ 同盟侧可见的只有同盟国', faceNations(vA).every(n => allies.indexOf(n) >= 0),
 		JSON.stringify(faceNations(vA)))
-	ok('★ Axis 侧只有自己（my_nation）有牌面',
-		faceNations(vX).length === 1 && faceNations(vX)[0] === vX.my_nation,
+	ok('★★ 轴心侧看不到任何同盟国牌面', allies.every(n => !vA || countOnly(vX, n)),
 		JSON.stringify(faceNations(vX)))
-	ok('其余国家一律 cards=null', only(vA) === false || true)   /* 占位，下面逐条判定 */
-	ok('Allies 侧非本方国家均为 null',
-		Object.keys(vA.hands).filter(n => n !== vA.my_nation).every(n => vA.hands[n].cards === null))
+	ok('★ 轴心侧可见的只有轴心国',
+		faceNations(vX).every(n => ['德国', '日本', '意大利'].indexOf(n) >= 0),
+		JSON.stringify(faceNations(vX)))
+	ok('★★ 同盟侧看不到任何轴心国牌面',
+		['德国', '日本', '意大利'].every(n => countOnly(vA, n)), JSON.stringify(faceNations(vA)))
+	ok('两侧各自至少能看到本国牌面',
+		faceNations(vA).indexOf(vA.my_nation) >= 0 && faceNations(vX).indexOf(vX.my_nation) >= 0)
 }
 
 /* ========== E. 静态守卫 ========== */
@@ -223,8 +230,14 @@ console.log('\n=== E. 静态守卫：hand_view 的 viewer 必须来自 my_nation
 	const calls = [...codeOnly.matchAll(/hand_view\(([^)]*)\)/g)].map(m => m[1])
 		.filter(a => !/^game,\s*nation, viewer_nation$/.test(a.trim()))
 	console.log('  hand_view 其它调用点: ' + JSON.stringify(calls))
+	/* 【2026-11-03 合并后】调用形如 hand_view(game, n, own ? n : my_nation)：
+	 * `own` 由 my_nation / _costVisible(阵营闸) / 同阵营 三项算出 —— 都属白名单。 */
 	ok('唯一调用点就是 hands 循环（viewer 来自白名单）',
-		calls.length === 1 && /_costVisible/.test(calls[0]), JSON.stringify(calls))
+		calls.length === 1 && /my_nation/.test(calls[0]) && /own|_costVisible/.test(calls[0]),
+		JSON.stringify(calls))
+	ok('`own` 的构成包含阵营闸（_costVisible）与同阵营判定',
+		/const _costVisible = hand_viewer_for\(game, side, _costNat\)/.test(codeOnly) &&
+		/faction_of_nation\(n\) === _myFaction|own \? n : my_nation/.test(codeOnly))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))

@@ -210,11 +210,15 @@ function update_map() {
 	 * 所以面板必须由这里统一刷新。
 	 */
 	update_hand_panel()
+	/* 【2026-11-01】同阵营另外两国的手牌（只读，随行动国自动换人） */
+	update_ally_hands()
 	update_response_panel()
 	/* 【2026-10-24】敌方状态卡栏（永远暗置），紧跟响应卡栏刷新 */
 	update_enemy_status()
 	/* 【2026-10-24】日志面板折叠状态 + "N 条新"（平台先 update_log 再 on_update，顺序安全） */
 	update_log_toggle()
+	/* 【2026-11-02】结构化日志：按回合/行动国/阶段分组渲染 */
+	render_qm_log()
 	/* 【2026-10-04】响应卡效果需要玩家选择时的窗口（日本响应牌第二批） */
 	update_response_choice_box()
 	update_resource_box()
@@ -4248,6 +4252,114 @@ function update_hand_panel() {
 }
 
 /* ============================================================
+ * 【2026-11-01】友军手牌区（同阵营另外两国）
+ *
+ * 一个玩家同时操控同阵营 3 国（轴心 德/日/意，同盟 英/苏/美），
+ * 但平台每帧只下发"当前行动国"的牌面（其余国家 cards 为 null，只有张数）。
+ * 服务端 view 已改为【同阵营的国家都下发牌面】（见 rules.js 的 hands 段），
+ * 这里把不是当前行动国的那两国常驻画在下方，行动国一换就自动换人。
+ *
+ * 只读：这些卡不挂点击（不能替非行动国出牌），但保留悬停大图。
+ * ============================================================ */
+let ally_hand_sig = null
+
+function build_ally_card_elt(c) {
+	/*
+	 * 【2026-11-01 性能】用 <img loading="lazy" decoding="async"> 而不是
+	 * build_card_elt 的 background-image：
+	 *   · 友军手牌区在地图下方、首屏之外，懒加载把约 20 张卡图（~1.2MB）
+	 *     推迟到滚动到那儿再下载 —— 首屏加载明显变快；
+	 *   · 不走 new Image() 探针，省掉每张牌的第二次解码。
+	 */
+	const d = document.createElement("div")
+	d.className = "card ally-card" + (c.type ? " t-" + c.type : "")
+	d.__card = c
+	d.title = c.name + (c.text ? "\n" + c.text : "") + "\n（非当前行动国，仅供查看）"
+
+	const fb = document.createElement("div")
+	fb.className = "card_fallback"
+	const nm = document.createElement("div")
+	nm.className = "card_name"
+	nm.textContent = c.name
+	const ty = document.createElement("div")
+	ty.className = "card_type"
+	ty.textContent = (view.card_types && view.card_types[c.type]
+		? view.card_types[c.type].zh : (c.type || ""))
+	fb.append(nm, ty)
+
+	const url = card_image_url(c)
+	if (url) {
+		const img = document.createElement("img")
+		img.alt = c.name
+		img.loading = "lazy"
+		img.decoding = "async"
+		img.onerror = () => { img.remove(); fb.style.display = "" }
+		img.src = url
+		fb.style.display = "none"
+		d.appendChild(img)
+	}
+	d.appendChild(fb)
+
+	d.addEventListener("mouseenter", () => on_focus_card(c))
+	d.addEventListener("mouseleave", on_blur_card)
+	return d
+}
+
+function update_ally_hands() {
+	const box = document.getElementById("ally_hands")
+	const note = document.getElementById("ally_hands_note")
+	if (!box || !view)
+		return
+
+	const hands = view.hands || {}
+	const cur = view.my_nation
+	const order = (view.order_of_nations || Object.keys(hands))
+
+	/* 只取"有牌面"的友军（同阵营才下发 cards；敌国仍是 null） */
+	const list = order.filter(n => n !== cur && hands[n] && hands[n].cards)
+	if (note) {
+		note.textContent = list.length
+			? "（" + list.map(n => n + " " + hands[n].cards.length).join(" · ") + "）"
+			: ""
+	}
+
+	if (!list.length) {
+		if (ally_hand_sig !== "empty") {
+			ally_hand_sig = "empty"
+			box.innerHTML = '<div class="hand_empty">（当前没有其他友军手牌可显示）</div>'
+		}
+		return
+	}
+
+	/* 签名：国别 + 牌实例 id 列表。没变化就整块跳过（避免每帧重建卡图） */
+	let sig = cur + "|"
+	for (const n of list)
+		sig += n + ":" + hands[n].cards.map(c => c.id).join(",") + ";"
+	if (sig === ally_hand_sig)
+		return
+	ally_hand_sig = sig
+
+	box.innerHTML = ""
+	for (const n of list) {
+		const wrap = document.createElement("div")
+		wrap.className = "ally-hand"
+
+		const head = document.createElement("div")
+		head.className = "ally-hand-head"
+		head.textContent = n + " · " + hands[n].cards.length + " 张"
+		wrap.appendChild(head)
+
+		const cards = document.createElement("div")
+		cards.className = "cards"
+		for (const c of hands[n].cards)
+			cards.appendChild(build_ally_card_elt(c))
+		wrap.appendChild(cards)
+
+		box.appendChild(wrap)
+	}
+}
+
+/* ============================================================
  * 资源再分配（easy_rule 二.1）
  *
  * 弃 3 张手牌 -> 从牌堆挑 1 张基本卡置入手牌 -> 洗混牌堆。
@@ -5656,8 +5768,8 @@ function update_deck_panel() {
 			'<span class="dk-side" style="background:' +
 			(isAxis ? '#8a2d2d' : '#1e3a5f') + '"></span>' +
 			'<span class="dk-nation">' + esc(nat) + '</span>' +
-			'<span class="dk-deck">牌库 ' + deck + '</span>' +
-			'<span class="dk-discard">弃牌 ' + dis + '</span>' +
+			'<span class="dk-stat"><i>牌库</i><b>' + deck + '</b></span>' +
+			'<span class="dk-stat dk-discard"><i>弃牌</i><b>' + dis + '</b></span>' +
 			'</div>')
 	}
 	if (!rows.length)
@@ -5708,9 +5820,9 @@ function update_reserve_panel() {
 			'<span class="dk-side" style="background:' +
 			(isAxis ? '#8a2d2d' : '#1e3a5f') + '"></span>' +
 			'<span class="dk-nation">' + esc(nat) + '</span>' +
-			'<span class="dk-reserve">陆：' + rem.army +
-				'，海：' + rem.navy +
-				'，空：' + rem.air + '</span>' +
+			'<span class="dk-stat"><i>陆</i><b>' + rem.army + '</b></span>' +
+			'<span class="dk-stat"><i>海</i><b>' + rem.navy + '</b></span>' +
+			'<span class="dk-stat"><i>空</i><b>' + rem.air + '</b></span>' +
 			'</div>')
 	}
 	if (!rows.length)
@@ -8788,7 +8900,14 @@ function update_score_panel() {
 			/* 代表团一并显示，例如"英国（含法国）" */
 			const bloc = (bd.bloc || []).slice()
 			const extra = bloc.length > 1 ? "（含 " + bloc.slice(1).join("/") + "）" : ""
-			set_text("score_my_nation", (bd.counted_as || view.my_nation || "—") + extra)
+			const myNat = (bd.counted_as || view.my_nation || "—")
+			set_text("score_my_nation", myNat + extra)
+			const myEl = document.getElementById("score_my_nation")
+			if (myEl) {
+				const col = LOG_NATION_COLOR[myNat]
+				myEl.classList.toggle("qm_nat", !!col)
+				myEl.style.color = col || ""
+			}
 		}
 	}
 	if (!bd || !bd.total) {
@@ -8806,6 +8925,11 @@ function update_score_panel() {
 		const nm = document.createElement("span")
 		nm.className = "nm"
 		nm.textContent = it.name + (it.shared ? "（共同占领）" : "")
+		/* 【2026-11-02】明细里若出现国名，用与日志一致的国别色，便于和左栏对照 */
+		if (LOG_NATION_COLOR[it.name]) {
+			nm.classList.add("qm_nat")
+			nm.style.color = LOG_NATION_COLOR[it.name]
+		}
 		row.appendChild(nm)
 
 		const who = document.createElement("span")
@@ -8885,20 +9009,11 @@ function update_markers() {
 		}
 
 		/*
-		 * 位置：地块右上角。
-		 * data.spaces 只有 x/y（左上角），宽高在 layout 里，
-		 * 所以用固定偏移把胶囊摆在格子右上外侧，避免压住地区名。
-		 * 【2026-10-28 性能】位置没变就不写 style。
+		 * 位置：地块上方。
+		 * 屏幕偏移由 position_marker() 按当前缩放换算成地图坐标 ——
+		 * 与算子同款"恒定屏幕尺寸"，fit 到 0.25 时分数依然看得清。
 		 */
-		const sp = data.spaces[space_id]
-		if (sp) {
-			const l = (sp.x + 6) + "px"
-			const t = (sp.y - 16) + "px"
-			if (elt.style.left !== l)
-				elt.style.left = l
-			if (elt.style.top !== t)
-				elt.style.top = t
-		}
+		position_marker(elt, space_id)
 
 		const totalTxt = String(total)
 		const whoTxt = owners.length ? owners.join("/") : ""
@@ -9057,59 +9172,614 @@ function esc_attr(s) {
 }
 
 /*
- * 【2026-10-24 玩家口径】日志面板可折叠（默认收起）。
+ * 【2026-11-01 玩家口径】日志栏改成【左侧常驻、可调宽、按钮开关】。
+ *
+ * 旧实现是右侧栏底部的一个"日志 ▾"折叠块：默认收起、且被 aside 的
+ * 滚动区挤在最后，玩家基本看不到；和其他模块"左侧日志栏"的手感也不一致。
+ *
+ * 现在的结构（play.html 里）：
+ *   #log_panel  —— body 网格第 1 列的常驻面板（标题条 + 可滚动正文）
+ *   #log        —— 平台 client.js / common/client.css 认的原始元素
+ *                  （update_log() 会 getElementById("log")，【不能改名/删除】）
+ *   #log_resize —— 右边缘拖拽手柄，宽度存 localStorage
  *
  * ⚠ #log 元素【不能删】：平台 common/client.js 的 update_log() 会
  * `document.getElementById("log")` 后直接读 children/lastChild，
  * 元素缺失就抛 TypeError、日志渲染整条链断掉。
- * 所以"折叠"只切 class（display:none），元素始终在。
- *
- * 收起时标题显示"N 条新"，避免错过关键日志；折叠状态存 localStorage
- * （跟着浏览器走，不跟着对局）。
  */
-let log_collapsed = true
+let log_open = true          /* 默认常驻显示（用户口径：常驻在左侧） */
 let log_seen = 0
 let log_ready = false
 
-function update_log_toggle() {
-	const btn = document.getElementById("log_toggle")
-	const box = document.getElementById("log")
-	if (!btn || !box) return
+const LOG_W_DEFAULT = 210
+const LOG_W_MIN = 120
 
-	if (!log_ready) {
-		log_ready = true
-		try {
-			const v = window.localStorage.getItem("qm_log_collapsed")
-			if (v === "0") log_collapsed = false
-		} catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
-		/* 首次进来把已有日志视为已读，否则会显示"800 条新" */
-		log_seen = box.children.length
-		box.classList.toggle("collapsed", log_collapsed)
-	}
+/* ============================================================
+ * 【2026-11-01】右侧信息栏开关 + 顶栏高度变量
+ *
+ * 玩家口径：左右两个面板都要可开关；窄屏默认都关，
+ * 而且都不许压住顶部按钮栏（header）。
+ * ============================================================ */
+let aside_open = true
 
-	const n = box.children.length
-	const unread = log_collapsed ? Math.max(0, n - log_seen) : 0
-	btn.textContent = (log_collapsed ? "日志 ▾" : "日志 ▴") +
-		(unread ? "　" + unread + " 条新" : "")
-	if (!log_collapsed) log_seen = n
+function apply_aside() {
+	const a = document.querySelector("aside")
+	if (!a)
+		return
+	a.hidden = !aside_open
+	const btn = document.getElementById("btn_aside")
+	if (btn)
+		btn.classList.toggle("on", aside_open)
+	/* 主区宽度变了 → 地图重新 fit（缩放时只缩地图，不缩面板） */
+	if (typeof window.__qm_refit_map === "function")
+		window.__qm_refit_map()
 }
 
-function toggle_log() {
-	const box = document.getElementById("log")
-	if (!box) return
-	log_collapsed = !log_collapsed
+/*
+ * 【2026-11-01 玩家口径】阶段/操作面板的独立开关。
+ *
+ *   桌面（>800px）：按钮只是把右侧栏里的 #phase_panel 显示/隐藏。
+ *                   常态保持显示（没人想隐藏它），所以默认 false。
+ *   窄屏（<=800px）：同一按钮把它拎成【悬浮窗】——
+ *                   把元素从 aside 移到 body 并加 .floating，
+ *                   于是不打开整条侧栏也能出牌，也不受 aside 隐藏影响。
+ *                   纯 DOM 移动，不碰 socket，不会产生连接问题。
+ *
+ * 关掉悬浮窗时把元素插回 aside 的 #turn_info 之前（原位置）。
+ */
+let phase_hidden = false
+let phase_float = false
+let panel_mode_narrow = window.innerWidth <= 800
+
+function is_narrow_screen() {
+	return window.innerWidth <= 800
+}
+
+function place_phase_panel_back() {
+	const panel = document.getElementById("phase_panel")
+	const aside = document.querySelector("aside")
+	if (!panel || !aside)
+		return
+	panel.classList.remove("floating")
+	document.body.classList.remove("qm-phase-float")
+	const turn = document.getElementById("turn_info")
+	if (turn && turn.parentNode === aside)
+		aside.insertBefore(panel, turn)
+	else
+		aside.insertBefore(panel, aside.firstChild)
+}
+
+function set_phase_float(on) {
+	const panel = document.getElementById("phase_panel")
+	if (!panel)
+		return
+	phase_float = !!on
+	if (on) {
+		document.body.appendChild(panel)
+		panel.classList.add("floating")
+		document.body.classList.add("qm-phase-float")
+		panel.hidden = false
+		phase_hidden = false
+	} else {
+		place_phase_panel_back()
+	}
+	sync_phase_button()
+}
+
+function sync_phase_button() {
+	const btn = document.getElementById("btn_phase")
+	if (!btn)
+		return
+	const on = is_narrow_screen() ? phase_float : !phase_hidden
+	btn.classList.toggle("on", on)
+	btn.title = is_narrow_screen()
+		? (phase_float ? "关闭阶段悬浮窗" : "阶段操作面板（悬浮窗）")
+		: "阶段操作面板"
+}
+
+function toggle_phase_panel() {
+	const panel = document.getElementById("phase_panel")
+	if (!panel)
+		return
+	if (is_narrow_screen()) {
+		set_phase_float(!phase_float)
+		return
+	}
+	/* 桌面：只切显示/隐藏（若之前处于悬浮态，先归位） */
+	if (phase_float) {
+		set_phase_float(false)
+		phase_hidden = true
+	} else if (!aside_open) {
+		/*
+		 * 侧栏关着时点「阶段」：先把侧栏打开 ——
+		 * 否则面板在隐藏的 aside 里，点了像没反应。
+		 */
+		aside_open = true
+		try {
+			window.localStorage.setItem(panel_storage_key("qm_aside_open"), "1")
+		} catch (e) {}
+		apply_aside()
+		phase_hidden = false
+	} else {
+		phase_hidden = !phase_hidden
+	}
+	panel.hidden = phase_hidden
 	try {
-		window.localStorage.setItem("qm_log_collapsed", log_collapsed ? "1" : "0")
+		window.localStorage.setItem(panel_storage_key("qm_phase_hidden"), phase_hidden ? "1" : "0")
 	} catch (e) {}
-	log_seen = box.children.length
+	sync_phase_button()
+}
+
+/* 窗口跨过 800px 时把悬浮窗收回去（避免桌面端留一个浮层） */
+window.addEventListener("resize", () => {
+	if (phase_float && !is_narrow_screen())
+		set_phase_float(false)
+	sync_phase_button()
+})
+
+function toggle_aside() {
+	aside_open = !aside_open
+	try {
+		window.localStorage.setItem(panel_storage_key("qm_aside_open"), aside_open ? "1" : "0")
+	} catch (e) {}
+	apply_aside()
+}
+
+/* 顶栏高度 → CSS 变量：窄屏下两个面板的浮层从这里往下排，不盖住按钮栏 */
+function sync_header_height() {
+	const h = document.querySelector("header")
+	if (!h)
+		return
+	document.documentElement.style.setProperty("--qm-header-h", h.offsetHeight + "px")
+}
+
+/*
+ * 面板开关状态按【屏幕模式】分开存：
+ *   · 桌面（>800px）：日志栏/侧栏默认开（玩家要求"常驻"）；
+ *   · 窄屏（<=800px）：两者默认关（都是浮层，默认开会挡住地图）。
+ * 用户手动切换后按当前模式记住，因此同一台设备宽窄切换不会互相污染。
+ */
+function panel_storage_key(base) {
+	return base + (window.innerWidth <= 800 ? "_m" : "_d")
+}
+
+function load_panel_state() {
+	const narrow = window.innerWidth <= 800
+	try {
+		const lo = window.localStorage.getItem(panel_storage_key("qm_log_open"))
+		log_open = (lo === null) ? !narrow : (lo === "1")
+		const ao = window.localStorage.getItem(panel_storage_key("qm_aside_open"))
+		aside_open = (ao === null) ? !narrow : (ao === "1")
+		const ph = window.localStorage.getItem(panel_storage_key("qm_phase_hidden"))
+		phase_hidden = (ph === "1")
+		const w = parseInt(window.localStorage.getItem("qm_log_w") || "", 10)
+		if (w >= LOG_W_MIN) set_log_width(w)
+	} catch (e) {
+		log_open = !narrow
+		aside_open = !narrow
+		phase_hidden = false
+	}
+}
+
+;(function init_panels() {
+	sync_header_height()
+	/*
+	 * 顶栏高度会随按钮换行、字体加载变化（实测初始化时 93px、稳定后 115px），
+	 * 只在 window.resize 时同步会留下 20 多像素的重叠 —— 面板会压住按钮栏。
+	 * 用 ResizeObserver 盯住 header 本身，外加 load / 延时兜底。
+	 */
+	;(function watch_header_height() {
+		const h = document.querySelector("header")
+		if (!h)
+			return
+		if (window.ResizeObserver)
+			new ResizeObserver(sync_header_height).observe(h)
+		window.addEventListener("load", sync_header_height)
+		setTimeout(sync_header_height, 400)
+		setTimeout(sync_header_height, 1200)
+	})()
+	load_panel_state()
+	apply_aside()
+	const ph = document.getElementById("phase_panel")
+	if (ph)
+		ph.hidden = phase_hidden
+	sync_phase_button()
+	window.addEventListener("resize", sync_header_height)
+
+	/* 跨过 800px 断点时，切到该模式自己记住的开关状态 */
+	window.addEventListener("resize", function () {
+		const narrow = window.innerWidth <= 800
+		if (narrow === panel_mode_narrow)
+			return
+		panel_mode_narrow = narrow
+		if (phase_float && !narrow)
+			set_phase_float(false)
+		load_panel_state()
+		if (ph)
+			ph.hidden = phase_hidden
+		apply_aside()
+		apply_log_panel()
+		sync_phase_button()
+	})
+	panel_mode_narrow = window.innerWidth <= 800
+})()
+
+function log_panel_el() { return document.getElementById("log_panel") }
+
+function apply_log_panel() {
+	const panel = log_panel_el()
+	const box = document.getElementById("log")
+	if (!panel)
+		return
+	panel.classList.toggle("hide", !log_open)
+	const btn = document.getElementById("btn_log")
+	if (btn)
+		btn.classList.toggle("on", log_open)
+	if (log_open && box) {
+		/* 面板从 display:none 切回来时 scrollTop 会归零，这里补一次滚到底 */
+		box.scrollTop = box.scrollHeight
+		log_seen = box.children.length
+	}
+	/*
+	 * 主区宽度变了 → 让地图重新 fit（平台只在 window resize 时算 fit，
+	 * 不知道我们开了个侧栏）。缩放状态由 setup_map_zoom 内部维护。
+	 */
+	if (typeof window.__qm_refit_map === "function")
+		window.__qm_refit_map()
 	update_log_toggle()
 }
 
-/* 绑定折叠按钮（本文件以 defer 加载，执行时 DOM 已解析完） */
+function toggle_log() {
+	log_open = !log_open
+	try {
+		window.localStorage.setItem(panel_storage_key("qm_log_open"), log_open ? "1" : "0")
+	} catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
+	apply_log_panel()
+}
+
+function set_log_width(w) {
+	const panel = log_panel_el()
+	if (!panel)
+		return
+	const max = Math.max(LOG_W_MIN, Math.round(window.innerWidth * 0.42))
+	const px = Math.max(LOG_W_MIN, Math.min(max, Math.round(w)))
+	panel.style.width = px + "px"
+	return px
+}
+
+function update_log_toggle() {
+	const box = document.getElementById("log")
+	if (!box)
+		return
+
+	if (!log_ready) {
+		log_ready = true
+		load_panel_state()
+		/* 首次进来把已有日志视为已读，否则会显示"800 条新" */
+		log_seen = box.children.length
+		apply_log_panel()
+		return
+	}
+
+	const n = box.children.length
+	const unread = log_open ? 0 : Math.max(0, n - log_seen)
+	const btn = document.getElementById("btn_log")
+	if (btn)
+		btn.title = "日志" + (unread ? "（" + unread + " 条新）" : "") +
+			"（左侧栏，可拖拽调宽）"
+	const badge = document.getElementById("log_unread")
+	if (badge)
+		badge.textContent = unread ? (unread + " 条新") : ""
+	if (log_open)
+		log_seen = n
+}
+
+/* 绑定开关/拖拽（本文件以 defer 加载，执行时 DOM 已解析完） */
 ;(function () {
-	const b = document.getElementById("log_toggle")
-	if (b) b.onclick = toggle_log
+	const grip = document.getElementById("log_resize")
+	const panel = log_panel_el()
+	if (!grip || !panel)
+		return
+
+	let drag = null
+
+	const onMove = (ev) => {
+		if (!drag) return
+		ev.preventDefault()
+		const x = (ev.touches ? ev.touches[0].clientX : ev.clientX)
+		set_log_width(x)
+	}
+	const onUp = () => {
+		if (!drag) return
+		drag = null
+		document.removeEventListener("pointermove", onMove)
+		document.removeEventListener("pointerup", onUp)
+		try {
+			window.localStorage.setItem("qm_log_w", String(panel.offsetWidth))
+		} catch (e) {}
+		if (typeof window.__qm_refit_map === "function")
+			window.__qm_refit_map()
+	}
+	grip.addEventListener("pointerdown", (ev) => {
+		ev.preventDefault()
+		drag = true
+		document.addEventListener("pointermove", onMove)
+		document.addEventListener("pointerup", onUp)
+	})
+	/* 双击手柄恢复默认宽度 */
+	grip.addEventListener("dblclick", (ev) => {
+		ev.preventDefault()
+		set_log_width(LOG_W_DEFAULT)
+		try {
+			window.localStorage.setItem("qm_log_w", String(LOG_W_DEFAULT))
+		} catch (e) {}
+	})
 })()
+
+/* ============================================================
+ * 通用日志样式（对齐其他模块的 #log 观感）
+ *
+ * 平台 update_log() 在有 on_log(text, i) 时用它的返回值当行元素；
+ * 我们只加 class（文本仍走 textContent，避免日志里的特殊字符被当 HTML）。
+ *   .log_head   回合/阶段分隔行
+ *   .lp-axis    轴心三国的行
+ *   .lp-allies  同盟三国的行
+ * ============================================================ */
+const LOG_NATION_SIDE = {
+	"德国": "axis", "日本": "axis", "意大利": "axis",
+	"英国": "allies", "苏联": "allies", "美国": "allies",
+	"法国": "allies", "中国": "allies",
+}
+
+function on_log(text, i) {
+	const d = document.createElement("div")
+	const s = (text == null) ? "" : String(text)
+	d.textContent = s
+	if (/^[=\-─]{3,}/.test(s)) {
+		d.className = "log_head"
+	} else {
+		const m = s.match(/^【([^】]+)】/)
+		const side = m && LOG_NATION_SIDE[m[1]]
+		if (side)
+			d.className = "lp-" + side
+	}
+	return d
+}
+
+/* ============================================================
+ * 【2026-11-02 玩家口径】结构化日志
+ *
+ * 平台 #log 只给一串平铺文本（分不清"这是第几回合 / 谁在动 / 什么阶段"）。
+ * 这里用同一份 game_log 重新渲染成：
+ *   第 N 回合 · 行动国 · 阶段      ← 粘顶分组标题
+ *   【德国】打出《黄色方案》…       ← 行首国家色条 + 极淡底色
+ *   【德国】陆军：北欧 → 东欧       ← 服务端补写的动作明细
+ * 每批新日志按当前 view 的 回合/行动国/阶段 归组；
+ * 行动国或阶段一换，就自动开一个新组。
+ * ============================================================ */
+const LOG_NATION_COLOR = {
+	"德国": "#3a3a3a", "日本": "#a06a00", "意大利": "#7b2fa8",
+	"英国": "#1656a8", "苏联": "#b22222", "美国": "#1e3a5f",
+	"法国": "#2e7d32", "中国": "#c2185b",
+}
+
+let qm_log_rendered = 0
+let qm_log_group = null
+let qm_log_group_nation = null
+
+/*
+ * 分组状态要取【这批日志产生时】的回合/行动国/阶段。
+ * 如果直接用渲染时的 view，会出现"德国弃牌"被归到"英国"标题下的错位
+ * （动作结算完服务端已经把 current_nation 翻到下一国了）。
+ * 所以记住上一批渲染时的状态，本批用它开头，渲染完再更新成当前状态。
+ */
+let qm_log_state = null
+
+function qm_log_state_now() {
+	return {
+		turn: (view && view.turn) || 1,
+		nation: (view && view.current_nation) || "",
+		phase: (view && (view.turn_phase_zh || view.turn_phase)) || "",
+	}
+}
+
+function qm_log_header_key(st) {
+	const s = st || qm_log_state_now()
+	return [(s.turn | 0), s.nation || "", s.phase || ""].join("|")
+}
+
+function qm_log_line_elt(text) {
+	const s = (text == null) ? "" : String(text)
+	const d = document.createElement("div")
+
+	if (/^[=\-─]{3,}/.test(s)) {
+		d.className = "ql_sep"
+		d.textContent = s
+		return d
+	}
+
+	const m = s.match(/^【([^】]+)】/)
+	const nat = (m && LOG_NATION_COLOR[m[1]]) ? m[1] : null
+	d.className = "ql_line" + (nat ? " ql_nat" : "")
+	if (nat) {
+		const col = LOG_NATION_COLOR[nat]
+		d.style.borderLeftColor = col
+		d.style.backgroundColor = col + "0d"
+	}
+
+	/* 把《卡名》切成可悬停的片段，其余保持纯文本节点（不拼 innerHTML，避免转义问题） */
+	const re = /《([^》]+)》/g
+	let last = 0
+	let hit
+	while ((hit = re.exec(s))) {
+		if (hit.index > last)
+			d.appendChild(document.createTextNode(s.slice(last, hit.index)))
+		const span = document.createElement("span")
+		span.className = "ql_card"
+		span.textContent = "《" + hit[1] + "》"
+		span.dataset.card = hit[1]
+		d.appendChild(span)
+		last = hit.index + hit[0].length
+	}
+	if (last < s.length)
+		d.appendChild(document.createTextNode(s.slice(last)))
+	if (!d.childNodes.length)
+		d.textContent = s
+	return d
+}
+
+const QM_LOG_MARK_RE = /^——\s*第\s*(\d+)\s*回合\s*·\s*([^·]+?)\s*·\s*(.+?)\s*——$/
+
+function emit_qm_log_group(body, turn, nation, phase) {
+	const key = [(turn | 0), nation || "", phase || ""].join("|")
+	if (key === qm_log_group)
+		return
+	qm_log_group = key
+	const head = document.createElement("div")
+	head.className = "ql_head"
+	const dot = document.createElement("span")
+	dot.className = "ql_dot"
+	if (nation && LOG_NATION_COLOR[nation])
+		dot.style.backgroundColor = LOG_NATION_COLOR[nation]
+	const txt = document.createElement("span")
+	txt.textContent = "第 " + (turn || 1) + " 回合 · " + (nation || "—") +
+		(phase ? " · " + phase : "")
+	head.append(dot, txt)
+	body.appendChild(head)
+}
+
+function render_qm_log() {
+	const body = document.getElementById("qm_log_list")
+	if (!body || typeof game_log === "undefined" || !game_log)
+		return
+
+	const total = game_log.length
+
+	/* 回退/重连后日志变短：整块重建 */
+	if (total < qm_log_rendered) {
+		body.innerHTML = ""
+		qm_log_rendered = 0
+		qm_log_group = null
+		qm_log_group_nation = null
+	}
+
+	if (total === 0) {
+		if (!body.querySelector(".ql_empty")) {
+			body.innerHTML = ""
+			const e = document.createElement("div")
+			e.className = "ql_empty"
+			e.textContent = "（暂无日志）"
+			body.appendChild(e)
+		}
+		return
+	}
+
+	if (total === qm_log_rendered)
+		return
+
+	if (body.querySelector(".ql_empty"))
+		body.innerHTML = ""
+
+	const near_bottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48
+	const cur = qm_log_state_now()
+
+	for (let i = qm_log_rendered; i < total; i++) {
+		const raw = game_log[i]
+		const str = (raw == null) ? "" : String(raw)
+
+		/* ① 服务端阶段标记 -> 分组标题（本身不显示为日志行） */
+		const mk = str.match(QM_LOG_MARK_RE)
+		if (mk) {
+			const nat = mk[2].trim()
+			emit_qm_log_group(body, Number(mk[1]), nat, mk[3].trim())
+			qm_log_group_nation = nat
+			continue
+		}
+
+		/* ② 没有标记的旧日志（开局段）：按行首【国家】分组 */
+		const nm = (str.match(/^【([^】]+)】/) || [])[1]
+		if (!qm_log_group) {
+			/* 行首没有【国家】的是系统提示（开局/分隔行）——单列一组，不要错挂到当前行动国 */
+			const nat = (nm && LOG_NATION_COLOR[nm]) ? nm : "系统"
+			emit_qm_log_group(body, cur.turn, nat, cur.phase)
+			qm_log_group_nation = nat
+		} else if (nm && LOG_NATION_COLOR[nm] && nm !== qm_log_group_nation) {
+			/* 同一批里换成另一国的动作（拦截 / 代打）：另起一组 */
+			emit_qm_log_group(body, cur.turn, nm, cur.phase)
+			qm_log_group_nation = nm
+		}
+
+		body.appendChild(qm_log_line_elt(str))
+	}
+
+	qm_log_rendered = total
+	qm_log_state = qm_log_state_now()
+
+	if (near_bottom)
+		body.scrollTop = body.scrollHeight
+}
+
+/* ---- 日志里的《卡名》：悬停显示卡面（cards.js 首次悬停时才加载） ---- */
+let qm_cards_state = 0          /* 0=未加载 1=加载中 2=就绪 */
+const qm_cards_by_name = new Map()
+let qm_cards_waiters = []
+
+function qm_load_cards(done) {
+	if (qm_cards_state === 2) { done(); return }
+	if (qm_cards_state === 1) { qm_cards_waiters.push(done); return }
+	qm_cards_state = 1
+	const sc = document.createElement("script")
+	sc.src = "cards.js"
+	sc.onload = () => {
+		try {
+			if (typeof CARDS !== "undefined")
+				for (const c of CARDS)
+					if (c && c.name && !qm_cards_by_name.has(c.name))
+						qm_cards_by_name.set(c.name, c)
+		} catch (e) {}
+		qm_cards_state = 2
+		const w = qm_cards_waiters
+		qm_cards_waiters = []
+		for (const fn of w) { try { fn() } catch (e) {} }
+		done()
+	}
+	sc.onerror = () => {
+		qm_cards_state = 0
+		qm_cards_waiters = []
+	}
+	document.head.appendChild(sc)
+}
+
+;(function setup_qm_log_hover() {
+	const body = document.getElementById("qm_log_list")
+	if (!body)
+		return
+	body.addEventListener("mouseover", (ev) => {
+		const t = ev.target
+		const sp = (t && t.closest) ? t.closest(".ql_card") : null
+		if (!sp)
+			return
+		const nm = sp.dataset.card
+		if (!nm)
+			return
+		qm_load_cards(() => {
+			const c = qm_cards_by_name.get(nm)
+			if (c)
+				on_focus_card(c)
+		})
+	})
+	body.addEventListener("mouseout", (ev) => {
+		const t = ev.target
+		if (t && t.closest && t.closest(".ql_card"))
+			on_blur_card()
+	})
+	/* 滚动时收起大图，避免卡图钉在原地 */
+	body.addEventListener("scroll", () => {
+		if (qm_cards_state === 2)
+			on_blur_card()
+	})
+})()
+
 
 function update_violations() {
 	/* 留空，后续规则检查接入 */
@@ -9124,6 +9794,17 @@ function update_pieces() {
 	const wrap = document.getElementById("pieces")
 	if (!wrap)
 		return
+
+	/*
+	 * 【2026-11-01】每次重画先同步一次 --pz（= 1/地图总缩放）。
+	 * 只靠 rAF/观察者建立初始值不够稳：标签页在后台时 rAF 会被节流，
+	 * 首帧可能拿不到正确的反向缩放，算子就会只有 11px（实测过）。
+	 */
+	const z = piece_zoom()
+	wrap.style.setProperty("--pz", z.unit)
+	wrap.style.setProperty("--pzm", z.mark)
+	wrap.classList.toggle("tiny", !!z.tiny)
+	wrap.classList.toggle("no-marks", map_total_scale() < 0.25)
 
 	const seen = {}
 
@@ -9245,13 +9926,406 @@ function compare_pieces(a, b) {
 	return String(a.id).localeCompare(String(b.id))
 }
 
+/* 当前"地图总缩放" = 平台 fit 缩放 × 用户缩放（两层 transform 相乘） */
+function map_total_scale() {
+	const wrap = document.getElementById("mapwrap")
+	const inner = document.getElementById("pan_zoom_main")
+	const a = (wrap && Number(wrap.dataset.scale)) || 1
+	const b = (inner && Number(inner.dataset.scale)) || 1
+	return a * b || 1
+}
+
+/*
+ * 【2026-11-01 性能】底图分两级：
+ *   · 首屏用 map_lo.webp（1450×483 / 60KB）—— fit 到 0.2 倍时足够清晰；
+ *   · 放大到总缩放 > 0.45 后，换全分辨率 map.webp（4835×1612 / 340KB）。
+ * 省下的是首屏 280KB 下载 + 7.8MP 解码（弱机上就是几百毫秒到一秒）。
+ * 只换一次；加载失败会重置状态，下次放大还会再试。
+ */
+let hi_map_state = 0   /* 0=未加载 1=加载中 2=已切换 */
+function ensure_hi_map() {
+	if (hi_map_state) return
+	hi_map_state = 1
+	const img = new Image()
+	img.onload = () => {
+		const map = document.getElementById("map")
+		if (map)
+			map.style.backgroundImage = "url(map.webp)"
+		hi_map_state = 2
+	}
+	img.onerror = () => { hi_map_state = 0 }
+	img.src = "map.webp"
+}
+
+/*
+ * 【2026-11-01 可读性】算子/计分标记的"恒定屏幕尺寸"。
+ *
+ * 地图逻辑尺寸 4835×1612，默认按宽度 fit 到 0.25 倍：
+ *   · 46px 的算子只剩 11px（兵种字 3px）—— 完全看不清；
+ *   · 20px 的计分胶囊只剩 5px —— 分数读不出来。
+ * 这里把 1/总缩放 写进 #pieces 的 --pz，CSS 用它反向缩放算子与标记，
+ * 于是无论地图缩到多小，屏幕上始终是 46px 算子 / 20px 标记。
+ *
+ * 位置需要同步换算：left/top 是地图坐标，屏幕偏移 dx 要写成 dx * (1/总缩放)。
+ * 每个算子把自己所在格位与屏幕偏移记在 __space_id/__dx/__dy 上，
+ * 缩放变化时 apply_piece_zoom() 直接按新系数重排，不必重新拉 view。
+ */
+function apply_piece_zoom() {
+	const z = piece_zoom()
+	const pieces = document.getElementById("pieces")
+	if (pieces) {
+		pieces.style.setProperty("--pz", z.unit)
+		pieces.style.setProperty("--pzm", z.mark)
+		/* 缩得太小时藏掉兵种字（19px 的算子塞 16px 的字只会糊成一团） */
+		pieces.classList.toggle("tiny", !!z.tiny)
+		/* 整张世界地图 fit 时标记会压住算子/邻格：放大到 0.25 倍以上再显示 */
+		pieces.classList.toggle("no-marks", map_total_scale() < 0.25)
+	}
+	for (const id of Object.keys(ui.piece_el)) {
+		const elt = ui.piece_el[id]
+		if (elt && elt.__space_id != null)
+			position_piece(elt, elt.__space_id, elt.__dx || 0, elt.__dy || 0)
+	}
+	for (const key of Object.keys(ui.marker_el)) {
+		const elt = ui.marker_el[key]
+		if (elt && elt.__space_id != null)
+			position_marker(elt, elt.__space_id)
+	}
+}
+
+/*
+ * 反向缩放的三个系数（见上面说明）：
+ *   · 算子：屏幕尺寸不低于 30px（46px 是原始尺寸，不受缩放影响时保持不变）
+ *   · 标记：屏幕高度不低于 18px
+ * 用"下限"而不是"完全恒定"：整张世界地图 fit 到 0.2 倍时，若算子固定 46px，
+ * 会互相压住（实测德国周边一坨），30px 既有字号可读又只轻微交叠。
+ */
+function piece_zoom() {
+	const s = map_total_scale()
+	/*
+	 * 【2026-11-01 二次调整】算子不再"恒为 30px"，而是跟格位大小挂钩：
+	 *   屏幕尺寸 = clamp(格位宽 × 0.8, 19, 46)
+	 * 格位在地图上固定 118px，所以：
+	 *   · fit（≈0.2 倍）时约 19px，正好嵌在格位里，不会互相压住；
+	 *   · 放大到 0.5 倍以上就封顶 46px（原始尺寸），再放大也不再变胖。
+	 * 标记同理：clamp(40×s, 12, 20) 高。
+	 */
+	const spaceScreen = 118 * s
+	/* 下限 10px：手机整图 fit（≈0.08 倍）时也不至于让算子糊住一格 */
+	const unitScreen = Math.max(10, Math.min(46, spaceScreen * 0.85))
+	const markScreen = Math.max(8, Math.min(20, 60 * s))
+	return {
+		unit: unitScreen / (46 * s),
+		mark: markScreen / (20 * s),
+		tiny: unitScreen < 24,
+	}
+}
+
+/*
+ * 监听缩放容器的变化（平台 resize 时也会改 #map 的 transform）：
+ * 用 rAF 合并同一帧内的多次变化，避免连续滚轮时重复重排。
+ */
+;(function watch_map_zoom() {
+	let self = false
+	let queued = false
+	const kick = () => {
+		if (self || queued)
+			return
+		queued = true
+		requestAnimationFrame(() => {
+			queued = false
+			self = true
+			try { apply_piece_zoom() } finally { self = false }
+		})
+	}
+	for (const id of ["map", "pan_zoom_main"]) {
+		const el = document.getElementById(id)
+		if (el)
+			new MutationObserver(kick).observe(el, {
+				attributes: true,
+				attributeFilter: ["style", "data-scale"],
+			})
+	}
+	window.addEventListener("resize", kick)
+	/* 首帧：view 可能还没到，先建立 --pz；算子由 update_pieces 建好后自然继承 */
+	requestAnimationFrame(kick)
+})()
+
+/* ============================================================
+ * 【2026-11-01】地图缩放改为"只缩地图，不缩面板"
+ *
+ * 病根（玩家实测："缩放不卡了，但下面卡牌区变得特别小"）：
+ * 平台 common/client.js 的用户缩放是把 main 的**全部内容**
+ * （#pan_zoom_main，含地图 + Hand/响应卡/友军手牌）一起
+ * `transform: scale()`。地图确实放大了，但手牌区也跟着缩到 20%，
+ * 卡面完全没法看。
+ *
+ * 平台还有两条入口都会触发它：
+ *   · Ctrl+滚轮 / 双指捏合（wheel handler + main.ontouch*）
+ *   · 顶栏放大镜按钮（toggle_zoom → zoom_to → e_inner transform）
+ *
+ * 修法（不改公共层）：在本模块内接管这三个入口，
+ * 用"和 fit 同一套机制"缩放：#map 上 transform: scale(z)、
+ * #mapwrap 设成缩放后的尺寸。地图照常放大、main 的滚动照常平移，
+ * 而 .panel-list 完全不受影响。
+ * ============================================================ */
+;(function setup_map_zoom() {
+	const main = document.querySelector("main")
+	const wrap = document.getElementById("mapwrap")
+	const map = document.getElementById("map")
+	if (!main || !wrap || !map)
+		return
+
+	const MW = map.clientWidth || 4835
+	const MH = map.clientHeight || 1612
+	const MAX_Z = 3
+	let followFit = true          /* 还没手动缩放过 → 跟随 fit */
+
+	function fit_z() {
+		return Math.min(main.clientWidth / MW, main.clientHeight / MH, 1)
+	}
+
+	function cur_z() {
+		const z = Number(wrap.dataset.scale)
+		return (z > 0) ? z : fit_z()
+	}
+
+	/*
+	 * #pan_zoom_main 的宽度由平台写成 win_w/缩放；面板开关后它不会自己更新，
+	 * 会留下"内容比视口宽"的横向滚动（手牌区被拉宽）。
+	 * 我们的缩放不缩内容，所以把它固定成当前视口宽度即可。
+	 */
+	function sync_inner_width() {
+		const inner = document.getElementById("pan_zoom_main")
+		if (!inner)
+			return
+		if (inner.style.transform)
+			inner.style.transform = ""
+		const w = main.clientWidth + "px"
+		if (inner.style.width !== w)
+			inner.style.width = w
+		/*
+		 * #pan_zoom_wrap 是 main 的滚动内容层，平台在初始化时把它的宽度
+		 * 写成了"当时"的 main 宽度。面板开关后 main 变窄，但它不会更新 ——
+		 * 结果 main 里凭空多出 210px 横向滚动（就是那条带左右箭头的横滚动条
+		 * 和两端的黑条）。这里按【当前视口宽度】与【地图实际宽度】取大值同步。
+		 */
+		const outer = document.getElementById("pan_zoom_wrap")
+		if (outer) {
+			const ow = Math.max(main.clientWidth, wrap.offsetWidth || 0) + "px"
+			if (outer.style.width !== ow)
+				outer.style.width = ow
+		}
+	}
+
+	/* z = 目标总缩放；cx/cy = 缩放锚点（视口坐标），null = 以地图中心为准 */
+	function apply_z(z, cx, cy) {
+		const z0 = cur_z()
+		z = Math.max(fit_z(), Math.min(MAX_Z, z))
+		sync_inner_width()
+		if (Math.abs(z - z0) < 1e-6) {
+			apply_piece_zoom()
+			return
+		}
+
+		const r0 = map.getBoundingClientRect()
+		const mx = (cx == null) ? null : (cx - r0.left) / z0
+		const my = (cy == null) ? null : (cy - r0.top) / z0
+
+		map.style.transform = (z === 1) ? null : "scale(" + z + ")"
+		wrap.style.width = (MW * z) + "px"
+		wrap.style.height = (MH * z) + "px"
+		wrap.dataset.scale = z
+		/*
+		 * 兜底：平台如果已经缩放过后台 inner（把卡牌区一起缩小了），
+		 * 这里清掉它的 inline transform/width，只保留 #map 上的缩放 ——
+		 * 否则地图会被缩两次、卡牌区永远小小一张。
+		 */
+		const inner = document.getElementById("pan_zoom_main")
+		if (inner && inner.style.transform) {
+			inner.style.transform = ""
+			inner.style.width = ""
+		}
+
+		if (mx != null) {
+			/* 锚点下的地图坐标保持不动 */
+			const r1 = map.getBoundingClientRect()
+			main.scrollLeft += r1.left - (cx - mx * z)
+			main.scrollTop += r1.top - (cy - my * z)
+		}
+		/* 放大后换成全分辨率底图（空闲时加载，不打断当前手势） */
+		if (z > 0.45) {
+			if (window.requestIdleCallback)
+				window.requestIdleCallback(() => ensure_hi_map(), { timeout: 800 })
+			else
+				setTimeout(ensure_hi_map, 60)
+		}
+		apply_piece_zoom()
+	}
+
+	function user_zoom(z, cx, cy) {
+		followFit = false
+		apply_z(z, cx, cy)
+	}
+
+	/* 日志栏开关 / 窗口尺寸变化后，若还处于 fit 状态就重新贴合 */
+	function refit() {
+		if (followFit)
+			apply_z(fit_z())
+	}
+	window.__qm_refit_map = refit
+
+	/* ---- 入口 1：Ctrl+滚轮（只拦地图区域，卡牌区保持原生行为） ---- */
+	main.addEventListener("wheel", (ev) => {
+		if (!ev.ctrlKey)
+			return
+		/*
+		 * 不限定光标位置：平台原逻辑是"缩整个 main"，光标停在手牌区时
+		 * 会把卡牌一起缩小（玩家实测的"缩放和侧栏/卡牌干涉"）。
+		 * 我们统一拦下，永远只缩地图。
+		 */
+		ev.preventDefault()
+		ev.stopPropagation()
+		const z0 = cur_z()
+		const z1 = z0 * Math.exp(-ev.deltaY / 500)
+		user_zoom(z1, ev.clientX, ev.clientY)
+	}, { capture: true, passive: false })
+
+	/* ---- 入口 2：Ctrl +/-/0（平台在 window 上绑了同一套） ---- */
+	window.addEventListener("keydown", (ev) => {
+		if (!ev.ctrlKey && !ev.metaKey)
+			return
+		const k = ev.key
+		if (k !== "+" && k !== "=" && k !== "-" && k !== "_" && k !== "0")
+			return
+		ev.preventDefault()
+		ev.stopPropagation()
+		if (k === "0")
+			user_zoom(fit_z())
+		else if (k === "-" || k === "_")
+			user_zoom(cur_z() / 1.25)
+		else
+			user_zoom(cur_z() * 1.25)
+	}, { capture: true })
+
+	/* ---- 入口 3：双指捏合（地图区域） ---- */
+	let pinch = null
+	const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+	const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 })
+
+	main.addEventListener("touchstart", (ev) => {
+		if (ev.touches.length !== 2)
+			return
+		/* 同 wheel：不限定区域，避免捏合时缩到卡牌区 */
+		ev.preventDefault()
+		ev.stopPropagation()
+		pinch = { d: dist(ev.touches[0], ev.touches[1]), z: cur_z() }
+	}, { capture: true, passive: false })
+
+	main.addEventListener("touchmove", (ev) => {
+		if (!pinch || ev.touches.length !== 2)
+			return
+		ev.preventDefault()
+		ev.stopPropagation()
+		const d = dist(ev.touches[0], ev.touches[1])
+		const m = mid(ev.touches[0], ev.touches[1])
+		if (pinch.d > 0)
+			user_zoom(pinch.z * (d / pinch.d), m.x, m.y)
+	}, { capture: true, passive: false })
+
+	const end_pinch = (ev) => {
+		if (!pinch)
+			return
+		if (ev.touches && ev.touches.length >= 2)
+			return
+		pinch = null
+	}
+	main.addEventListener("touchend", end_pinch, { capture: true })
+	main.addEventListener("touchcancel", end_pinch, { capture: true })
+
+	/* ---- 入口 4：顶栏放大镜（平台 toggle_zoom 会缩整个 main） ----
+	 * 改为：fit → 100% → 200% → fit 循环，只作用于地图。 */
+	window.toggle_zoom = function () {
+		const z = cur_z()
+		if (z < 0.995)
+			user_zoom(1)
+		else if (z < 1.995)
+			user_zoom(2)
+		else
+			user_zoom(fit_z())
+	}
+
+	/* 窗口尺寸变化：平台会按 fit 重设 #map，#mapwrap 会回到 100%；
+	 * 本监听排在平台 resize 之后执行，把缩放状态恢复回来。 */
+	window.addEventListener("resize", () => {
+		if (followFit)
+			apply_z(fit_z())
+		else
+			apply_z(cur_z())
+	})
+
+	/*
+	 * main 的 clientWidth 会因【垂直滚动条出现/消失】而变 15px：
+	 * 平台算 fit 时还没有滚动条，手牌一多就多出一条横向滚动。
+	 * 用 ResizeObserver 盯住 main 的尺寸变化，fit 状态下立刻重新贴合。
+	 */
+	let last_w = main.clientWidth
+	let last_h = main.clientHeight
+	if (window.ResizeObserver) {
+		new ResizeObserver(() => {
+			if (main.clientWidth === last_w && main.clientHeight === last_h)
+				return
+			last_w = main.clientWidth
+			last_h = main.clientHeight
+			if (followFit)
+				apply_z(fit_z())
+			else
+				sync_inner_width()
+		}).observe(main)
+	}
+
+	/* 首帧：修正"平台在日志栏出现前算出的 fit" */
+	refit()
+})()
+
 function position_piece(elt, space_id, dx, dy) {
 	const sp = data.spaces[space_id]
 	if (!sp)
 		return
+	/* 记住"屏幕偏移"，缩放变化时据此重排（见 apply_piece_zoom） */
+	elt.__space_id = space_id
+	elt.__dx = dx || 0
+	elt.__dy = dy || 0
+	const pz = piece_zoom().unit
 	/* 【2026-10-28 性能】位置没变就不写（每帧无谓写 style 会触发样式重算） */
-	const l = (sp.x + dx) + "px"
-	const t = (sp.y + dy) + "px"
+	const l = (sp.x + (dx || 0) * pz) + "px"
+	const t = (sp.y + (dy || 0) * pz) + "px"
+	if (elt.style.left !== l)
+		elt.style.left = l
+	if (elt.style.top !== t)
+		elt.style.top = t
+}
+
+/*
+ * 计分标记定位：贴在【格位方框的右上角外侧】。
+ *
+ * 旧版是"中心上方 26px"——同格有空军时（空军行在中心上方 40px）
+ * 会压住飞机。现在按 118px 的格位框算角点，再让出标记自身高度，
+ * 算子在框内（中心 ±49px），标记在框外，两者不可能相交。
+ */
+function position_marker(elt, space_id) {
+	const sp = data.spaces[space_id]
+	if (!sp)
+		return
+	elt.__space_id = space_id
+	const s = map_total_scale()
+	const z = piece_zoom()
+	const badge_h = 23 * z.mark * s      /* 标记在屏幕上的实际高度（含描边） */
+	const badge_w = 46 * z.mark * s      /* 近似宽度（★N 两段） */
+	const half = 59                     /* 格位 118 / 2 */
+	/* 目标屏幕坐标 = 方框右上角【上方】，再换算回地图坐标 */
+	const l = (sp.x + half - badge_w / s) + "px"
+	const t = (sp.y - half - (badge_h + 10) / s) + "px"
 	if (elt.style.left !== l)
 		elt.style.left = l
 	if (elt.style.top !== t)
@@ -10797,6 +11871,23 @@ function debug_do_set_phase() {
  * 六、启动
  * ============================================================ */
 
+/*
+ * 【2026-11-01】补上 on_init。
+ *
+ * 平台 common/client.js 的 module_ready() 要求 `on_init` 与 `on_update`
+ * 都是函数，否则最多轮询 3 秒才勉强连接（3 秒白屏 —— 就是"加载慢"的一部分）。
+ * 本模块此前没有 on_init，完全依赖那 3 秒兜底；补上后连接在
+ * DOMContentLoaded 当帧就开始，页面可交互时间明显提前。
+ *
+ * 本模块没有需要初始化的静态数据（地图/牌库都在 data.js 里），
+ * 保底的 build_map 已在下面执行，这里只在必要时补建一次。
+ */
+function on_init(scenario, game_options, static_view) {
+	const wrap = document.querySelector("#spaces")
+	if (wrap && !ui.built)
+		build_map()
+}
+
 /* 地图构建不依赖 view，可以立刻做（client.js 会在拿到 state 后调 on_update） */
 if (document.readyState === "loading")
 	document.addEventListener("DOMContentLoaded", build_map)
@@ -10851,3 +11942,17 @@ function bind_reserve_toggle_when_ready(tries) {
 	setTimeout(function () { bind_reserve_toggle_when_ready((tries || 0) + 1) }, 200)
 }
 bind_reserve_toggle_when_ready(0)
+
+/*
+ * 【2026-11-01】隐藏平台自带的日志按钮。
+ *
+ * common/client.js 会在顶栏插一个 #log_button（scroll-quill），点它执行的是
+ * 平台自己的 toggle_log() —— 把整个右侧 aside 隐藏/显示。
+ * 本模块的日志已经改为左侧独立面板（#btn_log），再留这个按钮会出现
+ * "两个卷轴图标、行为还不一样"的混乱。这里只隐藏按钮，不动公共层。
+ */
+;(function hide_common_log_button() {
+	const b = document.getElementById("log_button")
+	if (b)
+		b.style.display = "none"
+})()

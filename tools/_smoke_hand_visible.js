@@ -54,15 +54,18 @@ for (const n of AXIS_N.concat(ALLIES_N)) {
 		'count=' + (h && h.count) + ' cards=' + (h && (h.cards ? '有' : 'null')))
 }
 
-console.log('\n=== 2. 同阵营其它国家手牌【不可见】（只看张数）===')
+console.log('\n=== 2. 同阵营其它国家手牌【可见】（2026-11-01 玩家口径变更）===')
 {
+	/* 【2026-11-03 合并】外部交付把口径改成：同阵营 3 国由同一玩家操控 -> 互相可见牌面；
+	 * 只有【敌对阵营】才隐藏。原来这里断言"同阵营不可见"，与玩家口径冲突，已改。 */
 	const g = setup('日本')
 	const v = rules.view(g, 'Axis')
 	for (const n of ['德国', '意大利']) {
 		const h = v.hands && v.hands[n]
-		ok('日本回合：【' + n + '】手牌 cards=null（仅张数）',
-			!!h && h.cards === null, 'cards=' + (h && (h.cards === null ? 'null' : '有')))
-		ok('日本回合：【' + n + '】仍有 count', !!h && typeof h.count === 'number',
+		ok('日本回合：【' + n + '】同阵营 -> 牌面可见', !!(h && h.cards),
+			'cards=' + (h && (h.cards ? '有×' + h.cards.length : 'null')))
+		ok('日本回合：【' + n + '】仍有 count 且与 cards 一致',
+			!!h && typeof h.count === 'number' && (!h.cards || h.cards.length === h.count),
 			'count=' + (h && h.count))
 	}
 	/* 敌对阵营一律不可见 */
@@ -98,8 +101,9 @@ console.log('\n=== 4. 意大利回合（轴心第三个国家）同样可见 ===
 		'my_nation=' + v.my_nation)
 	ok('意大利回合：意大利手牌可见',
 		!!(v.hands && v.hands['意大利'] && v.hands['意大利'].cards))
-	ok('意大利回合：德国手牌不可见',
-		v.hands['德国'].cards === null)
+	/* 【2026-11-03 合并】同阵营（轴心）互相可见；德国是轴心 -> 可见 */
+	ok('意大利回合：同阵营的德国手牌可见（新口径）',
+		!!(v.hands['德国'] && v.hands['德国'].cards))
 }
 
 console.log('\n=== 5. 手牌张数与内容一致（cards.length === count）===')
