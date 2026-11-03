@@ -7329,3 +7329,75 @@ if (game.us_political && faction_of_nation('美国') === side)
 
 `piece_removed` 系列（21 张）**逐张核对条件是否写全**（国家 / 兵种 / 地区三问），
 已登记到 `docs/todo-2026-10-29.md`「待办：piece_removed 系列统一到声明式条件范式」。
+
+---
+
+## 2026-11-03 · 战斗挂起把「付代价国」手牌泄漏给对手（su_step_back / guard / kv2）
+
+测试：`tools/_verify_hand_scope.js`（**24 项**，三种 stage × 真实战斗驱动）。
+
+### 症状（玩家反馈：窗口手牌对双方可见）
+
+17853《一步也不许后退!》触发后，**轴心拿到苏联全部 10 张手牌牌面**（devtools 可读）；
+同一条代码在 15410《武士道》guard 阶段反向泄漏（同盟拿到日本手牌）。
+
+### 根因：view 按【阵营】下发，但 `hands` 的"放宽 viewer"没问阵营
+
+```js
+/* 旧实现（rules.js ~25290） */
+const _costNat = pending_cost_nation(game.pending_battle)          // 17853 -> 苏联 / 15410 -> 日本 / KV-2 -> 攻击方
+hands[n] = hand_view(game, n, (n === my_nation || n === _costNat) ? n : my_nation)
+//                                        ^^^^^^^^^^^ 直接把付代价国当 viewer -> 对手也拿到牌面
+```
+
+原意是"让付代价国的客户端能画弃牌框"（`my_nation` 在让权后可能不是付代价国），
+但 `view` 是 per-side 的，放宽必须限定在**本方阵营内部**。
+
+### 实测（修复前）
+
+```
+17853 su_step_back（付代价国=苏联/同盟）
+  [Axis]   my_nation=德国 -> 可见牌面 ["德国","苏联"]   ← 泄漏
+15410 guard（付代价国=日本/轴心）
+  [Allies] my_nation=英国 -> 可见牌面 ["英国","日本"]   ← 反向泄漏
+```
+
+### 修法：把"谁有资格看某国牌面"收成一个入口
+
+```js
+/** 付代价国只有在本方阵营内才放宽成"可看牌面" */
+function hand_viewer_for(game, side, costNation) {
+    if (!costNation) return null
+    if (faction_of_nation(costNation) !== side) return null
+    return costNation
+}
+
+const _costVisible = hand_viewer_for(game, side, _costNat)
+hands[n] = hand_view(game, n, (n === my_nation || n === _costVisible) ? n : my_nation)
+```
+
+与 `su_purge_offer` / `status_instant` / `armed_offer` / `pending_econ` 等 20+ 处**同一判定**，
+不是新机制 —— 只是原来这里漏了。一处改动覆盖 `su_step_back` / `guard` / `kv2` 三种 stage。
+
+### 实测（修复后）
+
+| 场景 | 对手侧 | 本方侧 | 结算 |
+|---|---|---|---|
+| 17853 su_step_back | 看不到苏联牌面 ✅ | 仍可看（弃 4 张成功）✅ | 陆军受 protect ✅ |
+| 15410 guard | 同盟看不到日本牌面 ✅ | 轴心仍可看 ✅ | — |
+| 17837 KV-2 kv2 | 同盟看不到德国牌面 ✅ | 轴心仍可看 ✅ | — |
+| 无挂起基线 | 每侧只有 `my_nation` 有牌面 ✅ | — | — |
+
+### 类级教训
+
+1. **`view` 是 per-side 的**：任何"放宽某个国家的可见性"都必须过 `faction_of_nation(x) === side`。
+   这条已经在 `pending_battle` / `pending_trigger` / `armed_offer` / `su_*` 上做了，`hands` 是漏网。
+2. 手牌比窗口更敏感：窗口泄漏的是"谁在等"，**手牌泄漏的是整副策略**。
+3. 收口成 `hand_viewer_for` 单一入口，并加静态守卫：**`hand_view(...)` 的第三个参数只允许来自
+   `my_nation` 或 `hand_viewer_for(...)`**（测试 E 段已覆盖，排除注释里的示例）。
+
+### 附带确认（写测试时用到）
+
+· 15410《武士道》是 `kind:'any'` 机会卡，**不能主动打出、也不需要装载**，留在手里即可；
+· 17837《KV-2》的 `kv2_ask` 由【苏联持有方】用 `resolve_battle{kv2_trigger:true}` 发动，之后
+  `stage='kv2'` 等待方变成**攻击方**，再由攻击方选 `{kv2:'discard'|'protect', drop:[4张]}`。

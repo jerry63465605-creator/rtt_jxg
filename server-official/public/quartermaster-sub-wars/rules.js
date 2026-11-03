@@ -8437,6 +8437,28 @@ function enforce_hand_limit(game, nation) {
  *   规则上是暗手牌 —— 只给本人看牌面，对手只看到张数。
  *   view 会据此裁剪。
  */
+/**
+ * 【2026-11-03 · 保密收口】"谁有资格看到某国手牌牌面"的唯一入口。
+ *
+ * 背景：view 是按 **side（阵营）** 下发的，任何"放宽 viewer"的地方都必须先确认
+ * 该国与观察方同阵营，否则等于把对手整副手牌塞进对方的 payload（devtools 直接可见）。
+ *
+ * 真实事故（本函数修复的两处）：
+ *   · 17853《一步也不许后退!》stage='su_step_back'（付代价国=苏联）
+ *       -> 轴心 view.hands['苏联'].cards 有值，轴心能看到苏联 10 张牌面；
+ *   · 15410《武士道》stage='guard'（付代价国=日本）
+ *       -> 同盟 view.hands['日本'].cards 有值，反向泄漏。
+ *   （17837《KV-2》stage='kv2'，付代价国=攻击方，同一行代码，方向随攻守而变。）
+ *
+ * 用法：`hand_view(game, n, n === my_nation || n === hand_viewer_for(game, side, costNat) ? n : my_nation)`
+ * 规矩：hand_view 的第三个参数只允许来自 `my_nation` 或本函数的返回值。
+ */
+function hand_viewer_for(game, side, costNation) {
+	if (!costNation) return null
+	if (faction_of_nation(costNation) !== side) return null
+	return costNation
+}
+
 function hand_view(game, nation, viewer_nation) {
 	const own = (nation === viewer_nation)
 	return {
@@ -25258,8 +25280,21 @@ exports.view = function (state, current) {
 	 * 若只放行 my_nation，客户端弃牌框会拿到 cards:null，只能空选。
 	 */
 	const _costNat = pending_cost_nation(game.pending_battle)
+	/*
+	 * 【2026-11-03 保密修复】付代价国只有【在本方阵营内】才放宽成"可看牌面"。
+	 *
+	 * 旧实现直接把 `_costNat` 当 viewer 传进去，没问阵营 —— 而 view 是按 side 下发的，于是：
+	 *   17853（su_step_back，付代价国=苏联）-> 轴心也拿到苏联整副手牌；
+	 *   15410（guard，付代价国=日本）      -> 同盟也拿到日本整副手牌；
+	 *   17837 KV-2（kv2，付代价国=攻击方）-> 方向随攻守而变。
+	 * 实测：17853 那局轴心 view.hands['苏联'].cards = 10 张牌面（devtools 可见）。
+	 *
+	 * 修法：统一走 hand_viewer_for（= `faction_of_nation(x) === side` 判定），
+	 * 与 su_purge_offer / status_instant / armed_offer / pending_econ 等 20+ 处同款。
+	 */
+	const _costVisible = hand_viewer_for(game, side, _costNat)
 	for (const n of ORDER_OF_NATIONS) {
-		hands[n] = hand_view(game, n, (n === my_nation || n === _costNat) ? n : my_nation)
+		hands[n] = hand_view(game, n, (n === my_nation || n === _costVisible) ? n : my_nation)
 	}
 
 	const ph = current_phase(game)
