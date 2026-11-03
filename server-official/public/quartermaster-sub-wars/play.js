@@ -9008,13 +9008,6 @@ function update_markers() {
 			elt.__who = who
 		}
 
-		/*
-		 * 位置：地块上方。
-		 * 屏幕偏移由 position_marker() 按当前缩放换算成地图坐标 ——
-		 * 与算子同款"恒定屏幕尺寸"，fit 到 0.25 时分数依然看得清。
-		 */
-		position_marker(elt, space_id)
-
 		const totalTxt = String(total)
 		const whoTxt = owners.length ? owners.join("/") : ""
 		if (elt.__num && elt.__num.textContent !== totalTxt)
@@ -9028,6 +9021,14 @@ function update_markers() {
 			(owners.length ? "（仅 " + owners.join("/") + " 可计分）" : "")
 		if (elt.title !== tip)
 			elt.title = tip
+		/*
+		 * 位置：格位右上角内侧。
+		 * 【2026-11-04 修复·漂移】必须放在【文本写完之​后】——position_marker 会用
+		 * offsetWidth 实测宽度（数字位数、归属国名都会改变宽度），
+		 * 先定位后改字会导致宽度变化后右对齐失效，看起来"标记在漂"。
+		 * 缩放变化时由 apply_piece_zoom() 用 __space_id 重排，不必重拉 view。
+		 */
+		position_marker(elt, space_id)
 	}
 
 	/* 清掉已无标记的 */
@@ -10360,11 +10361,22 @@ function position_piece(elt, space_id, dx, dy) {
 }
 
 /*
- * 计分标记定位：贴在【格位方框的右上角外侧】。
+ * 计分标记定位：【贴在格位方框的右上角内侧】。
  *
- * 旧版是"中心上方 26px"——同格有空军时（空军行在中心上方 40px）
- * 会压住飞机。现在按 118px 的格位框算角点，再让出标记自身高度，
- * 算子在框内（中心 ±49px），标记在框外，两者不可能相交。
+ * 【2026-11-04 修复·标记漂移】玩家口径：标记要钉在对应地区的右上角。
+ *
+ * 旧实现有两个问题：
+ *   ① 锚点在【方框右上角的上方外侧】（还要抬 10 屏幕像素）——
+ *      放大器下看着像浮在地块之间，缩放一变位置就"飘"；
+ *   ② 宽度用的是【估算值 46px】（注释自称"近似宽度 ★N 两段"），
+ *      但标记里还有归属国名（.who）与多位数，真实宽度随内容变化 →
+ *      右对齐永远对不准，表现为"每回合刷新就漂一点"。
+ *
+ * 现在改为：
+ *   · 实测元素尺寸（offsetWidth/offsetHeight，量不到时退回 46×20）；
+ *   · 用同一缩放系数 z.mark×总缩放 换算成地图坐标；
+ *   · 右边缘 = 格位右边缘 - 3 屏幕像素，上边缘 = 格位上边缘 + 3 屏幕像素，
+ *     于是标记的右上角始终贴住地块右上角内侧（transform-origin 仍是 0 0）。
  */
 function position_marker(elt, space_id) {
 	const sp = data.spaces[space_id]
@@ -10373,12 +10385,26 @@ function position_marker(elt, space_id) {
 	elt.__space_id = space_id
 	const s = map_total_scale()
 	const z = piece_zoom()
-	const badge_h = 23 * z.mark * s      /* 标记在屏幕上的实际高度（含描边） */
-	const badge_w = 46 * z.mark * s      /* 近似宽度（★N 两段） */
-	const half = 59                     /* 格位 118 / 2 */
-	/* 目标屏幕坐标 = 方框右上角【上方】，再换算回地图坐标 */
-	const l = (sp.x + half - badge_w / s) + "px"
-	const t = (sp.y - half - (badge_h + 10) / s) + "px"
+	const PAD = 3                        /* 与格位边框的内缩（屏幕像素） */
+	/* 真实尺寸（CSS 像素，不受 transform 影响）；首次渲染/测不到时用兜底值 */
+	const wCss = elt.offsetWidth || 46
+	const wScreen = wCss * z.mark * s    /* 标记在屏幕上的实际宽度 */
+	/*
+	 * 格位尺寸取 layout.js 的表（data.spaces 只有 x/y，没有 w/h）：
+	 * 陆地格 118×118、海域 106×106 —— 用固定 118 会让海域标记右对齐偏 12px。
+	 *
+	 * ⚠ 两套坐标语义不同（踩过）：
+	 *   · data.spaces[id].x / .y 是【格位中心】（算子的 CSS 用负 margin 回半个身位）；
+	 *   · layout[名称] = [x, y, w, h] 的 x/y 是【左上角】。
+	 * 所以这里一律用"中心 ± 半格"换算边缘，绝不能再把 sp.x 当左上角。
+	 */
+	const bx = (typeof layout !== "undefined" && layout[data.name_of(space_id)]) || null
+	const spW = (bx && bx[2]) || 118
+	const spH = (bx && bx[3]) || 118
+	const rightEdge = sp.x + spW / 2
+	const topEdge = sp.y - spH / 2
+	const l = (rightEdge - (wScreen + PAD) / s) + "px"
+	const t = (topEdge + PAD / s) + "px"
 	if (elt.style.left !== l)
 		elt.style.left = l
 	if (elt.style.top !== t)
