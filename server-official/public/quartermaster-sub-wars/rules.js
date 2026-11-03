@@ -24164,6 +24164,20 @@ function phase_draw(game, nation) {
 
 /* 进入某阶段时自动执行其中"无需玩家决策"的部分 */
 function run_phase_entry(game, phase, nation) {
+	/*
+	 * 【2026-11-02 玩家口径】阶段分隔标记。
+	 * 客户端用它把日志分成「第 N 回合 · 国家 · 阶段」的组；
+	 * 同一阶段重复进入（结算续跑）只写一次，避免刷屏。
+	 */
+	try {
+		const ph = PHASES.find(x => x.key === phase)
+		const mk = (game.turn | 0) + '|' + nation + '|' + phase
+		if (game.__phase_marker_key !== mk) {
+			game.__phase_marker_key = mk
+			game.log.push('—— 第 ' + (game.turn || 1) + ' 回合 · ' + nation +
+				' · ' + (ph ? ph.zh : phase) + ' ——')
+		}
+	} catch (e) {}
 	switch (phase) {
 		case 'resource': phase_resource(game, nation); break
 		case 'play': phase_play(game, nation); break
@@ -25258,8 +25272,17 @@ exports.view = function (state, current) {
 	 * 若只放行 my_nation，客户端弃牌框会拿到 cards:null，只能空选。
 	 */
 	const _costNat = pending_cost_nation(game.pending_battle)
+	/*
+	 * 【2026-11-01 玩家口径】同阵营 3 国由【同一个玩家】操控
+	 * （轴心 德/日/意，同盟 英/苏/美），同阵营国家之间不存在信息差：
+	 * 客户端要在手牌区下方常驻显示另外两国的牌面（不是牌背）。
+	 * 这里按【阵营】放行 —— 敌国仍然只给张数（cards=null），没有泄露。
+	 */
+	const _myFaction = faction_of_nation(my_nation)
 	for (const n of ORDER_OF_NATIONS) {
-		hands[n] = hand_view(game, n, (n === my_nation || n === _costNat) ? n : my_nation)
+		const own = (n === my_nation || n === _costNat ||
+			(!!_myFaction && faction_of_nation(n) === _myFaction))
+		hands[n] = hand_view(game, n, own ? n : my_nation)
 	}
 
 	const ph = current_phase(game)
@@ -33678,6 +33701,60 @@ function phase_zh(key) {
  * 若直接在 do_action 里记录，一步动作会被记成十几条历史。
  * 故用 game._in_action 标记：内层调用直通，只有最外层才记一条。
  * ============================================================ */
+/* ============================================================
+ * 【2026-11-02 玩家口径】动作明细日志
+ *
+ * 引擎原来的日志只写"某张卡结算了"，玩家看不出"到底哪支部队从哪走到哪"。
+ * 这里在【每个动作前后】对部队名册做一次差分，把变化写成可读的一行：
+ *     【德国】陆军：北欧 → 东欧
+ *     【德国】在 乌克兰 建设 1 支陆军
+ *     【苏联】陆军 从 莫斯科 移除
+ *
+ * 放在 exports.action 的统一出口处，所有动作（出牌 / 战斗 / 让权 / 调试除外）
+ * 都能覆盖，不需要在每个卡牌效果里各写一遍 —— 也不会漏掉新增的卡。
+ * 差分为空时不写任何行，不影响"没有日志产出的动作不记历史"的判定。
+ * ============================================================ */
+function qm_piece_snapshot(game) {
+	const m = Object.create(null)
+	const loc = game.location || {}
+	for (const id of Object.keys(loc)) {
+		m[id] = {
+			loc: loc[id],
+			nation: (game.piece_nation || {})[id],
+			type: (game.piece_type || {})[id],
+		}
+	}
+	return m
+}
+
+function qm_log_piece_diff(game, before) {
+	if (!before) return
+	const after = qm_piece_snapshot(game)
+	const name_of = (id) => {
+		try { return data.name_of(id) || ('地区' + id) } catch (e) { return '地区' + id }
+	}
+	/* 移动 */
+	for (const id of Object.keys(after)) {
+		const a = after[id]
+		const b = before[id]
+		if (b && b.loc !== a.loc)
+			game.log.push('【' + a.nation + '】' + piece_type_zh(a.type) + '：' +
+				name_of(b.loc) + ' → ' + name_of(a.loc))
+	}
+	/* 新增（建设 / 部署 / 征召） */
+	for (const id of Object.keys(after)) {
+		const a = after[id]
+		if (before[id]) continue
+		game.log.push('【' + a.nation + '】在 ' + name_of(a.loc) + ' 建设 1 支' + piece_type_zh(a.type))
+	}
+	/* 移除（战斗消灭 / 断补 / 撤退失败） */
+	for (const id of Object.keys(before)) {
+		const b = before[id]
+		if (after[id]) continue
+		game.log.push('【' + b.nation + '】' + piece_type_zh(b.type) + ' 从 ' + name_of(b.loc) + ' 移除')
+	}
+}
+
 exports.action = function (state, current, action, arg) {
 	const game = state
 	if (!game) return game
@@ -33708,12 +33785,15 @@ exports.action = function (state, current, action, arg) {
 		String(action).startsWith('debug_'))
 		return do_action(state, current, action, arg)
 
+	const before_pieces = qm_piece_snapshot(game)
 	game._in_action = true
 	try {
 		return do_action(state, current, action, arg)
 	} finally {
 		/* 必须清：否则 _in_action 会被写进存档，之后所有动作都不再记录 */
 		delete game._in_action
+		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
+		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {
 			const h = record_action_history(game, { action: action, side: side, from: from })
 			/*

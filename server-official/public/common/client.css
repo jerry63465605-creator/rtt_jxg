@@ -449,14 +449,14 @@ menu li.disabled:hover img {
 	background-color: #fff8;
 }
 
-#replay_first { background-image: url(/images/gui_arrow_up.svg) }
-#replay_prev { background-image: url(/images/gui_arrow_left.svg) }
-#replay_step_prev { background-image: url(/images/gui_chevron_left.svg) }
-#replay_step_next { background-image: url(/images/gui_chevron_right.svg) }
-#replay_next { background-image: url(/images/gui_arrow_right.svg) }
-#replay_last { background-image: url(/images/gui_arrow_down.svg) }
-#replay_play { background-image: url(/images/gui_play.svg) }
-#replay_stop { background-image: url(/images/gui_stop.svg) }
+#replay_first { background-image: url(/pre/images/gui_arrow_up.svg) }
+#replay_prev { background-image: url(/pre/images/gui_arrow_left.svg) }
+#replay_step_prev { background-image: url(/pre/images/gui_chevron_left.svg) }
+#replay_step_next { background-image: url(/pre/images/gui_chevron_right.svg) }
+#replay_next { background-image: url(/pre/images/gui_arrow_right.svg) }
+#replay_last { background-image: url(/pre/images/gui_arrow_down.svg) }
+#replay_play { background-image: url(/pre/images/gui_play.svg) }
+#replay_stop { background-image: url(/pre/images/gui_stop.svg) }
 
 /* ROLES */
 
@@ -550,6 +550,11 @@ menu li.disabled:hover img {
 	transform-origin: 0 0;
 }
 
+/* 菜单里“观战发言：隐藏”时，过滤掉观战者的发言行 */
+#chat_text.hide_observers .observer {
+	display: none;
+}
+
 /* CHAT WINDOW */
 
 #chat_button.new img {
@@ -630,7 +635,7 @@ menu li.disabled:hover img {
 	grid-row: 3;
 	grid-column: 2;
 	cursor: nwse-resize;
-	background-image: url(/images/gui_resize.svg);
+	background-image: url(/pre/images/gui_resize.svg);
 	background-repeat: no-repeat;
 	background-position: bottom right;
 }

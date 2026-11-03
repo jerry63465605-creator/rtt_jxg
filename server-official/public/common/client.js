@@ -12,8 +12,13 @@ var game_options = null
 /* PRIVATE GLOBALS */
 
 var search_params = new URLSearchParams(window.location.search)
+// IIS 反向代理前缀（/ga、/pre）：页面路径带前缀时先剥掉再解析 title_id，
+// 否则 title_id 会取到 "ga"/"pre"，模块资源与地图偏好键全部错位。
+var page_path = window.location.pathname
+if (window.SITE_PREFIX && page_path.startsWith(window.SITE_PREFIX))
+	page_path = page_path.slice(window.SITE_PREFIX.length)
 var params = {
-	title_id: window.location.pathname.split("/")[1],
+	title_id: page_path.split("/")[1],
 	game_id: search_params.get("game") || 0,
 	role: search_params.get("role") || "Observer",
 	mode: search_params.get("mode") || "play",
@@ -215,6 +220,8 @@ function init_chat() {
 
 	drag_element_with_mouse("#chat_window", "#chat_header")
 	resize_element_with_mouse("#chat_window", "#chat_size")
+	apply_observer_chat_visibility()
+	init_observer_chat_menu()
 	window.addEventListener("resize", function () {
 		if (window.innerWidth < 800) {
 			chat_window.style.width = null
@@ -222,20 +229,18 @@ function init_chat() {
 		}
 	})
 
-	if (player !== "Observer") {
-		document.getElementById("chat_form").addEventListener("submit", e => {
-			let input = document.getElementById("chat_input")
-			e.preventDefault()
-			if (input.value) {
-				send_message("chat", input.value)
-				input.value = ""
-			} else {
-				hide_chat()
-			}
-		})
-	} else {
-		document.getElementById("chat_input").disabled = true
-	}
+	// 观战者也可发言（登录后生效，未登录由服务端拦截）。
+	// 官方版在此禁用观战输入框（player === "Observer" 时 disabled），与本站"观战发言"功能冲突，还原为无条件绑定。
+	document.getElementById("chat_form").addEventListener("submit", e => {
+		let input = document.getElementById("chat_input")
+		e.preventDefault()
+		if (input.value) {
+			send_message("chat", input.value)
+			input.value = ""
+		} else {
+			hide_chat()
+		}
+	})
 
 	document.body.addEventListener("keydown", e => {
 		if (e.key === "Escape") {
@@ -294,8 +299,11 @@ function update_chat(chat_id, raw_date, user, message) {
 		if (user) {
 			if (role)
 				html += `<span class="user ${role}">${escape_html(user)}</span> `
-			else
+			else {
+				// 发言者不在本局角色名单里 => 观战者
 				html += `<span class="user">${escape_html(user)}</span> `
+				line.className = "observer"
+			}
 		} else {
 			line.className = "system"
 		}
@@ -378,6 +386,34 @@ window.addEventListener("focus", function () {
 	}
 })
 
+/* 观战发言显示开关：个人偏好，只影响自己窗口里是否显示观战者发言（消息仍会收到并保留在记录里） */
+
+let show_observer_chat = localStorage.getItem("rtt_show_observer_chat") !== "0"
+let observer_chat_menu_item = null
+
+function init_observer_chat_menu() {
+	if (!observer_chat_menu_item)
+		observer_chat_menu_item = add_main_menu_item("", toggle_observer_chat)
+	update_observer_chat_menu_item()
+}
+
+function update_observer_chat_menu_item() {
+	observer_chat_menu_item.textContent = show_observer_chat ? "观战发言：显示" : "观战发言：隐藏"
+}
+
+function apply_observer_chat_visibility() {
+	let chat_text = document.getElementById("chat_text")
+	if (chat_text)
+		chat_text.classList.toggle("hide_observers", !show_observer_chat)
+}
+
+function toggle_observer_chat() {
+	show_observer_chat = !show_observer_chat
+	localStorage.setItem("rtt_show_observer_chat", show_observer_chat ? "1" : "0")
+	apply_observer_chat_visibility()
+	update_observer_chat_menu_item()
+}
+
 /* NOTEPAD */
 
 let notepad = null
@@ -386,14 +422,14 @@ function init_notepad() {
 	if (notepad !== null)
 		return
 
-	add_main_menu_item("Notepad", toggle_notepad)
+	add_main_menu_item("笔记", toggle_notepad)
 
 	let notepad_window = document.createElement("div")
 	notepad_window.id = "notepad_window"
 	notepad_window.hidden = true
 	notepad_window.innerHTML = `
-		<div id="notepad_header">Notepad: ${player}</div>
-		<div id="notepad_x" onclick="toggle_notepad()">\u2716</div>
+		<div id="notepad_header">记事本: ${player}</div>
+		<div id="notepad_x" onclick="toggle_notepad()">\u274c</div>
 		<textarea id="notepad_input" maxlength="16000" oninput="dirty_notepad()"></textarea>
 		<div id="notepad_footer"><button id="notepad_save" onclick="save_notepad()" disabled>Save</button></div>
 		`
@@ -481,7 +517,7 @@ function on_finished() {
 	if (player !== "Observer") {
 		add_icon_button(1, "rematch_button", "cycle",
 			function goto_rematch() {
-				window.location = "/rematch/" + params.game_id
+				window.location = (window.SITE_PREFIX || "") + "/rematch/" + params.game_id
 			}
 		)
 	}
@@ -507,7 +543,8 @@ function init_player_names(players) {
 	roles.length = players.length
 	for (let i = 0; i < players.length; ++i) {
 		let pp = players[i]
-		let class_name = pp.role.replace(/\W/g, "_")
+		// 角色名可能是中文（汉化模块），\W 会连汉字一起替换掉，改用 Unicode 感知字符类
+		let class_name = pp.role.replace(/[^\p{L}\p{N}_]/gu, "_")
 		let id = "role_" + class_name
 		let e = document.getElementById(id)
 		if (!e)
@@ -524,7 +561,7 @@ function init_player_names(players) {
 			user: e.querySelector(".role_user"),
 		}
 		if (pp.name)
-			obj.user.innerHTML = `<a href="/user/${pp.name}" target="_blank">${pp.name}</a>`
+			obj.user.innerHTML = `<a href="${(window.SITE_PREFIX || "")}/user/${pp.name}" target="_blank">${pp.name}</a>`
 		else
 			obj.user.textContent = 'NONE'
 	}
@@ -643,7 +680,7 @@ function connect_play(is_reconnect) {
 
 	let seen = game_log.length
 	let hash = fnv1a_log(game_log)
-	let url = `${protocol}://${window.location.host}/play-socket?title=${params.title_id}&game=${params.game_id}&role=${encodeURIComponent(params.role)}&seen=${seen}&hash=${hash}`
+	let url = `${protocol}://${window.location.host}${window.SITE_PREFIX || ""}/play-socket?title=${params.title_id}&game=${params.game_id}&role=${encodeURIComponent(params.role)}&seen=${seen}&hash=${hash}`
 
 	if (is_reconnect)
 		url += "&reconnect=1"
@@ -654,7 +691,7 @@ function connect_play(is_reconnect) {
 	}
 
 	console.log("CONNECTING", url)
-	document.getElementById("prompt").textContent = "Connecting... "
+	document.getElementById("prompt").textContent = "正在连接.. "
 
 	socket = new WebSocket(url)
 
@@ -676,9 +713,9 @@ function connect_play(is_reconnect) {
 		document.title = "\xd7 " + game_title
 		document.querySelector("header").classList.add("disconnected")
 		if (evt.reason && evt.reason !== "idle")
-			document.getElementById("prompt").textContent = "Disconnected: " + evt.reason
+			document.getElementById("prompt").textContent = "已断开连接： " + evt.reason
 		else
-			document.getElementById("prompt").textContent = "Disconnected."
+			document.getElementById("prompt").textContent = "已断开连接：."
 		document.getElementById("actions").replaceChildren()
 		if (roles)
 			for (let role of roles)
@@ -741,8 +778,12 @@ function connect_play(is_reconnect) {
 
 			document.body.classList.add(player.replace(/\W/g, "_"))
 
-			if (typeof on_init === "function")
-				on_init(game_scenario, game_options, static_view)
+			// 先置门闩再调用：on_init 必须拿到上面刚赋的 game_scenario / game_options。
+			// 否则（例如被 DOMContentLoaded 兜底提前调用）模块会把 options 设成 undefined，
+			// 之后 card_class_name 里的 options.valiant 就会抛
+			// "Cannot read properties of null/undefined (reading 'valiant')"。
+			players_received = true
+			ensure_on_init()
 
 			if (player !== "Observer") {
 				init_notepad()
@@ -829,11 +870,17 @@ function connect_play(is_reconnect) {
 function update_view(log_start, log_end) {
 	update_roles()
 	update_log(log_start, log_end)
-	try {
-		on_update()
-	} catch (err) {
-		console.error(err)
-		window.alert(err)
+	// 模块脚本（defer 列表里排在 client.js 之后）可能还没执行到，此时 on_update 尚不存在。
+	// 之前无条件调用会抛 ReferenceError，并且被下面的 catch 弹成 alert 骚扰用户；
+	// 现在直接跳过 —— 模块就绪后 ensure_on_init() 会补跑 on_init，
+	// 之后任一次 state 消息都会正常进入 on_update 完成渲染。
+	if (typeof on_update === "function") {
+		try {
+			on_update()
+		} catch (err) {
+			console.error(err)
+			window.alert(err)
+		}
 	}
 	update_header()
 }
@@ -1002,27 +1049,63 @@ function confirm_action_button(action, label, message) {
 	action_button_imp(action, label, evt => confirm_send_action(action, undefined, message))
 }
 
-function send_action(verb, noun) {
+function send_action(verb, noun, extra) {
 	if (params.mode === "replay" || params.mode === "debug")
 		return false
+
 	// Reset action list here so we don't send more than one action per server prompt!
-	let va = view.actions?.[verb]
+	//
+	// extra：模块侧打包的额外参数（EOTS 的 send_action_with_oos 传
+	// [type, burma_road, ...oos, ...路径]）。存在时必须并进 argument：
+	// 服务端 framework.js 读 argument[1] 当 type、argument[0] 当真实参数。
+	// 旧版这里只有 (verb, noun) 两个参数，payload 被静默丢弃，
+	// 导致服务端收到错的 argument，每个动作都报 Invalid action。
+	let va = view.actions ? view.actions[verb] : undefined
 	if (va) {
-		// simple action
-		if (va === 1 || va === true || typeof va === "string") {
-			if (noun === undefined || noun === null || typeof noun === "object") {
-				view.actions = null
+		const fire = () => {
+			view.actions = null
+			if (extra !== undefined)
+				send_message("action", [ verb, [ noun, ...extra ], game_cookie ])
+			else
 				send_message("action", [ verb, noun, game_cookie ])
-				return true
-			}
+			return true
 		}
-		// thing action
+
+		// ---- 新版语义 ----
+		// simple action（服务端下发 1 / true / 字符串）
+		if (va === 1 || va === true || typeof va === "string") {
+			if (noun === undefined || noun === null || typeof noun === "object")
+				return fire()
+		}
+		// thing action（服务端下发 id 数组）
 		if (Array.isArray(va)) {
-			if (va.includes(noun) || (Array.isArray(noun) && va.includes(noun[0]))) {
-				view.actions = null
-				send_message("action", [ verb, noun, game_cookie ])
-				return true
+			if (va.includes(noun))
+				return fire()
+			// noun 是数组时按首元素匹配（沿用旧版 realnoun 语义）
+			if (Array.isArray(noun) && va.includes(noun[0]))
+				return fire()
+		}
+		// 数字型动作集
+		if (typeof va === "number" && va !== 0 && noun !== undefined)
+			return fire()
+
+		// ---- 向后兼容兜底（60+ 个既有模块）----
+		// 到这里说明新版判定为「不发」。旧版规则是：
+		//   noun 有值 -> view.actions[verb].includes(noun 或 noun[0])
+		//   noun 为空 -> 只要 view.actions[verb] 为真就发
+		if (noun !== undefined) {
+			const realnoun = Array.isArray(noun) ? noun[0] : noun
+			let hit = false
+			try {
+				hit = (typeof va.includes === "function") ? va.includes(realnoun) : false
+			} catch (e) {
+				hit = false
 			}
+			if (hit)
+				return fire()
+			// va 为真但 contains 不成立：旧版同样发不出去，保持 false
+		} else {
+			return fire()
 		}
 	}
 	return false
@@ -1046,14 +1129,16 @@ function send_query(q, param) {
 
 function init_replay() {
 	let script = document.createElement("script")
-	script.src = "/common/replay.js"
+	// 动态注入的脚本必须带 SITE_PREFIX（/ga、/pre 等反向代理前缀），
+	// 否则复盘模式加载 /common/replay.js 会 404、界面空白
+	script.src = (window.SITE_PREFIX || "") + "/common/replay.js"
 	document.body.appendChild(script)
 }
 
 /* MAIN MENU */
 
 function confirm_resign() {
-	if (window.confirm("Are you sure that you want to resign?"))
+	if (window.confirm("确定要认输吗？"))
 		send_message("resign")
 }
 
@@ -1061,7 +1146,7 @@ function add_resign_menu() {
 	if (roles.length === 2) {
 		let popup = document.querySelector("#toolbar details menu")
 		popup.insertAdjacentHTML("beforeend", '<li class="resign separator">')
-		popup.insertAdjacentHTML("beforeend", '<li class="resign" onclick="confirm_resign()">Resign')
+		popup.insertAdjacentHTML("beforeend", '<li class="resign" onclick="confirm_resign()">投降')
 	}
 }
 
@@ -1075,7 +1160,8 @@ function add_icon_button(where, id, img, fn) {
 	if (!button) {
 		button = document.createElement("button")
 		button.id = id
-		button.innerHTML = '<img src="/images/' + img + '.svg">'
+		// 动态生成的图标也要带 SITE_PREFIX（/ga 等反向代理前缀），否则跨代理部署时图标 404
+		button.innerHTML = '<img src="' + (window.SITE_PREFIX || "") + '/images/' + img + '.svg">'
 		button.addEventListener("click", fn)
 		if (where)
 			document.querySelector("#toolbar").appendChild(button)
@@ -1109,6 +1195,7 @@ function add_main_menu_item(text, onclick) {
 	item.onclick = onclick
 	item.textContent = text
 	popup.insertBefore(item, sep)
+	return item
 }
 
 function add_main_menu_item_link(text, url) {
@@ -1116,6 +1203,9 @@ function add_main_menu_item_link(text, url) {
 	let sep = popup.querySelector(".separator")
 	let item = document.createElement("li")
 	let a = document.createElement("a")
+	// 动态生成的菜单链接也要带 SITE_PREFIX（/ga、/pre 等反向代理前缀），否则跳转 404
+	if (url.startsWith("/") && !url.startsWith(window.SITE_PREFIX || ""))
+		url = (window.SITE_PREFIX || "") + url
 	a.href = url
 	a.textContent = text
 	item.appendChild(a)
@@ -1124,10 +1214,10 @@ function add_main_menu_item_link(text, url) {
 
 add_main_menu_separator()
 if (params.mode === "play" && params.role !== "Observer") {
-	add_main_menu_item_link("Go home", "/games/active")
-	add_main_menu_item_link("Go to next game", "/games/next")
+	add_main_menu_item_link("回到首页", "/games/active")
+	add_main_menu_item_link("去别的对局", "/games/next")
 } else {
-	add_main_menu_item_link("Go home", "/")
+	add_main_menu_item_link("回到首页", "/")
 }
 
 function close_toolbar_menus(self) {
@@ -1392,8 +1482,11 @@ var update_map_size = function (w, h) {}
 	}
 
 	const map = document.getElementById("map") || e_inner.querySelector("div")
-	var map_w = mapwrap ? mapwrap.clientWidth : map.clientWidth
-	var map_h = mapwrap ? mapwrap.clientHeight : map.clientHeight
+	// 地图逻辑尺寸：优先取 #map 的固有尺寸。#map 为 absolute 定位，不受 flex 压缩影响；
+	// 而 #mapwrap 会被 flex-shrink 压到容器宽、高可能为 0——用它的 clientWidth/Height 会让
+	// 下方"地图大于视口"判定恒假，初始适配（窄屏按宽度缩放）永不触发，地图溢出只显示一角。
+	var map_w = mapwrap ? (map.clientWidth || mapwrap.clientWidth) : map.clientWidth
+	var map_h = mapwrap ? (map.clientHeight || mapwrap.clientHeight) : map.clientHeight
 
 	if (e_scroll.dataset.mapHeight)
 		map_h = Number(e_scroll.dataset.mapHeight)
@@ -1507,7 +1600,8 @@ var update_map_size = function (w, h) {}
 			mapwrap.dataset.scale = 1
 			mapwrap.style.width = null
 			mapwrap.style.height = null
-			map.style.transform = null
+			if (map)
+				map.style.transform = null
 
 			if (scale !== 1)
 				update_transform()
@@ -1539,6 +1633,8 @@ var update_map_size = function (w, h) {}
 	function update_map_fit() {
 		if (mapwrap) {
 			let map = document.getElementById("map")
+			if (!map)
+				return // 模块只提供 mapwrap 而无 #map 时跳过 fit（无画布可缩放）
 			map.style.transform = null
 			mapwrap.style.width = null
 			mapwrap.style.height = null
@@ -1823,9 +1919,16 @@ var update_map_size = function (w, h) {}
 
 	window.addEventListener("resize", update_zoom)
 
-	// initialize map-fit based on per-device settings
+	// initialize map-fit: 沿用上次的适配选择；没有记录时，若地图大于可视区则
+	// 默认自动适配（桌面端整图可见，窄屏按宽度），否则地图保持原始尺寸。
+	// 画布型模块（如 empire-of-the-sun 用 <canvas> 绘底图）不套用 #map 缩放，
+	// 只尊重用户手动保存的适配偏好，避免底图与算子层错位。
 	if (mapwrap) {
-		var fit = localStorage.getItem(map_fit_key)
+		var fit = null
+		try { fit = localStorage.getItem(map_fit_key) } catch (e) {}
+		if (!fit && !mapwrap.querySelector("canvas") &&
+		    (map_w > e_scroll.clientWidth || map_h > e_scroll.clientHeight))
+			fit = (window.innerWidth <= 800) ? "width" : "both"
 		if (fit) {
 			mapwrap.dataset.fit = fit
 			update_map_fit()
@@ -1838,7 +1941,7 @@ var update_map_size = function (w, h) {}
 if (window.innerWidth <= 800)
 	document.querySelector("aside").hidden = true
 
-window.addEventListener("load", function () {
+function init_connect() {
 	if (params.mode === "debug")
 		init_replay()
 	else if (params.mode === "replay")
@@ -1847,4 +1950,71 @@ window.addEventListener("load", function () {
 		connect_play(false)
 	else
 		document.getElementById("prompt").textContent = "Invalid mode: " + params.mode
-})
+}
+
+/*
+ * 保证模块的 on_init 被调用【恰好一次】。
+ *
+ * client.js 是 defer 列表里排在模块脚本（world.js / play.js / …）之前的一个，
+ * 而 players 消息在 WebSocket 一连上就到达，因此存在两种坏时序：
+ *   - 消息早于 play.js 执行 → 那时 on_init 还不存在
+ *   - 连接早于模块脚本就绪 → update_view() 调 on_update() 直接抛错
+ * 一旦 on_init 没被调到，world.things 就是空的：
+ *   地图空白，且 populate_generic 报 "cannot find thing: s-loc <id>"。
+ * （实测：手动调用一次 on_init 后 things=19、s-loc=1145、地图正常。）
+ *
+ * 所以不再依赖单一时机，三处兜底（players 消息 / DOMContentLoaded / window load），
+ * 由本标志保证只执行一次。
+ *
+ * 但必须等 players 消息到达后才能调用 —— 那之前 game_scenario / game_options 还没赋值，
+ * 提前调用会把模块的 options 设成 undefined，导致 card_class_name 里的 options.valiant
+ * 抛 "Cannot read properties of null (reading 'valiant')"。故用 players_received 门闩。
+ */
+let on_init_done = false
+let players_received = false
+function ensure_on_init() {
+	if (on_init_done) return
+	if (!players_received) return
+	if (typeof on_init !== "function") return
+	// 只有真正调用成功才置位：on_init 内部若因模块尚未就绪而抛错
+	// （例如 play.js 里的 ui 还在 TDZ），后续的 DOMContentLoaded / load 兜底
+	// 必须还能重试，否则地图永远建不起来。
+	try {
+		on_init(game_scenario, game_options, static_view)
+		on_init_done = true
+	} catch (err) {
+		console.error("[client] on_init 失败，稍后重试:", err)
+	}
+}
+document.addEventListener("DOMContentLoaded", ensure_on_init)
+window.addEventListener("load", ensure_on_init)
+
+/*
+ * 模块脚本是否已就绪。
+ * client.js 是 defer 列表里排在模块脚本（world.js / play.js / …）之前的一个，
+ * 若在模块尚未执行完时就连上，服务端一连上就发 players/state，会导致：
+ *   - update_view() 调 on_update() → ReferenceError
+ *   - 模块里 let 声明的变量（如 paths-of-glory 的 ui）还在 TDZ → 崩在渲染中途
+ * 因此连接前先确认 on_init 与 on_update 都已存在。用轮询而非 window load：
+ * 不必等图片/字体，也不会被挂起的资源拖住。
+ */
+function module_ready() {
+	return typeof on_init === "function" && typeof on_update === "function"
+}
+function init_connect_when_ready(tries) {
+	tries = tries || 0
+	if (module_ready() || tries >= 150) {       // 最多等 3 秒
+		init_connect()
+		return
+	}
+	setTimeout(() => init_connect_when_ready(tries + 1), 20)
+}
+
+/*
+ * defer 脚本按【文档顺序】执行，client.js 排在模块脚本之前。
+ * 等 DOMContentLoaded（此时所有 defer 脚本都已执行）再启动连接流程。
+ */
+if (document.readyState === "loading")
+	document.addEventListener("DOMContentLoaded", init_connect_when_ready)
+else
+	init_connect_when_ready()
