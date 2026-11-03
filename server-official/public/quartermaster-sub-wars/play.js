@@ -9187,9 +9187,12 @@ function esc_attr(s) {
  * `document.getElementById("log")` 后直接读 children/lastChild，
  * 元素缺失就抛 TypeError、日志渲染整条链断掉。
  */
-let log_open = true          /* 默认常驻显示（用户口径：常驻在左侧） */
+let log_open = true          /* 桌面默认常驻（用户口径：常驻在左侧）；窄屏由 load_panel_state 强制关 */
 let log_seen = 0
 let log_ready = false
+/* 【2026-11-04】记录上一次"已应用"的开合状态：只有真的变化才 refit 地图（避免战斗刷日志时反复重排） */
+let log_layout_open = null
+let aside_layout_open = null
 
 const LOG_W_DEFAULT = 210
 const LOG_W_MIN = 120
@@ -9210,9 +9213,13 @@ function apply_aside() {
 	const btn = document.getElementById("btn_aside")
 	if (btn)
 		btn.classList.toggle("on", aside_open)
-	/* 主区宽度变了 → 地图重新 fit（缩放时只缩地图，不缩面板） */
-	if (typeof window.__qm_refit_map === "function")
-		window.__qm_refit_map()
+	/* 主区宽度变了 → 地图重新 fit（缩放时只缩地图，不缩面板）
+	 * 【2026-11-04】同样只在开合变化时 refit（详见 log_layout_open 的注释）。 */
+	if (aside_layout_open !== aside_open) {
+		aside_layout_open = aside_open
+		if (typeof window.__qm_refit_map === "function")
+			window.__qm_refit_map()
+	}
 }
 
 /*
@@ -9319,9 +9326,21 @@ window.addEventListener("resize", () => {
 
 function toggle_aside() {
 	aside_open = !aside_open
-	try {
-		window.localStorage.setItem(panel_storage_key("qm_aside_open"), aside_open ? "1" : "0")
-	} catch (e) {}
+	/*
+	 * 【2026-11-04 修复·窄屏双抽屉夹死地图】
+	 * 窄屏下日志栏（左，z-index 940）与侧栏（右，z-index 930）都是相对视口的覆盖层，
+	 * 同时打开会把地图夹得几乎没有可点区域。这里保证"同一时刻只开一个"。
+	 */
+	if (aside_open && is_narrow_screen() && log_open) {
+		log_open = false
+		apply_log_panel()
+	}
+	/* 窄屏不持久化：见 load_panel_state 的说明（会被记住 → 下次进来又顶着） */
+	if (!is_narrow_screen()) {
+		try {
+			window.localStorage.setItem(panel_storage_key("qm_aside_open"), aside_open ? "1" : "0")
+		} catch (e) {}
+	}
 	apply_aside()
 }
 
@@ -9346,10 +9365,28 @@ function panel_storage_key(base) {
 function load_panel_state() {
 	const narrow = window.innerWidth <= 800
 	try {
-		const lo = window.localStorage.getItem(panel_storage_key("qm_log_open"))
-		log_open = (lo === null) ? !narrow : (lo === "1")
-		const ao = window.localStorage.getItem(panel_storage_key("qm_aside_open"))
-		aside_open = (ao === null) ? !narrow : (ao === "1")
+		/*
+		 * 【2026-11-04 修复·窄屏覆盖地图】
+		 *
+		 * 窄屏（<=800px）下 #log_panel / aside 都是 position:fixed 的【覆盖层】：
+		 *   #log_panel { left:0; top:var(--qm-header-h); bottom:0; width:min(78vw,320px); z-index:940 }
+		 *   body > aside { right:0; ... z-index:930 }
+		 * 一旦它们被打开、又被 localStorage 记住，用户每次进来都会看到
+		 * "左上角顶着一个关不掉的日志栏、地图点不动"（玩家报的卡死）。
+		 *
+		 * 因此窄屏下【强制关闭】且【不读也不写】localStorage：
+		 * 每次进窄屏都是干净状态，想要看日志就当场点一下（点完即止）。
+		 * 桌面（>800px）保持原口径：日志栏/侧栏默认常驻，可手动关。
+		 */
+		if (narrow) {
+			log_open = false
+			aside_open = false
+		} else {
+			const lo = window.localStorage.getItem(panel_storage_key("qm_log_open"))
+			log_open = (lo === null) ? true : (lo === "1")
+			const ao = window.localStorage.getItem(panel_storage_key("qm_aside_open"))
+			aside_open = (ao === null) ? true : (ao === "1")
+		}
 		const ph = window.localStorage.getItem(panel_storage_key("qm_phase_hidden"))
 		phase_hidden = (ph === "1")
 		const w = parseInt(window.localStorage.getItem("qm_log_w") || "", 10)
@@ -9423,17 +9460,33 @@ function apply_log_panel() {
 	/*
 	 * 主区宽度变了 → 让地图重新 fit（平台只在 window resize 时算 fit，
 	 * 不知道我们开了个侧栏）。缩放状态由 setup_map_zoom 内部维护。
+	 *
+	 * 【2026-11-04 修复·战斗期卡顿】只在"开/关状态真的变了"时才 refit。
+	 * 旧实现每次 apply_log_panel 都 refit，而 update_log_toggle 在每次 on_update 都会走到
+	 * 首次分支 —— 战斗/多步卡（伞兵 15209 等）一次刷十几条日志，地图被反复缩放重排，
+	 * 表现为"打一张卡就卡死"。
 	 */
-	if (typeof window.__qm_refit_map === "function")
-		window.__qm_refit_map()
+	if (log_layout_open !== log_open) {
+		log_layout_open = log_open
+		if (typeof window.__qm_refit_map === "function")
+			window.__qm_refit_map()
+	}
 	update_log_toggle()
 }
 
 function toggle_log() {
 	log_open = !log_open
-	try {
-		window.localStorage.setItem(panel_storage_key("qm_log_open"), log_open ? "1" : "0")
-	} catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
+	/* 窄屏互斥：开日志就关掉右侧栏，别把地图夹死（同 toggle_aside 里的说明） */
+	if (log_open && is_narrow_screen() && aside_open) {
+		aside_open = false
+		apply_aside()
+	}
+	/* 窄屏不持久化：否则下次进来日志栏又顶着左上角（玩家报的卡死就是这么来的） */
+	if (!is_narrow_screen()) {
+		try {
+			window.localStorage.setItem(panel_storage_key("qm_log_open"), log_open ? "1" : "0")
+		} catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
+	}
 	apply_log_panel()
 }
 

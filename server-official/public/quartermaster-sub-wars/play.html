@@ -145,11 +145,11 @@ start();
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261103a">
+	<link rel="stylesheet" href="play.css?v=20261104a">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261103a"></script>
-	<script defer src="layout.js?v=20261103a"></script>
-	<script defer src="play.js?v=20261103a"></script>
+	<script defer src="data.js?v=20261104a"></script>
+	<script defer src="layout.js?v=20261104a"></script>
+	<script defer src="play.js?v=20261104a"></script>
 </head>
 <body>
 
@@ -623,6 +623,15 @@ start();
 		<div id="log_panel_head">
 			<span>日志</span>
 			<span id="log_unread"></span>
+			<!--
+				【2026-11-04 修复·关不掉】
+				窄屏（<=800px）下本面板是 position:fixed;z-index:940 的覆盖层，
+				而顶栏没有显式 z-index —— 一旦它被打开，header 上的「日志」按钮就被它压住，
+				面板里又没有关闭入口 => 只能刷新；而刷新后 localStorage 仍记住 open=1，
+				于是"每次进来都顶着左上角、地图点不动"（玩家报的卡死）。
+				这里给面板自带一个关闭按钮，任何情况下都能关掉。
+			-->
+			<button id="log_close" class="action" title="关闭日志栏" onclick="toggle_log()">×</button>
 		</div>
 		<!-- 平台原始日志：继续接收 update_log 的写入，但显示由结构化列表负责 -->
 		<div id="log"></div>
