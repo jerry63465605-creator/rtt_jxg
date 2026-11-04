@@ -27553,7 +27553,18 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 		 */
 		return merge_pending_battle_resolve(game, side, { log: 1 })
 	}
-	if (pendingBattle) {
+	/*
+	 * 【2026-11-04 修复·T3 非应答方按钮全亮】判据必须看【原始】挂起，不能只看按 side 过滤后的参数。
+	 *
+	 * pendingBattle 是【按阵营过滤】的视图字段（见 view 里 `pendingBattle` 的构造：
+	 * 非等待方拿到 null）。旧实现直接 `if (pendingBattle)`，于是【非应答方】跳过本分支、
+	 * 落到下方通用动作表 —— 出牌/推阶段/换国等按钮全亮，点了才被拒（或被允许做不该做的事），
+	 * 且 block_reason 为空、看不出"正在等对方结算战斗"。
+	 *
+	 * 与上方响应窗口分支（`if (pendingTrigger || top_response_frame(game))`）同款写法：
+	 * 参数为空时回退到 game.pending_battle 这个真相源。
+	 */
+	if (pendingBattle || game.pending_battle) {
 		/*
 		 * 按【阵营】而不是【国家名】比较。
 		 *
@@ -27565,10 +27576,13 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 		 *
 		 * 同一阵营只有一个玩家位，所以按阵营判定才是正确的口径。
 		 */
-		const wait = pending_wait_nation(pendingBattle)
+		const pbRaw = pendingBattle || game.pending_battle
+		const wait = pending_wait_nation(pbRaw)
 		const acts = { log: 1 }
 		if (wait && faction_of_nation(wait) === side)
 			acts.resolve_battle = 1
+		else
+			game.block_reason = 'pending_battle: 等待【' + (wait || '?') + '】' + pending_stage_zh(pbRaw)
 		/*
 		 * 【2026-10-16 修复】战斗结算期间若同侧还有武装增强窗口
 		 * （如 15311 马奇诺·法军被移除触发），一并放行 use_armed_offer/skip_armed_offer：
