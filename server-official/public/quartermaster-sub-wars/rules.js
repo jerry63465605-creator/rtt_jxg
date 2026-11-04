@@ -28875,7 +28875,23 @@ function do_action(state, current, action, arg) {
 	 * 此时必须放行【拦截方的表态动作】（use/skip_armed_offer）与响应栈动作，
 	 * 否则拦截方点了没反应、永远推不动（与战斗预算 BUDGET_ALLOWED 同款口径）。
 	 */
-	if (game.pending_echo &&
+	/*
+	 * 【2026-11-04 修复·15209《伞兵》点不上】战斗预算优先于"空 echo_need"。
+	 *
+	 * 旧实现（战斗步误写空 pending_echo）除了让客户端弹出全屏空框，
+	 * 还在 do_action 这里冻结一切非 play_card 动作 —— 于是玩家点了高亮地区，
+	 * 客户端确实发出 event_battle，却被本门禁拒回：
+	 *   「《伞兵》等待你选择目标（请点地图高亮地区）」
+	 * 表现就是"看得见高亮、点不上"。
+	 *
+	 * 判据与 view.pending_echo 的下发抑制保持一致：只有【预算 + 空框】才让行；
+	 * 真正的选择框（有 options/cands）行为不变。
+	 */
+	const _emptyEchoWithBudget = !!(game.pending_echo && game.event_budget &&
+		game.pending_echo.kind === 'echo_need' &&
+		!(Array.isArray(game.pending_echo.options) && game.pending_echo.options.length) &&
+		!(Array.isArray(game.pending_echo.cands) && game.pending_echo.cands.length))
+	if (game.pending_echo && !_emptyEchoWithBudget &&
 		(
 			/*
 			 * 【2026-10-31】kind='echo_need'：多步增强卡在等"补参重发"——
