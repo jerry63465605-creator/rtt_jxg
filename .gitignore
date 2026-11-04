@@ -65,3 +65,6 @@ server-official/tools/_rtt_server.out
 server-official/public/quartermaster-sub-wars/_harness_*
 tools/fixtures/gid*.json
 tmp/
+
+# 发布包不入库（每次打包由 pack.ps1 生成）
+quartermaster-sub-wars*.zip
