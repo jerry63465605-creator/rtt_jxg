@@ -8088,14 +8088,38 @@ function cancel_status_act() {
  * ⚠ 高亮/候选一律用服务端下发的数据，客户端【不二次过滤】，
  *   否则又会漂移出"看得见点不中"（见 rtt-client-server-contract 第四节）。
  * ============================================================ */
+/*
+ * 【2026-11-04 修复·T4 响应选完目标后高亮不消失】
+ *
+ * 响应窗口会在 update_response_choice_box() 里自己贴 .target（space / piece 两种），
+ * 但它【不在】reapply_all_highlights() 的每帧重贴名单里。
+ * 于是窗口一关（选完目标 / 被服务端撤销），没有任何一处把那些 .target 摘掉 ——
+ * 地图上就留着上一帧的金色高亮，玩家以为还能点（点了没反应）。
+ *
+ * 清完必须立刻调 reapply_all_highlights()：
+ *   clear_target_highlight() 是【全清】，会顺带清掉战斗预算 / 让权委托 / 建设等
+ *   同帧存在的高亮；重贴一次让"只掉响应那一层"。
+ * 用 rc_highlight_active 记住"当前是否由本框贴着高亮"，避免每帧无谓地清+重贴。
+ */
+let rc_highlight_active = false
+function clear_response_choice_highlight() {
+	if (!rc_highlight_active) return
+	rc_highlight_active = false
+	if (typeof clear_target_highlight === 'function') clear_target_highlight()
+	try {
+		if (typeof reapply_all_highlights === 'function') reapply_all_highlights()
+	} catch (e) { /* 重贴失败不影响主流程 */ }
+}
+
 function update_response_choice_box() {
 	const rc = view && view.response_choice
 	if (!rc) {
-		/* 窗口没了：若本框还占着 ask_box 就清掉 */
+		/* 窗口没了：若本框还占着 ask_box 就清掉，并摘掉自己贴的地图高亮 */
 		if (ask_state && ask_state.kind === 'response_choice') {
 			ask_state = null
 			render_ask_box(null, null, null)
 		}
+		clear_response_choice_highlight()
 		return
 	}
 
@@ -8103,6 +8127,8 @@ function update_response_choice_box() {
 	const submit = (choice) => {
 		ask_state = null
 		render_ask_box(null, null, null)
+		/* 先摘高亮再派发：不等下一帧，点完立刻看到"选完了" */
+		clear_response_choice_highlight()
 		send_action('resolve_response_choice', { choice })
 		toast('《' + rc.name + '》已结算')
 	}
@@ -8115,6 +8141,7 @@ function update_response_choice_box() {
 			return
 		}
 		highlight_targets({ spaces: cands, pieces: [] })
+		rc_highlight_active = true     /* 记住"这层高亮是本框贴的"，关窗时要负责摘掉 */
 		return
 	}
 
@@ -8125,10 +8152,12 @@ function update_response_choice_box() {
 			return
 		}
 		highlight_targets({ spaces: [], pieces: cands })
+		rc_highlight_active = true
 		return
 	}
 
 	/* card / option：弹选项框（响应卡在队列里，优先级高，直接占用 ask_box） */
+	rc_highlight_active = false
 	ask_state = { kind: 'response_choice' }
 	render_ask_box(
 		'《' + rc.name + '》：选择',
