@@ -38,11 +38,25 @@ function setup(withInterceptor, statusCard) {
 	g.hands['德国'] = ['15341#50', '15341#51']
 	g.decks['德国'] = ['15345#1', '15345#2', '15345#3']
 	g.table = { '德国': [statusCard] }
+	/* 【2026-11-04 S2-b】15245 的 run 需要合法的发起单位（摆前提，不是冒充建设） */
+	g.location = g.location || {}
+	g.piece_nation = g.piece_nation || {}
+	g.piece_type = g.piece_type || {}
+	g.location['de_a1'] = d.id_of('德国')
+	g.piece_nation['de_a1'] = '德国'
+	g.piece_type['de_a1'] = 'army'
 	if (withInterceptor) g.hands['英国'] = ['15353#1', '15341#70']
 	else g.hands['英国'] = ['15341#70']
 	I.refresh(g)
+	/* 【2026-11-04 S2-b】目标格必须"没有本方部队"（预检会拦）→ 取德国的空陆地相邻格做空打 */
+	const _ger = d.id_of('德国')
+	const _gerSpace = I.get_connections(g, _ger, 'axis').find(x =>
+		d.spaces[x] && d.spaces[x].terrain !== 'sea' &&
+		!I.pieces_on(g, x).length)
+	g.__test_target = (_gerSpace != null ? _gerSpace : _ger)
+	console.log('  [setup] 目标格 = ' + d.name_of(g.__test_target) + '  from=de_a1@' + d.name_of(g.location["de_a1"]))
 	/* 武装窗口：after_land（刚发起陆战） */
-	I.arm_status_instant(g, 'after_land', '德国', d.id_of('法国'))
+	I.arm_status_instant(g, 'after_land', '德国', g.__test_target)
 	I.refresh(g)
 	return g
 }
@@ -54,7 +68,7 @@ console.log('\n=== A：德国发动 15245，英国【发动】15353 拦截 ===')
 	const ts = (R.view(g, 'Axis').table_status || []).find(x => x.card === '15245#1') || {}
 	ok('15245 ready=true', ts.ready === true, JSON.stringify(ts.reason))
 	const d0 = (g.decks['德国'] || []).length
-	R.action(g, 'Axis', 'activate_status', { card: '15245#1' })
+	R.action(g, 'Axis', 'activate_status', { card: '15245#1', space: g.__test_target, from: 'de_a1' })
 	const win = (g.armed_offers || []).some(w => w.when === 'enemy_status_effect')
 	ok('开窗等待 15353', win, JSON.stringify((g.armed_offers || []).map(w => w.when)))
 	ok('★ 代价在开窗前已付（牌堆 -1）', (g.decks['德国'] || []).length === d0 - 1,
@@ -73,7 +87,7 @@ console.log('\n=== B：英国【放弃】拦截 -> 效果照常，代价照付 =
 	const g = setup(true, '15245#1')
 	R.view(g, 'Axis')
 	const d0 = (g.decks['德国'] || []).length
-	R.action(g, 'Axis', 'activate_status', { card: '15245#1' })
+	R.action(g, 'Axis', 'activate_status', { card: '15245#1', space: g.__test_target, from: 'de_a1' })
 	ok('开窗', (g.armed_offers || []).some(w => w.when === 'enemy_status_effect'))
 	R.action(g, 'Allies', 'skip_armed_offer', {})
 	ok('放弃后窗口清空', (g.armed_offers || []).length === 0)
@@ -96,7 +110,7 @@ console.log('\n=== C：无拦截方 ===')
 	const g = setup(false, '15245#1')
 	R.view(g, 'Axis')
 	const d0 = (g.decks['德国'] || []).length
-	R.action(g, 'Axis', 'activate_status', { card: '15245#1' })
+	R.action(g, 'Axis', 'activate_status', { card: '15245#1', space: g.__test_target, from: 'de_a1' })
 	ok('无窗口残留', (g.armed_offers || []).length === 0)
 	ok('代价照付', (g.decks['德国'] || []).length === d0 - 1)
 }
@@ -118,7 +132,7 @@ console.log('\n=== D：skip_play 类（17746 耀武）缺 from 时被参数预�
 	I.refresh(g)
 	R.view(g, 'Axis')
 	const d0 = (g.decks['意大利'] || []).length
-	R.action(g, 'Axis', 'activate_status', { card: '17746#1', space: d.id_of('法国'), from: null })
+	R.action(g, 'Axis', 'activate_status', { card: '17746#1', space: d.id_of('德国'), from: null })
 	const lg = (g.log || []).slice(-3).join(' | ')
 	console.log('  log: ' + lg)
 	const win = (g.armed_offers || []).some(w => w.when === 'enemy_status_effect')

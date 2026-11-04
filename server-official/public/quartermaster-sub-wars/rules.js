@@ -4800,6 +4800,11 @@ const STATUS_EFFECTS = {
 		trigger: {
 			window: 'after_build_navy', cost: { attrition: 1 },
 			/*
+			 * 【2026-11-04 · S2-b】实测事故卡（对空地连点 3 次各损耗 1 张）——必须提前预检。
+			 * 本卡 run 用"被武装那一刻的地区"，缺 space 也能成功 → requireSpace:false。
+			 */
+			precheck: (g, o, a, c) => precheck_launch_battle(g, o, a, c, { requireSpace: false }),
+			/*
 			 * 【2026-10-23】地区组限定：只有"建设海军发生在<太平洋>"才开窗/可点。
 			 * status_window_ready 的 after_build_navy 分支按此字段置灰，
 			 * 与下方 run 内的 is_pacific_space 判定同源（都由 REGION_GROUPS['太平洋'] 展开）。
@@ -5050,6 +5055,8 @@ const STATUS_EFFECTS = {
 			window: 'after_land',
 			once_per_turn: true,
 			cost: { discard: 2 },
+			/* 【2026-11-04 · S2-b】付代价前预检（目标是本方地区 / 有敌军未给 victim 都会被提前拦下） */
+			precheck: precheck_launch_battle,
 			desc: '一回合一次，发起陆战后，弃置2张手牌：对战斗地区或相邻地区发起1次陆战',
 			run(game, ctx) {
 				const sp = ctx.ctx.space
@@ -5176,6 +5183,8 @@ const STATUS_EFFECTS = {
 	'15245': {
 		trigger: {
 			window: 'after_land', once_per_turn: true, cost: { attrition: 1 },
+			/* 【2026-11-04 · S2-b】附上损耗代价，必须先预检再扣（否则失败即白亏 1 张） */
+			precheck: precheck_launch_battle,
 			desc: '一回合一次，发起陆战后损耗1张：在战斗地区或相邻地区发起1次陆战',
 			/*
 			 * 【2026-10-18 重做，与 15247/17848 同款】攻击地区 / 发起单位 / 攻击目标
@@ -5217,6 +5226,8 @@ const STATUS_EFFECTS = {
 	'15247': {
 		trigger: {
 			window: 'after_build_army', once_per_turn: true, cost: { attrition: 1 },
+			/* 【2026-11-04 · S2-b】付代价前预检（同 15245/17848） */
+			precheck: precheck_launch_battle,
 			desc: '一回合一次，建设陆军后损耗1张：对相邻地区发起1次陆战',
 			/*
 			 * 【2026-10-15 重做】攻击地区 / 发起单位 / 攻击目标【全部由玩家选择】，
@@ -7907,6 +7918,92 @@ function status_launch_battle(game, nation, battleSpace, arg, kind, allowed) {
 	if (!r.ok) return { ok: false, reason: r.reason }
 	refresh(game)
 	return { ok: true, desc: nation + ' 发起' + (kind === 'sea' ? '海战' : '陆战') + '：' + (r.desc || data.name_of(sp)) }
+}
+
+/*
+ * ============ 【2026-11-04 · S2-b】状态卡"付代价之前"的参数预检 ============
+ *
+ * 玩家口径：**能点的就应该能成功**。而 15245/15247/17544/17848 这类卡是
+ * "先付代价（损耗/弃牌）→ 再执行 run"，一旦 run 因参数不合法失败：
+ *   · discard 代价会退回（已有逻辑）；
+ *   · **attrition 代价不回滚**（损耗已进弃牌堆，无法精确还原）→ 玩家白亏牌。
+ * 实测：17544 对空地连点 3 次，各损耗 1 张（见 status_launch_battle 注释）。
+ *
+ * 修法：在付代价之前先做一次"能不能成功"的预检，预检不过就直接返回、不扣任何代价。
+ *   · 通用部分：`arg.discard` 数量不足、`arg.from` 不存在/不属于本方；
+ *   · 卡自定义：`tr.precheck(game, owner, arg)` —— 目前给"发起战斗型"卡提供了
+ *     `precheck_launch_battle`（目标格有本方部队、有敌军却未给 victim、发起单位非法）。
+ */
+function precheck_status_args(game, owner, tr, arg, cardId) {
+	arg = arg || {}
+	const cost = tr.cost || {}
+	/*
+	 * ① 弃牌代价：只校验"给了的牌确实在手里"。
+	 *
+	 * 不校验张数 —— 张数不足的提示由原代价逻辑给出（且部分卡会把弃牌延后到
+	 * need/续跑阶段，早拦会误伤 17546 这类多步卡）。
+	 */
+	if (cost.discard && Array.isArray(arg.discard) && arg.discard.length) {
+		const hand = game.hands[delegate_of_nation(owner)] || game.hands[owner] || []
+		const notInHand = arg.discard.find(x => hand.indexOf(x) < 0)
+		if (notInHand) return { ok: false, reason: '要弃置的手牌不在手里' }
+	}
+	/* ② 卡自定义预检 */
+	if (typeof tr.precheck === 'function') {
+		try {
+			const r = tr.precheck(game, owner, arg, cardId)
+			if (r && r.ok === false) return r
+		} catch (e) {
+			return { ok: false, reason: '预检异常：' + e.message }
+		}
+	}
+	return { ok: true }
+}
+
+/*
+ * 发起战斗型状态卡的预检：不真的开打，只判断"打了会不会失败"。
+ *
+ * 三条口径（都是被回归测试打出来的，别收紧）：
+ *   ① `arg.space` 缺省不放行也不拒绝 —— 缺省时 status_launch_battle 会用
+ *      "被武装那一刻的地区"（15245/15247 的常用路径），预检无从判断，交给 run；
+ *   ② `arg.from` 只要求"在场 + 属本方阵营"；借用卡（17732 意大利借德国卡）时
+ *      发起单位可能属于**借用方**，两边的阵营都接受；
+ *   ③ 只拦"一定失败"的两种：目标格全是本方部队（17848 实测）、有敌军却没给 victim。
+ */
+function precheck_launch_battle(game, owner, arg, cardId, opt) {
+	arg = arg || {}
+	if (arg.space == null) {
+		/*
+		 * 缺 space 分两种卡：
+		 *   · 15245/15247/17848：run 里【必须】读 arg.space（缺了就 `ok:false`），
+		 *     此时预检必须拦下，否则"损耗已付、效果必然失败"——正是 S2-b 要治的病；
+		 *   · 17544 这类：run 用"被武装那一刻的地区"，缺 space 也能成功 → 放行。
+		 * 差异用卡配置上的 `{ requireSpace:false }` 表达，不在这里猜。
+		 */
+		if (opt && opt.requireSpace === false) return { ok: true }
+		return { ok: false, reason: '请指定战斗地区' }
+	}
+	const sp = space_id(arg.space)
+	if (sp == null) return { ok: false, reason: '请指定战斗地区' }
+	if (arg.from == null) return { ok: false, reason: '请选择发起单位' }
+	const pid = String(arg.from)
+	if (game.location[pid] == null) return { ok: false, reason: '发起单位不在场上' }
+	const f = faction_of_nation(game.piece_nation[pid])
+	const myFac = faction_of_nation(owner)
+	const borrowFac = game.italy_borrow ? faction_of_nation(game.italy_borrow.nation) : null
+	if (f !== myFac && f !== borrowFac) return { ok: false, reason: '发起单位不属于本方' }
+	/* 目标格：本方部队不能被攻击（这是 17848 实测失败的那条） */
+	const on = pieces_on(game, sp)
+	const own = on.filter(p => faction_of_nation(game.piece_nation[p]) === myFac)
+	const enemy = on.filter(p => {
+		const pf = faction_of_nation(game.piece_nation[p])
+		return !!pf && pf !== myFac
+	})
+	if (own.length && !enemy.length)
+		return { ok: false, reason: data.name_of(sp) + ' 有我方部队，不能攻击' }
+	if (enemy.length && !arg.victim)
+		return { ok: false, reason: '该地区有敌方部队，请选择攻击目标' }
+	return { ok: true }
 }
 
 /*
@@ -30911,6 +31008,20 @@ function do_action(state, current, action, arg) {
 		if (!ready.ok && !isForgoBuild) {
 			game.log.push('《' + cName + '》现在不能发动：' + ready.reason)
 			return game
+		}
+		/*
+		 * 【2026-11-04 · S2-b】付代价【之前】的参数预检。
+		 *
+		 * 损耗（attrition）代价一旦付出就无法精确回滚（见 activate_status 失败分支：
+		 * 只退回 discard，attrition 明确不退）。所以"注定会失败"的参数必须在这里拦下，
+		 * 而不是等 run 返回 ok:false —— 否则玩家点了发动就是白亏牌。
+		 */
+		{
+			const pre = precheck_status_args(game, owner, tr, arg || {}, cardId)
+			if (!pre.ok && !isForgoBuild) {
+				game.log.push('《' + cName + '》现在不能发动：' + pre.reason)
+				return game
+			}
 		}
 		/*
 		 * ---------------- 付代价（【2026-10-31 S1】已前移到拦截窗口之前） ----------------

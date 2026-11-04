@@ -64,7 +64,7 @@ assert(cands.spaces.indexOf(emptySp) >= 0, '候选【含空地】' + data.name_o
 const l0 = g.log.length
 rules.action(g, 'Axis', 'activate_status', { card: '15247' })
 const noSpaceMsg = g.log.slice(l0).join('|')
-assert(/请选择要攻击的相邻地区/.test(noSpaceMsg), '未指定地区时被拒绝（不再替玩家选）')
+assert(/请选择要攻击的相邻地区|请指定战斗地区/.test(noSpaceMsg), '未指定地区时被拒绝（不再替玩家选）')
 
 /* ④ 非相邻地区应被拒 */
 const far = Object.keys(data.spaces).map(Number)
