@@ -1,6 +1,17 @@
 ﻿<!DOCTYPE html>
 <html>
-<head><script data-site-prefix="1">window.SITE_PREFIX="/pre";(function(){
+<head><script data-site-prefix="1">/*
+  【2026-11-04 修复·本地页面全白/无数据】
+  部署前缀必须【按页面实际位置自适应】，不能写死。
+  旧写法 window.SITE_PREFIX="/pre"：本地（服务在根路径）时 fetch/XHR/WebSocket 全被改写成
+  /pre/... -> 本地 404 -> 客户端连不上服务器、图标与字体全空，
+  表现就是"所有面板堆在左上角、地图空白、按钮点了没反应"。
+  线上挂在 /pre 下时仍自动得到 /pre，两端都不用改。
+*/
+window.SITE_PREFIX = (function () {
+  var m = (location.pathname || "").match(/^\/([^\/]+)\//);
+  return (m && m[1] === "pre") ? "/pre" : "";
+})();(function(){
 var P=window.SITE_PREFIX||"";
 if(!P)return;
 function fix(u){
@@ -145,18 +156,18 @@ start();
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261104b">
+	<link rel="stylesheet" href="play.css?v=20261104c">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261104b"></script>
-	<script defer src="layout.js?v=20261104b"></script>
-	<script defer src="play.js?v=20261104b"></script>
+	<script defer src="data.js?v=20261104c"></script>
+	<script defer src="layout.js?v=20261104c"></script>
+	<script defer src="play.js?v=20261104c"></script>
 </head>
 <body>
 
 <header>
 	<div id="toolbar">
 		<details>
-			<summary><img src="/pre/images/cog.svg"></summary>
+			<summary><img src="/images/cog.svg"></summary>
 			<menu>
 				<li><a href="about.html" target="_blank">关于</a>
 				<li><a href="info/rules.html" target="_blank">规则</a>
@@ -170,7 +181,7 @@ start();
 			</menu>
 		</details>
 		<details id="info_menu">
-			<summary><img src="/pre/images/wooden-sign.svg"></summary>
+			<summary><img src="/images/wooden-sign.svg"></summary>
 			<menu>
 				<li onclick="show_straits()"> 海峡控制权</li>
 				<li class="separator">
@@ -187,16 +198,16 @@ start();
 			  · #btn_phase    阶段面板开关（窄屏为悬浮窗）
 		-->
 		<button id="btn_log" onclick="toggle_log()" title="日志（左侧栏，可拖拽调宽）">
-			<img src="/pre/images/scroll-quill.svg">
+			<img src="/images/scroll-quill.svg">
 		</button>
 		<button id="btn_rollback" onclick="toggle_history()" title="回退 / 出牌流水">
-			<img src="/pre/images/sands-of-time.svg">
+			<img src="/images/sands-of-time.svg">
 		</button>
 		<button id="btn_aside" onclick="toggle_aside()" title="信息栏（右侧）">
-			<img src="/pre/images/stack.svg">
+			<img src="/images/stack.svg">
 		</button>
 		<button id="btn_phase" onclick="toggle_phase_panel()" title="阶段操作面板">
-			<img src="/pre/images/flying-flag.svg">
+			<img src="/images/flying-flag.svg">
 		</button>
 	</div>
 </header>
