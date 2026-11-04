@@ -67,13 +67,10 @@ main { background-color: #2b3a45; }
 	 * 少解码 7.8MP（这是"加载慢"的主要来源之一）。
 	 */
 	/*
-	 * 【2026-11-04 修复·地图空白】外部交付的分级底图引用了 map_lo.webp，
-	 * 但仓库/包里并没有这个文件（只有 map.webp）→ 404 → #map 只剩深色底，
-	 * 表现为"算子散落在黑底上、看不到地图"（玩家截图）。
-	 * 这里先用全分辨率 map.webp（放大到 >0.45 时 ensure_hi_map() 本来也会切成它），
-	 * 将来补了 map_lo.webp 再把这一行换回去即可。
+	 * 【2026-11-04】map_lo.webp（1450×483 / 60KB）已随包提供（与线上一致）；
+	 * 总缩放 > 0.45 时由 ensure_hi_map() 换成全分辨率 map.webp。
 	 */
-	background-image: url(map.webp);
+	background-image: url(map_lo.webp);
 	background-size: 4835px 1612px;
 	background-repeat: no-repeat;
 }
