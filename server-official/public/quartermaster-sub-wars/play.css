@@ -66,10 +66,6 @@ main { background-color: #2b3a45; }
 	 * 全分辨率 map.webp（4835×1612，340KB）—— 首屏少下载 280KB、
 	 * 少解码 7.8MP（这是"加载慢"的主要来源之一）。
 	 */
-	/*
-	 * 【2026-11-04】map_lo.webp（1450×483 / 60KB）已随包提供（与线上一致）；
-	 * 总缩放 > 0.45 时由 ensure_hi_map() 换成全分辨率 map.webp。
-	 */
 	background-image: url(map_lo.webp);
 	background-size: 4835px 1612px;
 	background-repeat: no-repeat;
@@ -1119,14 +1115,6 @@ body.Allies header.your_turn { background-color: #b0c8e8; }
 	pointer-events: none;
 }
 #budget_hud > * { pointer-events: auto; }
-
-/*
- * 【2026-11-04 修复】本模块的 .hide【没有通用规则】（见本文件上方注释），
- * 每个用 .hide 的元素都要自带 display:none。此前漏了 #budget_hud，
- * 于是右上角那个固定容器在"什么都不该显示"时依旧占位/露出残影。
- */
-#budget_hud.hide { display: none; }
-#tooltip[hidden] { display: none; }
 
 /* 面板本体：共用同一套 .eb-* 视觉样式（复用优先，不重写第二份）
  * 【2026-10-21】#event_step_box（事件卡分步执行机的"步骤边界"面板）加入本组，
@@ -2245,29 +2233,6 @@ body > aside {
 }
 
 /*
- * 【2026-11-04 修复·关不掉】面板自带的关闭按钮。
- * 窄屏下本面板是 z-index:940 的覆盖层，会压住顶栏的「日志」按钮，
- * 没有这个入口就只能刷新页面（而刷新后 localStorage 又记住"开着"）。
- */
-#log_panel_head #log_close {
-	flex: 0 0 auto;
-	margin-left: auto;
-	padding: 0 6px;
-	line-height: 18px;
-	font-size: 14px;
-	font-weight: bold;
-	border: 1px solid #c7d0d8;
-	border-radius: 4px;
-	background: #fff;
-	color: #33414d;
-	cursor: pointer;
-}
-
-#log_panel_head #log_close:hover {
-	background: #ffe9c7;
-}
-
-/*
  * #log 本体沿用平台样式（12px/18px、pre-wrap、行内边距），
  * 这里只负责"占满面板 + 独立滚动"。
  * padding-bottom 给固定页脚（↑←→▶ 那排）留位，否则最后一行会被压住。
@@ -2425,21 +2390,13 @@ aside {
 	body > main { grid-column: 1; }
 	body > aside { grid-column: 2; }
 	#log_panel {
-		/*
-		 * 【2026-11-04 调整】窄屏浮层：
-		 *  · top 让开顶栏高度（原来 top:0 会压住 header 上的按钮，打开后点不到"日志"按钮）；
-		 *  · 宽度从 78vw 收到 72vw/300px，仍保留可点地图的余量；
-		 *  · 加 transition，开合是"抽屉滑入/滑出"而不是硬切。
-		 * 默认关闭由 JS 保证（load_panel_state 窄屏强制 false，且不写 localStorage）。
-		 */
 		position: fixed;
 		left: 0;
-		top: var(--qm-header-h, 44px);
+		top: 0;
 		bottom: 0;
-		width: min(72vw, 300px);
+		width: min(78vw, 320px);
 		max-width: none;
 		z-index: 940;
-		transition: transform .18s ease;
 		box-shadow: 6px 0 20px #000a;
 	}
 	body > main { grid-row: 2/4; }

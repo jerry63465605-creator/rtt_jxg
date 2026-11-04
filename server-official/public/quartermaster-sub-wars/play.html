@@ -1,154 +1,6 @@
 ﻿<!DOCTYPE html>
 <html>
-<head><script data-site-prefix="1">/*
-  【2026-11-04 修复·本地页面全白/无数据】
-  部署前缀必须【按页面实际位置自适应】，不能写死。
-  旧写法 window.SITE_PREFIX="/pre"：本地（服务在根路径）时 fetch/XHR/WebSocket 全被改写成
-  /pre/... -> 本地 404 -> 客户端连不上服务器、图标与字体全空，
-  表现就是"所有面板堆在左上角、地图空白、按钮点了没反应"。
-  线上挂在 /pre 下时仍自动得到 /pre，两端都不用改。
-*/
-window.SITE_PREFIX = (function () {
-  var m = (location.pathname || "").match(/^\/([^\/]+)\//);
-  return (m && m[1] === "pre") ? "/pre" : "";
-})();(function(){
-var P=window.SITE_PREFIX||"";
-if(!P)return;
-function fix(u){
-  if(typeof u!=="string"||u.charAt(0)!=="/")return u;
-  if(u.charAt(1)==="/")return u;
-  if(u===P||u.indexOf(P+"/")===0)return u;
-  return P+u;
-}
-var _f=window.fetch;
-if(_f)window.fetch=function(i,init){
-  try{
-    if(typeof i==="string")i=fix(i);
-    else if(i&&typeof i.url==="string"&&fix(i.url)!==i.url)i=new Request(fix(i.url),i);
-  }catch(e){}
-  return _f.call(this,i,init);
-};
-// 注意：location.replace/assign/href 在浏览器里是 LegacyUnforgeable，
-// 无法被页面脚本包装（实测 writable:false, configurable:false），
-// 因此这类跳转只能在其源码处保证带前缀（如 pug_ai_waiting.js）。
-var _o=XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open=function(){
-  try{arguments[1]=fix(arguments[1]);}catch(e){}
-  return _o.apply(this,arguments);
-};
-if(window.WebSocket){
-  var W=window.WebSocket;
-  var NW=function(u,p){return p===undefined?new W(fix(u)):new W(fix(u),p);};
-  NW.prototype=W.prototype;
-  window.WebSocket=NW;
-}
-if(window.EventSource){
-  var E=window.EventSource;
-  var NE=function(u,c){return new E(fix(u),c);};
-  NE.prototype=E.prototype;
-  window.EventSource=NE;
-}
-function fixlist(v){
-  if(typeof v!=="string")return v;
-  var parts=v.split(",");var dirty=false;
-  for(var i=0;i<parts.length;i++){
-    var t=parts[i].trim();
-    var sp=t.split(" ").filter(function(z){return z!=="";});
-    if(!sp.length)continue;
-    var n=fix(sp[0]);
-    if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
-  }
-  return dirty?parts.join(", "):v;
-}
-var _sa=Element.prototype.setAttribute;
-Element.prototype.setAttribute=function(n,v){
-  var name=n;
-  try{
-    // 只对**比较**用一个小写副本，绝不能改动真正的属性名：
-    //   SVG 属性名大小写敏感，setAttribute("viewBox", ...) 一旦被写成 "viewbox"
-    //   就会被渲染器忽略 → SVG 失去坐标系缩放 → 手机上只见地图左上角、
-    //   底图正常但叠加的文字被整体拉糊（Hannibal-Rome-vs-Carthage 实测）。
-    //   原生 setAttribute 本身对 HTML 属性名不区分大小写，所以这里也不需要小写化。
-    var k=String(n).toLowerCase();
-    if(k==="src"||k==="href"||k==="action"||k==="poster"||k==="data")v=fix(v);
-    else if(k==="srcset")v=fixlist(v);
-  }catch(e){}
-  return _sa.call(this,name,v);
-};
-function patchProp(proto,prop,isList){
-  try{
-    if(!proto)return;
-    var d=Object.getOwnPropertyDescriptor(proto,prop);
-    if(!d||!d.set)return;
-    var st=d.set,gt=d.get;
-    Object.defineProperty(proto,prop,{configurable:true,enumerable:d.enumerable,
-      get:gt,set:function(v){return st.call(this,isList?fixlist(v):fix(v));}});
-  }catch(e){}
-}
-patchProp(window.HTMLScriptElement&&HTMLScriptElement.prototype,"src");
-patchProp(window.HTMLLinkElement&&HTMLLinkElement.prototype,"href");
-patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"src");
-patchProp(window.HTMLImageElement&&HTMLImageElement.prototype,"srcset",true);
-patchProp(window.HTMLIFrameElement&&HTMLIFrameElement.prototype,"src");
-patchProp(window.HTMLFormElement&&HTMLFormElement.prototype,"action");
-patchProp(window.HTMLAnchorElement&&HTMLAnchorElement.prototype,"href");
-patchProp(window.HTMLAreaElement&&HTMLAreaElement.prototype,"href");
-patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"src");
-patchProp(window.HTMLSourceElement&&HTMLSourceElement.prototype,"srcset",true);
-patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"src");
-patchProp(window.HTMLVideoElement&&HTMLVideoElement.prototype,"poster");
-patchProp(window.HTMLAudioElement&&HTMLAudioElement.prototype,"src");
-patchProp(window.HTMLEmbedElement&&HTMLEmbedElement.prototype,"src");
-patchProp(window.HTMLTrackElement&&HTMLTrackElement.prototype,"src");
-patchProp(window.HTMLObjectElement&&HTMLObjectElement.prototype,"data");
-var T={A:"href",AREA:"href",LINK:"href",IMG:"src",SCRIPT:"src",IFRAME:"src",SOURCE:"src",TRACK:"src",EMBED:"src",AUDIO:"src",VIDEO:"src",FORM:"action",USE:"href"};
-function fixel(el){
-  if(!el||el.nodeType!==1)return;
-  var a=T[el.tagName];
-  if(a){
-    var v=el.getAttribute(a);
-    if(v){var n=fix(v);if(n!==v)el.setAttribute(a,n);}
-  }
-  var ss=el.getAttribute&&el.getAttribute("srcset");
-  if(ss){
-    var parts=ss.split(",");var dirty=false;
-    for(var i=0;i<parts.length;i++){
-      var t=parts[i].trim();
-      var sp=t.split(" ").filter(function(z){return z!=="";});
-      if(!sp.length)continue;
-      var n=fix(sp[0]);
-      if(n!==sp[0]){sp[0]=n;parts[i]=sp.join(" ");dirty=true;}
-    }
-    if(dirty)el.setAttribute("srcset",parts.join(", "));
-  }
-}
-function scan(root){
-  if(!root||root.nodeType!==1)return;
-  fixel(root);
-  if(root.querySelectorAll){
-    var list=root.querySelectorAll("*");
-    for(var i=0;i<list.length;i++)fixel(list[i]);
-  }
-}
-function start(){
-  scan(document.documentElement);
-  try{
-    new MutationObserver(function(ms){
-      for(var i=0;i<ms.length;i++){
-        var m=ms[i];
-        if(m.type==="attributes"){fixel(m.target);}
-        else{
-          for(var j=0;j<m.addedNodes.length;j++){
-            var n=m.addedNodes[j];
-            if(n&&n.nodeType===1)scan(n);
-          }
-        }
-      }
-    }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["href","src","action","srcset"]});
-  }catch(e){}
-}
-start();
-})();</script>
+<head>
 	<meta name="viewport" content="width=device-width, height=device-height, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
 	<meta name="theme-color" content="#444">
 	<meta charset="UTF-8">
@@ -156,11 +8,11 @@ start();
 	<link rel="stylesheet" href="/fonts/fonts.css">
 	<link rel="stylesheet" href="/common/client.css">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261104e">
+	<link rel="stylesheet" href="play.css?v=2026110226">
 	<script defer src="/common/client.js"></script>
-	<script defer src="data.js?v=20261104e"></script>
-	<script defer src="layout.js?v=20261104e"></script>
-	<script defer src="play.js?v=20261104e"></script>
+	<script defer src="data.js?v=20261030f"></script>
+	<script defer src="layout.js?v=20261030f"></script>
+	<script defer src="play.js?v=2026110227"></script>
 </head>
 <body>
 
@@ -634,15 +486,6 @@ start();
 		<div id="log_panel_head">
 			<span>日志</span>
 			<span id="log_unread"></span>
-			<!--
-				【2026-11-04 修复·关不掉】
-				窄屏（<=800px）下本面板是 position:fixed;z-index:940 的覆盖层，
-				而顶栏没有显式 z-index —— 一旦它被打开，header 上的「日志」按钮就被它压住，
-				面板里又没有关闭入口 => 只能刷新；而刷新后 localStorage 仍记住 open=1，
-				于是"每次进来都顶着左上角、地图点不动"（玩家报的卡死）。
-				这里给面板自带一个关闭按钮，任何情况下都能关掉。
-			-->
-			<button id="log_close" class="action" title="关闭日志栏" onclick="toggle_log()">×</button>
 		</div>
 		<!-- 平台原始日志：继续接收 update_log 的写入，但显示由结构化列表负责 -->
 		<div id="log"></div>
