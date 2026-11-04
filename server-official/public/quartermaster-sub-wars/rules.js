@@ -8459,6 +8459,28 @@ function hand_viewer_for(game, side, costNation) {
 	return costNation
 }
 
+/**
+ * 【2026-11-04 · 15209《伞兵》卡死】判定一个 pending_echo 是不是"空框"。
+ *
+ * 空框 = kind:'echo_need' 且 options / cands 都没有内容 —— 客户端打开后
+ * 只有一个「不发动」按钮，却带着 .modal{position:fixed;inset:0} 的全屏遮罩。
+ *
+ * 它没有任何可选项，等价于"没有挂起"：不下发、不冻结动作、并在动作出口清掉。
+ *
+ * 来源：战斗步（steps 里 op:'battle'）建立 event_budget 后返回的 `pending`
+ * 语义是"等 event_battle / event_finish 驱动"，没有 need 字段；
+ * 而 play_card 的 r.pending 分支曾把这个"无 need 的 pending"也写成了 echo_need。
+ *
+ * 真正需要补参的卡（17514 飞虎队 / 17815 Z 计划 / 17546 铆钉女工）都会带
+ * options 或 cands，不会被这个判据命中。
+ */
+function is_empty_echo_frame(pe) {
+	if (!pe || pe.kind !== 'echo_need') return false
+	const hasOpts = Array.isArray(pe.options) && pe.options.length > 0
+	const hasCands = Array.isArray(pe.cands) && pe.cands.length > 0
+	return !hasOpts && !hasCands
+}
+
 function hand_view(game, nation, viewer_nation) {
 	const own = (nation === viewer_nation)
 	return {
@@ -26418,21 +26440,20 @@ exports.view = function (state, current) {
 			const pe = game.pending_echo
 			if (!pe) return null
 			/*
-			 * 【2026-11-04 修复·15209《伞兵》卡死】空框不下发。
+			 * 【2026-11-04 修复·15209《伞兵》卡死】空框永不下发（与 event_budget 解耦）。
 			 *
 			 * 战斗步建立 event_budget 后本不该再有 pending_echo，但旧实现误写了一个
-			 * 【空】的 echo_need（options / cands 都是 null）。客户端看到 view.pending_echo
-			 * 就弹 #pending_echo_modal —— 那是 position:fixed; inset:0 的全屏遮罩，
-			 * 会盖住地图与预算面板，框里只剩一个「不发动」按钮（点它又被预算冻结拒回）
-			 * = 玩家实测的"多了一个不需要的框、卡死"。
+			 * 【空】的 echo_need（options / cands 都是 null）。
+			 * 客户端看到 view.pending_echo 就弹 #pending_echo_modal —— position:fixed; inset:0
+			 * 的全屏遮罩，会盖住地图与预算面板，框里只剩「不发动」，点它又被冻结拒回 = 卡死。
 			 *
-			 * 这里只挡"预算 + 空框"这一种畸形组合（只读判断，不改状态）；
+			 * ⚠ 早先这里把判据绑在 `game.event_budget` 上，结果【点「结束《伞兵》」后
+			 *   event_budget 被清空 → 抑制失效 → 空框复活再卡死】（玩家实测）。
+			 *   空框本来就没有任何可选项，等价于"没有挂起"，所以判据只依赖它自身。
+			 *
 			 * 真正的选择框有 options 或 cands，照常下发（17514 / 17815 / 17546 等不受影响）。
 			 */
-			if (game.event_budget && pe.kind === 'echo_need' &&
-				!(Array.isArray(pe.options) && pe.options.length) &&
-				!(Array.isArray(pe.cands) && pe.cands.length))
-				return null
+			if (is_empty_echo_frame(pe)) return null
 			const _owner = ((CARD_BY_ID[String(inst_card_id(pe.card))] || {}).nation) || game.current_nation
 			if (!_owner || faction_of_nation(_owner) !== side) return null
 			return pe
@@ -27593,17 +27614,17 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 漏掉这段 -> 客户端 send_action 因 view.actions 无此 key 静默 return false。
 	 */
 	/*
-	 * 【2026-11-04 修复·15209《伞兵》卡死】两者共存时【预算优先】。
+	 * 【2026-11-04 修复·15209《伞兵》卡死】空框不算挂起。
 	 *
 	 * 战斗步（steps 里的 op:'battle'）建立 event_budget 后返回 pending:true，
 	 * 旧实现把它误当成"缺参数"又写了一个空 pending_echo（step='choice' / options=null），
 	 * 而本分支是排他 return 且早于预算分支 → event_battle / event_finish 被挤出白名单，
-	 * 客户端既点不动地图目标、也看不到「结束」按钮，双方都动不了（玩家实测 game 10）。
+	 * 客户端既点不动地图目标、也看不到「结束」按钮（玩家实测 game 10）。
 	 *
-	 * 新建局面已不会产生这种组合（见 play_card 的 _budgetDrives 分支），
-	 * 这里的 `!game.event_budget` 只为【存量对局】兜底：预算本身就是玩家要做的交互。
+	 * 判据与 view.pending_echo 同源（is_empty_echo_frame），**不再依赖 event_budget**：
+	 * 早先写成 `!game.event_budget` 时，点「结束《伞兵》」清空预算后空框又复活、再次排他。
 	 */
-	if (game.pending_echo && !game.event_budget) {
+	if (game.pending_echo && !is_empty_echo_frame(game.pending_echo)) {
 		const card = inst_card(game.pending_echo.card)
 		if (card && faction_of_nation(card.nation) === side)
 			return { resolve_effect: 1, log: 1 }
@@ -28876,22 +28897,17 @@ function do_action(state, current, action, arg) {
 	 * 否则拦截方点了没反应、永远推不动（与战斗预算 BUDGET_ALLOWED 同款口径）。
 	 */
 	/*
-	 * 【2026-11-04 修复·15209《伞兵》点不上】战斗预算优先于"空 echo_need"。
+	 * 【2026-11-04 修复·15209《伞兵》】空 echo_need 框不算挂起，不冻结任何动作。
 	 *
 	 * 旧实现（战斗步误写空 pending_echo）除了让客户端弹出全屏空框，
-	 * 还在 do_action 这里冻结一切非 play_card 动作 —— 于是玩家点了高亮地区，
-	 * 客户端确实发出 event_battle，却被本门禁拒回：
-	 *   「《伞兵》等待你选择目标（请点地图高亮地区）」
-	 * 表现就是"看得见高亮、点不上"。
+	 * 还在 do_action 这里冻结一切非 play_card 动作 —— 玩家点高亮地区发出的
+	 * event_battle 被拒回「《伞兵》等待你选择目标（请点地图高亮地区）」= 点不上。
 	 *
-	 * 判据与 view.pending_echo 的下发抑制保持一致：只有【预算 + 空框】才让行；
-	 * 真正的选择框（有 options/cands）行为不变。
+	 * 判据与 view.pending_echo 完全同源（is_empty_echo_frame），且**不再依赖 event_budget**
+	 * —— 否则点「结束《伞兵》」清空预算后，空框会重新冻结所有动作。
 	 */
-	const _emptyEchoWithBudget = !!(game.pending_echo && game.event_budget &&
-		game.pending_echo.kind === 'echo_need' &&
-		!(Array.isArray(game.pending_echo.options) && game.pending_echo.options.length) &&
-		!(Array.isArray(game.pending_echo.cands) && game.pending_echo.cands.length))
-	if (game.pending_echo && !_emptyEchoWithBudget &&
+	const _emptyEcho = is_empty_echo_frame(game.pending_echo)
+	if (game.pending_echo && !_emptyEcho &&
 		(
 			/*
 			 * 【2026-10-31】kind='echo_need'：多步增强卡在等"补参重发"——
@@ -33887,6 +33903,17 @@ exports.action = function (state, current, action, arg) {
 	} finally {
 		/* 必须清：否则 _in_action 会被写进存档，之后所有动作都不再记录 */
 		delete game._in_action
+		/*
+		 * 【2026-11-04 · 15209《伞兵》卡死】空 echo_need 框（既无 options 也无 cands）
+		 * 等价于"没有挂起"，在动作出口统一清掉。
+		 *
+		 * 为什么必须真删、而不是只在下发时过滤：
+		 *   它是历史遗留的脏字段（战斗步的 pending 被误写成 need 框），会长期留在存档里；
+		 *   只要别的分支把它当挂起（或哪天过滤条件再次和 event_budget 绑在一起），
+		 *   就会在「点「结束《伞兵》」→ 预算清空」这一刻复活并卡死（玩家实测）。
+		 * 真正的选择框（17514/17815/17546）带 options 或 cands，不受影响。
+		 */
+		try { if (is_empty_echo_frame(game.pending_echo)) game.pending_echo = null } catch (e) {}
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {

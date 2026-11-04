@@ -30,9 +30,19 @@ if (typeof g.log === 'number') g.log = []
 const R = require(path.join(MOD, 'rules.js'))
 R._internal.refresh(g)
 const view = R.view(g, 'Axis')
+/*
+ * 存档可能已经"机会用尽"（remaining=0）：此时客户端【按设计】会清掉地图高亮
+ * （play.js reapply_event_budget_highlight：remaining<=0 → clear_target_highlight）。
+ * 本测试要验证的是"可发起时的高亮/面板"，所以把 remaining 归一成 1；
+ * remaining=0 的清除行为另用 extra 断言覆盖。
+ */
+const viewUsed = JSON.parse(JSON.stringify(view))
+if (viewUsed.event_budget && viewUsed.event_budget.remaining === 0)
+	viewUsed.event_budget.remaining = 1
 console.log('view: my_nation=' + view.my_nation +
 	'  pending_echo=' + JSON.stringify(view.pending_echo && view.pending_echo.kind) +
-	'  event_budget=' + JSON.stringify(view.event_budget && { remaining: view.event_budget.remaining, targets: (view.event_budget.targets || []).length }))
+	'  event_budget=' + JSON.stringify(view.event_budget && { remaining: view.event_budget.remaining, targets: (view.event_budget.targets || []).length }) +
+	'  （测试用 remaining=' + (viewUsed.event_budget && viewUsed.event_budget.remaining) + '）')
 
 const dom = new JSDOM(fs.readFileSync(path.join(MOD, 'play.html'), 'utf8').replace(/<script[^>]*src="[^"]*"[^>]*><\/script>/g, ''), {
 	runScripts: 'dangerously',
@@ -56,7 +66,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 ;(async () => {
 	await sleep(260)
-	win.view = view
+	win.view = viewUsed
 	win.on_update()
 	await sleep(220)
 

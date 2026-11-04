@@ -20,7 +20,11 @@ const R = require(path.join(MOD, 'rules.js'))
 const I = R._internal
 const d = I.data
 I.refresh(gRaw)
-const view = R.view(gRaw, 'Axis')
+const viewRaw = R.view(gRaw, 'Axis')
+/* 机会用尽(remaining=0) 时客户端按设计清掉地图高亮（reapply_event_budget_highlight）；
+ * 本测试验证“可点击”，所以把 remaining 归一成 1，不改服务端状态。 */
+const view = JSON.parse(JSON.stringify(viewRaw))
+if (view.event_budget && view.event_budget.remaining === 0) view.event_budget.remaining = 1
 
 const eb = view.event_budget
 console.log('=== view.event_budget ===')
