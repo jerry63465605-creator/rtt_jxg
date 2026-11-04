@@ -27576,20 +27576,12 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 【2026-09-30 德国增强·战术革新】两步交互：只有【打出方所属阵营】能提交。
 	 * 漏掉这段 -> 客户端 send_action 因 view.actions 无此 key 静默 return false。
 	 */
-	if (game.pending_echo && !game.event_budget) {
+	if (game.pending_echo) {
 		const card = inst_card(game.pending_echo.card)
 		if (card && faction_of_nation(card.nation) === side)
 			return { resolve_effect: 1, log: 1 }
 		return { log: 1 }
 	}
-	/*
-	 * 【2026-11-04 修复·15209 伞兵卡死】存量对局兜底。
-	 *
-	 * 旧实现会在"战斗步建立预算"之后又写一个空的 pending_echo（step='choice' / options=null），
-	 * 上面这个排他分支于是把 event_battle / event_finish 挤出白名单 —— 已有对局会一直卡死。
-	 * 现在两者共存时【预算优先】（预算本身就是玩家要做的交互），让存量局面也能继续。
-	 * 新建局面不会再出现这种组合（见 play_card 里 _budgetDrives 分支）。
-	 */
 	/*
 	 * 【2026-09-28】高速公路（15228）结算：玩家逐一在地图选建设位置期间，
 	 * 只有德国（actor）阵营可提交 resolve_autobahn。
@@ -32601,28 +32593,6 @@ function do_action(state, current, action, arg) {
 			const r = resolve_event_card(game, nation, card_id, arg || {}, 0, extra)
 			if (!r.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
-				return game
-			}
-			/*
-			 * 【2026-11-04 修复·15209 伞兵卡死】
-			 *
-			 * 战斗步（steps 里的 op:'battle'）建立 event_budget 后返回的是
-			 * `{ ok:true, pending:true, cardResolved:true, desc }` —— 这里的 pending 意思是
-			 * **"事件还没结束，等玩家用 event_battle / event_finish 驱动"**，
-			 * 而不是"还缺参数要重发 play_card"。
-			 *
-			 * 旧实现把任何 r.pending 一律写成 pending_echo{kind:'echo_need', step:nd.need||'choice'}，
-			 * 而战斗步的 need 是空的 → 生成一个 options=null / cands=null 的空选择框；
-			 * 更致命的是 build_actions 里 `if (game.pending_echo)` 分支【早于】预算分支且排他 return
-			 * （只给 resolve_effect），把 event_battle / event_finish 挤出白名单 ——
-			 * 客户端因此既点不动地图目标、也没有「结束」按钮，双方都动不了（玩家实测 game 10）。
-			 *
-			 * 所以：已建立战斗预算时（budget 本身就是交互），不再写 pending_echo。
-			 */
-			const _budgetDrives = !!(game.event_budget && !(r.need && r.need.need))
-			if (r.pending && _budgetDrives) {
-				game.log.push('【' + nation + '】《' + c.name + '》：' + (r.desc || '请在地图上选择目标，或点「结束」放弃剩余机会'))
-				refresh(game)
 				return game
 			}
 			/* ③ 还缺玩家选择 -> 不弃牌不结算，但要把"缺什么/候选是什么"持久化下发 */
