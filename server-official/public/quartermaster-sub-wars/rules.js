@@ -7729,8 +7729,19 @@ function status_window_ready(game, nation, card_id, tr, opts) {
  * 回合由 (game.turn 完整回合序号, game.current_nation 当前行动国) 唯一确定。
  * 旧实现误用 game.turn（完整 6 国回合）记账，会把"代理再发动"错误拦截为"本回合已用过"。
  */
+/*
+ * 【2026-11-04 · S1】"一回合一次"的频率键必须用【回合归属国】而不是瞬时 current_nation。
+ *
+ * current_nation 会被"让权 / 委托 / 战斗挂起"临时改写
+ * （17553 抗日义勇军让权给日本、17817 进攻是最好的防守、17535 租借法案…），
+ * 同一国家的回合里于是出现两个不同的 key —— `once_per_turn` 判空，同一张卡被重复发动
+ * （玩家实测 17848《一步也不许后退》一回合多次）。
+ *
+ * game.turn_owner：新增的权威字段，在"某国回合开始"时写入，让权/挂起都不改它。
+ * 旧存档没有该字段 -> 回退到 current_nation（行为与改前一致，不会崩）。
+ */
 function freq_key(game) {
-	return game.turn + ':' + (game.current_nation || '')
+	return game.turn + ':' + (game.turn_owner || game.current_nation || '')
 }
 function arm_status_instant(game, window, nation, space) {
 	game.status_instant = game.status_instant || []
@@ -7768,6 +7779,16 @@ function arm_status_instant(game, window, nation, space) {
 			if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
 			if (!status_active(game, cid, own)) continue
 			if (cfg.trigger.once_per_turn && (game.status_used || {})[cid] === freq_key(game)) continue
+			/*
+			 * 【2026-11-04 · S1】"正在发动中"的卡不许被本帧重新武装。
+			 *
+			 * 17848《一步也不许后退》的 run 会【再发起一次陆战】，那次战斗结束又触发
+			 * arm_status_instant('after_land')；而"本回合已发动"的记账（status_used）
+			 * 要等 run 返回后才写 —— 于是同一张卡在运行途中被重新点亮，玩家能连续发动
+			 * （实测一回合多次）。这里用一次性的 in-flight 标记把它挡在窗口外，
+			 * 不影响"多步卡第二次点击续跑"（那时 inflight 已清）。
+			 */
+			if (game.status_inflight && String(game.status_inflight) === String(cid)) continue
 			/* 声明式条件（缺省视为满足） */
 			if (typeof cfg.trigger.ready === 'function') {
 				let okReady = true
@@ -24284,6 +24305,7 @@ function start_opening_phase(game) {
 	}
 	game.opening = { index: 0 }
 	game.current_nation = ORDER_OF_NATIONS[0]
+	game.turn_owner = ORDER_OF_NATIONS[0]   /* 【2026-11-04 · S1】回合归属国，见 freq_key() */
 	game.active = faction_role_of_nation(ORDER_OF_NATIONS[0])
 	game.phase_note = '初始阶段：各国依次弃 3 张（' + ORDER_OF_NATIONS[0] + ' 先弃）'
 }
@@ -24383,6 +24405,7 @@ function do_opening_discard(game, current, arg) {
 	/* 全部弃完：清除 opening，进入正式第一回合 */
 	game.opening = null
 	game.current_nation = ORDER_OF_NATIONS[0]
+	game.turn_owner = ORDER_OF_NATIONS[0]   /* 【2026-11-04 · S1】回合归属国，见 freq_key() */
 	game.active = faction_role_of_nation(ORDER_OF_NATIONS[0])
 	game.turn = 1
 	game.turn_phase = PHASES[0].key
@@ -24478,6 +24501,14 @@ function advance_phase(game) {
 	const ni = ORDER_OF_NATIONS.indexOf(nation)
 	const nextNation = ORDER_OF_NATIONS[(ni + 1) % ORDER_OF_NATIONS.length]
 	game.current_nation = nextNation
+	/*
+	 * 【2026-11-04 · S1】回合归属国（权威字段）：在国家轮转这一刻写入。
+	 *
+	 * 与 current_nation 的区别：让权 / 委托 / 战斗挂起会把 current_nation 临时改成别人，
+	 * 但"这一回合属于谁"不变。`freq_key()`（一回合一次的记账键）必须用它，否则
+	 * 17848《一步也不许后退》这类卡在同一国家回合里能重复发动（玩家实测）。
+	 */
+	game.turn_owner = nextNation
 	/* 【2026-10-22】国家回合切换：清零"本回合被移除部队"计数（17512 战俘）。
 	 * 卡面的"本回合"= 1 个国家回合，故必须在【国家轮转】这一刻清零，而不是整轮。 */
 	reset_removed_this_turn(game)
@@ -31143,7 +31174,23 @@ function do_action(state, current, action, arg) {
 		// 借用生效（italy_borrow）时，效果归属国改为借用方（意大利），
 		// 而非桌面归属 owner（德国）；代价/弃牌已由上方 costPayer 处理，不动。
 		const effNation = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
-		const r = run_status_effect(game, effNation, cardId, tr, arg || {}, instEntry && instEntry.space)
+		/*
+		 * 【2026-11-04 · S1】in-flight 标记：run 期间本卡不能被重新武装。
+		 *
+		 * 17848《一步也不许后退》的 run 会再发起一次陆战；那次战斗结束又触发
+		 * arm_status_instant('after_land')，而"本回合已发动"要等 run 返回后才记账
+		 * （见下方 status_used 写入）——于是同一张卡在运行途中被重新点亮，可连续发动。
+		 * 这里只在 run 期间挂标记，跑完立刻清：
+		 *   · 不影响多步卡第二次点击续跑（那时标记已清）；
+		 *   · 不影响 15245→15253 这类【别的卡】在嵌套战斗里被武装。
+		 */
+		game.status_inflight = String(cardId)
+		let r
+		try {
+			r = run_status_effect(game, effNation, cardId, tr, arg || {}, instEntry && instEntry.space)
+		} finally {
+			delete game.status_inflight
+		}
 		/*
 		 * 【2026-10-15】效果发起了战斗（15247 贵在行动 / 15245 等）-> 挂起高速公路。
 		 * 否则 pending_autobahn 守卫会拦掉后续所有战斗结算动作，玩家卡死。
@@ -31216,8 +31263,17 @@ function do_action(state, current, action, arg) {
 		 * 美国状态卡删掉 status_used 记账，使其可再发动1次（见 resolve_us_wartime），
 		 * 故这里统一只写 status_used，不再有 status_extra 特例。 */
 		if (tr.once_per_turn) {
+			/*
+			 * 【2026-11-04 · S1】记账键归一成【桌面实例 id】—— 与 arm_status_instant /
+			 * view.table_status[].used_this_turn 的读侧完全一致。
+			 * 客户端偶尔会回传面 id（如 "17848"），若直接当键写，读侧按 "17848#75" 找不到，
+			 * `once_per_turn` 就永远判空 = 每回合都能再发动（与 rtt-card-id-face 记的是同一类坑）。
+			 */
+			const _tab = game.table[owner] || []
+			const _usedKey = _tab.find(x => String(x) === String(cardId)) ||
+				_tab.find(x => String(x).split('#')[0] === String(cardId)) || cardId
 			game.status_used = game.status_used || {}
-			game.status_used[cardId] = freq_key(game)
+			game.status_used[String(_usedKey)] = freq_key(game)
 		}
 		/*
 		 * 【2026-10-11】repeat:'per_unit' + count_by：每成功发动 1 次记 1 笔，

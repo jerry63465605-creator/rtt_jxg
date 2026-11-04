@@ -76,7 +76,8 @@ function nation_of_player(game, role) {
 {
   turn: 1,                       // 回合数
   active: 'Axis',                // RTT role（决定谁能提交）
-  current_nation: '德国',        // 行动顺序国家（决定谁在行棋）
+  current_nation: '德国',        // 行动顺序国家（决定谁在行棋）——【可被让权临时改写】
+  turn_owner: '德国',            // ★ 回合归属国（权威）：本国家回合开始时写入，让权/挂起不改
   turn_phase: 'resource',        // 7 阶段之一
   nations_done: 0,               // 本回合已轮过的国家数（0..5）
   play_done: { 德国: false },    // 出牌阶段"三选一"是否已用（v1.1 取代 action_points）
@@ -86,6 +87,18 @@ function nation_of_player(game, role) {
   last_supply: { ... },          // 上次补给结算结果
 }
 ```
+
+#### `turn_owner`（2026-11-04 新增，权威字段）
+
+| 项 | 说明 |
+|---|---|
+| **语义** | "当前这个**国家回合**属于哪个国家"。只在国家轮转 / 开局进入正式回合时写入，**任何让权、委托、战斗挂起都不改它** |
+| **与 `current_nation` 的区别** | `current_nation` 是"此刻轮到谁动"，会被 `17553 抗日义勇军`（让权日本）、`17817 进攻是最好的防守`、`17535 租借法案`、战斗挂起（防守方表态）等临时改写；`turn_owner` 始终是这一回合的主人 |
+| **写入点** | `setup()` 与开局弃牌结束（`game.turn_owner = ORDER_OF_NATIONS[0]`）、国家轮转（`game.turn_owner = nextNation`） |
+| **唯一消费点** | `freq_key(game) = game.turn + ':' + (game.turn_owner \|\| game.current_nation)` —— 所有"一回合一次"记账（`status_used` / `status_suppressed_this_turn` / `status_repeat`）都用它 |
+| **为什么必须有** | 旧实现用瞬时 `current_nation` 做键：同一国家回合里一旦发生让权，键就变了 → `once_per_turn` 判空 → 同一张状态卡被重复发动（实测 `17848《正面攻击》` 一回合多次） |
+| **兼容性** | 旧存档没有该字段 → `freq_key` 回退到 `current_nation`，行为与改前一致，不会报错 |
+| **扩展提醒** | 若将来做 6 人（按国家）模式，"回合归属"应进一步上升为 seat/座位模型；`turn_owner` 是当前两级模型（`active` 阵营 + `current_nation` 国家）下的正确归属源 |
 
 ### 3.2 阶段推进
 
