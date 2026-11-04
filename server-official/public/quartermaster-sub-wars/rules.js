@@ -26417,6 +26417,22 @@ exports.view = function (state, current) {
 		pending_echo: (() => {
 			const pe = game.pending_echo
 			if (!pe) return null
+			/*
+			 * 【2026-11-04 修复·15209《伞兵》卡死】空框不下发。
+			 *
+			 * 战斗步建立 event_budget 后本不该再有 pending_echo，但旧实现误写了一个
+			 * 【空】的 echo_need（options / cands 都是 null）。客户端看到 view.pending_echo
+			 * 就弹 #pending_echo_modal —— 那是 position:fixed; inset:0 的全屏遮罩，
+			 * 会盖住地图与预算面板，框里只剩一个「不发动」按钮（点它又被预算冻结拒回）
+			 * = 玩家实测的"多了一个不需要的框、卡死"。
+			 *
+			 * 这里只挡"预算 + 空框"这一种畸形组合（只读判断，不改状态）；
+			 * 真正的选择框有 options 或 cands，照常下发（17514 / 17815 / 17546 等不受影响）。
+			 */
+			if (game.event_budget && pe.kind === 'echo_need' &&
+				!(Array.isArray(pe.options) && pe.options.length) &&
+				!(Array.isArray(pe.cands) && pe.cands.length))
+				return null
 			const _owner = ((CARD_BY_ID[String(inst_card_id(pe.card))] || {}).nation) || game.current_nation
 			if (!_owner || faction_of_nation(_owner) !== side) return null
 			return pe
@@ -27576,7 +27592,18 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 【2026-09-30 德国增强·战术革新】两步交互：只有【打出方所属阵营】能提交。
 	 * 漏掉这段 -> 客户端 send_action 因 view.actions 无此 key 静默 return false。
 	 */
-	if (game.pending_echo) {
+	/*
+	 * 【2026-11-04 修复·15209《伞兵》卡死】两者共存时【预算优先】。
+	 *
+	 * 战斗步（steps 里的 op:'battle'）建立 event_budget 后返回 pending:true，
+	 * 旧实现把它误当成"缺参数"又写了一个空 pending_echo（step='choice' / options=null），
+	 * 而本分支是排他 return 且早于预算分支 → event_battle / event_finish 被挤出白名单，
+	 * 客户端既点不动地图目标、也看不到「结束」按钮，双方都动不了（玩家实测 game 10）。
+	 *
+	 * 新建局面已不会产生这种组合（见 play_card 的 _budgetDrives 分支），
+	 * 这里的 `!game.event_budget` 只为【存量对局】兜底：预算本身就是玩家要做的交互。
+	 */
+	if (game.pending_echo && !game.event_budget) {
 		const card = inst_card(game.pending_echo.card)
 		if (card && faction_of_nation(card.nation) === side)
 			return { resolve_effect: 1, log: 1 }
@@ -32593,6 +32620,26 @@ function do_action(state, current, action, arg) {
 			const r = resolve_event_card(game, nation, card_id, arg || {}, 0, extra)
 			if (!r.ok) {
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
+				return game
+			}
+			/*
+			 * 【2026-11-04 修复·15209《伞兵》卡死】战斗步的 pending ≠ 缺参数。
+			 *
+			 * steps 里的 op:'battle' 建立 event_budget 后返回
+			 * `{ ok:true, pending:true, cardResolved:true, desc }` ——
+			 * 这里的 pending 意思是"事件未结束，等 event_battle / event_finish 驱动"，
+			 * 它【没有 need 字段】。旧实现把它当成"缺参数重发"，于是写出
+			 * pending_echo{ kind:'echo_need', step:'choice', options:null, cands:null }，
+			 * 客户端据此弹出一个全屏空框（只有「不发动」），并且把预算动作挤出白名单 → 卡死。
+			 *
+			 * 判据：r.need 存在 `need` 字段（'space'/'piece'/…）才是真要补参；
+			 * 否则若已有战斗预算，就交给预算 UI，不再写 pending_echo。
+			 */
+			const _budgetDrives = !!(game.event_budget && !(r.need && r.need.need))
+			if (r.pending && _budgetDrives) {
+				game.log.push('【' + nation + '】《' + c.name + '》：' +
+					(r.desc || '请在地图上选择目标，或点「结束」放弃剩余机会'))
+				refresh(game)
 				return game
 			}
 			/* ③ 还缺玩家选择 -> 不弃牌不结算，但要把"缺什么/候选是什么"持久化下发 */
