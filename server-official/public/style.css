@@ -10,15 +10,18 @@ html {
 * { max-height: 100000px; /* disable chrome's "font boosting" algorithm */ }
 
 :root {
-	--font-normal: "Source Serif", "Noto Emoji", serif;
-	--font-small: "Source Serif SmText", "Noto Emoji", serif;
-	--font-widget: "Source Sans", "Noto Emoji", sans-serif;
+	--font-normal: "Source Serif", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Emoji", serif;
+	--font-small: "Source Serif SmText", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Emoji", serif;
+	--font-widget: "Source Sans", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Emoji", sans-serif;
 
 	--drop-shadow: 1px 1px 4px #0004;
 
 	--thin-border: 1px solid black;
 
 	--color-black: black;
+
+	--color-table-active: hsla(55, 100%, 50%, 0.15);
+	--color-table-invite: hsla(120, 100%, 50%, 0.15);
 }
 
 /* light gray */
@@ -133,14 +136,6 @@ button:disabled {
 	outline-color: gray;
 }
 
-fieldset {
-	border: var(--thin-border);
-	margin: 1em 0;
-}
-
-legend + p { margin-top: 0; }
-fieldset > p:last-child { margin-bottom: 0; }
-
 /* PAGE LAYOUT */
 
 html, body { margin: 0 }
@@ -211,12 +206,11 @@ article hr + p { font-style: italic; }
 /* COMMON ELEMENTS */
 
 a { color: var(--color-blue); }
-a.red { text-decoration: none; color: var(--color-red); }
-a.green { text-decoration: none; color: var(--color-green); }
-a.command { text-decoration: none; color: var(--color-black); }
-a.command:hover { color: var(--color-blue); }
 nav a, a.black { color: var(--color-black); text-decoration: none; }
 nav a:hover, a.black:hover { color: var(--color-blue); text-decoration: underline; }
+
+table a.black { color: var(--color-black); text-decoration: none; }
+table a.black:hover { color: var(--color-blue); text-decoration: underline; }
 
 .error { color: var(--color-red); font-style: italic; white-space: pre-wrap; }
 .warning { color: var(--color-red); }
@@ -243,12 +237,6 @@ p.box {
 	box-shadow: var(--drop-shadow);
 	background-color: var(--color-text);
 }
-
-/* MODERATOR ELEMENTS */
-
-fieldset.mod legend { color: brown; }
-fieldset.mod { border-color: brown; }
-a.mod { color: brown; }
 
 /* TABLES */
 
@@ -306,22 +294,31 @@ table.striped tr:nth-child(2n) {
 	background-color: var(--color-table-stripe);
 }
 
-td.c, th.c { text-align: center; }
 td.r, th.r { text-align: right; }
 td.w, th.w { white-space: nowrap; }
 td.n, th.n { width: 0px; white-space: nowrap; text-align: right; }
 
 /* TOURNAMENT TABLES */
 
-table.tm img {
-	border: var(--thin-border);
-	max-width: 36px; max-height: 36px;
-	margin: auto;
-	display: block;
+table.seeds { table-layout: fixed }
+table.seeds td:nth-child(n+2) { width: 42px; text-align: center; }
+table.seeds td:last-child { width: 20px; }
+table.seeds tbody td:nth-child(5) { border-left: 1px solid #0004; }
+table.seeds tbody td:first-child { border-right: 1px solid #0004; }
+table.seeds tbody td:last-child { border-left: 1px solid #0004; }
+
+table.seeds a { color: var(--color-black); text-decoration: none; }
+table.seeds a:hover { color: var(--color-blue); text-decoration: underline; }
+table.pools a { color: var(--color-black); text-decoration: none; }
+table.pools a:hover { color: var(--color-blue); text-decoration: underline; }
+
+@media (max-width: 650px) { table.seeds.stats td:nth-child(2) { display: none } }
+@media (max-width: 600px) { table.seeds.stats td:nth-child(3) { display: none } }
+@media (max-width: 550px) { table.seeds.stats td:nth-child(4) { display: none } }
+@media (max-width: 500px) {
+	table.seeds td:nth-child(n+2) { width: 36px; }
+	table.seeds td:last-child { width: 18px; }
 }
-table.tm td:has(img) { width: 36px; padding-right: 0; }
-table.tm td { vertical-align: middle }
-table.tm td:last-child, table.tm th:last-child { text-align: right }
 
 /* FORUM AND MESSAGE POSTS */
 
@@ -330,30 +327,14 @@ div.post {
 	margin-top: 24px;
 	border: var(--thin-border);
 	box-shadow: var(--drop-shadow);
-	scroll-margin-top: 20px;
 }
-
-p.box:target {
-	outline: 3px solid var(--color-focus);
-}
-
-div.post:target {
-	outline: 3px solid var(--color-focus);
-}
-
-div.post.removed { background-color: mistyrose; }
-div.post.removed > div.head { background-color: red; }
 
 div.post > div.head {
 	display: flex;
+	justify-content: space-between;
 	padding: 5px 10px;
-	gap: 10px;
 	background-color: var(--color-post-head);
 	border-bottom: var(--thin-border);
-}
-
-div.post > div.head div.from {
-	flex-grow: 1;
 }
 
 div.post > div.body {
@@ -363,11 +344,7 @@ div.post > div.body {
 
 div.post + div.edit {
 	margin-top: 5px;
-	margin-right: 8px;
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: right;
-	gap: 8px;
+	text-align: right;
 }
 
 div.body img {
@@ -450,3 +427,39 @@ div.body img {
 .game_item.unread .game_head { background-color: orange }
 .game_item.your_turn .game_head { background-color: gold }
 .game_item.your_turn .game_main { background-color: lightyellow }
+
+/* 全站页脚 */
+footer {
+	margin: 28px auto 14px;
+	max-width: 824px;
+	padding: 14px 16px 18px;
+	border-top: 1px solid #c8c5bd;
+	text-align: center;
+	font-size: 13px;
+	color: #555;
+	line-height: 1.7;
+}
+footer p { margin: 4px 0; }
+footer a { color: #1a47a8; }
+
+/* 手机端：对局卡片紧凑化，一屏能看到多局 */
+@media (max-width: 600px) {
+	.game_list {
+		gap: 8px;
+		margin: 8px 0;
+	}
+	.game_head, .game_main {
+		padding: 3px 6px;
+	}
+	.game_head {
+		line-height: 20px;
+		font-size: 14px;
+	}
+	.game_info {
+		font-size: 13px;
+		line-height: 17px;
+	}
+	.game_main img {
+		display: none;
+	}
+}
