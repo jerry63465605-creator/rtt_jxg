@@ -7102,12 +7102,15 @@ function resolve_us_lend_lease_play(game, arg) {
 		   照 play_card 的 BASIC 分支结算，复用 has_legal_target / resolve_basic_card 原子 */
 		const pre = has_legal_target(game, nat, c, arg || {})
 		if (!pre.ok) {
+			/* 【2026-11-05 · B7】建设海军失败也要给 after_build_navy 时点 */
+			maybe_emit_navy_build_failed(game, nat, c, pre, arg)
 			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》无法执行：' + pre.reason)
 			return game
 		}
 		const r = resolve_basic_card(game, nat, card, arg || {})
 		if (!r.ok) {
+			maybe_emit_navy_build_failed(game, nat, c, r, arg)
 			put_back_to_hand(game, nat, card)
 			game.log.push('【' + nat + '】《' + c.name + '》无法执行：' + r.reason)
 			return game
@@ -9160,7 +9163,11 @@ function unit_cap_ok(game, nation, type) {
 /* 建设 1 支陆军/海军/空军 */
 function build_piece(game, nation, type, space) {
 	const capChk = unit_cap_ok(game, nation, type)
-	if (!capChk.ok) return capChk
+	if (!capChk.ok) {
+		/* 【2026-11-05 · B7】建设海军【失败】也要给 after_build_navy 时点（玩家口径） */
+		if (type === 'navy') emit_build_navy_failed(game, nation, space, capChk.reason)
+		return capChk
+	}
 	const __r = _build_piece_impl(game, nation, type, space)
 	if (__r && __r.ok) {
 		if (type === 'army' || type === 'navy') { game.last_built = { space: space, nation: nation, type: type } }
@@ -9193,8 +9200,44 @@ function build_piece(game, nation, type, space) {
 		 * 避免"同一件事两个名字"。
 		 */
 		if (type === 'army') offer_armed_effects(game, 'after_build_army', { space: space, nation: nation, type: type, piece_id: __r.id })
+	} else if (type === 'navy') {
+		/* 【2026-11-05 · B7】建设海军失败（供给/地形/占位…）也给 after_build_navy 时点 */
+		emit_build_navy_failed(game, nation, space, (__r && __r.reason) || '')
 	}
 	return __r
+}
+
+/*
+ * 【2026-11-05 · B7《施佩伯爵》】"建设海军失败"也要派发 after_build_navy 窗口。
+ *
+ * 玩家口径：卡面写"建设海军后"，但**建不出来**的时候也要给触发时点
+ * （否则 15210《施佩伯爵海军上将号》这类卡等于永远无法触发）。
+ *
+ * 失败范围（玩家确认：全部算）：上限不足 / 无合法海域 / 该格已有己方部队 / 供给不足。
+ * ctx 带 `failed:true` + `reason`，各卡可按自己的 ready 决定是否置亮
+ * （15210 已放开 ready，并在 run 里对"无合法海战目标"返回 ok:false —— 不扣代价）。
+ */
+/*
+ * 便捷包装：只有「建设海军」基本卡且本次失败时才派发窗口。
+ * 用于"在 has_legal_target / can_build_at 阶段就被拒"的路径
+ * （这些路径根本走不到 build_piece，所以必须在调用点补一刀）。
+ */
+function maybe_emit_navy_build_failed(game, nation, c, res, arg) {
+	if (!c || c.name !== '建设海军') return
+	if (res && res.ok) return
+	const sp = (arg && arg.space != null) ? Number(arg.space) : null
+	emit_build_navy_failed(game, nation, sp, (res && res.reason) || '')
+}
+
+function emit_build_navy_failed(game, nation, space, reason) {
+	if (!nation) return
+	game.last_build_failed = { type: 'navy', nation: nation, space: space, reason: reason || '' }
+	game.log.push('【' + nation + '】建设海军未能执行：' + (reason || '（原因不明）') +
+		'（仍开启「建设海军后」的触发时点）')
+	offer_armed_effects(game, 'after_build_navy', {
+		space: space, nation: nation, piece_id: null,
+		failed: true, reason: reason || '',
+	})
 }
 function _build_piece_impl(game, nation, type, space) {
 	/*
@@ -12113,20 +12156,20 @@ const ECHO_EFFECTS = {
 		armed: {
 			when: 'after_build_navy', actor: '德国', cost: { attrition: 1 },
 			desc: '建设海军后：在<亚速尔>相邻地区发起1次海战',
-			/* 最小原子预检：<亚速尔>相邻海域能否发起海战 */
+			/* 【2026-11-05 · B7】不再要求"此刻已有合法海战目标"：
+			 * 建设海军【失败】也会开窗（见 emit_build_navy_failed），
+			 * 玩家可以点；若确实没有目标，run 返回 ok:false —— 明确拒绝且**不扣代价**。 */
 			ready(game, ctx) {
-				const az = space_id('亚速尔')
-				if (az == null) return false
-				return !!find_battle_target(game, '德国', 'sea', { near: az, enemyOnly: true })
+				return space_id('亚速尔') != null
 			},
 			run(game, ctx) {
 				const az = space_id('亚速尔')
-				if (az == null) return { ok: true, desc: '亚速尔不存在' }
+				if (az == null) return { ok: false, reason: '亚速尔不存在' }
 				/* 复用最小原子（与 ready 共用） */
 				const tgt = find_battle_target(game, '德国', 'sea', { near: az, enemyOnly: true })
-				if (!tgt) return { ok: true, skip: true, desc: '亚速尔相邻无可发起的海战目标，未发动' }
+				if (!tgt) return { ok: false, reason: '亚速尔相邻无可发起的海战目标' }
 				const r = do_battle(game, '德国', tgt.space, 0, 'sea', { from: tgt.initiator })
-				if (!r.ok) return { ok: true, desc: '海战未发动：' + (r.reason || '') }
+				if (!r.ok) return { ok: false, reason: '海战未发动：' + (r.reason || '') }
 				refresh(game)
 				return { ok: true, desc: '对' + data.name_of(tgt.space) + '发起海战' }
 			},
@@ -32653,6 +32696,8 @@ function do_action(state, current, action, arg) {
 			 */
 			const pre = has_legal_target(game, nation, c, arg || {})
 			if (!pre.ok) {
+				/* 【2026-11-05 · B7】建设海军失败也要给 after_build_navy 时点 */
+				maybe_emit_navy_build_failed(game, nation, c, pre, arg)
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + pre.reason)
 				return game
 			}
@@ -32666,6 +32711,8 @@ function do_action(state, current, action, arg) {
 				if (r.ok) discard_card(game, nation, card_id)
 			}
 			if (!r.ok) {
+				/* 【2026-11-05 · B7】建设海军失败（can_build_at 拒绝）也要给 after_build_navy 时点 */
+				maybe_emit_navy_build_failed(game, nation, c, r, arg)
 				game.log.push('【' + nation + '】《' + c.name + '》无法执行：' + r.reason)
 				return game
 			}
