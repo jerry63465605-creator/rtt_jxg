@@ -2407,16 +2407,68 @@ function de_is_controlled(game, space, nation) {
 	return has_pieces(game, { space: space, nation: nation })
 }
 function de_soviet_armies_near_german(game) {
-	const gArmy = {}
-	for (const p in game.piece_nation)
-		if (game.piece_nation[p] === '德国' && game.piece_type[p] === 'army' && game.location[p] != null)
-			gArmy[game.location[p]] = true
+	/*
+	 * 【2026-11-06 · 15226 巴巴罗萨】
+	 *   ① 邻接改用 `get_connections(game, sp, 轴心)`（动态，含海峡控制与阵营限制），
+	 *      旧实现用静态 `data.spaces[].connections`，在海峡/限制地形下会算错；
+	 *   ② 只保留陆地（卡面是"苏联陆军"，海域不可能有陆军，但保持与候选同口径）。
+	 */
+	const f = faction_of_nation('德国')
+	const gSp = new Set()
+	for (const p in game.location) {
+		if (game.location[p] == null) continue
+		if (game.piece_nation[p] === '德国' && game.piece_type[p] === 'army')
+			gSp.add(Number(game.location[p]))
+	}
 	const out = []
-	for (const p in game.piece_nation) {
-		if (game.piece_nation[p] === '苏联' && game.piece_type[p] === 'army' && game.location[p] != null) {
-			const sp = game.location[p]
-			if ((data.spaces[sp].connections || []).some(nb => gArmy[nb])) out.push(p)
+	for (const p in game.location) {
+		if (game.location[p] == null) continue
+		if (game.piece_nation[p] !== '苏联' || game.piece_type[p] !== 'army') continue
+		const sp = Number(game.location[p])
+		const nbs = get_connections(game, sp, f).map(Number)
+		if (nbs.some(x => gSp.has(x))) out.push(p)
+	}
+	return out.sort()
+}
+
+/*
+ * 【2026-11-06 · 15226《巴巴罗萨》】
+ *
+ * 卡面：「选择在【本回合开始时】与德国陆军相邻的 3 支苏联陆军」。
+ *
+ * 旧实现：候选由 `event_battle_targets → spacesFn` 在**每次点击时实时重算**，
+ * 于是"回合中途把德国陆军移到新位置"就会凭空多出可选目标（探针实测：
+ * 回合开始 targets=[]，中途把德国陆军放到<东欧>后 targets=['罗斯']），与卡面不符。
+ *
+ * 现在：德国【回合开始】（current_nation 切成德国那一刻）冻结一次快照
+ * （只记苏联陆军实例 id），候选 = 快照里**仍在场**的那些单位所在地区。
+ */
+function refresh_barbarossa_snapshot(game) {
+	game.de_turn_start_adjacent = {
+		round: game.turn || 1,
+		units: de_soviet_armies_near_german(game),
+	}
+}
+
+function barbarossa_target_spaces(game) {
+	const snap = game.de_turn_start_adjacent
+	if (!snap || !Array.isArray(snap.units)) {
+		/* 兜底：老存档 / 未经过德国回合开始的盘面 —— 按当前局面算，只提示一次 */
+		if (!game.__barbarossa_fallback) {
+			game.__barbarossa_fallback = true
+			game.log.push('《巴巴罗萨》：未找到"回合开始"快照，按当前局面计算目标')
 		}
+		return de_soviet_armies_near_german(game)
+			.map(id => Number(game.location[id]))
+			.filter((sp, i, a) => sp && data.spaces[sp] && data.spaces[sp].terrain === 'land' && a.indexOf(sp) === i)
+	}
+	const out = []
+	for (const id of snap.units) {
+		if (game.location[id] == null) continue                       /* 中途被消灭 */
+		if (game.piece_nation[id] !== '苏联' || game.piece_type[id] !== 'army') continue
+		const sp = Number(game.location[id])
+		if (!data.spaces[sp] || data.spaces[sp].terrain !== 'land') continue
+		if (out.indexOf(sp) < 0) out.push(sp)
 	}
 	return out
 }
@@ -11199,15 +11251,8 @@ const EVENT_EFFECTS = {
 		 */
 		steps: [{
 			op: 'battle', kind: 'land', pick: 3, pickMin: 1, onlyNation: '苏联',
-			spacesFn: (game, actor) => {
-				const out = []
-				for (const pid of de_soviet_armies_near_german(game)) {
-					const sp = game.location[pid]
-					if (sp == null || out.indexOf(sp) >= 0) continue
-					if (data.spaces[sp] && data.spaces[sp].terrain === 'land') out.push(sp)
-				}
-				return out
-			},
+			/* 【2026-11-06】候选改为"德国回合开始时的快照"，不再实时重算 */
+			spacesFn: (game) => barbarossa_target_spaces(game),
 		}],
 	},
 	'15227': {
@@ -25185,6 +25230,8 @@ function advance_phase(game) {
 	 * 17848《一步也不许后退》这类卡在同一国家回合里能重复发动（玩家实测）。
 	 */
 	game.turn_owner = nextNation
+	/* 【2026-11-06 · 15226】德国回合开始冻结"与德国陆军相邻的苏联陆军"快照 */
+	if (nextNation === '德国') refresh_barbarossa_snapshot(game)
 	/* 【2026-10-22】国家回合切换：清零"本回合被移除部队"计数（17512 战俘）。
 	 * 卡面的"本回合"= 1 个国家回合，故必须在【国家轮转】这一刻清零，而不是整轮。 */
 	reset_removed_this_turn(game)
@@ -29409,6 +29456,8 @@ function do_action(state, current, action, arg) {
 		game.current_nation = nation
 		game.active = faction_of_nation(nation) === 'allies' ? ALLIES_ROLE : AXIS_ROLE
 		game.turn_phase = phase
+		/* 【2026-11-06 · 15226】调试/测试盘面同样在"德国回合开始"这一刻冻结快照 */
+		if (nation === '德国') refresh_barbarossa_snapshot(game)
 		refresh(game)
 		game.log.push('【调试】清空挂起态，跳到【' + nation + '】·' + phase_zh(phase))
 		const ENTRY = {
