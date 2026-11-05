@@ -24467,7 +24467,12 @@ function phase_scoring(game, nation, opts) {
 	 * 现在：先询问 -> 被拦的卡写压制 -> 再计分（下面的循环跳过被压制的卡），
 	 * 因此不需要回滚分数。opts.__afterIntercept 由续跑路径设置，避免递归再问一次。
 	 */
-	if (!opts.__afterIntercept && !game.pending_status_react && nation === '德国') {
+	/* 【2026-11-06 · B12 扩展】借出的德国 auto 卡在【借用方】计分阶段同样要能被 15353 拦 */
+	const _ibPre = game.italy_borrow
+	const _ibBorrowerHere = !!(_ibPre && _ibPre.turn === game.turn &&
+		_ibPre.nation === nation && _ibPre.card_face)
+	if (!opts.__afterIntercept && !game.pending_status_react &&
+		(nation === '德国' || _ibBorrowerHere)) {
 		const items = []
 		for (const n2 of Object.keys(game.table || {})) {
 			for (const cid of (game.table[n2] || [])) {
@@ -24475,8 +24480,12 @@ function phase_scoring(game, nation, opts) {
 				if (status_suppressed_now(game, cid)) continue
 				const cfg0 = status_config_of(cid)
 				if (!cfg0 || !cfg0.auto || cfg0.auto.phase !== 'scoring') continue
+				/* 借用当回合：只问被借出的那一张，且只在借用方计分阶段问 */
+				const _ibSame = !!(_ibPre && _ibPre.turn === game.turn && _ibPre.card_face === cid)
+				const _ibMine = _ibSame && _ibPre.nation === nation
+				if (_ibSame && !_ibMine) continue
 				if (cfg0.auto.trigger_nation) {
-					if (cfg0.auto.trigger_nation !== nation) continue
+					if (cfg0.auto.trigger_nation !== nation && !_ibMine) continue
 				} else if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
 				items.push({ cid: cid, nation: n2, name: (inst_card(cid) || {}).name || '状态卡' })
 			}
@@ -24484,8 +24493,14 @@ function phase_scoring(game, nation, opts) {
 		if (items.length) {
 			game.pending_scoring_deferred = { nation: nation, opts: opts }
 			queue_status_react(game, 'scoring', { nation: nation }, items)
-			/* 有人可拦 -> 已挂起，等表态后再计分；无人拦 -> step 内部会即时调用本函数 */
-			if (game.pending_status_react) return
+			/*
+			 * 一律 return —— 真正的计分只由两条路之一完成：
+			 *   · 有人可拦：挂起，等表态后由 step_status_react 以 __afterIntercept 重入；
+			 *   · 无人可拦：step 内部【同步】重入（同样带 __afterIntercept）并算完。
+			 * 【2026-11-06 修】原来只在 pending 存在时 return，
+			 * 无人可拦时同步重入已经算了一遍，外层再往下走 = **同一张卡重复加分**（实测 15241 +2 变 +4）。
+			 */
+			return
 		}
 	}
 	/*
@@ -24587,8 +24602,20 @@ function phase_scoring(game, nation, opts) {
 			if (status_suppressed_now(game, cid)) continue
 			const cfg = status_config_of(cid)
 			if (!cfg || !cfg.auto || cfg.auto.phase !== PH.SCORING) continue
+			/*
+			 * 【2026-11-06 · B12 扩展 · 玩家口径】17732 借出的德国 auto 计分卡
+			 * （15241 瑞典铁矿 / 15244 丰富的资源 / 6601 大德意志帝国）：
+			 *
+			 * 借出当回合【自动】在借用方（意大利）的计分阶段结算 —— 不需要玩家再点一次卡。
+			 * 条件仍按卡归属国（德国）的部队判定（cfg.auto.run(game, n2) 传的就是德国）；
+			 * 同一轮里其它国家（含德国本国）跳过，避免重复加两次。
+			 */
+			const _ib = game.italy_borrow
+			const _ibSameTurn = !!(_ib && _ib.turn === game.turn && _ib.card_face === cid)
+			const _ibMine = _ibSameTurn && _ib.nation === nation
+			if (_ibSameTurn && !_ibMine) continue
 			if (cfg.auto.trigger_nation) {
-				if (cfg.auto.trigger_nation !== nation) continue
+				if (cfg.auto.trigger_nation !== nation && !_ibMine) continue
 			} else {
 				if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
 			}
@@ -24604,7 +24631,7 @@ function phase_scoring(game, nation, opts) {
 					 * 供英国下个回合开始时发动 15328 选择弃置（延迟窗口，参照大清洗范式）。
 					 * 只记 bonus > 0（"有效的自动加分"），按 card_id 去重。
 					 */
-					if (cfg.auto.trigger_nation === '德国' && bonus > 0) {
+					if ((cfg.auto.trigger_nation === '德国' || _ibMine) && bonus > 0) {
 						game.uk_enigma_targets = game.uk_enigma_targets || []
 						if (!game.uk_enigma_targets.some(t => t.card_id === cid))
 							game.uk_enigma_targets.push({ card_id: cid, bonus: bonus })
