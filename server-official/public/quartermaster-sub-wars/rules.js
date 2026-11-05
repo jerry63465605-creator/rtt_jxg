@@ -21331,6 +21331,11 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		})
 		return {
 			ok: true, pending: true, removed: null, space: space,
+			/*
+			 * 【2026-11-05 修复·文案】挂起出口也带上被攻击单位的类型/国家，
+			 * 否则调用方 battle_desc(r,…) 会打印「移除敌方undefined（undefined）」。
+			 */
+			removed_type: vType, removed_nation: vNation,
 			defender: defenderNation,
 			desc: '等待【' + defenderNation + '】决定是否用空军代受' +
 				(defenderNation !== vNation
@@ -31108,6 +31113,16 @@ function do_action(state, current, action, arg) {
 			/* use_air 有值 -> 代受；否则视为不代受 */
 			defend_air: (arg && arg.use_air != null) ? arg.use_air : undefined,
 			air_retreat: (arg && arg.retreat != null) ? arg.retreat : undefined,
+			/*
+			 * 【2026-11-05 修复·15410 武士道】必须带 guard_done。
+			 *
+			 * 走到 defend 阶段说明 guard（保护卡）已经表态过（选了"不使用"或已打出）。
+			 * 但重放 do_battle 时旧代码没带 guard_done，于是 do_battle 又走一遍
+			 * `if (!opt.guard_done && !opt.kv2_done)` 的 guard 分支 ——
+			 * 15410 还在手里、条件依旧满足 → 又挂 guard → 玩家在
+			 * 「guard ↔ defend」之间无限循环，被攻击的陆军永远死不了（实测）。
+			 */
+			guard_done: true,
 		}
 		/*
 		 * 明确"不代受"：把 defend_air 显式设为 null，
