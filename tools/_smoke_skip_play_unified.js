@@ -159,7 +159,7 @@ section('S7 源码守卫：skip_play_done 只在 apply_skip_play 里写')
 		/function apply_skip_play\(game, nation\) \{[\s\S]{0,400}mark_play_acted\(game, nation\)[\s\S]{0,200}mark_play_done\(game, nation\)/.test(src))
 	ok('apply_skip_play 不设 pending_advance_phase',
 		!/apply_skip_play[\s\S]{0,400}pending_advance_phase\s*=/.test(src))
-	ok('activate_status 走 apply_skip_play', /cost\.skip_play && !borrowed[\s\S]{0,200}apply_skip_play\(game, costPayer\)/.test(src))
+	ok('activate_status 走 apply_skip_play', /cost\.skip_play && !_costPaidNow[\s\S]{0,200}apply_skip_play\(game, costPayer\)/.test(src))
 	ok('自动派发走 apply_skip_play', /if \(tr\.cost\.skip_play\) apply_skip_play\(game, n\)/.test(src))
 	ok('15255 的 attrition 在 cost 里', /cost: \{ skip_play: true, attrition: 2 \}/.test(src))
 }

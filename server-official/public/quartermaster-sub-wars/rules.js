@@ -17725,12 +17725,19 @@ const RESPONSE_EFFECT_IMPL = {
 	/* 17732 德国军事顾问：收集桌上德国状态卡，置 pending 待意大利选 1 张借用 */
 	'17732': (game, side, ctx) => {
 		const germanyTable = (game.table && game.table['德国']) || []
-		const opts = germanyTable.filter(cid => {
-			const cfg = status_config_of(cid)
-			return cfg && cfg.trigger
-		})
+		/*
+		 * 【2026-11-05 · B12 玩家口径】候选 = 该桌面【全部】德国状态卡。
+		 * 只有带 trigger（有点击发动条件）的才可激活；其余仅展示（playable:false），
+		 * 客户端按 playable 置灰，服务端 activate_status 仍保留第二道闸。
+		 */
+		const opts = germanyTable.slice()
+		const playable = {}
+		for (const cid of opts) {
+			const cfg0 = status_config_of(cid)
+			playable[cid] = !!(cfg0 && cfg0.trigger)
+		}
 		if (!opts.length) return { ok: false, desc: '（桌上没有德国状态卡可借用）' }
-		game.italy_borrow = { pending: true, nation: '意大利', options: opts, turn: game.turn }
+		game.italy_borrow = { pending: true, nation: '意大利', options: opts, playable: playable, turn: game.turn }
 		return { ok: true, desc: '选择 1 张德国状态卡借用（本回合内由意大利使用）', choice: true }
 	},
 }
@@ -27235,7 +27242,11 @@ exports.view = function (state, current) {
 						nation: ib.nation,
 						options: (ib.options || []).map(cid => {
 							const c = inst_card(String(inst_card_id(cid)))
-							return { card_id: cid, name: c ? c.name : cid }
+							/* 【2026-11-05 · B12】playable=false 只能看不能点（客户端据此置灰） */
+							return {
+								card_id: cid, name: c ? c.name : cid,
+								playable: !ib.playable || ib.playable[cid] !== false,
+							}
 						}),
 					}
 				}
@@ -31726,7 +31737,14 @@ function do_action(state, current, action, arg) {
 		 * 而不是等 run 返回 ok:false —— 否则玩家点了发动就是白亏牌。
 		 */
 		{
-			const pre = precheck_status_args(game, owner, tr, arg || {}, cardId)
+			/*
+		 * 【2026-11-05 · B12】预检也要按【付款方】看手牌：
+		 * 借用德国状态卡时 costPayer = 意大利，弃牌代价必须从意大利手牌里选；
+		 * 传 owner（德国）会误判「要弃置的手牌不在手里」，借用直接失效。
+		 */
+		const pre = precheck_status_args(game,
+			borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner,
+			tr, arg || {}, cardId)
 			if (!pre.ok && !isForgoBuild) {
 				game.log.push('《' + cName + '》现在不能发动：' + pre.reason)
 				return game
@@ -31766,6 +31784,20 @@ function do_action(state, current, action, arg) {
 		 */
 		const costPayer = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
 		const cost = tr.cost || {}
+		/*
+		 * 【2026-11-05 · B12】损耗代价的前置预检。
+		 *
+		 * 原来 can_attrite 校验在 skip_play 之后：15255《征兵》这种「跳过出牌阶段 + 损耗 2」的卡，
+		 * 牌库不足时会**先把出牌阶段跳过**、再报"牌库不足，无法发动" —— 代价白付、效果零。
+		 * 借用（17732）时更明显：意大利付不起损耗，却已经把德国的出牌阶段……不对，是自己的阶段跳掉了。
+		 *
+		 * 玩家口径：付不起就「拒绝发动」= 一张都不扣、阶段也不动。故把校验提到所有代价之前。
+		 */
+		if (cost.attrition && !_costPaidNow && !can_attrite(game, costPayer, cost.attrition)) {
+			game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
+				' 张牌，但牌库不足，无法发动（未支付代价）')
+			return game
+		}
 		/*
 		 * 【2026-10-23】效果【参数】预检 —— 必须在付代价之前。
 		 *
@@ -31823,8 +31855,19 @@ function do_action(state, current, action, arg) {
 		 * （症状：玩家报「借用《贵在行动》没有生效」）。
 		 * 下面 discard / attrition / skip_play 三处代价统一按 borrowed 免除。
 		 */
-		if (cost.discard && !borrowed && !_costPaidNow) {
+		if (cost.discard && !_costPaidNow) {
 			const picked = (arg && arg.discard) || []
+			/*
+			 * 【2026-11-05 · B12】代价必须来自【付款方】手牌。
+			 * 借用德国状态卡时 costPayer = 意大利：玩家点了德国的牌、或点了不在手里的牌，
+			 * discard_card 会静默失败（牌没扣、效果照跑 = 白嫖），这里提前拒绝。
+			 */
+			for (const _dc of ((arg && arg.discard) || []).slice(0, cost.discard)) {
+				if ((game.hands[costPayer] || []).indexOf(_dc) < 0) {
+					game.log.push('《' + cName + '》的代价须从【' + costPayer + '】手牌中选择（未支付代价）')
+					return game
+				}
+			}
 			if (picked.length < cost.discard) {
 				game.log.push('请先选择要弃置的 ' + cost.discard + ' 张手牌')
 				return game
@@ -31842,29 +31885,6 @@ function do_action(state, current, action, arg) {
 						 * 【从未定义】—— 15242 人民冲锋队弃错牌时会抛 ReferenceError。
 						 * 直接复用上文已算好的 cName（同一状态卡名）。
 						 */
-						game.log.push('《' + cName + '》的代价必须是指定的牌（' + nmTxt + '）')
-						return game
-					}
-				}
-			}
-			for (const cid of picked.slice(0, cost.discard))
-				discard_card(game, costPayer, cid)
-			game.log.push('【' + costPayer + '】弃置 ' + cost.discard + ' 张手牌')
-		}
-		if (cost.discard && !borrowed && !_costPaidNow) {
-			const picked = (arg && arg.discard) || []
-			if (picked.length < cost.discard) {
-				game.log.push('请先选择要弃置的 ' + cost.discard + ' 张手牌')
-				return game
-			}
-			/* 代价须为指定卡（15242 等：必须弃置【发起陆战】） */
-			if (cost.discard_is) {
-				for (const cid of picked.slice(0, cost.discard)) {
-					const c = inst_card(cid)
-					if (!card_matches_filter(c, cost.discard_is)) {
-						/* 【2026-10-20】discard_is.name 可能是数组（"或"关系），文案须展开为"A或B" */
-						const nm = cost.discard_is.name
-						const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '')
 						game.log.push('《' + cName + '》的代价必须是指定的牌（' + nmTxt + '）')
 						return game
 					}
@@ -31943,7 +31963,7 @@ function do_action(state, current, action, arg) {
 		 *     play_done 未置 -> 还能继续打出别的牌，代价形同虚设。
 		 * 即"跳过"= 出牌阶段已被这张卡用掉，但【不】替玩家推进阶段。
 		 */
-		if (cost.skip_play && !borrowed && !_costPaidNow) {   /* 【2026-10-30】被拦也照付 */
+		if (cost.skip_play && !_costPaidNow) {   /* 【2026-10-30】被拦也照付 */
 			/* 【2026-10-28】统一走 apply_skip_play（与自动派发 / 17841 等同一实现） */
 			apply_skip_play(game, costPayer)
 			game.log.push('【' + costPayer + '】跳过本回合出牌阶段（不再出牌，可点「下一阶段」继续）')
@@ -31957,7 +31977,7 @@ function do_action(state, current, action, arg) {
 		 * 注意这里【不】走 attrition_passive 的"差额扣分"——
 		 * 那条规则只适用于【被别国损耗】，自己主动付代价不适用。
 		 */
-		if (cost.attrition && !borrowed && !_costPaidNow) {
+		if (cost.attrition && !_costPaidNow) {
 			if (!can_attrite(game, costPayer, cost.attrition)) {
 				game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
 					' 张牌，但牌库不足，无法发动')

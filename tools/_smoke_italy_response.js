@@ -251,16 +251,27 @@ console.log('\n=== 17732 德国军事顾问（借用德国状态卡，免费激�
 	const ger = I.space_id_of('德国')
 	const sovId = putPiece('苏联', 'army', ger)
 	/*
-	 * 【2026-10-28 基线清理】15242 现在有 requires { type:'BASIC', name:'发起陆战' }：
-	 * 借用时"免代价"只是跳过 cost（弃手牌 / skip_play），requires 仍要满足。
-	 * 德国手牌补一张【发起陆战】(15201) 才能激活。
+	 * 【2026-11-05 · B12 玩家口径】借用不再免费 —— 代价由【借款方意大利】支付：
+	 *   15242 需要「弃 1 张[发起陆战] + 跳过出牌阶段」，两项都落在意大利身上（德国不受影响）。
+	 * requires 仍按原卡：需要有[发起陆战]这张牌可弃（从意大利手牌里给）。
 	 */
 	g.hands['德国'] = g.hands['德国'] || []
-	g.hands['德国'].push('15201#1')
+	g.hands['德国'].push('15201#1')            /* requires 用：德国手牌里有一张[发起陆战] */
+	g.hands['意大利'] = g.hands['意大利'] || []
+	g.hands['意大利'].push('17701#1')          /* 意大利自己的[发起陆战]，作为代价被弃 */
 	const deHandBefore = (g.hands['德国'] || []).length
-	rules.action(g, 'Axis', 'activate_status', { card: gst })
-	ok('借用激活免代价：德国未弃手牌', (g.hands['德国'] || []).length === deHandBefore)
-	ok('借用激活免代价：未置 skip_play', !g.skip_play_done || !g.skip_play_done['德国'])
+	const itHandBefore = (g.hands['意大利'] || []).length
+	const _n0 = (g.log || []).length
+	rules.action(g, 'Axis', 'activate_status', { card: gst, discard: ['17701#1'] })
+	console.log('    [借用激活] current_nation=' + g.current_nation +
+		'  italy_borrow=' + JSON.stringify(g.italy_borrow && g.italy_borrow.card_face) +
+		'  log=' + (g.log || []).slice(_n0).join(' | ').slice(0, 220))
+	ok('借用激活：德国手牌不受影响', (g.hands['德国'] || []).length === deHandBefore)
+	ok('借用激活：★意大利付了弃牌代价（-1）', (g.hands['意大利'] || []).length === itHandBefore - 1,
+		(g.hands['意大利'] || []).length + ' vs ' + itHandBefore)
+	ok('借用激活：★跳过出牌阶段落在意大利', !!(g.skip_play_done && g.skip_play_done['意大利']),
+		JSON.stringify(g.skip_play_done))
+	ok('借用激活：德国未被跳过出牌阶段', !(g.skip_play_done && g.skip_play_done['德国']))
 	ok('借用激活执行效果：苏联陆军被消除', g.location[sovId] == null)
 }
 

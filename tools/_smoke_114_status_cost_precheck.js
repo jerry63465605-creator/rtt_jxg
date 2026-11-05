@@ -129,7 +129,7 @@ section('S4 源码守卫')
 	 */
 	const _actIdx = src.indexOf("action === 'activate_status'")
 	const _fromIdx = src.indexOf('arg || {}).from == null', _actIdx)
-	const _costIdx2 = src.indexOf('if (cost.discard && !borrowed', _actIdx)
+	const _costIdx2 = src.indexOf('if (cost.discard && !_costPaidNow', _actIdx)
 	ok('预检位于付代价之前（在状态卡 cost.discard 之前）',
 		_actIdx > 0 && _fromIdx > _actIdx && _costIdx2 > _actIdx && _fromIdx < _costIdx2,
 		'act=' + _actIdx + ' from=' + _fromIdx + ' cost=' + _costIdx2)
