@@ -216,10 +216,20 @@ console.log('\n=== 17744 土耳其开放海峡：永久成对邻接 + 无敌方�
 console.log('\n=== 17747 西班牙控制直布罗陀：成对邻接 + 无敌方陆军计分 ===')
 {
 	const cfg = S['17747']
-	ok('17747 ongoing kind = pair_adjacency', cfg.ongoing && cfg.ongoing.kind === 'pair_adjacency')
-	const pairs = cfg.ongoing.pairs || []
-	ok('17747 含 [北海,地中海]',
-		pairs.some(p => p[0] === '北海' && p[1] === '地中海'))
+	/*
+	 * 【2026-11-05 · B2】17747 的 ongoing 改为【数组】：
+	 *   · 北海-地中海 是【海峡】（id=15），必须走 axis_only_seas 才能"夺走同盟的通行权"；
+	 *   · 非洲北部-西欧 不是海峡，仍走 pair_adjacency（只对轴心加）。
+	 */
+	ok('17747 ongoing 是数组（海峡 + 陆地两条语义）', Array.isArray(cfg.ongoing))
+	const ogs = Array.isArray(cfg.ongoing) ? cfg.ongoing : [cfg.ongoing]
+	const strait = ogs.find(o => o.kind === 'axis_only_seas')
+	const land = ogs.find(o => o.kind === 'pair_adjacency')
+	ok('17747 海峡那条用 axis_only_seas 且指定 [北海,地中海]',
+	!!strait && (strait.pairs || []).some(p => p[0] === '北海' && p[1] === '地中海'))
+	const pairs = (land && land.pairs) || []
+	ok('17747 含 [非洲北部,西欧]（陆地成对邻接）',
+	pairs.some(p => p[0] === '非洲北部' && p[1] === '西欧'))
 	ok('17747 含 [非洲北部,西欧]',
 		pairs.some(p => p[0] === '非洲北部' && p[1] === '西欧'))
 

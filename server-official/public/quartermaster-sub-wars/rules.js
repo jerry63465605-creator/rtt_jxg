@@ -5707,11 +5707,25 @@ const STATUS_EFFECTS = {
 					*       计分阶段：若<非洲北部>和相邻地区没有敌方国家陆军，获得1分。
 					*/
 					'17747': {
-					ongoing: {
-						kind: 'pair_adjacency',
-						pairs: [['北海', '地中海'], ['非洲北部', '西欧']], only: 'axis',
-						desc: '<北海>-<地中海>、<非洲北部>-<西欧> 仅对轴心国相邻（永久）',
-					},
+					/*
+					 * 【2026-11-05 · B2 修复】卡面 '<北海>和<地中海>' 是一条【海峡】（id=15，默认控制者=同盟），
+					 * 旧实现只用 pair_adjacency 给轴心"加"一条邻接，没有夺走同盟那条 →
+					 * 打出后同盟照样相邻（玩家实测）。
+					 * 现在：海峡交给 axis_only_seas（强制轴心 = 夺走同盟的通行权），
+					 * 陆地那条（非洲北部-西欧，本来就不是海峡）仍用 pair_adjacency 加给轴心。
+					 */
+					ongoing: [
+						{
+							kind: 'axis_only_seas',
+							pairs: [['北海', '地中海']],
+							desc: '直布罗陀海峡（<北海>-<地中海>）仅对轴心国相邻',
+						},
+						{
+							kind: 'pair_adjacency',
+							pairs: [['非洲北部', '西欧']], only: 'axis',
+							desc: '<非洲北部>-<西欧> 仅对轴心国相邻（永久）',
+						},
+					],
 					auto: { phase: 'scoring', trigger_nation: '意大利', affects: '意大利', kind: 'run',
 						run(game) {
 							const na = space_id_of('非洲北部')
@@ -8174,6 +8188,27 @@ function run_status_effect(game, nation, card_id, tr, arg, ctxSpace) {
 function apply_status_ongoing(game, card_id, nation) {
 	const cfg = status_config_of(card_id)
 	if (!cfg || !cfg.ongoing) return null
+	/*
+	 * 【2026-11-05 · B2】`ongoing` 允许是【数组】：一张卡可能同时需要
+	 *   "海峡强制轴心"（axis_only_seas）与"成对地区邻接"（pair_adjacency）。
+	 * 实现方式：临时把 cfg.ongoing 换成单个元素递归调用（同步执行、立即还原），
+	 * 避免把 200 多行的执行器拆成两半带来回归风险。
+	 */
+	if (Array.isArray(cfg.ongoing)) {
+		const out = []
+		const saved = cfg.ongoing
+		try {
+			for (const one of saved) {
+				cfg.ongoing = one
+				const r = apply_status_ongoing(game, card_id, nation)
+				if (Array.isArray(r)) out.push(...r)
+				else if (r) out.push(r)
+			}
+		} finally {
+			cfg.ongoing = saved
+		}
+		return out
+	}
 	const og = cfg.ongoing
 	const aura = status_aura(game)
 	const lines = []
@@ -8331,10 +8366,26 @@ function apply_status_ongoing(game, card_id, nation) {
 	if (og.kind === 'axis_only_seas') {
 		const aura = status_aura(game)
 		aura.strait_force_axis = aura.strait_force_axis || {}
+		/* ① 旧写法：给一个地区名 → 命中"第一条包含它的海峡"（15254 北欧海峡） */
 		for (const nm of (og.spaces || [])) {
 			const sid = space_id(nm)
 			if (sid == null) continue
 			const st = data.straits.find(x => x.a === sid || x.b === sid)
+			if (st) aura.strait_force_axis[st.id] = card_id
+		}
+		/*
+		 * ② 【2026-11-05 · B2】新写法：按【无序对】精确指定海峡。
+		 *
+		 * 为什么必须有：只给一个地区名时 `find` 会命中"第一条"包含它的海峡 ——
+		 * 例如「北海」先命中 id=4（北欧海峡），拿它去表达「直布罗陀海峡（北海↔地中海, id=15）」
+		 * 就会把北欧海峡一起强制成轴心（15254 的效果被误触发）。
+		 * 用 pair 精确匹配 str.a/b 的集合，才能只动目标那条。
+		 */
+		for (const pr of (og.pairs || [])) {
+			const a = space_id(pr[0]), b = space_id(pr[1])
+			if (a == null || b == null) continue
+			const st = data.straits.find(x =>
+				(x.a === a && x.b === b) || (x.a === b && x.b === a))
 			if (st) aura.strait_force_axis[st.id] = card_id
 		}
 		/*
@@ -8345,7 +8396,13 @@ function apply_status_ongoing(game, card_id, nation) {
 		 * 而移动/战斗/候选地区（读缓存）仍是旧连接 —— 两处口径不一致。
 		 */
 		refresh(game)
-		lines.push('北欧海峡永远视为轴心控制（战争海军）：北海↔波罗的海恒对轴心相邻')
+		/* 文案按实际声明生成（不再写死 15254 的北欧海峡） */
+		{
+			const nmKind = (og.pairs || []).map(pr => '<' + pr[0] + '>-<' + pr[1] + '>')
+				.concat((og.spaces || []).map(nm => '<' + nm + '>'))
+				.join('、')
+			lines.push((og.desc || (nmKind + ' 永远视为轴心控制')))
+		}
 	}
 
 	/* ---- 光环：15444 <硫磺岛>视为日本港口 ---- */
@@ -8490,6 +8547,22 @@ function notify_german_status_used(game, cardIds) {
 function revert_status_ongoing(game, card_id, nation) {
 	const cfg = status_config_of(card_id)
 	if (!cfg || !cfg.ongoing) return null
+	/* 【2026-11-05 · B2】与 apply 对称：ongoing 为数组时逐个撤销 */
+	if (Array.isArray(cfg.ongoing)) {
+		const out = []
+		const saved = cfg.ongoing
+		try {
+			for (const one of saved) {
+				cfg.ongoing = one
+				const r = revert_status_ongoing(game, card_id, nation)
+				if (Array.isArray(r)) out.push(...r)
+				else if (r) out.push(r)
+			}
+		} finally {
+			cfg.ongoing = saved
+		}
+		return out
+	}
 	const og = cfg.ongoing
 	const aura = status_aura(game)
 	const lines = []
