@@ -26214,6 +26214,14 @@ exports.view = function (state, current) {
 		 * 客户端 check_phase_for_card 据此镜像服务端限制，不自己猜。
 		 */
 		it_viva: !!game.it_viva && game.current_nation === '意大利',
+		/*
+		 * 【2026-11-05 · P3-3】16701《意大利万岁》的"剩余额外行动次数"。
+		 *
+		 * 之前只有布尔 it_viva，客户端没法提示「本回合还可再行动 1 次」，
+		 * 玩家点了一次才发现没机会了。这里直接下发服务端算好的次数（0/1），
+		 * 与 it_viva_allows / 记账点同源（it_italy_viva_left）。
+		 */
+		it_viva_left: it_italy_viva_left(game, game.current_nation),
 
 		/*
 		 * 【2026-10-01】手牌每张卡的"此刻能否打出"——**服务端同源算好**给客户端。

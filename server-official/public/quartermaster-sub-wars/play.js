@@ -493,9 +493,20 @@ function update_phase_panel() {
 	const suRedWaitTxt = (view.pending_red && !view.pending_red.prompt)
 		? "等待【" + (view.pending_red.waiting_for || "德国") + "】选择《红色管弦乐队》" : ""
 	const headTxt = suRedWaitTxt || waitTxt || redTxt
+	/*
+	 * 【2026-11-05 · P3-3】16701《意大利万岁》：提示本回合还能额外行动几次。
+	 * 次数由服务端算好下发（view.it_viva_left），客户端不自己猜（教训 R26）。
+	 */
+	const vivaTxt = (view.it_viva && (view.it_viva_left || 0) > 0)
+		? "《意大利万岁》：本回合还可额外行动 " + view.it_viva_left + " 次"
+		: ""
 	set_text("phase_note", headTxt
 		? headTxt + (view.phase_note ? " · " + view.phase_note : "")
 		: (view.phase_note || ""))
+	if (vivaTxt) {
+		const pn = document.getElementById("phase_note")
+		if (pn) set_text("phase_note", (pn.textContent ? pn.textContent + " · " : headTxt ? "" : "") + vivaTxt)
+	}
 
 	/* 阶段进度条 */
 	const track = document.getElementById("phase_track")
