@@ -125,8 +125,12 @@ section('S5 源码守卫：4 处 battle 派发都传了 deferToTail')
 	const src = require('fs').readFileSync(path.join(__dirname, '..', M, 'rules.js'), 'utf8')
 	const all = src.match(/request_responses\(game, 'battle'/g) || []
 	const withDefer = src.match(/request_responses\(game, 'battle'[\s\S]{0,400}?deferToTail: true/g) || []
-	ok('★ battle 派发点共 4 处', all.length === 4, all.length)
-	ok('★ 全部带 deferToTail', withDefer.length === 4, withDefer.length)
+	/*
+	 * 【2026-11-05 · B10】新增第 5 处：resume_after_air_loss() 里的 battle 派发
+	 * （抵消成立 -> 空军被移除窗口处理完后再结算）。它同样带 { deferToTail: true }。
+	 */
+	ok('★ battle 派发点共 5 处', all.length === 5, all.length)
+	ok('★ 全部带 deferToTail', withDefer.length === 5, withDefer.length)
 }
 
 section('S6 结算完不留残帧（无死锁）')

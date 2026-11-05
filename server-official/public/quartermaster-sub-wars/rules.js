@@ -13483,7 +13483,8 @@ const ECHO_EFFECTS = {
 	'17808': {
 		name: '莫斯科战役', actor: '苏联',
 		armed: {
-			when: 'piece_removed', actor: '苏联',
+			/* 【2026-11-05 · B10】补 watch（与 17811/15311/15351 对称）：苏联陆军通常在敌方回合被移除 */
+			when: 'piece_removed', actor: '苏联', watch: true,
 			cost: { discard: 1, filter: 'build' },
 			desc: '苏联陆军被移除后且场上无苏联陆军：弃置1张[建设陆军]，消灭<莫斯科>或相邻地区1支敌方陆军',
 			ready(game, ctx) {
@@ -13577,7 +13578,13 @@ const ECHO_EFFECTS = {
 	'17811': {
 		name: '雅科夫列夫设计局', actor: '苏联',
 		armed: {
-			when: 'piece_removed', actor: '苏联',
+			/*
+			 * 【2026-11-05 · B10】必须 watch:true —— 空军几乎总是在【敌方回合】被移除
+			 * （德国发起攻击、空战的结果）；不 watch 时 offer_armed_effects 会因为
+			 * "actorNation(德国) !== 苏联" 直接跳过，玩家永远收不到窗口。
+			 * 与 15311 马奇诺 / 15351 敦刻尔克（都带 watch）对称。
+			 */
+			when: 'piece_removed', actor: '苏联', watch: true,
 			desc: '苏联空军被移除后：在该地区或其相邻地区部署/调度1支苏联空军',
 			ready(game, ctx) {
 				if (!ctx || ctx.piece_nation !== '苏联' || ctx.piece_type !== 'air') return false
@@ -20833,6 +20840,53 @@ function resume_event_after_armed(game) {
  * !game.pending_battle，故挂起待决期间延期帧（15425 的"是否再战"）依旧不会提前出现，
  * "第二次询问必须在第一次完全结束后"的口径不变。
  */
+/*
+ * 【2026-11-05 · B10】空军因战斗而消失时，统一"删除 + 三路派发"。
+ *
+ * 旧实现：代受成立 / 抵消成立 / "无处撤离" 三条路径都只 delete game.location[air]，
+ * 从不派发 piece_removed —— 于是 17811《雅科夫列夫设计局》（"苏联空军被移除后…"）
+ * 以及同类卡在这些最该出现的时刻全部收不到窗口（探针实测：offers=[]）。
+ *
+ * 与 victim 被移除那条路径【完全对齐】：响应卡 / 增强卡 / 状态卡三路都派发。
+ * 对称：不区分国家，谁掉飞机就给谁开窗（德国掉机也照开）。
+ */
+function remove_air_with_piece_removed(game, airId, space, byNation) {
+	if (airId == null || game.location[airId] == null) return null
+	const nat = game.piece_nation[airId]
+	const supplied = !!compute_supply(game).in_supply[airId]
+	delete game.location[airId]
+	note_removed(game, nat, 1)
+	const ctx = {
+		nation: byNation || nat, piece: airId, piece_id: airId,
+		piece_nation: nat, piece_type: 'air',
+		space: space, reason: 'piece_removed', was_supplied: supplied,
+	}
+	/*
+	 * ⚠ offer_armed_effects 以 `when` 为唯一键【合并】窗口：同一 when 的第二张不同国家的卡
+	 * 会把前一个国家的候选整窗替换掉（抵消时苏联、德国各掉 1 架，就会互相踩）。
+	 * 所以：若已有同 when 且属于【别的国家】的窗口，就先排队，等那一窗处理完再派发。
+	 */
+	const busy = (game.armed_offers || []).find(w =>
+		w.when === 'piece_removed' && (w.cards || []).length > 0)
+	if (busy) {
+		game.pending_air_dispatch = (game.pending_air_dispatch || []).concat([ctx])
+		return ctx
+	}
+	dispatch_air_removed_window(game, ctx)
+	return ctx
+}
+
+/* 真正派发"空军被移除"的三路窗口（响应卡 / 增强卡 / 状态卡） */
+function dispatch_air_removed_window(game, ctx) {
+	if (!ctx) return
+	/* 与 victim 派发同款：ctx 必带 piece + piece_id（静态守卫 _smoke_piece_id_unified 检查这里） */
+	if (!ctx.piece_id) ctx.piece_id = ctx.piece
+	const nat = ctx.piece_nation
+	try { request_responses(game, 'piece_removed', ctx, false) } catch (e) {}
+	try { offer_armed_effects(game, 'piece_removed', ctx) } catch (e) { game.log.push('arm piece_removed(air) 错误：' + e.message) }
+	try { arm_status_instant(game, 'piece_removed', nat, ctx.space) } catch (e) {}
+}
+
 function do_battle(game, nation, space, target_piece, kind, opt) {
 	game.battle_in_progress = (game.battle_in_progress || 0) + 1
 	try {
@@ -21451,12 +21505,9 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			const rmvSuppliedC = !!compute_supply(game).in_supply[victim]
 			const victimRemovedC = !is_protected(game, victim)
 			/* 抵消成立：双方各掉 1 支空军 —— 分别按各自阵营计数（不能合并成 +2） */
-			const dfAirNation = game.piece_nation[defend_air]
-			const ctAirNation = game.piece_nation[counter_air]
-			delete game.location[defend_air]
-			delete game.location[counter_air]
-			note_removed(game, dfAirNation, 1)
-			note_removed(game, ctAirNation, 1)
+			/* 【2026-11-05 · B10】两架空军都走"删除 + piece_removed 三路派发"（对称） */
+			remove_air_with_piece_removed(game, defend_air, space, nation)
+			remove_air_with_piece_removed(game, counter_air, space, nation)
 			/* 受保护部队本回合无法被移除（抵消成立时原目标照常移除，但 protect 优先） */
 			if (is_protected(game, victim)) {
 				game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的' +
@@ -21534,8 +21585,8 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 
 		/* 不抵消：代受成立 —— 防守方损失空军，原目标部队保住 */
 		/* 【总体战】此处只移除空军 -> 不触发损耗（空军移除不掉牌） */
-		note_removed(game, game.piece_nation[defend_air], 1)
-		delete game.location[defend_air]
+		/* 【2026-11-05 · B10】走统一助手：删除 + piece_removed 三路派发（17811 等才会开窗） */
+		remove_air_with_piece_removed(game, defend_air, space, nation)
 		refresh(game)
 		/*
 		 * 【2026-09-25 第 2 步】代受空军也算"发起战斗成功"，
@@ -21647,7 +21698,11 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	if (!victimProtected) {
 		for (const a of guardAirs.slice().sort()) {
 			if (retreatTo != null) game.location[a] = retreatTo
-			else { delete game.location[a]; retreatRemoved.push(a) }
+			else {
+				/* 【2026-11-05 · B10】"无处撤离"被移除也要派发 piece_removed（17811 等开窗） */
+				remove_air_with_piece_removed(game, a, space, nation)
+				retreatRemoved.push(a)
+			}
 		}
 	}
 
@@ -27933,6 +27988,72 @@ function set_pending_battle(game, pb) {
  *   · 还有挂起  -> 让给新的等待方（defend -> counter 会换人）
  *   · 挂起清空  -> 交还 battle_return_active 记录的那一方
  */
+/*
+ * 【2026-11-05 · B10】抵消成立后的续跑。
+ *
+ * 抵消让两架空军都死了；此时 victim 的生死【挂起】（pending_battle.stage='after_air_loss'），
+ * 因为持有方可能用 17811《雅科夫列夫设计局》在原地补 1 支空军 —— 那支新机可以【再次代受】。
+ *
+ * 调用时机：piece_removed 的窗口（响应队列 / armed_offers / pending_echo）全部清空之后。
+ *   ① 原地出现新机（且不在 air_used 里）-> 回到 defend 阶梯，重新问是否代受
+ *   ② 没有新机 -> 按原结果移除 victim（含战斗钩子与 after_land 窗口）
+ * air_used 保证每支空军只能用一次，配合"空军数量有限"自然收敛，不会死循环。
+ */
+function resume_after_air_loss(game) {
+	const pb = game.pending_battle
+	if (!pb || pb.stage !== 'after_air_loss') return false
+	const space = pb.space
+	const used = (pb.air_used || []).map(String)
+	const newAir = pieces_on(game, space).find(p =>
+		game.piece_nation[p] === pb.victim_nation &&
+		game.piece_type[p] === 'air' &&
+		used.indexOf(String(p)) < 0)
+	game.pending_battle = null
+	if (newAir) {
+		game.log.push('【' + pb.victim_nation + '】在 ' + data.name_of(space) +
+			' 补充了空军，可以再次代替受创')
+		do_battle(game, pb.attacker, space, pb.victim, pb.kind, {
+			from: pb.attacker_piece || undefined,
+			defend_air: newAir,
+			_air_used: used.concat([String(newAir)]),
+		})
+		refresh(game)
+		return true
+	}
+	const vNation = pb.victim_nation
+	const vType = pb.victim_type
+	const supplied = !!compute_supply(game).in_supply[pb.victim]
+	const removed = !is_protected(game, pb.victim)
+	if (removed) {
+		delete game.location[pb.victim]
+		try { axis_pact_register(game, pb.attacker, space, pb.victim) } catch (e) {}
+		try { total_war_attrition(game, [{ nation: vNation, type: vType }]) } catch (e) {}
+		const ctx = {
+			nation: pb.attacker, piece: pb.victim, piece_id: pb.victim,
+			piece_nation: vNation, piece_type: vType,
+			space: space, reason: 'piece_removed', was_supplied: supplied,
+		}
+		try { request_responses(game, 'piece_removed', ctx, false) } catch (e) {}
+		try { offer_armed_effects(game, 'piece_removed', ctx) } catch (e) {}
+		try { arm_status_instant(game, 'piece_removed', vNation, space) } catch (e) {}
+		try { maybe_settle_axis_pact(game) } catch (e) {}
+	} else {
+		game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的部队受保护，本回合无法被移除')
+	}
+	try {
+		request_responses(game, 'battle', {
+			nation: pb.attacker, space: space, kind: pb.kind, victimNation: vNation,
+			result: {
+				removed: removed ? pb.victim : null,
+				removed_nation: vNation, by_air: true, countered: true,
+			},
+		}, false, { deferToTail: true })
+	} catch (e) {}
+	try { arm_after_battle_status(game, pb.attacker, pb.kind, space, {}) } catch (e) {}
+	refresh(game)
+	return true
+}
+
 function battle_reconcile_active(game) {
 	const pb = game.pending_battle
 	if (pb) {
@@ -30910,12 +31031,48 @@ function do_action(state, current, action, arg) {
 				return game
 			}
 			const wants = arg && arg.counter_air != null
+			/*
+			 * 【2026-11-05 · B10】抵消成立时【不立刻】打死 victim。
+			 *
+			 * 两架空军会同时被移除，而防守方可能持有 17811《雅科夫列夫设计局》
+			 * （"苏联空军被移除后：在该地区或相邻地区部署 1 支空军"）——
+			 * 若他在【原地】补 1 支空军，那支新机可以【再次代受】，原目标就能活下来。
+			 *
+			 * 所以这里先把两架空军移除（各自触发 piece_removed 窗口，对称），
+			 * 把 victim 的生死挂起（stage='after_air_loss'），
+			 * 等窗口全部处理完由 resume_after_air_loss() 决定：
+			 *   · 原地有新机 -> 回到 defend 阶梯重新问是否代受
+			 *   · 没有      -> 按原结果移除 victim
+			 */
+			if (wants) {
+				const used = (pb.air_used || []).concat([pb.defend_air, arg.counter_air]).filter(Boolean)
+				remove_air_with_piece_removed(game, pb.defend_air, pb.space, pb.attacker)
+				remove_air_with_piece_removed(game, arg.counter_air, pb.space, pb.attacker)
+				game.pending_battle = null
+				set_pending_battle(game, {
+					stage: 'after_air_loss',
+					space: pb.space, kind: pb.kind || 'land',
+					attacker: pb.attacker, attacker_faction: faction_of_nation(pb.attacker),
+					attacker_piece: pb.attacker_piece || null,
+					victim: pb.victim, victim_type: pb.victim_type,
+					victim_nation: pb.victim_nation,
+					defender: pb.defender, defender_nation: pb.defender_nation,
+					air_nation: pb.victim_nation,
+					air_used: used,
+					reason: 'counter_air_lost',
+				})
+				game.log.push('【' + pb.attacker + '】用空军抵消了这次代受（双方各损失 1 支空军）—— ' +
+					'先处理"空军被移除"的后续，再决定 ' + data.name_of(pb.space) + ' 的 ' +
+					piece_type_zh(pb.victim_type) + '是否被移除')
+				refresh(game)
+				return game
+			}
 			const opt = {
 				from: pb.attacker_piece || null,
 				/* 重放防守方已选定的代受空军 */
 				defend_air: pb.defend_air,
-				counter_air: wants ? arg.counter_air : undefined,
-				declined_counter: !wants,
+				counter_air: undefined,
+				declined_counter: true,
 			}
 			game.pending_battle = null
 			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', opt)
@@ -34682,6 +34839,32 @@ exports.action = function (state, current, action, arg) {
 			const _answered = (action === 'use_armed_offer' || action === 'skip_armed_offer')
 			if (game.pending_status_react && (_answered || !_waiting)) step_status_react(game)
 		} catch (e) { game.log.push('状态卡拦截续跑错误：' + e.message) }
+		/*
+		 * 【2026-11-05 · B10】抵消成立后的 victim 生死挂起（stage='after_air_loss'）：
+		 * 等 piece_removed 的窗口全部处理完，再决定"重新代受"还是"移除 victim"。
+		 */
+		try {
+			/* ① 排队的"空军被移除"窗口（抵消时两国各掉 1 架）逐张派发 */
+			if ((game.pending_air_dispatch || []).length) {
+				const _aw = (game.armed_offers || []).some(w => w.when === 'piece_removed' && (w.cards || []).length > 0)
+				const _rq = (game.response_queue || []).length || (game.response_stack || []).length || game.pending_echo
+				if (!_aw && !_rq) {
+					const next = game.pending_air_dispatch.shift()
+					if (!(game.pending_air_dispatch || []).length) delete game.pending_air_dispatch
+					dispatch_air_removed_window(game, next)
+				}
+			}
+			/* ② 抵消后 victim 生死挂起：等所有窗口处理完再决定 */
+			if (game.pending_battle && game.pending_battle.stage === 'after_air_loss') {
+				const noWin =
+					!(game.armed_offers || []).some(w => (w.cards || []).length > 0) &&
+					!(game.response_queue || []).length &&
+					!(game.response_stack || []).length &&
+					!game.pending_echo &&
+					!(game.pending_air_dispatch || []).length
+				if (noWin) resume_after_air_loss(game)
+			}
+		} catch (e) { game.log.push('B10 续跑错误：' + e.message) }
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {
