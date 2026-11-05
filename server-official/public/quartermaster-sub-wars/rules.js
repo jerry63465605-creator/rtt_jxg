@@ -8793,6 +8793,25 @@ function effective_home_base(game, nation) {
 }
 
 /*
+ * 【2026-11-05 · B6《掠夺》】同阵营【所有】国家的大本营格（含 effective_home_base 的改判）。
+ *
+ * 卡面：每有 1 个「本国控制的【友方大本营之外】的地区」，+1 分并让其失去 1 个计分标记。
+ * 旧实现只排除了【本国】大本营 —— 德国控制意大利大本营时照样计分（玩家报障）。
+ * 「友方」按【阵营】理解（与本作"一名玩家控制一个阵营"一致），委托国（法国/中国）一并纳入。
+ */
+function friendly_home_base_spaces(game, nation) {
+	const f = faction_of_nation(nation)
+	const out = new Set()
+	const all = ORDER_OF_NATIONS.concat(['法国', '中国'])
+	for (const n of all) {
+		if (faction_of_nation(n) !== f) continue
+		const sp = Number(effective_home_base(game, n))
+		if (sp) out.add(sp)
+	}
+	return out
+}
+
+/*
  * 【2026-10-28 待办 #21】「某国大本营 + 相邻」的【唯一】候选池实现。
  *
  * 为什么要有这个原子：
@@ -10937,12 +10956,13 @@ const EVENT_EFFECTS = {
 		 * ② 纯计算、无选择 -> 保留服务端一次性结算。
 		 */
 		run(game, ctx) {
-			const hb = effective_home_base(game, '德国')
+			/* 【2026-11-05 · B6】排除【同阵营所有】大本营（原来只排本国） */
+			const hbs = friendly_home_base_spaces(game, '德国')
 			let n = 0
 			for (let sp = 1; sp < data.spaces.length; sp++) {
 				if (!data.spaces[sp]) continue
 				const ctrl = has_pieces(game, { space: sp, nation: '德国' })
-				if (ctrl && sp !== hb) {
+				if (ctrl && !hbs.has(Number(sp))) {
 					add_axis_score(game, 1)
 					/* 【2026-10-25 阶段 1】通道 ⑥（掠夺）-> 统一 ops：减 1，不筛选归属 */
 					apply_marker_ops(game, [{ space: sp, delta: -1 }])
@@ -11351,12 +11371,13 @@ const EVENT_EFFECTS = {
 	'17725': {
 		name: '掠夺', actor: '意大利',
 		run: function (game, ctx) {
-			const hb = effective_home_base(game, '意大利')
+			/* 【2026-11-05 · B6】排除【同阵营所有】大本营（与 15233 同源） */
+			const hbs = friendly_home_base_spaces(game, '意大利')
 			let n = 0
 			for (let sp = 1; sp < data.spaces.length; sp++) {
 				if (!data.spaces[sp]) continue
 				const ctrl = has_pieces(game, { space: sp, nation: '意大利' })
-				if (ctrl && sp !== hb) {
+				if (ctrl && !hbs.has(Number(sp))) {
 					add_axis_score(game, 1)
 					/* 【2026-10-25 阶段 1】通道 ⑥（掠夺）-> 统一 ops：减 1，不筛选归属 */
 					apply_marker_ops(game, [{ space: sp, delta: -1 }])
