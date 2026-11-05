@@ -7479,6 +7479,33 @@ function status_repeat_bump(game, card_id) {
  */
 const CROSS_NATION_STATUS_WINDOWS = { after_ally_battle: 1, build_army: 1, piece_removed: 1 }
 
+/*
+ * 【2026-11-05 · B11】该状态卡此刻是否正处在【已被武装的"立刻"窗口】里。
+ *
+ * 场景：卡佩里尼/租借法案让"打出国家"建设陆军 → 它的 after_build_army 卡被武装
+ * （status_instant 里有一条 card_id 命中）。但链/委托会把 current_nation 切到别的国家，
+ * 于是 owner 判据（"不能触发非本方的状态卡"）把玩家自己刚触发的窗口挡掉 ——
+ * 玩家看到的就是"窗口没触发"。
+ *
+ * 这里只对【窗口里那一张卡】放行（最小豁免），其它卡仍按原判据。
+ */
+function status_instant_covers(game, card_id, owner) {
+	const key = String(inst_card_id(card_id))
+	return (game.status_instant || []).some(e => {
+		if (!e || e.consumed === true) return false
+		if (String(e.card_id) !== key && String(inst_card_id(e.card_id)) !== key) return false
+		if (!owner) return true
+		/*
+		 * 只认【引擎武装】的窗口：`by` = 引发该窗口的国家（arm_status_instant 写入）。
+		 * 必须与卡的归属国同属一个代表（delegate_of_nation）——
+		 * 这样"德国建设陆军触发的窗口"只对德国自己的卡放行，
+		 * 也不会把测试里手工塞进 status_instant 的条目当成合法窗口。
+		 */
+		if (!e.by) return false
+		return delegate_of_nation(e.by) === delegate_of_nation(owner)
+	})
+}
+
 function status_window_ready(game, nation, card_id, tr, opts) {
 	/*
 	 * 【2026-10-26】15353《保持冷静·继续前进》本回合压制 -> 窗口直接关闭。
@@ -7515,6 +7542,7 @@ function status_window_ready(game, nation, card_id, tr, opts) {
 		game.italy_borrow.card_face === card_id &&
 		game.current_nation === game.italy_borrow.nation)
 	if (!CROSS_NATION_STATUS_WINDOWS[tr.window] && !borrowed &&
+		!status_instant_covers(game, card_id, nation) &&
 		nation !== game.current_nation)
 		return {
 			ok: false,
@@ -11769,6 +11797,9 @@ const EVENT_EFFECTS = {
 		run: function (game, ctx) {
 			game.delegate = {
 				mode: 'order',
+				/* 【2026-11-05 · B11】记住本卡的实例 id，供"分步机"面板显示《卡佩里尼》 */
+				card_id: (ctx && ctx.card_id) || null,
+				chain: 'italy',
 				order: ['德国', '意大利', '日本'], step: 0,
 				pickedNation: null, pickedCard: null, sub: null, results: [],
 				return_nation: '意大利', return_active: faction_role_of_nation('意大利'),
@@ -11837,6 +11868,35 @@ const EVENT_EFFECTS = {
 /* 【2026-10-08】17729 卡佩里尼：推进轴心依次链。
  * 每个国家在己方弃牌堆随机抽 1 张，检视后由 resolve_italy_chain 处置。
  * 某国弃牌堆为空则跳过；全部处理完则清空 game.italy_chain。 */
+/*
+ * 【2026-11-05 · B11】卡佩里尼「分步机」面板用的卡实例 id。
+ * 优先用链里记下的（run 时从 ctx 取的实例 id），退而求其次在意大利桌面/弃牌堆找 17729。
+ */
+function _italy_chain_card_id(game, ch, picked) {
+	if (ch && ch.card_id) return ch.card_id
+	const pool = (game.discard['意大利'] || []).concat(game.table['意大利'] || [])
+	const hit = pool.find(x => String(inst_card_id(x)) === '17729')
+	return hit || String(inst_card_id(picked) || '17729')
+}
+
+/*
+ * 【2026-11-05 · B11】建设国桌上是否有「建设后」型状态卡（after_build_army / after_build_navy）。
+ * 只有存在时才需要把链停一步给玩家机会；否则照原样推进，不多弹一次「下一步」。
+ */
+function has_after_build_status(game, nation, type) {
+	const win = type === 'navy' ? 'after_build_navy' : 'after_build_army'
+	const fac = faction_of_nation(nation)
+	for (const own of Object.keys(game.table || {})) {
+		if (faction_of_nation(own) !== fac) continue
+		for (const cid of (game.table[own] || [])) {
+			const cfg = status_config_of(cid)
+			if (!cfg || !cfg.trigger || cfg.trigger.window !== win) continue
+			if (status_active(game, cid, own)) return true
+		}
+	}
+	return false
+}
+
 function advance_italy_chain(game) {
 	const ch = game.delegate
 	if (!ch) return
@@ -27192,7 +27252,8 @@ exports.view = function (state, current) {
 				const bl = event_step_blockers(game, side)
 				return {
 					card_id: ps.card_id,
-					card_name: (inst_card(ps.card_id) || {}).name || ps.card_id,
+					/* 【2026-11-05 · B11】卡佩里尼等"链"型分步机自带 card_name（实例 id 可能不在卡表里） */
+					card_name: (inst_card(ps.card_id) || {}).name || ps.card_name || ps.card_id,
 					nation: ps.nation,
 					step: ps.step,
 					total: ps.total,
@@ -31254,6 +31315,18 @@ function do_action(state, current, action, arg) {
 			game.status_instant = []
 			clear_armed_offer_for_side(game, side)
 		}
+		/*
+		 * 【2026-11-05 · B11】卡佩里尼链的「分步机」：
+		 * 本步打出的基本卡武装了窗口时，链会停在这里（不立刻推进到下一国）。
+		 * 玩家点「下一步」= 放弃未处理的窗口，继续处置下一位。
+		 */
+		if (ps.chain === 'italy') {
+			game.pending_event_step = null
+			game.log.push('【' + ps.nation + '】《卡佩里尼》继续处置下一位')
+			advance_italy_chain(game)
+			refresh(game)
+			return game
+		}
 		const arg = Object.assign({}, ps.accum || {})
 		arg.card = ps.card_id
 		game.pending_event_step = null
@@ -31404,6 +31477,7 @@ function do_action(state, current, action, arg) {
 		}
 		const tr = cfg.trigger
 		if (!borrowed && !CROSS_NATION_STATUS_WINDOWS[tr.window] &&
+			!status_instant_covers(game, cardId, owner) &&
 			delegate_of_nation(owner) !== delegate_of_nation(game.current_nation)) {
 			game.log.push('不能触发非本方的状态卡')
 			return game
@@ -32768,6 +32842,32 @@ function do_action(state, current, action, arg) {
 		ch.pickedNation = null
 		ch.pickedCard = null
 		ch.sub = null
+		/*
+		 * 【2026-11-05 · B11】本步打出的基本卡可能武装了【打出国家】的 after_build_* 状态卡
+		 * （如德国 15247《贵在行动》）。链若立刻推进到下一国，current_nation 就变了，
+		 * 那个窗口既 ready=false、又会被"非本方"判据拒绝 —— 玩家看到的就是"没触发"。
+		 *
+		 * 所以这里先停一步，登记成通用「事件卡分步机」面板
+		 * （客户端已有 #event_step_box + 「下一步」按钮 + 软窗口提示），
+		 * 玩家可以先发动，也可以直接点「下一步」放弃。
+		 */
+		if (r && r.ok && game.last_built &&
+			has_after_build_status(game, game.last_built.nation, game.last_built.type)) {
+			game.pending_event_step = {
+				card_id: _italy_chain_card_id(game, ch, cid),
+				card_name: '卡佩里尼 UIT 24 伊 503',
+				nation: nat,
+				step: ch.step,
+				total: (ch.order || []).length,
+				desc: '在 ' + data.name_of(game.last_built.space) + ' 建设 1 支陆军',
+				next_label: '继续处置下一位：' + ((ch.order || [])[ch.step] || '（结束）'),
+				token: null,
+				chain: 'italy',
+			}
+			game.log.push('【' + nat + '】《卡佩里尼》—— 本步触发了窗口，处理完（或直接）点「下一步」继续处置下一位')
+			refresh(game)
+			return game
+		}
 		advance_italy_chain(game)
 		return game
 	}
