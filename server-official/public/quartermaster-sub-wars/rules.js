@@ -3638,7 +3638,34 @@ function railroad_recall(game, who, timing) {
 	const ids = Object.keys(game.location || {}).filter(p =>
 		game.piece_nation[p] === who && game.piece_type[p] === 'army')
 	let n = 0
-	for (const p of ids) { remove_piece(game, who, p); n++ }
+	for (const p of ids) {
+		/*
+		 * 【2026-11-05 · B1《高速公路》/17827《西伯利亚大铁路》】陆军被收回时，驻留在该格的空军怎么处理。
+		 *
+		 * 玩家口径：**有相邻本国海军就撤离，没有就随陆军一起被消灭**。
+		 * （同格不可能同时有陆军和海军 —— 那是非法布阵，所以"同格海军"不用考虑。）
+		 * 撤离只改 location、不触发 piece_removed；被消灭走 remove_piece，保留移除窗口语义。
+		 */
+		const sp = Number(game.location[p])
+		if (sp) {
+			const airs = pieces_on(game, sp).filter(q =>
+				game.piece_nation[q] === who && game.piece_type[q] === 'air')
+			for (const air of airs) {
+				const nb = get_connections(game, sp, faction_of_nation(who)).map(Number)
+					.find(s => pieces_on(game, s).some(q =>
+						game.piece_nation[q] === who && game.piece_type[q] === 'navy'))
+				if (nb != null) {
+					game.location[air] = nb
+					game.log.push('【' + who + '】' + data.name_of(sp) + ' 的空军撤离到 ' +
+						data.name_of(nb) + '（相邻有本国海军）')
+				} else {
+					game.log.push('【' + who + '】' + data.name_of(sp) + ' 的空军没有相邻本国海军，随陆军一起被消灭')
+					remove_piece(game, who, air)
+				}
+			}
+		}
+		remove_piece(game, who, p); n++
+	}
 	if (n === 0)
 		return { ok: true, pending: false, total: 0, desc: '无' + who + '陆军可收回' }
 	game.pending_autobahn = { remaining: n, total: n, actor: who, timing: !!timing }
