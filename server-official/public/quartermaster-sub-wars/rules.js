@@ -818,8 +818,17 @@ function navy_ab_check(game, nation, space, sup, build_mode, nbrs) {
 	let hasSrc = false
 	let srcFrom = null          /* 【2026-10-28】提供 A 的那支部队（用于继承源国籍） */
 	for (const nb of list) {
-		if (portAs[nb] != null && String(portAs[nb]) === String(nation) &&
-			!has_pieces(game, { space: Number(nb), enemyOf: nation })) {
+		/*
+		 * 【2026-11-05 · B5《丘克群岛》】删掉 `!has_pieces({space, enemyOf:nation})` 守卫。
+		 *
+		 * 旧实现：港口所在格一旦有敌方部队，这层光环就整条作废 ——
+		 * 表现是「打出后被占领即失效」（玩家实测：占领前中太平洋可建海军，占领后 false）。
+		 * 但卡面只写 "<硫磺岛>视为日本港口"，**没有"被占领失效"**，守卫属多余。
+		 *
+		 * 玩家口径：**被占领仍有效**（A 补给来源与 B 建造条件都保留）。
+		 * 与 15343 压制不冲突：压制走 port_as 的撤销/恢复路径（光环本身没了就自然不成立）。
+		 */
+		if (portAs[nb] != null && String(portAs[nb]) === String(nation)) {
 			hasLand = true
 			hasSrc = true
 		}
