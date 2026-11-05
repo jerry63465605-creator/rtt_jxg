@@ -9049,18 +9049,22 @@ function update_markers() {
 		}
 
 		/*
-		 * 位置：地块上方。
+		 * 位置：地块右上角内侧。
 		 * 屏幕偏移由 position_marker() 按当前缩放换算成地图坐标 ——
 		 * 与算子同款"恒定屏幕尺寸"，fit 到 0.25 时分数依然看得清。
 		 */
-		position_marker(elt, space_id)
-
 		const totalTxt = String(total)
 		const whoTxt = owners.length ? owners.join("/") : ""
 		if (elt.__num && elt.__num.textContent !== totalTxt)
 			elt.__num.textContent = totalTxt
 		if (elt.__who && elt.__who.textContent !== whoTxt)
 			elt.__who.textContent = whoTxt
+		/*
+		 * 【2026-11-05 · C3】定位必须放在【文本写完之​后】——
+		 * position_marker 用 offsetWidth 实测宽度（位数、归属国名都会改变宽度），
+		 * 先定位再改字会让右对齐失效，看起来就是"标记在漂"。
+		 */
+		position_marker(elt, space_id)
 		const wantOwned = owners.length > 0
 		if (elt.classList.contains("owned") !== wantOwned)
 			elt.classList.toggle("owned", wantOwned)
@@ -10360,12 +10364,28 @@ function position_marker(elt, space_id) {
 	elt.__space_id = space_id
 	const s = map_total_scale()
 	const z = piece_zoom()
-	const badge_h = 23 * z.mark * s      /* 标记在屏幕上的实际高度（含描边） */
-	const badge_w = 46 * z.mark * s      /* 近似宽度（★N 两段） */
-	const half = 59                     /* 格位 118 / 2 */
-	/* 目标屏幕坐标 = 方框右上角【上方】，再换算回地图坐标 */
-	const l = (sp.x + half - badge_w / s) + "px"
-	const t = (sp.y - half - (badge_h + 10) / s) + "px"
+	const PAD = 3                        /* 与格位边框的内缩（屏幕像素） */
+	/*
+	 * 【2026-11-05 · C3 修复·标记漂移】玩家口径：标记要钉在对应地区的右上角。
+	 *
+	 * 旧实现三处不准：
+	 *   ① 锚点是"方框右上角【再往上抬 10 屏幕像素】"的外侧 → 放大器下像浮在地块之间；
+	 *   ② 宽度用估算值 46px，但标记里还有归属国名（.who）与多位数 → 右对齐永远差一点；
+	 *   ③ 用固定的 half=59，而海域格是 106×106（陆地 118）→ 混用时右边缘偏 12px。
+	 *
+	 * 现在：实测元素尺寸 + layout 的真实 w/h + 中心坐标换算。
+	 * ⚠ 两套坐标语义不同：data.spaces[id].x/.y 是【中心】，
+	 *   layout[名称] = [x, y, w, h] 的 x/y 是【左上角】—— 这里一律"中心 ± 半格"。
+	 */
+	const wCss = elt.offsetWidth || 46   /* 实测宽度（含国名/多位数），量不到才兜底 */
+	const wScreen = wCss * z.mark * s
+	const bx = (typeof layout !== "undefined" && layout[data.name_of(space_id)]) || null
+	const spW = (bx && bx[2]) || 118
+	const spH = (bx && bx[3]) || 118
+	const rightEdge = sp.x + spW / 2
+	const topEdge = sp.y - spH / 2
+	const l = (rightEdge - (wScreen + PAD) / s) + "px"
+	const t = (topEdge + PAD / s) + "px"
 	if (elt.style.left !== l)
 		elt.style.left = l
 	if (elt.style.top !== t)
