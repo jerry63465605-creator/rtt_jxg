@@ -5815,7 +5815,12 @@ const STATUS_EFFECTS = {
 	}
 
 	function status_on_attacked(game, space, attacker, kind) {
-		const reacted = []  // 收集本次被攻击发动的德国状态卡
+		/*
+		 * 【2026-11-05 · 15353】改为「收集 -> 逐张询问 -> 再结算」。
+		 * 旧实现先 attrition_passive 再 request_responses('status_attacked')，
+		 * 事后只能弃卡（15328），无法撤销已扣的损耗；现在拦截发生在结算之前。
+		 */
+		const items = []
 		for (const n in (game.table || {})) {
 			for (const cid of (game.table[n] || [])) {
 				const c = inst_card(cid)
@@ -5823,28 +5828,59 @@ const STATUS_EFFECTS = {
 				const cfg = status_config_of(cid)
 				if (!cfg || !cfg.react || cfg.react.when !== 'attacked') continue
 				if (!status_active(game, cid, n)) continue
+				if (status_suppressed_now(game, cid)) continue      /* 已被 15353 压制 -> 本回合不生效 */
 				const rc = cfg.react
 				if (rc.space && space_id(rc.space) !== space) continue
 				if (rc.has_army && !has_pieces(game, { space: space, nation: rc.has_army, types: ['army'] })) continue
 				if (rc.type && rc.type !== kind) continue
-				/* 【2026-10-17 修复】攻击方被德国状态卡强制损耗属【被动损耗】，
-				 * 必须用 attrition_passive：牌库不足时差额每张扣 1 分
-				 * （L898-900 通用规则）。此前误用 attrition_cards（主动、牌空即停不扣分），
-				 * 导致「英国牌库为空时 15250 损耗 2 张」既没磨牌也没扣分。 */
-				const lost = attrition_passive(game, attacker, rc.attrition)
-				game.log.push('《' + (c.name || '状态卡') + '》触发：' + attacker + ' 损耗 ' + lost.length + ' 张牌' +
-					(lost.attrition_short ? '（牌库不足，扣 ' + lost.attrition_short + ' 分）' : ''))
-				reacted.push({ cid, c })
+				items.push({
+					cid: cid, nation: n, name: c.name || '状态卡',
+					attrition: rc.attrition || 0,
+				})
 			}
 		}
-		/* 德国状态卡因被攻击发动后，统一触发一次《破译恩尼格码》15328：
-		 * 让英国从【刚才发动的这些德国状态卡】里选 1 张弃置（单卡也弹窗选 1 张）。 */
-		if (reacted.length > 0) {
-			request_responses(game, 'status_attacked', {
-				nation: '德国',
-				cards: reacted.map(r => r.cid),
-			}, false)
+		if (!items.length) return
+		queue_status_react(game, 'attacked', { space: space, attacker: attacker, kind: kind }, items)
+	}
+
+	/*
+	 * 【2026-11-05 · 15353】经济战反应的「收集」阶段（不结算）。
+	 * 旧实现 status_on_econ 直接结算并事后上报，15353 无从拦截；
+	 * 现在改为 收集 -> 逐张询问 -> 结算，见 docs/change-15353-status-intercept.md。
+	 */
+	function status_econ_items(game, tag, target, actor) {
+		const items = []
+		for (const n in (game.table || {})) {
+			for (const cid of (game.table[n] || [])) {
+				const c = inst_card(cid)
+				if (!c || c.nation !== '德国') continue
+				const cfg = status_config_of(cid)
+				if (!cfg || !cfg.react) continue
+				if (!status_active(game, cid, n)) continue
+				if (status_suppressed_now(game, cid)) continue
+				const rc = cfg.react
+				if (rc.when === 'econ_target') {
+					if (rc.tag && rc.tag !== tag) continue
+					if (target !== '德国') continue
+					items.push({
+						cid: cid, nation: n, name: c.name || '状态卡', mode: 'econ_target',
+						attacker_attrition: rc.attacker_attrition || 0,
+						reduce_attrition: rc.reduce_attrition || 0,
+					})
+				}
+				if (rc.when === 'econ_used') {
+					if (faction_of_nation(actor) !== AXIS) continue
+					const tags = Array.isArray(rc.tag) ? rc.tag : [rc.tag]
+					if (tags.indexOf(tag) < 0) continue
+					items.push({
+						cid: cid, nation: n, name: c.name || '状态卡', mode: 'econ_used',
+						add_attrition: rc.add_attrition || 0, add_score: rc.add_score || 0,
+						extra_if_space_army: rc.extra_if_space_army || null,
+					})
+				}
+			}
 		}
+		return items
 	}
 
 	function status_on_econ(game, tag, target, actor) {
@@ -8546,6 +8582,123 @@ function discard_status_instance(game, nation, inst_id) {
 function notify_german_status_used(game, cardIds) {
 	if (!cardIds || !cardIds.length) return null
 	return request_responses(game, 'status_attacked', { nation: '德国', cards: cardIds }, false)
+}
+
+/* ============================================================
+ * 【2026-11-05】15353《保持冷静·继续前进》对「非主动发动」德国状态卡的拦截
+ * 设计文档：docs/change-15353-status-intercept.md
+ *
+ * 核心：把 react / auto 类的「先结算、后上报」改成「先询问、再结算」。
+ *   ① 收集（不结算）→ ② 逐张派发 enemy_status_effect 窗口 → ③ 玩家表态后逐张结算
+ * 被拦的卡写 status_suppressed_this_turn（15353.run 负责），本回合该卡直接不生效。
+ * 因为询问在结算之前，**不需要回滚**（损耗没扣、分数没加）。
+ * ============================================================ */
+
+/* 某张状态卡本回合是否已被 15353 压制（与 15353.run 的写入同源） */
+function status_suppressed_now(game, cid) {
+	const s = (game.status_suppressed_this_turn || {})[cid]
+	return s != null && s === freq_key(game)
+}
+
+/* 对单张卡派发拦截窗口，返回「是否真的开出了窗口」 */
+function status_intercept_window_open(game, cid) {
+	offer_armed_effects(game, 'enemy_status_effect', {
+		nation: '德国', card: cid, arg: {}, window: 'enemy_status_effect',
+	})
+	return (game.armed_offers || []).some(w =>
+		w.when === 'enemy_status_effect' && w.ctx && String(w.ctx.card) === String(cid))
+}
+
+/* 入队并开始推进 */
+function queue_status_react(game, mode, ctx, items) {
+	game.pending_status_react = { mode: mode, ctx: ctx || {}, items: items || [], fired: [] }
+	step_status_react(game)
+}
+
+/* 按 mode 结算「一张」状态卡的效果（此时已确认未被拦截） */
+function apply_one_status_react(game, p, it) {
+	if (p.mode === 'attacked') {
+		const attacker = p.ctx.attacker
+		const lost = attrition_passive(game, attacker, it.attrition || 0)
+		game.log.push('《' + it.name + '》触发：' + attacker + ' 损耗 ' + lost.length + ' 张牌' +
+			(lost.attrition_short ? '（牌库不足，扣 ' + lost.attrition_short + ' 分）' : ''))
+		p.fired.push(it.cid)
+		return
+	}
+	if (it.mode === 'econ_target') {
+		const actor = p.ctx.actor
+		if (it.attacker_attrition) {
+			const lost = attrition_passive(game, actor, it.attacker_attrition)
+			game.log.push('《' + it.name + '》触发：' + actor + ' 损耗 ' + lost.length + ' 张' +
+				(lost.attrition_short ? '（牌库不足，扣 ' + lost.attrition_short + ' 分）' : ''))
+		}
+		if (it.reduce_attrition) {
+			const disc = (game.discard && game.discard['德国']) || []
+			let k = Math.min(it.reduce_attrition, disc.length)
+			for (let i = 0; i < k; i++) {
+				const card = disc.pop()
+				const dk = game.decks['德国']
+				if (dk && card) dk.unshift(card)
+			}
+			game.log.push('《' + it.name + '》触发：损耗数减 ' + k)
+		}
+		p.fired.push(it.cid)
+		return
+	}
+	if (it.mode === 'econ_used') {
+		const actor = p.ctx.actor, target = p.ctx.target
+		if (it.add_attrition) attrition_passive(game, target, it.add_attrition)
+		if (it.add_score) add_axis_score(game, it.add_score)
+		if (it.extra_if_space_army && has_pieces(game, {
+			space: it.extra_if_space_army.space, types: ['army'], nation: it.extra_if_space_army.nation,
+		})) {
+			attrition_passive(game, target, it.extra_if_space_army.add_attrition)
+		}
+		game.log.push('《' + it.name + '》触发：经济战加成')
+		p.fired.push(it.cid)
+		return
+	}
+	/* scoring：真实加分由 phase_scoring 统一重算（被压制的卡在循环里被跳过） */
+	p.fired.push(it.cid)
+}
+
+/* 推进：逐张「询问 -> 结算」，全部处理完后收尾（补上报 / 补计分） */
+function step_status_react(game) {
+	const p = game.pending_status_react
+	if (!p) return
+	while (p.items.length) {
+		const it = p.items[0]
+		if (status_suppressed_now(game, it.cid)) {
+			game.log.push('《' + it.name + '》本回合已被《保持冷静·继续前进》压制，不生效')
+			p.items.shift()
+			continue
+		}
+		/*
+		 * 每张卡【只问一次】：问过之后（玩家选「不发动」）就照常结算，
+		 * 否则续跑会反复开窗 = 死循环询问。
+		 */
+		if (!it.asked) {
+			if (status_intercept_window_open(game, it.cid)) {
+				it.asked = true
+				return          /* 等玩家表态，本帧到此为止 */
+			}
+		}
+		apply_one_status_react(game, p, it)
+		p.items.shift()
+	}
+	const fired = (p.fired || []).slice()
+	const mode = p.mode
+	game.pending_status_react = null
+	refresh(game)
+	if (fired.length && mode !== 'scoring') notify_german_status_used(game, fired)
+	if (mode === 'scoring') {
+		const sc = game.pending_scoring_deferred
+		game.pending_scoring_deferred = null
+		if (sc) {
+			const so = Object.assign({}, sc.opts || {}, { __afterIntercept: true })
+			phase_scoring(game, sc.nation, so)
+		}
+	}
 }
 
 /*
@@ -13754,8 +13907,16 @@ const ECHO_EFFECTS = {
 				 *   · once_per_turn 的卡 ready 不会变灰（status_window_ready 只读 status_used），
 				 *     一直是亮的，点了才被 activate_status 的压制分支拒绝 —— "能点的 ≠ 能成功的"。
 				 */
-				game.status_used = game.status_used || {}
-				game.status_used[cid] = freq_key(game)
+				/*
+				 * 【2026-11-05】只有【主动发动类】（带 trigger）才记「本回合已发动」。
+				 * react / auto 类本来就不占发动次数，若也写 status_used，
+				 * 客户端会显示「本回合已发动」，与事实不符（用户口径：只写压制）。
+				 */
+				const _cfg53 = status_config_of(cid)
+				if (_cfg53 && _cfg53.trigger) {
+					game.status_used = game.status_used || {}
+					game.status_used[cid] = freq_key(game)
+				}
 				return {
 					ok: true,
 					desc: '英国弃置 1 张手牌：敌方状态卡《' + nm + '》本回合效果无效',
@@ -24173,6 +24334,34 @@ function score_of_bloc(game, space, nation, bloc, occupants) {
 function phase_scoring(game, nation, opts) {
 	opts = opts || {}
 	/*
+	 * 【2026-11-05 · 15353】计分阶段入口：先对「本阶段将自动生效的德国状态卡」逐张询问。
+	 *
+	 * 旧实现把加分直接算进总分、事后才上报给 15328（只能弃卡），15353 拦不到。
+	 * 现在：先询问 -> 被拦的卡写压制 -> 再计分（下面的循环跳过被压制的卡），
+	 * 因此不需要回滚分数。opts.__afterIntercept 由续跑路径设置，避免递归再问一次。
+	 */
+	if (!opts.__afterIntercept && !game.pending_status_react && nation === '德国') {
+		const items = []
+		for (const n2 of Object.keys(game.table || {})) {
+			for (const cid of (game.table[n2] || [])) {
+				if (!status_active(game, cid, n2)) continue
+				if (status_suppressed_now(game, cid)) continue
+				const cfg0 = status_config_of(cid)
+				if (!cfg0 || !cfg0.auto || cfg0.auto.phase !== 'scoring') continue
+				if (cfg0.auto.trigger_nation) {
+					if (cfg0.auto.trigger_nation !== nation) continue
+				} else if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
+				items.push({ cid: cid, nation: n2, name: (inst_card(cid) || {}).name || '状态卡' })
+			}
+		}
+		if (items.length) {
+			game.pending_scoring_deferred = { nation: nation, opts: opts }
+			queue_status_react(game, 'scoring', { nation: nation }, items)
+			/* 有人可拦 -> 已挂起，等表态后再计分；无人拦 -> step 内部会即时调用本函数 */
+			if (game.pending_status_react) return
+		}
+	}
+	/*
 	 * 【2026-09-30 德国增强 B 组】[北方行动]计分阶段开始时，触发 scoring_north 装载卡
 	 * （如 威瑟堡行动：在<北欧>征召陆军；可打出 1 张[北方行动]）。
 	 * 【2026-10-22】原写<北海>，但北海是海域、陆军只能在陆地征召，恒定失败；已改<北欧>。
@@ -24267,6 +24456,8 @@ function phase_scoring(game, nation, opts) {
 	for (const n2 of Object.keys(game.table || {})) {
 		for (const cid of (game.table[n2] || [])) {
 			if (!status_active(game, cid, n2)) continue
+			/* 【2026-11-05 · 15353】本回合已被《保持冷静》压制 -> 本阶段不生效 */
+			if (status_suppressed_now(game, cid)) continue
 			const cfg = status_config_of(cid)
 			if (!cfg || !cfg.auto || cfg.auto.phase !== PH.SCORING) continue
 			if (cfg.auto.trigger_nation) {
@@ -29278,6 +29469,21 @@ function do_action(state, current, action, arg) {
 	 * 判据与 view.pending_echo 完全同源（is_empty_echo_frame），且**不再依赖 event_budget**
 	 * —— 否则点「结束《伞兵》」清空预算后，空框会重新冻结所有动作。
 	 */
+	/*
+	 * 【2026-11-05 · 15353】状态卡拦截挂起期间，只允许「表态」类动作。
+	 *
+	 * react / auto 类效果在结算前挂起等英国表态；若此时放任别的动作（出牌/推阶段），
+	 * 待结算的效果会一直悬着，或与新的结算交叉 —— 必须先处理询问。
+	 */
+	if (game.pending_status_react &&
+		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+		action !== 'trigger_response' && action !== 'pass_response' &&
+		action !== 'resolve_response_choice' && action !== 'response_reorder' &&
+		action !== 'response_confirm' && action !== 'log' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push('请先处理《保持冷静·继续前进》的拦截询问（发动或不发动）')
+		return game
+	}
 	const _emptyEcho = is_empty_echo_frame(game.pending_echo)
 	if (game.pending_echo && !_emptyEcho &&
 		(
@@ -33297,7 +33503,12 @@ function do_action(state, current, action, arg) {
 					}
 				}
 				const r = cfg.run(game, nation, t)
-				try { status_on_econ(game, cfg.tag, t, nation) } catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
+				try {
+							/* 【2026-11-05 · 15353】先收集 -> 逐张询问 -> 再结算（原来直接结算，拦不到） */
+							const _econItems = status_econ_items(game, cfg.tag, t, nation)
+							if (_econItems.length)
+								queue_status_react(game, 'econ', { tag: cfg.tag, target: t, actor: nation }, _econItems)
+						} catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
 				/* 17505 P-51 野马：打出[轰炸行动]时，目标地区每有1支美国空军，损耗数+2（追加受害方损耗） */
 				if (game.us_p51 && cfg.tag === '轰炸行动') {
 					/*
@@ -34329,6 +34540,21 @@ exports.action = function (state, current, action, arg) {
 		 * 真正的选择框（17514/17815/17546）带 options 或 cands，不受影响。
 		 */
 		try { if (is_empty_echo_frame(game.pending_echo)) game.pending_echo = null } catch (e) {}
+		/*
+		 * 【2026-11-05 · 15353】状态卡拦截挂起的续跑点。
+		 *
+		 * react / auto 类效果在结算【之前】挂起等英国表态（enemy_status_effect 窗口）。
+		 * 玩家一表态（发动 15353 / 不发动 / 触发其它响应把窗口关掉），
+		 * 这里统一续跑：被压制的卡跳过，其余按原逻辑结算。
+		 * 判据「窗口仍在 -> 不动」保证不会在等待期间把它提前结算掉。
+		 */
+		try {
+			/* 判据用"窗口里还有没有可选卡"：skip 可能只清空 cards 而保留窗口外壳 */
+			const _waiting = (game.armed_offers || []).some(w =>
+				w.when === 'enemy_status_effect' && (w.cards || []).length > 0)
+			const _answered = (action === 'use_armed_offer' || action === 'skip_armed_offer')
+			if (game.pending_status_react && (_answered || !_waiting)) step_status_react(game)
+		} catch (e) { game.log.push('状态卡拦截续跑错误：' + e.message) }
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {
