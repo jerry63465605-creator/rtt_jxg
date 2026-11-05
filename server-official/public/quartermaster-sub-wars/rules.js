@@ -11972,13 +11972,20 @@ const ECHO_EFFECTS = {
 			run(game, ctx) {
 				const targets = ctx.targets || []
 				if (targets.indexOf('英国') < 0) return { ok: true, skip: true, desc: '目标非英国，不发动' }
-				const bt = space_id('不列颠')
-				let k = 0
-				if (bt != null) for (const p of pieces_on(game, bt))
-					if (game.piece_nation[p] === '德国' && game.piece_type[p] === 'air') k++
-				if (!k) return { ok: true, skip: true, desc: '不列颠无德国空军，未发动' }
+				/*
+				 * 【2026-11-05 · B4 修复】卡面是「<不列颠>2 地区内每有 1 支德国空军」——
+				 * 指【不列颠半径 2 的范围】（本格 + 1~2 跳，几何邻接），不是单个地区格。
+				 *
+				 * 旧实现 `space_id('不列颠')` + 单格遍历：本图里「不列颠」只有 1 格，
+				 * 于是最多只数到这 1 格上的空军，2 跳内的其他德国空军完全不计
+				 * （玩家实测：应当 +4 只 +2，甚至 0）。
+				 *
+				 * 口径与美国「轰炸行动」类卡一致（count_pieces + radius，见 2139/2142 行）。
+				 */
+				const k = count_pieces(game, { space: '不列颠', radius: 2, types: ['air'], nation: '德国' })
+				if (!k) return { ok: true, skip: true, desc: '不列颠 2 地区内无德国空军，未发动' }
 				const lost = attrition_cards(game, '英国', 2 * k)
-				return { ok: true, desc: '不列颠有 ' + k + ' 支德国空军，英国额外损耗 ' + lost.length + ' 张牌' }
+				return { ok: true, desc: '不列颠 2 地区内有 ' + k + ' 支德国空军，英国额外损耗 ' + lost.length + ' 张牌' }
 			},
 		},
 	},
