@@ -222,6 +222,21 @@ body.debug .space.connected_to_selected { box-shadow: 0 0 0 3px #0ff inset; }
 /* 状态外框尽量贴合形状（三角仍是圆角方，作为"选中框"已足够醒目） */
 .unit.army, .unit.navy { border-radius: 6px; }
 
+/*
+ * 【2026-11-06 · 玩家要求】海军算子缩小一点。
+ *
+ * 正方形在同尺寸下视觉比"三角形（陆军）/圆形（空军）"更厚重，
+ * 混在同一格里显得偏大。这里只缩海军：46 → 40，
+ * margin 同步改成 -20（= 自身尺寸的一半），保证仍然以格位中心对齐；
+ * 兵种字略微缩小以免 40px 容器里挤。
+ */
+.unit.navy {
+	width: 40px;
+	height: 40px;
+	margin: -20px 0 0 -20px;
+	font-size: 12px;
+}
+
 /* ---- 国家 = 底色（英法、美中同屏操作，色相必须拉开）---- */
 .unit.germany::before { background-color: #2b2b2b; }  /* 黑 */
 .unit.uk::before      { background-color: #b8860b; }  /* 深土黄（避开陆地 #d8c9a8）*/
