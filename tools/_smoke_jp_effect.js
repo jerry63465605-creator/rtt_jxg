@@ -150,8 +150,17 @@ console.log('\n=== 3. 15407 秋水火箭战斗机：消灭1支相邻日本空军
 	/* 让日本空军处于补给状态 */
 	I.grant_supply(g, 'jp_air', g.turn)
 	I.compute_supply(g)
-	const r = eff.run(g, {})
-	console.log('    -> ' + JSON.stringify(r))
+	/*
+	 * 【2026-11-05 · B3】秋水改为"先选目标再确认"：
+	 * 未带 choice 时不应消灭，返回"请先选择"；带 choice:0 才精确消灭那一支。
+	 */
+	const r0 = eff.run(g, { arg: {} })
+	console.log('    -> 未选目标: ' + JSON.stringify(r0))
+	ok('未选目标时拒绝执行（要求先选）',
+		!r0.ok && /请先选择/.test(String(r0.reason || '')), JSON.stringify(r0))
+	ok('未选目标时敌机仍在', g.location['us_air'] !== undefined, 'loc=' + g.location['us_air'])
+	const r = eff.run(g, { arg: { choice: 0 } })
+	console.log('    -> 选第 0 项: ' + JSON.stringify(r))
 	ok('消灭了敌方空军', g.location['us_air'] === undefined,
 		'loc=' + g.location['us_air'])
 	ok('日本空军还在（发起方留原地）', g.location['jp_air'] === sid,

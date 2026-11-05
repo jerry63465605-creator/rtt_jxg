@@ -9621,6 +9621,35 @@ function piece_candidate_label(game, id) {
 		'@' + data.name_of(game.location[id])
 }
 
+/*
+ * 【2026-11-05 · B3《秋水火箭战斗机》】合法目标候选。
+ *
+ * 卡面：「消灭 1 支【相邻日本空军】的敌方国家空军」——
+ * 即：对每支日本空军，取【同格 + 相邻】（按阵营连通）地区里的敌方空军。
+ * 同格也算（日本空军与敌机停在同一地区时同样"相邻"）。
+ *
+ * 返回 [{ id, space, via }]，via = 可发起夺取制空权的那支日本空军。
+ */
+function qiushui_targets(game) {
+	const myF = faction_of_nation('日本')
+	const out = []
+	for (const p of Object.keys(game.location || {})) {
+		if (game.piece_nation[p] !== '日本' || game.piece_type[p] !== 'air') continue
+		const loc = Number(game.location[p])
+		const zone = [loc].concat(get_connections(game, loc, myF).map(Number))
+		for (const sp of zone) {
+			for (const q of pieces_on(game, sp)) {
+				if (game.piece_type[q] !== 'air') continue
+				const qf = faction_of_nation(game.piece_nation[q])
+				if (!qf || qf === myF) continue
+				if (out.some(x => String(x.id) === String(q))) continue
+				out.push({ id: q, space: Number(sp), via: p })
+			}
+		}
+	}
+	return out
+}
+
 function eliminate_candidates(game, nation, space, wantType) {
 	const myFaction = faction_of_nation(nation)
 	return pieces_on(game, space).filter(p => {
@@ -12793,6 +12822,7 @@ const ECHO_EFFECTS = {
 
 	/* ---- 15407 秋水火箭战斗机：弃牌阶段开始时，消灭1支相邻日本空军的敌方空军 ---- */
 	'15407': {
+		/* 见下方 run；候选函数在文件末尾附近定义（qiushui_targets） */
 		name: '秋水火箭战斗机', actor: '日本',
 		desc: '弃牌阶段开始时：消灭1支相邻日本空军的敌方国家空军',
 		run(game, ctx) {
@@ -12801,31 +12831,24 @@ const ECHO_EFFECTS = {
 			 *   包含 `game.piece_type[p] !== 'air'`，【排除空军】，
 			 *   消灭敌机会被拒绝（2026-10-06 踩过）。
 			 *   消灭敌方空军要用【夺取制空权】原子 seize_air。
+			 *
+			 * 【2026-11-05 · B3 修复】原来服务端 for 循环直接挑【第一支】，玩家无法选、
+			 * 也没有确认步骤（玩家报"变成自动了"）。现在与 15355《特种空勤团》同款：
+			 * 第一次打出返回 need:'piece' 下发候选 → 客户端选中后带 piece 重发 play_card →
+			 * 只消灭【选中的那一支】。卡本身仍是"弃牌阶段开始时手动打出"（不打算打出=不发动）。
 			 */
-			const myFaction = faction_of_nation('日本')
-			for (const p in game.piece_nation) {
-				if (game.location[p] == null) continue
-				if (game.piece_nation[p] !== '日本' || game.piece_type[p] !== 'air') continue
-				const loc = Number(game.location[p])
-				const nbrs = [loc].concat(
-					get_connections(game, loc, myFaction).map(Number))
-				for (const sp of nbrs) {
-					/* 该地区有敌方空军吗 */
-					const hasEnemyAir = pieces_on(game, sp).some(q => {
-						if (game.piece_type[q] !== 'air') return false
-						const qf = faction_of_nation(game.piece_nation[q])
-						return qf && qf !== myFaction
-					})
-					if (!hasEnemyAir) continue
-					const r = seize_air(game, '日本', sp, p, { by: 'card' })
-					if (r && r.ok)
-						return {
-							ok: true,
-							desc: '消灭' + data.name_of(sp) + ' 的敌方空军',
-						}
-				}
-			}
-			return { ok: false, reason: '没有相邻的敌方空军可消灭' }
+			const arg = (ctx && ctx.arg) || {}
+			const cands = qiushui_targets(game)
+			if (!cands.length) return { ok: false, reason: '没有相邻日本空军的敌方空军可消灭' }
+			/* 候选/选项由 event_card_needs('15407') 下发；这里只负责"按玩家选的打" */
+			if (arg.choice == null) return { ok: false, reason: '请先选择要消灭的敌方空军' }
+			const hit = cands[Number(arg.choice)]
+			if (!hit) return { ok: false, reason: '所选目标无效' }
+			const pick = String(hit.id)
+			const r = seize_air(game, '日本', hit.space, hit.via, { by: 'card' })
+			if (!r || !r.ok) return { ok: false, reason: (r && r.reason) || '夺取制空权失败' }
+			refresh(game)
+			return { ok: true, desc: '消灭' + data.name_of(hit.space) + ' 的敌方空军（' + pick + '）' }
 		},
 	},
 
@@ -18479,6 +18502,25 @@ function event_card_needs(game, nation, card_id, arg) {
 	 * 注：card_id 在真实流程里是实例形式（如 '15408#1'），需剥掉实例后缀比对面 id。
 	 */
 	const faceId = String(card_id || '').split('#')[0]
+	/*
+	 * 【2026-11-05 · B3《秋水火箭战斗机》】消灭哪一支敌机由玩家选。
+	 *
+	 * 旧实现服务端 for 循环直接挑第一支（玩家报"变成自动了"）。
+	 * 这里下发 choice 选项（每架敌机一项），玩家选完后 play_card 带 choice 重发，
+	 * run 里按 `cands[choice]` 精确消灭 —— 与 15408 的"选项 + 重发"同款通道。
+	 */
+	if (faceId === '15407') {
+		if (arg && arg.choice != null) return null
+		const cands = qiushui_targets(game)
+		if (!cands.length) return null
+		return {
+			need: 'choice', pick: 1,
+			options: cands.map((x, i) => ({
+				index: i,
+				label: piece_candidate_label(game, x.id),
+			})),
+		}
+	}
 	/*
 	 * 【2026-10-09】泛化：17706《意大利完成航母》与 15408 同款
 	 * （海域部署或调度 1 支空军），国家取 eff.actor，代价取 eff.cost。
