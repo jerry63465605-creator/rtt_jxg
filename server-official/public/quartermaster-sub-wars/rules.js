@@ -24613,11 +24613,18 @@ function phase_scoring(game, nation, opts) {
 			const _ibSameTurn = !!(_ib && _ib.turn === game.turn && _ib.card_face === cid)
 			const _ibMine = _ibSameTurn && _ib.nation === nation
 			/*
-			 * 【2026-11-06 · 玩家口径修正】"借出回合各加一次"：
-			 *   · 意大利的【回合】（即 game.turn 这一个国家回合）里借用生效 → 意大利计分 +N；
-			 *   · 德国自己的【回合】是另一个 game.turn，借用已自然失效 → 德国计分再 +N。
-			 * 两者各加一次、互不吞掉（一轮次 6 个国家回合里合计两次）。
-			 * 所以这里【不再】因为"被借出"而跳过归属国的计分。
+			 * 【2026-11-06 · 玩家口径】"借出回合各加一次"。
+			 *
+			 * 术语（见 skill `rtt-turn-system`）：
+			 *   · 回合 = 一个国家的行动回合 -> `game.current_nation`
+			 *   · 轮次 = 6 个国家回合走完一圈 -> `game.turn`（只在 nations_done 归零时 +1）
+			 *
+			 * 所以：
+			 *   · 借用生效的那个【回合】（意大利的 current_nation）→ 意大利计分 +N；
+			 *   · 德国自己的【回合】（同一轮次内，current_nation 换成德国）→ 德国计分 +N；
+			 *   · 两处各加一次，互不吞掉。
+			 * 因此这里【不再】因"被借出"而跳过归属国的计分；
+			 * 借用是否生效仍由 `italy_borrow.nation === 当前计分国`（= 意大利回合）判断。
 			 */
 			if (cfg.auto.trigger_nation) {
 				if (cfg.auto.trigger_nation !== nation && !_ibMine) continue

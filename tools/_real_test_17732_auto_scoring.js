@@ -121,17 +121,22 @@ console.log('\n=== E. 借出回合各加一次：意大利回合 +N，德国自�
 	const g = setup('15241')
 	putNavy(g, 'de_n', '波罗的海'); putArmy(g, 'de_a1', '北欧')
 	I.refresh(g)
-	/* ① 借出回合 = 意大利这个国家回合 */
+	/*
+	 * 术语（skill rtt-turn-system）：回合 = current_nation；轮次 = game.turn。
+	 * 同轮次内各国共用同一个 game.turn —— 所以模拟"德国自己的回合"只切 current_nation，不动 game.turn。
+	 */
+	const turnBefore = g.turn
 	const r1 = scoreRun(g, '意大利', '瑞典铁矿')
-	console.log('  意大利回合 log: ' + (r1.lines.join(' | ') || '（无）'))
+	console.log('  意大利回合 log: ' + (r1.lines.join(' | ') || '（无）') + '  game.turn=' + g.turn)
 	ok('★★ 借出回合（意大利）计分 +2', r1.bonus === 2, 'bonus=' + r1.bonus)
-	/* ② 德国自己的回合（game.turn 前进一格 = 借用自然失效）*/
-	g.turn += 1
+	/* ② 德国自己的回合：同一轮次内，current_nation 换成德国 */
+	g.current_nation = '德国'
 	I.refresh(g)
 	const r2 = scoreRun(g, '德国', '瑞典铁矿')
-	console.log('  德国回合 log: ' + (r2.lines.join(' | ') || '（无）'))
+	console.log('  德国回合 log: ' + (r2.lines.join(' | ') || '（无）') + '  game.turn=' + g.turn)
 	ok('★★ 德国自己的回合再 +2（各加一次）', r2.bonus === 2, 'bonus=' + r2.bonus)
-	/* ③ 合计 = 4（一轮次 6 个国家回合里共两次） */
+	ok('★ 两回合同属一个轮次（game.turn 未变）', g.turn === turnBefore, g.turn + ' vs ' + turnBefore)
+	/* ③ 一轮次合计 = 4 */
 	ok('★★ 一轮次合计 4 分', r1.bonus + r2.bonus === 4, r1.bonus + '+' + r2.bonus)
 }
 
@@ -158,7 +163,7 @@ console.log('\n=== F. 15353 在意大利计分阶段也能拦 ===')
 	}
 }
 
-console.log('\n=== G. 回合变更后借用失效 ===')
+console.log('\n=== G. 跨轮次后借用失效（game.turn +1）===')
 {
 	const g = setup('15241')
 	putNavy(g, 'de_n', '波罗的海'); putArmy(g, 'de_a1', '北欧')
@@ -166,7 +171,7 @@ console.log('\n=== G. 回合变更后借用失效 ===')
 	I.refresh(g)
 	const r = scoreRun(g, '意大利', '瑞典铁矿')
 	console.log('  log: ' + (r.lines.join(' | ') || '（无该卡日志）'))
-	ok('★ 跨回合后不再自动加', r.bonus === 0, 'bonus=' + r.bonus)
+	ok('★ 跨轮次后不再自动加', r.bonus === 0, 'bonus=' + r.bonus)
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
