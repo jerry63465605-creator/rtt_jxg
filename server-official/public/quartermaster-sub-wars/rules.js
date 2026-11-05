@@ -24480,10 +24480,9 @@ function phase_scoring(game, nation, opts) {
 				if (status_suppressed_now(game, cid)) continue
 				const cfg0 = status_config_of(cid)
 				if (!cfg0 || !cfg0.auto || cfg0.auto.phase !== 'scoring') continue
-				/* 借用当回合：只问被借出的那一张，且只在借用方计分阶段问 */
+				/* 借用当回合：被借出的那一张在【借用方】计分阶段也要能被拦（归属国自己那回合照常） */
 				const _ibSame = !!(_ibPre && _ibPre.turn === game.turn && _ibPre.card_face === cid)
 				const _ibMine = _ibSame && _ibPre.nation === nation
-				if (_ibSame && !_ibMine) continue
 				if (cfg0.auto.trigger_nation) {
 					if (cfg0.auto.trigger_nation !== nation && !_ibMine) continue
 				} else if (faction_of_nation(n2) !== faction_of_nation(nation)) continue
@@ -24613,7 +24612,13 @@ function phase_scoring(game, nation, opts) {
 			const _ib = game.italy_borrow
 			const _ibSameTurn = !!(_ib && _ib.turn === game.turn && _ib.card_face === cid)
 			const _ibMine = _ibSameTurn && _ib.nation === nation
-			if (_ibSameTurn && !_ibMine) continue
+			/*
+			 * 【2026-11-06 · 玩家口径修正】"借出回合各加一次"：
+			 *   · 意大利的【回合】（即 game.turn 这一个国家回合）里借用生效 → 意大利计分 +N；
+			 *   · 德国自己的【回合】是另一个 game.turn，借用已自然失效 → 德国计分再 +N。
+			 * 两者各加一次、互不吞掉（一轮次 6 个国家回合里合计两次）。
+			 * 所以这里【不再】因为"被借出"而跳过归属国的计分。
+			 */
 			if (cfg.auto.trigger_nation) {
 				if (cfg.auto.trigger_nation !== nation && !_ibMine) continue
 			} else {

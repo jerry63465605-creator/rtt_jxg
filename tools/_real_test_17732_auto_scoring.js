@@ -116,21 +116,23 @@ console.log('\n=== D. 未借用：意大利计分阶段不加（基线）===')
 	ok('★ 未借用时该卡不结算', r.bonus === 0, 'bonus=' + r.bonus)
 }
 
-console.log('\n=== E. 借出当回合，德国本国计分【跳过】（不重复加）===')
+console.log('\n=== E. 借出回合各加一次：意大利回合 +N，德国自己的回合再 +N ===')
 {
 	const g = setup('15241')
 	putNavy(g, 'de_n', '波罗的海'); putArmy(g, 'de_a1', '北欧')
 	I.refresh(g)
-	const r = scoreRun(g, '德国', '瑞典铁矿')
-	console.log('  log: ' + (r.lines.join(' | ') || '（无该卡日志）'))
-	ok('★★ 德国计分阶段不再结算这张（借出中）', r.bonus === 0, 'bonus=' + r.bonus)
-	/* 对照：未借出时德国本国应当照常结算 */
-	const g2 = setup('15241', { noBorrow: true })
-	putNavy(g2, 'de_n', '波罗的海'); putArmy(g2, 'de_a1', '北欧')
-	I.refresh(g2)
-	const r2 = scoreRun(g2, '德国', '瑞典铁矿')
-	console.log('  对照(未借出) log: ' + r2.lines.join(' | '))
-	ok('★★ 未借出时德国本国照常 +2', r2.bonus === 2, 'bonus=' + r2.bonus)
+	/* ① 借出回合 = 意大利这个国家回合 */
+	const r1 = scoreRun(g, '意大利', '瑞典铁矿')
+	console.log('  意大利回合 log: ' + (r1.lines.join(' | ') || '（无）'))
+	ok('★★ 借出回合（意大利）计分 +2', r1.bonus === 2, 'bonus=' + r1.bonus)
+	/* ② 德国自己的回合（game.turn 前进一格 = 借用自然失效）*/
+	g.turn += 1
+	I.refresh(g)
+	const r2 = scoreRun(g, '德国', '瑞典铁矿')
+	console.log('  德国回合 log: ' + (r2.lines.join(' | ') || '（无）'))
+	ok('★★ 德国自己的回合再 +2（各加一次）', r2.bonus === 2, 'bonus=' + r2.bonus)
+	/* ③ 合计 = 4（一轮次 6 个国家回合里共两次） */
+	ok('★★ 一轮次合计 4 分', r1.bonus + r2.bonus === 4, r1.bonus + '+' + r2.bonus)
 }
 
 console.log('\n=== F. 15353 在意大利计分阶段也能拦 ===')
