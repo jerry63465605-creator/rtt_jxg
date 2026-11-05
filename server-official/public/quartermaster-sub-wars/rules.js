@@ -29470,6 +29470,33 @@ function do_action(state, current, action, arg) {
 	 * —— 否则点「结束《伞兵》」清空预算后，空框会重新冻结所有动作。
 	 */
 	/*
+	 * 【2026-11-05 · B8】「对方的时点」窗口必须【强挂起】。
+	 *
+	 * 场景（玩家实测）：德国《阿登闪击战》第一步在<西欧>移除法国陆军 -> 英国桌面有 15311《马奇诺防线》、
+	 * 手牌 7 张，窗口确实开在英国那侧；但 armed_offers 只被当作"可选窗口"，
+	 * 行动方照样可以 event_finish 把阿登的第二步（建设陆军）做完，还能继续出牌 ——
+	 * 等英国终于表态时，西欧已经被德国建设完毕，复原出来的法国陆军与德军同格，局面不合法。
+	 *
+	 * 判据：窗口里被移除/被指向的部队属于【对方阵营】(ctx.piece_nation / target_nation) 且候选非空。
+	 * 此时行动方必须等对方表态；自己回合的"自有窗口"（after_build_army / after_deploy_air 等）
+	 * 仍是"错过即失效"，节奏不变。
+	 */
+	const _oppMoment = (game.armed_offers || []).find(w => {
+		if (!(w.cards || []).length || !w.ctx) return false
+		const pn = w.ctx.piece_nation || w.ctx.target_nation
+		if (!pn) return false
+		const f = faction_of_nation(pn)
+		return !!f && f !== side
+	})
+	if (_oppMoment && action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+		action !== 'log' && !(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		const who = (_oppMoment.cards[0] && _oppMoment.cards[0].nation) || _oppMoment.ctx.piece_nation
+		const nm = (_oppMoment.cards[0] && _oppMoment.cards[0].name) || '增强卡'
+		game.log.push('等待【' + who + '】决定是否发动《' + nm + '》（对方时点，不可继续推进）')
+		return game
+	}
+
+	/*
 	 * 【2026-11-05 · 15353】状态卡拦截挂起期间，只允许「表态」类动作。
 	 *
 	 * react / auto 类效果在结算前挂起等英国表态；若此时放任别的动作（出牌/推阶段），
