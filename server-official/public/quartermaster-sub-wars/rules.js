@@ -8750,6 +8750,13 @@ function step_status_react(game) {
 		const it = p.items[0]
 		if (status_suppressed_now(game, it.cid)) {
 			game.log.push('《' + it.name + '》本回合已被《保持冷静·继续前进》压制，不生效')
+			/*
+			 * 【2026-11-06 · B20】被压制 ≠ 没发动。
+			 * 玩家口径：「被继续前进无效掉的状态，也应该可以被密码机弃掉」——
+			 * 所以这里也要记进 fired，收尾时上报 status_attacked，
+			 * 让 15328《破译恩尼格码》的候选里能看到这张卡。
+			 */
+			p.fired.push(it.cid)
 			p.items.shift()
 			continue
 		}
@@ -8770,7 +8777,13 @@ function step_status_react(game) {
 	const mode = p.mode
 	game.pending_status_react = null
 	refresh(game)
-	if (fired.length && mode !== 'scoring') notify_german_status_used(game, fired)
+	/*
+	 * 【2026-11-06 · B20】计分类（scoring）也要上报。
+	 *
+	 * 旧代码 `mode !== 'scoring'` 把 auto 计分卡（15241/15244/6601…）整类排除，
+	 * 15328《破译恩尼格码》永远拿不到它们。玩家口径：发动过就该能被弃掉。
+	 */
+	if (fired.length) notify_german_status_used(game, fired)
 	if (mode === 'scoring') {
 		const sc = game.pending_scoring_deferred
 		game.pending_scoring_deferred = null
