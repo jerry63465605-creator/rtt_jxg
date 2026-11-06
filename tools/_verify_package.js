@@ -1,0 +1,38 @@
+/*
+ * 出包校验：直接读【包内解出来的文件】而不是源码目录。
+ * 用法：node tools/_verify_package.js <tag>
+ *   前提：已 Expand-Archive 到 tmp/packcheck
+ */
+const fs = require('fs')
+const path = require('path')
+const tag = process.argv[2] || '20261106d'
+const B = path.join(__dirname, '..', 'tmp', 'packcheck', 'quartermaster-sub-wars')
+const read = f => fs.readFileSync(path.join(B, f), 'utf8')
+
+let pass = 0, fail = 0
+const ok = (m, c, extra) => { if (c) { pass++; console.log('  ✓ ' + m) } else { fail++; console.log('  ✗ ' + m + (extra ? '  | ' + extra : '')) } }
+
+const R = read('rules.js'), H = read('play.html'), J = read('play.js'), C = read('play.css')
+
+const vers = [...new Set([...H.matchAll(/\?v=(\w+)/g)].map(m => m[1]))]
+console.log('包内 play.html 版本串 = ' + JSON.stringify(vers))
+ok('版本串统一且等于 ' + tag, vers.length === 1 && vers[0] === tag, JSON.stringify(vers))
+
+ok('17811 特例（bureau_wait）', /bureau_wait/.test(R))
+ok('空军窗口排队续派 flush_piece_removed_offers', /flush_piece_removed_offers/.test(R))
+ok('victim 不再覆盖空军窗口 offer_armed_piece_removed', /offer_armed_piece_removed/.test(R))
+ok('B19 门禁判据（卡片归属国）', /c0\.nation \|\| ctx\.piece_nation/.test(R))
+ok('B19 内部重放豁免 internal_action', /!game\.__internal_depth/.test(R))
+ok('B20 压制也记账 p.fired.push', /p\.fired\.push\(it\.cid\)/.test(R))
+ok('B21 silent 重算不派发', /!opts\.silent/.test(R))
+ok('B22 view.last_built', /last_built: \(function/.test(R))
+ok('B22 17846 锁定建设地陆军', /const pid = cand\.length \? cand\[0\] : null/.test(R))
+ok('B23 15352 注册名 = 布莱切利园', /'15352': \{\s*\n\s*\/\*[\s\S]{0,260}name: '布莱切利园'/.test(R))
+ok('15226 巴巴罗萨回合开始快照', /refresh_barbarossa_snapshot/.test(R))
+
+ok('客户端 bureau_wait 分支', /bureau_wait/.test(J))
+ok('客户端海军 40px', /\.unit\.navy\s*\{\s*width:\s*40px/.test(C))
+ok('客户端计分标记已回退（badge_h 常量）', /const badge_h = 23/.test(J))
+
+console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
+process.exitCode = fail ? 1 : 0
