@@ -15031,8 +15031,19 @@ function offer_armed_effects(game, when, ctx) {
 	 * 【2026-10-25 保密】只写【张数】，不列卡名、不写描述。
 	 *   窗口建立时牌还在手牌里，卡名与描述都能被对手反推 -> 等于手牌透明。
 	 */
-	game.log.push('【' + _out[0].nation + '】可打出 ' + _out.length + ' 张增强卡' +
-		'（现在打出，做其它动作即错过）')
+	/*
+	 * 【2026-11-06 · B21】窗口提示只写进【本方】可见的日志。
+	 *
+	 * 旧写法无条件 push 进 game.log（双方共享的日志栏）：
+	 * 对手能读到"【英国】可打出 N 张增强卡"，等于泄露"对方手里有拦截卡"；
+	 * 计分/弃牌阶段一回合触发多次时，还会连刷数行，看着像重复询问。
+	 *
+	 * 现在：只有窗口属于【当前行动方自己】时才落日志（自己的窗口无需保密）；
+	 * 对方的时点由「等待【X】决定是否发动…」那条门禁日志说明。
+	 */
+	if (_out[0].nation === game.current_nation)
+		game.log.push('【' + _out[0].nation + '】可打出 ' + _out.length + ' 张增强卡' +
+			'（现在打出，做其它动作即错过）')
 }
 
 /* ============================================================
@@ -24706,7 +24717,16 @@ function phase_scoring(game, nation, opts) {
 	const _ibPre = game.italy_borrow
 	const _ibBorrowerHere = !!(_ibPre && _ibPre.turn === game.turn &&
 		_ibPre.nation === nation && _ibPre.card_face)
-	if (!opts.__afterIntercept && !game.pending_status_react &&
+	/*
+	 * 【2026-11-06 · B21】`silent`（advance_phase 里的"落账前重算"）不派发拦截窗口。
+	 *
+	 * 旧实现：进入计分阶段跑一次 phase_scoring（开窗口），离开计分阶段 advance_phase
+	 * 又用 {silent:true} 重算一次 —— 拦截块没有区分 silent，于是**同一张状态卡被问两次**
+	 * （探针实测：15241 在 supply→scoring、scoring→discard 各开一次窗口，日志也刷两遍）。
+	 * 静默重算只负责把分数算准，不该再打扰玩家；压制判定已在 auto 循环里
+	 * （`status_suppressed_now`）单独处理。
+	 */
+	if (!opts.__afterIntercept && !opts.silent && !game.pending_status_react &&
 		(nation === '德国' || _ibBorrowerHere)) {
 		const items = []
 		for (const n2 of Object.keys(game.table || {})) {
