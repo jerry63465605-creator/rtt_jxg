@@ -270,8 +270,31 @@ function strait_controller(game, strait_space) {
 function status_card_effective(game, cardId) {
 	if (!cardId) return false
 	if ((game.status_suppressed_this_turn || {})[cardId] === freq_key(game)) return false
-	const cfg = status_config_of(cardId)
-	return status_active(game, cardId, (cfg && cfg.actor) || null)
+	const cfg = status_config_of(cardId) || {}
+	/*
+	 * 【2026-11-06 · B25-a 修复】归属国不能只读 `cfg.actor`。
+	 *
+	 * 实测：所有状态卡配置（15254/17747/15343/15444/8601…）都没有 `actor` 字段，
+	 * 于是这里一直传 null → `status_active()` 里 `faction_of_nation(null) = null`
+	 * → 提前 `return true`（= 视为有效）。
+	 * 结果：凡走 `status_card_effective()` 的路径（compute_connections 的海峡强制轴心
+	 * 15254/17747、compute_supply 里 15254 的波罗的海中继）**永远压不掉**，
+	 * 与玩家局内实测一致（英国回合 + 15343 在场，海峡仍是"仅轴心相邻"）。
+	 *
+	 * 现在按三级回退取归属国：配置 actor → 卡定义 nation → 桌面归属国。
+	 * 其它路径（activate_status / ready / 计分 / 标记）本来就显式传桌面国，不受影响。
+	 */
+	let owner = cfg.actor || null
+	if (!owner) {
+		const def = inst_card(String(inst_card_id(cardId))) || {}
+		owner = def.nation || null
+	}
+	if (!owner) {
+		for (const n of Object.keys(game.table || {})) {
+			if ((game.table[n] || []).indexOf(cardId) >= 0) { owner = n; break }
+		}
+	}
+	return status_active(game, cardId, owner)
 }
 
 /*
