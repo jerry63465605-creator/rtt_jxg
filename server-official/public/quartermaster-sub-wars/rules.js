@@ -29409,6 +29409,12 @@ function internal_action(game, role, action, arg) {
 function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+	/*
+	 * 【2026-11-07 · B28】调试动作 = 开发期检视，属"带外操作"。
+	 * 它在下面多处"错过即失效"逻辑里都要豁免（armed 窗口 / 拦截队列 /
+	 * 分步事件 / 气球炸弹），所以在函数作用域统一声明一次。
+	 */
+	const isDebugAction = String(action).startsWith('debug_')
 
 	/*
 	 * 【2026-10-25】派生缓存自愈：game.response_queue 只是 response_stack 的只读派生视图，
@@ -29518,7 +29524,17 @@ function do_action(state, current, action, arg) {
 		 * 与响应动作（同一事件的多张独立响应互不误清）同口径。
 		 */
 		const isSameMomentWindow = action === 'activate_status'
-		if (!isResponseAction && !isSameMomentWindow) clear_armed_offer_for_side(game, side)
+		/*
+		 * 【2026-11-07 · B28】调试动作一律【不打断】进行中的窗口。
+		 *
+		 * 调试卡牌面板新增了"损耗 / 复原"、调试阶段面板新增了"分数 ±"，
+		 * 这些工具常在"窗口还开着"的时候用（想边看边调）。若照旧走
+		 * `clear_armed_offer_for_side`，一按按钮就把本方窗口清掉 —— 与
+		 * status_instant 的既有口径也不一致（L29616 早就豁免了 debug_*）。
+		 * 这里统一：debug_* 属"开发期检视"，不清窗口、不放行拦截队列、
+		 * 不作废分步/气球炸弹（下面几处条件一并加 !isDebugAction）。
+		 */
+		if (!isResponseAction && !isSameMomentWindow && !isDebugAction) clear_armed_offer_for_side(game, side)
 		/*
 		 * 【2026-10-29 P1 玩家口径】发起方去做别的动作（推进阶段 / 再打牌 / 弃牌 …）
 		 * = 不等拦截应答了 -> 被挂起的那张增强卡"未被打断，直接生效"。
@@ -29528,7 +29544,7 @@ function do_action(state, current, action, arg) {
 		 * 存在 enemy_echo_played 窗口、且它不属于本次行动的阵营 -> 放行队列。
 		 * 响应动作（trigger/pass/resolve/reorder/confirm）与 activate_status 不清。
 		 */
-		if (!isResponseAction && !isSameMomentWindow &&
+		if (!isResponseAction && !isSameMomentWindow && !isDebugAction &&
 			(game.armed_offers || []).some(w => w.when === 'enemy_echo_played' &&
 				faction_of_nation(w.nation || '') !== side))
 			flush_echo_queue(game, '发起方转向其它动作')
@@ -29557,7 +29573,7 @@ function do_action(state, current, action, arg) {
 		action === 'activate_status' || action === 'use_armed_offer' || action === 'skip_armed_offer' ||
 		action === 'trigger_response' || action === 'pass_response' ||
 		action === 'resolve_response_choice' || action === 'response_reorder' || action === 'response_confirm'
-	if (game.pending_event_step && !isStepOwnAction &&
+	if (game.pending_event_step && !isStepOwnAction && !isDebugAction &&
 		faction_of_nation(game.pending_event_step.nation) === side) {
 		const ps = game.pending_event_step
 		game.pending_event_step = null
@@ -29571,7 +29587,7 @@ function do_action(state, current, action, arg) {
 	 * 玩家一旦去做别的事（再打牌、推进阶段…）就视为放弃，窗口关闭。
 	 * 自身的两个动作（弃牌回手/完成）不清除。
 	 */
-	if (action !== 'balloon_discard' && action !== 'balloon_done')
+	if (action !== 'balloon_discard' && action !== 'balloon_done' && !isDebugAction)
 		game.pending_balloon = null
 
 	/*
@@ -29722,6 +29738,81 @@ function do_action(state, current, action, arg) {
 		refresh(game)
 		game.log.push('【调试】' + nation + ' 的' + (DEST_ZH[dest] || '手牌') +
 			'加入《' + card.name + '》')
+		return game
+	}
+
+	/*
+	 * 【2026-11-07 · B28】调试卡牌面板：对【当前国家】损耗 N 张牌。
+	 *
+	 * 语义与真实损耗完全一致（复用 attrition_cards）：
+	 *   牌库顶 → 弃牌堆，带 17847《消耗战》计分、15251 记录等副作用；
+	 *   法国/中国按 NATION_DELEGATE 落到控制国牌库。
+	 * arg: { n }
+	 */
+	if (action === 'debug_attrition') {
+		const raw = Number(arg && arg.n)
+		const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
+		if (!nation || !Number.isFinite(raw) || raw <= 0) {
+			game.log.push('【调试】损耗需要正数张数（当前国家：' + (nation || '未知') + '）')
+			return game
+		}
+		init_nation_deck(game, nation)
+		const before = (game.decks[nation] || []).length
+		const lost = attrition_cards(game, nation, Math.floor(raw))
+		refresh(game)
+		game.log.push('【调试】' + nation + ' 损耗 ' + lost.length + ' 张牌（牌库 ' + before +
+			'→' + (game.decks[nation] || []).length + '，弃牌堆 ' + (game.discard[nation] || []).length + '）')
+		return game
+	}
+
+	/*
+	 * 【2026-11-07 · B28】调试卡牌面板：把【最近进入弃牌堆】的 N 张牌，
+	 * 按它们在弃牌堆里的原顺序放回【牌库顶】（等价于撤销一次损耗）。
+	 *
+	 * 例：损耗 3 张后弃牌堆末尾是 [A,B,C]（A 先掉），复原后牌库顶 = [A,B,C,…]，
+	 *     之后再抽牌会先抽到 A —— 顺序与损耗前一致。
+	 * arg: { n }
+	 */
+	if (action === 'debug_restore') {
+		const raw = Number(arg && arg.n)
+		const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
+		if (!nation || !Number.isFinite(raw) || raw <= 0) {
+			game.log.push('【调试】复原需要正数张数（当前国家：' + (nation || '未知') + '）')
+			return game
+		}
+		init_nation_deck(game, nation)
+		game.discard[nation] = game.discard[nation] || []
+		const want = Math.floor(raw)
+		const take = Math.min(want, game.discard[nation].length)
+		if (!take) {
+			game.log.push('【调试】' + nation + ' 弃牌堆是空的，无法复原')
+			return game
+		}
+		const back = game.discard[nation].splice(game.discard[nation].length - take, take)
+		game.decks[nation] = back.concat(game.decks[nation] || [])
+		refresh(game)
+		game.log.push('【调试】' + nation + ' 复原 ' + take + ' 张牌到牌库顶' +
+			(take < want ? '（弃牌堆不足 ' + want + ' 张）' : '') +
+			'（弃牌堆剩 ' + game.discard[nation].length + '，牌库 ' + (game.decks[nation] || []).length + '）')
+		return game
+	}
+
+	/*
+	 * 【2026-11-07 · B28】调试阶段面板：阵营分数增减（game.score 只有阵营总分）。
+	 * arg: { faction: 'axis'|'allies', delta: 整数（可负） }
+	 */
+	if (action === 'debug_score') {
+		const f = String((arg && (arg.faction || arg.side)) || '').toLowerCase()
+		const delta = Math.trunc(Number(arg && arg.delta))
+		if ((f !== 'axis' && f !== 'allies') || !Number.isFinite(delta) || !delta) {
+			game.log.push('【调试】分数增减需要阵营（axis/allies）与非零整数')
+			return game
+		}
+		game.score = game.score || { axis: 0, allies: 0 }
+		game.score[f] = Number(game.score[f] || 0) + delta
+		refresh(game)
+		game.log.push('【调试】' + (f === 'axis' ? '轴心' : '同盟') + ' 分数 ' +
+			(delta > 0 ? '+' : '') + delta + ' → ' + game.score[f])
 		return game
 	}
 

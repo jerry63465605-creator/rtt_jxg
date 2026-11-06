@@ -5,14 +5,14 @@
 	<meta name="theme-color" content="#444">
 	<meta charset="UTF-8">
 	<title>军需官 · 次要战场</title>
-	<link rel="stylesheet" href="/fonts/fonts.css?v=20261107a">
-	<link rel="stylesheet" href="/common/client.css?v=20261107a">
+	<link rel="stylesheet" href="/fonts/fonts.css?v=20261107b">
+	<link rel="stylesheet" href="/common/client.css?v=20261107b">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261107a">
-	<script defer src="/common/client.js?v=20261107a"></script>
-	<script defer src="data.js?v=20261107a"></script>
-	<script defer src="layout.js?v=20261107a"></script>
-	<script defer src="play.js?v=20261107a"></script>
+	<link rel="stylesheet" href="play.css?v=20261107b">
+	<script defer src="/common/client.js?v=20261107b"></script>
+	<script defer src="data.js?v=20261107b"></script>
+	<script defer src="layout.js?v=20261107b"></script>
+	<script defer src="play.js?v=20261107b"></script>
 </head>
 <body>
 
@@ -612,6 +612,20 @@
 					</label>
 				</p>
 				<p id="dbg_card_hint"></p>
+				<!-- 【2026-11-07】损耗 / 复原：都只作用于【当前国家】的牌库与弃牌堆 -->
+				<p>
+					<label>损耗
+						<input id="dbg_attrition_n" type="number" min="1" step="1" value="1" style="width:52px">
+						张
+					</label>
+					<button class="action" onclick="debug_do_attrition()">执行损耗</button>
+					<label>复原
+						<input id="dbg_restore_n" type="number" min="1" step="1" value="1" style="width:52px">
+						张
+					</label>
+					<button class="action" onclick="debug_do_restore()">复原到牌库顶</button>
+				</p>
+				<p id="dbg_pile_hint"></p>
 				<div id="dbg_card_grid" class="card-grid" style="max-height:360px;overflow:auto"></div>
 			</div>
 		</div>
@@ -648,6 +662,18 @@
 					</label>
 				</p>
 				<p><button class="action" onclick="debug_do_set_phase()">清空状态并跳过去</button></p>
+				<!-- 【2026-11-07】阵营分数增减（game.score 只有阵营总分） -->
+				<p>
+					<label>分数
+						<select id="dbg_score_faction">
+							<option value="axis">轴心</option>
+							<option value="allies">同盟</option>
+						</select>
+					</label>
+					<input id="dbg_score_n" type="number" min="1" step="1" value="1" style="width:52px">
+					<button class="action" onclick="debug_do_score(1)">+ 加</button>
+					<button class="action" onclick="debug_do_score(-1)">− 减</button>
+				</p>
 				<p id="dbg_phase_hint"></p>
 			</div>
 		</div>

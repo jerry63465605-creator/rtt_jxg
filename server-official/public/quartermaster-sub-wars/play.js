@@ -11936,7 +11936,54 @@ function debug_do_set_phase() {
 		return
 	send_action("debug_set_phase", { nation: nation, phase: phase })
 	set_dbg_phase_hint("已跳转：" + nation + " · " + zh)
-}
+	}
+
+	/* ============================================================
+	* 【2026-11-07 · B28】调试卡牌面板：损耗 / 复原（只作用于当前国家）
+	*
+	* 损耗：牌库顶 → 弃牌堆 N 张（服务端复用 attrition_cards，带真实副作用）
+	* 复原：把最近进入弃牌堆的 N 张，按原顺序放回牌库顶（撤销一次损耗）
+	* ============================================================ */
+	function debug_pile_n(id, label) {
+	const el = document.getElementById(id)
+	const n = el ? Number(el.value) : NaN
+	if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
+	  set_dbg_pile_hint(label + "需要填写正整数")
+	  return null
+	}
+	return n
+	}
+	function set_dbg_pile_hint(t) {
+	const el = document.getElementById("dbg_pile_hint")
+	if (el) el.textContent = t || ""
+	}
+	function debug_do_attrition() {
+	const n = debug_pile_n("dbg_attrition_n", "损耗")
+	if (n == null) return
+	send_action("debug_attrition", { n: n })
+	set_dbg_pile_hint("已请求损耗 " + n + " 张（当前国家）")
+	}
+	function debug_do_restore() {
+	const n = debug_pile_n("dbg_restore_n", "复原")
+	if (n == null) return
+	send_action("debug_restore", { n: n })
+	set_dbg_pile_hint("已请求复原 " + n + " 张到牌库顶（当前国家）")
+	}
+
+	/* 调试阶段面板：阵营分数 ±N（game.score 只有阵营总分） */
+	function debug_do_score(sign) {
+	const fEl = document.getElementById("dbg_score_faction")
+	const nEl = document.getElementById("dbg_score_n")
+	const faction = fEl ? fEl.value : "axis"
+	const n = nEl ? Math.floor(Number(nEl.value)) : NaN
+	if (!Number.isFinite(n) || n <= 0) {
+	  set_dbg_phase_hint("分数需要填写正整数")
+	  return
+	}
+	const delta = (sign < 0 ? -1 : 1) * n
+	send_action("debug_score", { faction: faction, delta: delta })
+	set_dbg_phase_hint((faction === "axis" ? "轴心" : "同盟") + " 分数 " + (delta > 0 ? "+" : "") + delta)
+	}
 
 /* ============================================================
  * 六、启动
