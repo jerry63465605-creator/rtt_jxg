@@ -54,7 +54,7 @@ const byDeck = {}
 for (const c of never) byDeck[c.deck] = (byDeck[c.deck] || 0) + 1
 console.log('\n=== 本局"完全不存在"的卡：' + never.length + ' / ' + arr.length + ' ===')
 console.log('  按 deck 字段：' + JSON.stringify(byDeck))
-console.log('  （SUPP 已实装但不入池；PRELUDE/ARMAMENT 既未实装也不入池）')
+console.log('  （SUPP 已入池；PRELUDE/ARMAMENT 既未实装也不入池）')
 
 /* 4) 写库 */
 const Database = require(path.join(ROOT, 'server-official', 'node_modules', 'better-sqlite3'))
