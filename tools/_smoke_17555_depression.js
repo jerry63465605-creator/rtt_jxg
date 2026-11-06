@@ -188,7 +188,7 @@ section('S8 源码守卫')
 	ok('★ 前置段写入 resume', /game\.us_depression_discard = \{[\s\S]{0,300}resume: \{ card: card_id/.test(src))
 	ok('★ 手牌数需 > 1（弃完还能打）', /\(game\.hands\['美国'\] \|\| \[\]\)\.length > 1/.test(src))
 	ok('★ 弃牌动作末尾有 resume 重放',
-		/if \(_resume && _resume\.card\)[\s\S]{0,300}exports\.action\(game, _resume\.role \|\| current, 'play_card', _resume\.arg\)/.test(src))
+		/if \(_resume && _resume\.card\)[\s\S]{0,300}internal_action\(game, _resume\.role \|\| current, 'play_card', _resume\.arg\)/.test(src))
 	ok('重放用一次性标记 __skip_depression',
 		/game\.__skip_depression = true/.test(src) && /delete game\.__skip_depression/.test(src))
 	ok('客户端文案改为「出牌前」',

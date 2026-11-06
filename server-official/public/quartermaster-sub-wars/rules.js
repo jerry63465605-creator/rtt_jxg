@@ -15067,7 +15067,7 @@ function release_echo_entry(game, entry) {
 	game.log.push('【' + entry.nation + '】《' + nm + '》未被打断，直接生效')
 	game.__resuming_echo = true
 	try {
-		exports.action(game, faction_role_of_nation(entry.nation), 'play_card', { card: entry.card })
+		internal_action(game, faction_role_of_nation(entry.nation), 'play_card', { card: entry.card })
 	} catch (e) {
 		game.log.push('续跑《' + nm + '》出错：' + e.message)
 	} finally {
@@ -15193,7 +15193,7 @@ function resume_suspended_use(game, pu) {
 	}
 	game.__armed_use_resuming = true
 	try {
-		exports.action(game, faction_role_of_nation(pu.owner), 'use_armed_offer',
+		internal_action(game, faction_role_of_nation(pu.owner), 'use_armed_offer',
 			Object.assign({ card: pu.card }, pu.arg || {}))
 	} catch (e) {
 		game.log.push('续跑增强卡结算出错：' + e.message)
@@ -15264,7 +15264,7 @@ function void_pending_armed_use(game, counterName) {
 			'》的拦截者被反制，继续结算这次发动')
 		game.__status_cost_resume = origCtx.card     /* 代价此前已付，续跑不重扣 */
 		try {
-			exports.action(game, faction_role_of_nation(origCtx.nation), 'activate_status',
+			internal_action(game, faction_role_of_nation(origCtx.nation), 'activate_status',
 				Object.assign({ card: origCtx.card }, origCtx.arg || {}))
 		} catch (e) {
 			game.log.push('续跑《' + snm + '》出错：' + e.message)
@@ -29226,6 +29226,23 @@ function play_status_card_impl(game, nation, card_id) {
  * 真正对外的 exports.action 是文件末尾的 wrapper（负责行动记录 + 内部 resume 去重），
  * 见 "四点五" 与文件末尾的 exports.action。
  */
+/*
+ * 【2026-11-06 · B19】内部重放包装。
+ *
+ * "对方时点强挂起"只应拦【玩家发起的推进动作】；引擎自己的续跑
+ * （echo 队列放行、状态卡拦截后重放、结算续跑…）必须放行，
+ * 否则 15352/15353 的窗口一开，连"放行那张卡"的重放也会被拦 = 死锁。
+ */
+function internal_action(game, role, action, arg) {
+	game.__internal_depth = (game.__internal_depth || 0) + 1
+	try {
+		return exports.action(game, role, action, arg)
+	} finally {
+		game.__internal_depth = Math.max(0, (game.__internal_depth || 1) - 1)
+		if (!game.__internal_depth) delete game.__internal_depth
+	}
+}
+
 function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
@@ -29875,17 +29892,33 @@ function do_action(state, current, action, arg) {
 	 * 此时行动方必须等对方表态；自己回合的"自有窗口"（after_build_army / after_deploy_air 等）
 	 * 仍是"错过即失效"，节奏不变。
 	 */
+	/*
+	 * 【2026-11-06 · B19】判据改为「窗口内卡片的【归属国】不属于本方阵营」。
+	 *
+	 * 旧写法只看 ctx.piece_nation / ctx.target_nation，只覆盖被移除类窗口；
+	 * 而 enemy_echo_played（15352 布莱切利园 / 16700 一日之狮）与
+	 * enemy_status_effect（15353 保持冷静）的 ctx 是 {nation:'德国', card, …}，
+	 * 两个字段都没有 → 门禁失效 → 打牌方可以继续 next_phase/play_card，
+	 * 拦截窗口还没被点就过期（玩家实测："没时间点就跳过了"）。
+	 *
+	 * 卡片的 nation 就是"谁要表态"，所以用它做判据最通用：
+	 *   · 对手持有 → 必须等（强挂起）
+	 *   · 本方持有（after_build_army 等自有窗口）→ 仍是"错过即失效"，节奏不变
+	 */
 	const _oppMoment = (game.armed_offers || []).find(w => {
-		if (!(w.cards || []).length || !w.ctx) return false
-		const pn = w.ctx.piece_nation || w.ctx.target_nation
+		if (!(w.cards || []).length) return false
+		const c0 = w.cards[0] || {}
+		const ctx = w.ctx || {}
+		const pn = c0.nation || ctx.piece_nation || ctx.target_nation
 		if (!pn) return false
 		const f = faction_of_nation(pn)
 		return !!f && f !== side
 	})
-	if (_oppMoment && action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+	if (_oppMoment && !game.__internal_depth && action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
 		action !== 'log' && !(arg && arg.__debug) && !String(action).startsWith('debug_')) {
-		const who = (_oppMoment.cards[0] && _oppMoment.cards[0].nation) || _oppMoment.ctx.piece_nation
-		const nm = (_oppMoment.cards[0] && _oppMoment.cards[0].name) || '增强卡'
+		const c0 = _oppMoment.cards[0] || {}
+		const who = c0.nation || (_oppMoment.ctx && _oppMoment.ctx.piece_nation) || '对方'
+		const nm = c0.name || (_oppMoment.ctx && _oppMoment.ctx.card) || '增强卡'
 		game.log.push('等待【' + who + '】决定是否发动《' + nm + '》（对方时点，不可继续推进）')
 		return game
 	}
@@ -30611,7 +30644,7 @@ function do_action(state, current, action, arg) {
 			game.log.push('已跳过全部 ' + skipped.length + ' 张暗置响应牌')
 			if (skippedResume) {
 				game.__skip_play_intercept = true
-				const r = exports.action(game, skippedResumeRole || current,
+				const r = internal_action(game, skippedResumeRole || current,
 					skippedResume.action, skippedResume.arg)
 				game.__skip_play_intercept = null
 				if (game.pending_advance_phase && game.turn_phase !== PH.PLAY)
@@ -30709,7 +30742,7 @@ function do_action(state, current, action, arg) {
 			if (resume) {
 				game.__skip_play_intercept = true
 				/* 用【原打出方】的 role 重放，保证回合归属校验通过 */
-				const r = exports.action(game, resume_role || current, resume.action, resume.arg)
+				const r = internal_action(game, resume_role || current, resume.action, resume.arg)
 				game.__skip_play_intercept = null
 				if (game.pending_advance_phase && game.turn_phase !== PH.PLAY)
 					game.pending_advance_phase = false
@@ -33065,7 +33098,7 @@ function do_action(state, current, action, arg) {
 					} else {
 						const nm = (inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card
 						game.log.push('【' + resumeEcho.nation + '】《' + nm + '》未被拦截，照常结算')
-						exports.action(game, faction_role_of_nation(resumeEcho.nation), 'play_card',
+						internal_action(game, faction_role_of_nation(resumeEcho.nation), 'play_card',
 							{ card: resumeEcho.card })
 					}
 				}
@@ -33077,7 +33110,7 @@ function do_action(state, current, action, arg) {
 					/* 置一次性令牌：这次续跑不再重复扣代价 */
 					game.__status_cost_resume = resumeStatus.card
 					try {
-						exports.action(game, faction_role_of_nation(resumeStatus.nation), 'activate_status',
+						internal_action(game, faction_role_of_nation(resumeStatus.nation), 'activate_status',
 							Object.assign({ card: resumeStatus.card }, resumeStatus.arg))
 					} catch (e) {
 						game.log.push('续跑《' + onm + '》出错：' + e.message)
@@ -34875,7 +34908,7 @@ function do_action(state, current, action, arg) {
 		if (_resume && _resume.card) {
 			game.__skip_depression = true
 			try {
-				const _r = exports.action(game, _resume.role || current, 'play_card', _resume.arg)
+				const _r = internal_action(game, _resume.role || current, 'play_card', _resume.arg)
 				return _r || game
 			} finally {
 				delete game.__skip_depression

@@ -162,7 +162,10 @@ console.log('\n=== G. 静态守卫 ===')
 	const src = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8')
 	ok('do_action 里有"对方时点"强挂起门禁', /_oppMoment/.test(src))
 	ok('只放行表态类动作', /action !== 'use_armed_offer' && action !== 'skip_armed_offer'/.test(src))
-	ok('判据取 piece_nation / target_nation 的阵营', /w\.ctx\.piece_nation \|\| w\.ctx\.target_nation/.test(src))
+	/* 【2026-11-06 · B19】判据改为「卡片归属国」，兼容 piece_removed 与 enemy_echo_played/status 三类窗口 */
+	ok('判据取「卡片归属国 → piece_nation → target_nation」',
+		/c0\.nation \|\| ctx\.piece_nation \|\| ctx\.target_nation/.test(src))
+	ok('内部重放不被门禁拦（internal_action）', /!game\.__internal_depth/.test(src))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
