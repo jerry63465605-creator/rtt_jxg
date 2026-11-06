@@ -1313,7 +1313,7 @@ function resolve_supply(game, nation) {
 		}
 		request_responses(game, 'piece_removed', ctx, false)
 		/* 15311 马奇诺防线：增强卡 armed 的 piece_removed 触发 */
-		try { offer_armed_effects(game, 'piece_removed', ctx) }
+		try { offer_armed_piece_removed(game, ctx) }
 		catch (e) { game.log.push('arm piece_removed(supply) 错误：' + e.message) }
 		/* 【2026-10-10】16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
 		game.last_piece_removed = { nation: d.nation, type: d.type, space: d.space, reason: 'supply', piece: d.pid, piece_id: d.pid }
@@ -3390,7 +3390,7 @@ function econ_remove_piece(game, space, piece) {
 	}
 	request_responses(game, 'piece_removed', ctx, false)
 	/* 15311 马奇诺防线：增强卡 armed 的 piece_removed 触发 */
-	try { offer_armed_effects(game, 'piece_removed', ctx) }
+	try { offer_armed_piece_removed(game, ctx) }
 	catch (e) { game.log.push('arm piece_removed(econ) 错误：' + e.message) }
 
 	/* 16304 中国远征军：移除瞬间记录上下文并武装 STATUS 的 piece_removed 窗口 */
@@ -9967,7 +9967,7 @@ function eliminate_piece(game, nation, space, target_piece, opt) {
 	}
 	request_responses(game, 'piece_removed', ctx, false)
 	/* 15311 马奇诺防线：增强卡 armed 的 piece_removed 触发 */
-	try { offer_armed_effects(game, 'piece_removed', ctx) }
+	try { offer_armed_piece_removed(game, ctx) }
 	catch (e) { game.log.push('arm piece_removed(eliminate) 错误：' + e.message) }
 	/* 【2026-10-16】17749 轴心协定：尝试落账（无窗口则立即 +1） */
 	maybe_settle_axis_pact(game)
@@ -20908,24 +20908,64 @@ function remove_air_with_piece_removed(game, airId, space, byNation) {
 	const supplied = !!compute_supply(game).in_supply[airId]
 	delete game.location[airId]
 	note_removed(game, nat, 1)
+	/*
+	 * 【2026-11-06】先 refresh 再派发：17811 的 ready 依赖 `su_air_deploy_spaces`（含补给计算），
+	 * 若沿用删除前的缓存（例如 seize_air 场景），会误判"没有可部署地区"→ 窗口被过滤掉。
+	 */
+	try { refresh(game) } catch (e) {}
 	const ctx = {
 		nation: byNation || nat, piece: airId, piece_id: airId,
 		piece_nation: nat, piece_type: 'air',
 		space: space, reason: 'piece_removed', was_supplied: supplied,
 	}
-	/*
-	 * ⚠ offer_armed_effects 以 `when` 为唯一键【合并】窗口：同一 when 的第二张不同国家的卡
-	 * 会把前一个国家的候选整窗替换掉（抵消时苏联、德国各掉 1 架，就会互相踩）。
-	 * 所以：若已有同 when 且属于【别的国家】的窗口，就先排队，等那一窗处理完再派发。
-	 */
-	const busy = (game.armed_offers || []).find(w =>
-		w.when === 'piece_removed' && (w.cards || []).length > 0)
-	if (busy) {
-		game.pending_air_dispatch = (game.pending_air_dispatch || []).concat([ctx])
-		return ctx
-	}
 	dispatch_air_removed_window(game, ctx)
 	return ctx
+}
+
+/*
+ * 【2026-11-06 · 空军待死·缺陷 1/2 修复】
+ *
+ * `offer_armed_effects` 以 `when` 为唯一键【合并】窗口：同一 when 的第二张不同来源的 ctx
+ * 会把前一窗的候选整窗替换掉（抵消时两国各掉 1 架、或"空军刚死 + victim 紧接着被移除"都会互踩）。
+ *
+ * 处理：**派发前先看窗口是否被占**，被占就把 ctx 塞进 `pending_air_dispatch`，
+ * 由 `exports.action` 出口的续派循环（见 flush_piece_removed_offers）在一窗处理完后补派。
+ * 响应卡 / 状态卡两路不受合并影响，仍然即时派发。
+ */
+function piece_removed_offers_busy(game) {
+	return (game.armed_offers || []).some(w =>
+		w.when === 'piece_removed' && (w.cards || []).length > 0)
+}
+
+function offer_armed_piece_removed(game, ctx) {
+	if (!ctx) return
+	if (piece_removed_offers_busy(game)) {
+		;(game.pending_air_dispatch = game.pending_air_dispatch || []).push({ ctx: ctx, armed_only: true })
+		return
+	}
+	/* 真正派发（不再回到本包装，避免自我递归）；ctx 必带 piece + piece_id */
+	if (!ctx.piece_id) ctx.piece_id = ctx.piece
+	offer_armed_effects(game, 'piece_removed', ctx)
+}
+
+/* 窗口清空后，把排队中的 piece_removed 增强窗口逐个补派（一次一个，派完就停） */
+function flush_piece_removed_offers(game) {
+	let guard = 0
+	while ((game.pending_air_dispatch || []).length && guard++ < 8) {
+		if (piece_removed_offers_busy(game)) return
+		if ((game.response_queue || []).length ||
+			(game.response_stack || []).length ||
+			game.pending_echo) return
+		const item = game.pending_air_dispatch.shift()
+		if (!(game.pending_air_dispatch || []).length) delete game.pending_air_dispatch
+		const ctx = item && (item.ctx || item)
+		if (ctx) {
+			/* 这里直接真派发：排队项已确认窗口空闲，再走包装会二次入队 */
+			try { offer_armed_effects(game, 'piece_removed', ctx) } catch (e) {
+				game.log.push('空军窗口续派错误：' + e.message)
+			}
+		}
+	}
 }
 
 /* 真正派发"空军被移除"的三路窗口（响应卡 / 增强卡 / 状态卡） */
@@ -20935,7 +20975,7 @@ function dispatch_air_removed_window(game, ctx) {
 	if (!ctx.piece_id) ctx.piece_id = ctx.piece
 	const nat = ctx.piece_nation
 	try { request_responses(game, 'piece_removed', ctx, false) } catch (e) {}
-	try { offer_armed_effects(game, 'piece_removed', ctx) } catch (e) { game.log.push('arm piece_removed(air) 错误：' + e.message) }
+	try { offer_armed_piece_removed(game, ctx) } catch (e) { game.log.push('arm piece_removed(air) 错误：' + e.message) }
 	try { arm_status_instant(game, 'piece_removed', nat, ctx.space) } catch (e) {}
 }
 
@@ -21590,7 +21630,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 				/* 【2026-10-20 修复】counter 路径与正常战斗路径一致：victim 移除后也武装
 				 * armed 增强窗口（如 15311 马奇诺），否则 15311 在"日本选抵消"时不触发，与预期不符。 */
 				try {
-					offer_armed_effects(game, 'piece_removed', {
+					offer_armed_piece_removed(game, {
 						nation: rmvNationC, piece: victim, piece_id: victim,
 						piece_nation: rmvNationC, piece_type: rmvTypeC,
 						space: space, reason: 'piece_removed',
@@ -21724,7 +21764,7 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 		 * （必须放在 rmvNation 声明之后，否则 TDZ 报错打崩 do_battle） */
 		if (rmvNation === '中国') offer_us_japan_delegate(game, '中国部队被发起战斗')
 		try {
-			offer_armed_effects(game, 'piece_removed', {
+			offer_armed_piece_removed(game, {
 				nation: rmvNation, piece: victim, piece_id: victim,
 				piece_nation: rmvNation, piece_type: rmvType,
 				space: space, reason: 'piece_removed',
@@ -21914,14 +21954,15 @@ function seize_air(game, nation, space, air_piece, opts) {
 		maybe_end_neutral_by_attack(game, game.piece_nation[enemies[0]], nation)
 
 	/* 仅移除敌方飞机；本国发起飞机留在原地（不进驻，与陆战发起单位一致） */
-	/* 【总体战】夺取制空权只移除空军 -> 不触发损耗（空军移除不掉牌） */
-	const seizedNation = game.piece_nation[enemies[0]]
-	delete game.location[enemies[0]]
 	/*
-	 * 【2026-10-23】17512《战俘》：卡面「本回合内每有 1 支敌方部队被移除」，
-	 * 玩家裁定【包含】夺取制空权消灭的敌机，故此处计数（总体战仍不触发，只管陆军）。
+	 * 【总体战】夺取制空权只移除空军 -> 不触发损耗（空军移除不掉牌）。
+	 *
+	 * 【2026-11-06 · 空军待死·缺陷 3 修复】改走 `remove_air_with_piece_removed`：
+	 * 旧实现只有 delete + note_removed，**从不派发 piece_removed**，
+	 * 于是"夺取制空权 / 秋水 / 特种空勤团 / 中国卡"打掉的飞机永远不给 17811 等窗口。
+	 * 该助手内部已完成 note_removed（17512《战俘》计数），故此处不再重复调用。
 	 */
-	note_removed(game, seizedNation, 1)
+	remove_air_with_piece_removed(game, enemies[0], space, nation)
 	refresh(game)
 	/* 轴心协定(17749)：敌方空军被"消灭"也计分（卡面"被攻击或消灭"；
 	   与 do_battle 攻击路径一致，复用同一钩子；该函数内部有 table_has 守卫，
@@ -23314,7 +23355,7 @@ function remove_piece(game, nation, piece) {
 	}
 	request_responses(game, 'piece_removed', ctx, false)
 	/* 15311 马奇诺防线：增强卡 armed 的 piece_removed 触发 */
-	try { offer_armed_effects(game, 'piece_removed', ctx) }
+	try { offer_armed_piece_removed(game, ctx) }
 	catch (e) { game.log.push('arm piece_removed(recall) 错误：' + e.message) }
 	return {
 		ok: true,
@@ -34872,6 +34913,14 @@ exports.action = function (state, current, action, arg) {
 			const _answered = (action === 'use_armed_offer' || action === 'skip_armed_offer')
 			if (game.pending_status_react && (_answered || !_waiting)) step_status_react(game)
 		} catch (e) { game.log.push('状态卡拦截续跑错误：' + e.message) }
+		/*
+		 * 【2026-11-06 · 空军待死·缺陷 1 修复】排队中的 piece_removed 增强窗口续派。
+		 *
+		 * `offer_armed_effects` 以 when 合并窗口，抵消时两国各掉 1 架会互踩，
+		 * 所以第二次及以后的 ctx 会进 `pending_air_dispatch` 排队。
+		 * 这里在"当前窗口/响应栈都空"时补派一条；派出的窗口若还有候选，下一轮循环会停。
+		 */
+		try { flush_piece_removed_offers(game) } catch (e) { game.log.push('空军窗口续派错误：' + e.message) }
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {

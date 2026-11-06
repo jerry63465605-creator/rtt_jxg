@@ -102,17 +102,22 @@ console.log('\n=== C. 抵消成立 → victim【立即】被移除（B10 部分�
 	ok('★★ 抵消后不再挂起', !g.pending_battle, JSON.stringify(g.pending_battle && g.pending_battle.stage))
 	ok('★★ victim 立即被移除（核心战斗时序未改）', g.location['su_e'] == null, String(g.location['su_e']))
 	ok('★ 双方空军都阵亡', g.location['su_air'] == null && g.location['de_air'] == null)
-	ok('★★ 操作权归还 Axis', g.active === 'Axis' && !g.battle_return_active, g.active + '/' + g.battle_return_active)
 	/*
-	 * 已知缺口（已登记待办）：抵消成立时，victim 的 piece_removed 派发会覆盖掉
-	 * 刚刚由"空军被移除"打开的 17811 窗口（同一 when、不同国家），
-	 * 表现为"掉了飞机但设计局没得打"。本次回退不处理，见
-	 * docs/todo-2026-10-29.md「17811：抵消路径窗口被 victim 派发覆盖」。
+	 * 【2026-11-06 修复 B16】victim 的 piece_removed 不再覆盖空军窗口（改为排队）：
+	 * 抵消路径下 17811 现在【会】开窗；窗口存在期间操作权交给窗口持有方（苏联/Allies），
+	 * 窗口处理完才归还 Axis。
 	 */
 	const has = !!off17811(g)
-	console.log('  17811 窗口（现状：被 victim 派发覆盖）= ' + has +
-		'  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when)))
-	ok('（现状记录）抵消路径 17811 窗口被覆盖 —— 已登记待办', has === false, String(has))
+	console.log('  17811 窗口 = ' + has + '  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when)))
+	ok('★★ 抵消路径 17811 会开窗（B16 已修）', has === true, String(has))
+	ok('★ 窗口存在期间操作权在持有方（Allies）', g.active === 'Allies', g.active)
+	/* 处理掉窗口（不发动），再确认归还 */
+	let guard = 0
+	while ((g.armed_offers || []).some(w => (w.cards || []).length) && guard++ < 4)
+		R.action(g, 'Allies', 'skip_armed_offer', {})
+	ok('★★ 窗口处理后操作权归还 Axis', g.active === 'Axis' && !g.battle_return_active,
+		g.active + '/' + g.battle_return_active)
+	ok('★ 队列已清空', !(g.pending_air_dispatch || []).length, JSON.stringify(g.pending_air_dispatch))
 }
 
 console.log('\n=== F. 苏联「不发动」→ 陆军按原结果被移除 ===')
