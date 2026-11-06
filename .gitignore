@@ -68,3 +68,10 @@ tmp/
 
 # 发布包不入库（每次打包由 pack.ps1 生成）
 quartermaster-sub-wars*.zip
+
+# 构建产物（导出目录，每次重新生成）
+out/
+
+# 根目录个人文件（图片 / 简历 / 无关 PDF）
+/photo.jpg
+/*.pdf
