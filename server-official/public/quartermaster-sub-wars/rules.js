@@ -20968,6 +20968,106 @@ function flush_piece_removed_offers(game) {
 	}
 }
 
+/* ============================================================
+ * 【2026-11-06 · 17811《雅科夫列夫设计局》特例：抵消后「补机保护陆军」
+ *
+ * 只在以下 4 条同时成立时启用（其余一律走原逻辑）：
+ *   ① 陆战；② victim 未被保护；③ 防守方手里有 17811；④ 【原地】可部署空军
+ *
+ * 流程：bureau_wait（问设计局）→ 原地补机 → defend(新机) → 德国可再抵消（排除 air_used）
+ *       → 再抵消则回到 bureau_wait（bureau_depth+1，上限 2）
+ *       → 德国不抵消 = 新机代受、陆军保住。
+ * ============================================================ */
+function bureau_card_for(game, nation) {
+	const hand = (game.hands && game.hands[nation]) || []
+	const hitc = hand.find(x => String(inst_card_id(x)) === '17811')
+	return hitc || null
+}
+
+/* 把 17811 从当前 armed 窗口里摘掉（特例会另开一个专门询问，避免问两次） */
+function strip_bureau_offers(game) {
+	for (const w of (game.armed_offers || [])) {
+		if (!w.cards) continue
+		w.cards = w.cards.filter(c => String(inst_card_id((c && c.card_id) || c)) !== '17811')
+	}
+	game.armed_offers = (game.armed_offers || []).filter(w => (w.cards || []).length > 0)
+}
+
+/* 特例收尾：按原逻辑移除 victim（三路派发 + battle 钩子），或受保护则保留 */
+function finalize_victim_after_bureau(game, pb) {
+	const space = pb.space, victim = pb.victim, vNation = pb.victim_nation
+	const rmvType = game.piece_type[victim] || 'army'
+	const rmvSupplied = !!compute_supply(game).in_supply[victim]
+	game.pending_battle = null
+	if (is_protected(game, victim)) {
+		game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的部队受保护，本回合无法被移除')
+	} else {
+		delete game.location[victim]
+		note_removed(game, vNation, 1)
+		try { total_war_attrition(game, [{ nation: vNation, type: rmvType }]) } catch (e) {}
+		try { axis_pact_register(game, pb.attacker, space, victim) } catch (e) {}
+		const ctx = {
+			nation: pb.attacker, piece: victim, piece_id: victim,
+			piece_nation: vNation, piece_type: rmvType,
+			space: space, reason: 'piece_removed', was_supplied: rmvSupplied,
+		}
+		try { request_responses(game, 'piece_removed', ctx, false) } catch (e) {}
+		game.last_piece_removed = Object.assign({}, ctx)
+		try { arm_status_instant(game, 'piece_removed', vNation, space) } catch (e) {}
+		try { offer_armed_piece_removed(game, ctx) } catch (e) {}
+		try { maybe_settle_axis_pact(game) } catch (e) {}
+	}
+	try {
+		request_responses(game, 'battle', {
+			nation: pb.attacker, space: space, kind: pb.kind, victimNation: vNation,
+			result: { removed: null, removed_nation: vNation, by_air: true, countered: true },
+		}, false, { deferToTail: true })
+	} catch (e) {}
+	try { arm_after_battle_status(game, pb.attacker, pb.kind, space, {}) } catch (e) {}
+	refresh(game)
+}
+
+/* 特例推进：窗口/响应栈都空时才动作（① 原地已有新机 -> 进入 defend；② 尚未问过 -> 开 17811；③ 收尾） */
+function maybe_ask_bureau(game) {
+	const pb = game.pending_battle
+	if (!pb || pb.stage !== 'bureau_wait') return false
+	if ((game.armed_offers || []).some(w => (w.cards || []).length)) return false
+	if ((game.response_queue || []).length || (game.response_stack || []).length || game.pending_echo) return false
+	if ((game.pending_air_dispatch || []).length) return false
+	const used = (pb.air_used || []).map(String)
+	const newAir = pieces_on(game, pb.space).find(p =>
+		game.piece_nation[p] === pb.victim_nation &&
+		game.piece_type[p] === 'air' &&
+		used.indexOf(String(p)) < 0)
+	if (newAir) {
+		const npb = Object.assign({}, pb, {
+			stage: 'defend', airs: [newAir], bureau_again: true,
+			air_used: used.concat([String(newAir)]),
+		})
+		delete npb.bureau_asked
+		set_pending_battle(game, npb)
+		game.log.push('【' + pb.victim_nation + '】《雅科夫列夫设计局》补上的空军可以代替受创 —— 是否用它代受？')
+		return true
+	}
+	if (!pb.bureau_asked) {
+		pb.bureau_asked = true
+		if (bureau_card_for(game, pb.victim_nation) &&
+			su_air_deploy_spaces(game, pb.space).indexOf(Number(pb.space)) >= 0) {
+			offer_armed_effects(game, 'piece_removed', {
+				nation: pb.attacker, piece: (pb.air_used || [])[0] || null, piece_id: (pb.air_used || [])[0] || null,
+				piece_nation: pb.victim_nation, piece_type: 'air',
+				space: pb.space, reason: 'piece_removed',
+			})
+			if ((game.armed_offers || []).some(w => (w.cards || []).length)) {
+				game.log.push('【' + pb.victim_nation + '】可用《雅科夫列夫设计局》原地补机，保护本次被攻击的陆军')
+				return true
+			}
+		}
+	}
+	finalize_victim_after_bureau(game, pb)
+	return true
+}
+
 /* 真正派发"空军被移除"的三路窗口（响应卡 / 增强卡 / 状态卡） */
 function dispatch_air_removed_window(game, ctx) {
 	if (!ctx) return
@@ -21549,13 +21649,17 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			/* 防守方已选定的代受空军，结算时要一并移除 */
 			defend_air: defend_air,
 			counter_airs: counter_air_options(game, nation, space)
+				.filter(o => ((opt && opt._air_used) || []).map(String).indexOf(String(o.id)) < 0)
 				.slice().sort((a, b) => String(a.id).localeCompare(String(b.id))),
+			/* 本场已用过的空军（代受/抵消/17811 补机）—— 每支只能用一次 */
+			air_used: ((opt && opt._air_used) || []).concat([defend_air]).filter(Boolean).map(String),
 		}
 	}
 
 	let counter_air = null
 	if (defend_air != null) {
 		const counterOpts = counter_air_options(game, nation, space)
+			.filter(o => ((opt && opt._air_used) || []).map(String).indexOf(String(o.id)) < 0)
 		const answered = (opt.counter_air !== undefined) || opt.declined_counter
 
 		if (!answered && counterOpts.length) {
@@ -21605,6 +21709,33 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			/* 【2026-11-05 · B10】两架空军都走"删除 + piece_removed 三路派发"（对称） */
 			remove_air_with_piece_removed(game, defend_air, space, nation)
 			remove_air_with_piece_removed(game, counter_air, space, nation)
+			/*
+			 * 【2026-11-06 · 17811 特例】抵消成立 → 先问设计局能否【原地】补机保护这支陆军；
+			 * 条件不满足（非陆战 / 已保护 / 无卡 / 原地不可部署 / 超过深度上限）一律走原逻辑。
+			 */
+			{
+				const _bc = bureau_card_for(game, vNation)
+				const _depth = ((opt && opt._bureau_depth) || 0) + 1
+				const _inPlace = su_air_deploy_spaces(game, space).indexOf(Number(space)) >= 0
+				if (kind === 'land' && !is_protected(game, victim) && _bc && _inPlace && _depth <= 2) {
+					strip_bureau_offers(game)
+					set_pending_battle(game, {
+						stage: 'bureau_wait', bureau_depth: _depth, bureau_card: _bc, bureau_asked: false,
+						space: space, kind: kind, attacker: nation, attacker_piece: (opt.from || null),
+						victim: victim, victim_type: 'army', victim_nation: vNation, defender_nation: vNation,
+						air_used: ((opt && opt._air_used) || []).concat([defend_air, counter_air]).map(String),
+					})
+					game.log.push('【' + vNation + '】抵消成立 —— 可用《雅科夫列夫设计局》原地补机保护本次陆军（先处理窗口，再决定陆军是否被移除）')
+					refresh(game)
+					return {
+						ok: true, pending: true, space: space,
+						removed: [defend_air, counter_air],
+						/* 供 battle_desc 打印（否则会写「移除敌方undefined」） */
+						removed_type: 'army', removed_nation: vNation,
+						desc: '空战已结算，等待【' + vNation + '】决定是否用《雅科夫列夫设计局》补机保护陆军',
+					}
+				}
+			}
 			/* 受保护部队本回合无法被移除（抵消成立时原目标照常移除，但 protect 优先） */
 			if (is_protected(game, victim)) {
 				game.log.push('【' + vNation + '】' + data.name_of(space) + ' 的' +
@@ -29763,6 +29894,15 @@ function do_action(state, current, action, arg) {
 	 * react / auto 类效果在结算前挂起等英国表态；若此时放任别的动作（出牌/推阶段），
 	 * 待结算的效果会一直悬着，或与新的结算交叉 —— 必须先处理询问。
 	 */
+	/* 【2026-11-06 · 17811 特例】bureau_wait 期间必须先表态（用设计局 / 不发动 / 二次代受） */
+	if (game.pending_battle && game.pending_battle.stage === 'bureau_wait' &&
+		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+		action !== 'resolve_battle' && action !== 'log' &&
+		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
+		game.log.push('请先处理《雅科夫列夫设计局》的询问（是否补机保护本次陆军）')
+		return game
+	}
+
 	if (game.pending_status_react &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
 		action !== 'trigger_response' && action !== 'pass_response' &&
@@ -31128,6 +31268,9 @@ function do_action(state, current, action, arg) {
 				defend_air: pb.defend_air,
 				counter_air: wants ? arg.counter_air : undefined,
 				declined_counter: !wants,
+			/* 【2026-11-06 · 17811 特例】同上 */
+			_air_used: (pb.air_used || []),
+			_bureau_depth: (pb.bureau_depth || 0),
 			}
 			game.pending_battle = null
 			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', opt)
@@ -31173,6 +31316,9 @@ function do_action(state, current, action, arg) {
 			 * 「guard ↔ defend」之间无限循环，被攻击的陆军永远死不了（实测）。
 			 */
 			guard_done: true,
+			/* 【2026-11-06 · 17811 特例】把本场已用空军与 bureau 深度传回 do_battle */
+			_air_used: (pb.air_used || []),
+			_bureau_depth: (pb.bureau_depth || 0),
 		}
 		/*
 		 * 明确"不代受"：把 defend_air 显式设为 null，
@@ -34921,6 +35067,8 @@ exports.action = function (state, current, action, arg) {
 		 * 这里在"当前窗口/响应栈都空"时补派一条；派出的窗口若还有候选，下一轮循环会停。
 		 */
 		try { flush_piece_removed_offers(game) } catch (e) { game.log.push('空军窗口续派错误：' + e.message) }
+		/* 【2026-11-06 · 17811 特例】窗口都处理完后推进 bureau_wait */
+		try { maybe_ask_bureau(game) } catch (e) { game.log.push('17811 特例续跑错误：' + e.message) }
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {

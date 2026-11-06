@@ -54,31 +54,23 @@ console.log('=== A/B/C. 抵消成立 → 17811 开窗 → 部署 ===')
 	R.action(g, 'Axis', 'resolve_battle', { counter_air: 'de_air' })
 	console.log('  抵消后 offers=' + JSON.stringify((g.armed_offers || []).map(w => (w.cards || []).map(c => faceOf(c.card_id)))))
 	const o = off(g, '17811')
-	ok('★★ 抵消路径 17811 开窗（修复 B16）', !!o, JSON.stringify((g.armed_offers || []).map(w => w.when)))
-	ok('★★ 此时陆军已被移除（战斗结果不变）', g.location['su_e'] == null, String(g.location['su_e']))
-	if (o) {
-		R.action(g, 'Allies', 'use_armed_offer', { card: o.card })
-		/* 抵消成立后<东欧>的陆军已死 → 原地不再是合法载体，改取第一个候选（通常是<罗斯>） */
-		const pend = (g.armed_offers || []).map(w => w.pending).filter(Boolean)[0] || {}
-		const cands = (pend.candidates || []).map(x => Number((x && x.id) || x))
-		const pick = cands[0]
-		console.log('  候选 = ' + JSON.stringify(cands.map(x => d.name_of(x))) + '  选=' + (pick != null ? d.name_of(pick) : '无'))
-		const n = (g.log || []).length
-		R.action(g, 'Allies', 'use_armed_offer', { card: o.card, space: pick })
-		console.log('  部署 log: ' + (g.log || []).slice(n).join(' | ').slice(0, 200))
-		const airs = I.pieces_on(g, pick).filter(p => g.piece_nation[p] === '苏联' && g.piece_type[p] === 'air')
-		ok('★★ 战后可在候选地区补 1 支苏联空军', airs.length >= 1, JSON.stringify(airs))
-		ok('★ 补机不改变本场战斗结果（陆军仍已被移除）', g.location['su_e'] == null)
-	}
-	/* 把队列里其余的窗口也表态掉 */
+	/*
+	 * 【2026-11-06 · 17811 特例】抵消 + 手里有 17811 → 进入 bureau_wait（陆军被挂起保护），
+	 * 这里验证"17611 窗口照常开出"，并走"不发动 → 陆军按原结果移除"的收尾。
+	 */
+	ok('★★ 抵消后进入 17811 特例询问（bureau_wait）',
+		!!(g.pending_battle && g.pending_battle.stage === 'bureau_wait'),
+		JSON.stringify(g.pending_battle && g.pending_battle.stage))
+	ok('★★ 17811 窗口已开出', !!o, JSON.stringify((g.armed_offers || []).map(w => w.when)))
+	ok('★★ 陆军此时【尚未】被移除', g.location['su_e'] != null, String(g.location['su_e']))
 	let guard = 0
-	while ((g.armed_offers || []).some(w => (w.cards || []).length) && guard++ < 4) {
+	while ((g.armed_offers || []).some(w => (w.cards || []).length) && guard++ < 4)
 		R.action(g, 'Allies', 'skip_armed_offer', {})
-		R.action(g, 'Axis', 'skip_armed_offer', {})
-	}
-	console.log('  queue=' + JSON.stringify((g.pending_air_dispatch || []).length) +
-		' pending=' + JSON.stringify(g.pending_battle && g.pending_battle.stage) +
+	console.log('  skip 后 pending=' + JSON.stringify(g.pending_battle && g.pending_battle.stage) +
+		' 陆军=' + String(g.location['su_e']) +
+		' queue=' + JSON.stringify((g.pending_air_dispatch || []).length) +
 		' active=' + g.active + ' ret=' + g.battle_return_active)
+	ok('★★ 不发动 → 陆军按原结果被移除', g.location['su_e'] == null, String(g.location['su_e']))
 	ok('★★ pending_air_dispatch 已清空（队列被续派消费）', !(g.pending_air_dispatch || []).length,
 		JSON.stringify(g.pending_air_dispatch))
 	ok('★★ 无战斗挂起残留', !g.pending_battle)

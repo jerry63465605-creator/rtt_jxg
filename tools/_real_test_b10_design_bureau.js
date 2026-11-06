@@ -95,6 +95,13 @@ console.log('\n=== B. 用 17811 在【原地】部署新机 ===')
 console.log('\n=== C. 抵消成立 → victim【立即】被移除（B10 部分回退后的底层行为）===')
 {
 	const g = setup();
+	/*
+	 * 【2026-11-06 · 17811 特例】本节验证"没有设计局"时的原时序：
+	 * 把 17811 从苏联手里去掉，否则会进入 bureau_wait（陆军被挂起保护）。
+	 * 特例本身由 `_real_test_17811_bureau_guard.js` 覆盖。
+	 */
+	g.hands['苏联'] = (g.hands['苏联'] || []).filter(x => String(x).split('#')[0] !== '17811')
+	I.refresh(g)
 	const n0 = (g.log || []).length
 	I.do_battle(g, '德国', EAST(), 'su_e', 'land', { from: 'de_army', defend_air: 'su_air' })
 	R.action(g, 'Axis', 'resolve_battle', { counter_air: 'de_air' })
@@ -108,14 +115,9 @@ console.log('\n=== C. 抵消成立 → victim【立即】被移除（B10 部分�
 	 * 窗口处理完才归还 Axis。
 	 */
 	const has = !!off17811(g)
-	console.log('  17811 窗口 = ' + has + '  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when)))
-	ok('★★ 抵消路径 17811 会开窗（B16 已修）', has === true, String(has))
-	ok('★ 窗口存在期间操作权在持有方（Allies）', g.active === 'Allies', g.active)
-	/* 处理掉窗口（不发动），再确认归还 */
-	let guard = 0
-	while ((g.armed_offers || []).some(w => (w.cards || []).length) && guard++ < 4)
-		R.action(g, 'Allies', 'skip_armed_offer', {})
-	ok('★★ 窗口处理后操作权归还 Axis', g.active === 'Axis' && !g.battle_return_active,
+	console.log('  17811 窗口 = ' + has + '（本节已移除该卡）  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when)))
+	ok('★ 没有设计局时不进特例、也不开该窗口', has === false, String(has))
+	ok('★★ 操作权直接归还 Axis', g.active === 'Axis' && !g.battle_return_active,
 		g.active + '/' + g.battle_return_active)
 	ok('★ 队列已清空', !(g.pending_air_dispatch || []).length, JSON.stringify(g.pending_air_dispatch))
 }
