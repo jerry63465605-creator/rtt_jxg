@@ -18795,6 +18795,21 @@ CARD_TRIGGERS['17511'] = { kind: 'load', nation: '美国' }   /* 美国陆军游
  * 客户端 check_phase_for_card 同源镜像；通过后仍进 EFFECT 分支特例（选状态卡重置）。
  */
 CARD_TRIGGERS['17513'] = { kind: 'conditional', nation: '美国', cond: 'has_used_status' }
+/*
+ * 【2026-11-07 · B26-b】17505 P-51 野马：**本方回合任意阶段可装载**。
+ *
+ * 它原本没有时点声明，`check_phase_for_card` 会走「未声明时点 EFFECT = 随时可打」的兜底
+ * —— 那个兜底【不校验行动方】，于是德国回合时美国手里的 P-51 仍然亮着"可打出"，
+ * 点下去却被 play_card 的行动方闸门拒绝（「现在轮到【德国】行动，同盟暂不能打牌」）。
+ *
+ * 这里补一条声明：kind:'conditional' 且不带 cond → trigger_ready 只校验
+ * 「本方回合」（不限制阶段），正好等于"被动修正随时可装载，但不能在对手回合装"。
+ *
+ * ⚠ 不要用这个兜底去统一改 check_phase_for_card：17805《红色管弦乐队》同样没有声明，
+ * 但它卡面是「**任一出牌阶段开始时**」触发（armed 窗口、watch:true），
+ * 敌方回合本来就该亮 —— 见 docs/change-17505-17513.md「B26-b」。
+ */
+CARD_TRIGGERS['17505'] = { kind: 'conditional', nation: '美国' }   /* P-51 野马：本方回合任意阶段装载 */
 /* 17514 飞虎队：空军阶段，中国部署空军 或 发起夺取制空权 */
 CARD_TRIGGERS['17514'] = { kind: 'self', phase: 'airforce', nation: '中国' }
 /* 17810 维捷布斯克之门：计分阶段，弃 1[建设陆军]+2 手牌，消灭 1 支敌方陆军 */
