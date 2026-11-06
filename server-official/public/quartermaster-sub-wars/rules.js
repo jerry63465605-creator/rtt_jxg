@@ -407,6 +407,16 @@ function get_connections(game, s, side, snap) {
 	if (game.status_connections && game.status_connections.length) {
 		for (const sc of game.status_connections) {
 			if (sc.side && sc.side !== side) continue
+			/*
+			 * 【2026-11-06 · B25-c】成对邻接也要能被 15343/15353 压制。
+			 *
+			 * 17744《土耳其开放海峡》/ 17747《西班牙控制直布罗陀》写入的 {a,b,side} 是"永久生效"的，
+			 * 于是英国回合里挂着 15343（敌方状态卡无效），英美照样能走 <黑海>-<地中海> 等邻接。
+			 * 现在写入时带 `card`，读取时按 status_card_effective() 判一次：
+			 *   · 老存档没有 card 字段 → 视为常驻有效（行为不变）
+			 *   · 卡被 15343 压制 / 15353 压制 / 已离场 → 这组邻接不参与
+			 */
+			if (sc.card && !status_card_effective(game, sc.card)) continue
 			if (sc.a === s && conns.indexOf(sc.b) < 0) conns = conns.concat([sc.b])
 			if (sc.b === s && conns.indexOf(sc.a) < 0) conns = conns.concat([sc.a])
 		}
@@ -8652,7 +8662,8 @@ function apply_status_ongoing(game, card_id, nation) {
 			const a = space_id(pr[0]), b = space_id(pr[1])
 			if (a == null || b == null) continue
 			if (!game.status_connections.some(x => x.a === a && x.b === b)) {
-				game.status_connections.push({ a: a, b: b, side: onlyF })
+				/* 【2026-11-06 · B25-c】带上卡 id，供 get_connections 做 15343/15353 压制判定 */
+				game.status_connections.push({ a: a, b: b, side: onlyF, card: card_id })
 				added++
 			}
 		}
@@ -8910,6 +8921,20 @@ function revert_status_ongoing(game, card_id, nation) {
 		if (sp != null && aura.space_immune[sp] != null) {
 			delete aura.space_immune[sp]
 			lines.push(data.name_of(sp) + ' 的免移除光环消失')
+		}
+	}
+	/*
+	 * 【2026-11-06 · B25-c】17744 / 17747 的成对邻接：离场即摘除。
+	 *
+	 * 旧口径是"这两张卡不会离场，永久生效不实现撤销"；现在 status_connections 带了 card，
+	 * 撤销只要按 card 过滤一次即可（15328 弃置、15343 压制都不再需要特殊处理）。
+	 */
+	if (og.kind === 'pair_adjacency' && Array.isArray(game.status_connections)) {
+		const before = game.status_connections.length
+		game.status_connections = game.status_connections.filter(x => x.card !== card_id)
+		if (game.status_connections.length !== before) {
+			refresh(game)
+			lines.push('成对邻接恢复原始连通')
 		}
 	}
 	/* 17549 共享补给线：重算（将来若有第二张同类卡也正确，且不残留） */
