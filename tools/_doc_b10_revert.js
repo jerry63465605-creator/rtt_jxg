@@ -13,7 +13,7 @@ const entry = [
 	'- **玩家裁定**：空军代死属战斗底层机制，不在这种地方冒险，回退到 17811 改动前的战斗时序。',
 	'- **回退内容**（只撤"挂起再代受"这一层）：',
 	'  1. `resolve_battle` 的 counter 分支恢复：双方空军移除后 **victim 立即移除**（再由 `battle_reconcile_active` 归还操作权）；',
-	'  2. 删除 `resume_after_air_loss()` 及 `exports.action` 里对它的调用；删除 `stage='after_air_loss'`。',
+	'  2. 删除 `resume_after_air_loss()` 及 `exports.action` 里对它的调用；删除 `after_air_loss` 这个 stage。',
 	'- **保留内容**（纯增量、无时序风险）：',
 	'  · `remove_air_with_piece_removed()` / `dispatch_air_removed_window()`：空军三种死法（代受成立/抵消成立/无处撤离）仍派发 `piece_removed`；',
 	'  · `game.pending_air_dispatch` 排队（两国各掉 1 架时窗口不互相覆盖）；',
