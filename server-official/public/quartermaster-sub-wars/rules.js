@@ -1425,14 +1425,25 @@ function init_nation_deck(game, nation) {
 		game.log.push('（开发期）' + nation + ' 暂用英国卡组代打')
 	}
 
-	/* SUPP 牌堆（增援）暂不混入核心牌堆，待规则明确后处理 */
+	/*
+	 * 【2026-11-07 · B27】SUPP（增援）牌堆正式混入核心牌堆。
+	 *
+	 * 玩家口径：这 37 张已经 100% 实装（见 docs/audit-card-implementation.md），
+	 * 但旧实现只收 CORE，导致「打了很多局一次都没见过」——
+	 * 每局可见池只有 326/446 = 73%。
+	 *
+	 * 现在 CORE + SUPP 一起进池（PRELUDE / ARMAMENT 仍排除：它们尚未实装）：
+	 *   英国 +4、德国 +6、日本 +8、苏联 +3、意大利 +4、美国 +12。
+	 * 非 BASIC 各 1 张，不打乱 BASIC_CARD_COUNTS 的复制规则。
+	 */
 	/* 核心牌库：非基本卡各 1 张；5 种基本卡按 BASIC_CARD_COUNTS[nation][name] 张数复制。
 	 * 同名实体牌靠实例化（#1/#2…）区分。按参数 nation 查表——开发期他国代打英国卡组时，
 	 * 仍按被代打国自己的数量（如日本代打→用日本数），故 key 取 nation 而非卡的 c.nation。 */
 	const core = []
 	for (const id of ids) {
 		const c = CARD_BY_ID[id]
-		if (c.deck !== 'CORE') continue
+		/* CORE 与 SUPP 入池；PRELUDE / ARMAMENT 尚未实装，继续排除 */
+		if (c.deck !== 'CORE' && c.deck !== 'SUPP') continue
 		if (c.type === 'BASIC') {
 			const cnt = (BASIC_CARD_COUNTS[nation] && BASIC_CARD_COUNTS[nation][c.name]) || 1
 			for (let k = 0; k < cnt; k++) core.push(id)
