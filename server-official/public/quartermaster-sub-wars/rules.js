@@ -5103,7 +5103,18 @@ const STATUS_EFFECTS = {
 			 */
 			precheck(game, nation, arg, ctxSpace) {
 				const sp = Number(ctxSpace)
-				const pid = (arg && arg.from != null) ? arg.from : null
+				/*
+				 * 【2026-11-06 · B22】发起单位一律取"该建设地区的本国陆军"。
+				 *
+				 * 每国每格限 1 支陆军 → 这一支就是刚建成的那支，不需要玩家再挑。
+				 * 旧实现要求客户端传对 `from`，而客户端的"发起单位"列表是
+				 * "相邻的本国陆军"全量，玩家看不出哪支是刚建成的（实测：点错 → 拒绝 →
+				 * 表现为"坦克运输无法发动"）。现在忽略 `from`，直接锁定建设地那一支；
+				 * 只有该地根本没有本国陆军（数据异常/老存档）才拒绝。
+				 */
+				const cand = pieces_on(game, sp).filter(p =>
+					game.piece_nation[p] === nation && game.piece_type[p] === 'army')
+				const pid = cand.length ? cand[0] : null
 				if (pid == null)
 					return { ok: false, reason: '请选择发起单位（必须是刚建成的这支陆军）' }
 				if (!Number.isFinite(sp) || Number(game.location[pid]) !== sp ||
@@ -5124,13 +5135,15 @@ const STATUS_EFFECTS = {
 				 * "位于建设地区的本国陆军" 与 "刚建成的那支" 等价，据此判定。
 				 * 单点查表（game.location/piece_nation/piece_type），非遍历，不绕过任何原子。
 				 */
-				const pid = (ctx.arg && ctx.arg.from != null) ? ctx.arg.from : null
+				/* 【2026-11-06 · B22】与 precheck 同源：无论如何都锁定"建设地区的本国陆军" */
+				const cand = pieces_on(game, sp).filter(p =>
+					game.piece_nation[p] === ctx.nation && game.piece_type[p] === 'army')
+				const pid = cand.length ? cand[0] : null
 				if (pid == null)
 					return { ok: false, reason: '请选择发起单位（必须是刚建成的这支陆军）' }
-				if (Number(game.location[pid]) !== Number(sp) ||
-					game.piece_nation[pid] !== ctx.nation ||
-					game.piece_type[pid] !== 'army')
-					return { ok: false, reason: '《坦克运输》只能以刚刚建成的这支陆军发起陆战' }
+				/* 玩家选错时不报错，改用刚建成的那支（参数覆盖，避免"点了没反应"） */
+				if (ctx.arg && String(ctx.arg.from) !== String(pid))
+					ctx.arg.from = pid
 				return status_launch_battle(game, ctx.nation, sp, ctx.arg, 'land', get_neighbors(sp))
 			},
 		},
@@ -8120,7 +8133,16 @@ function precheck_status_args(game, owner, tr, arg, cardId) {
 	/* ② 卡自定义预检 */
 	if (typeof tr.precheck === 'function') {
 		try {
-			const r = tr.precheck(game, owner, arg, cardId)
+			/*
+			 * 【2026-11-06 · B22】第 4 个参数是 **ctxSpace（被武装那一刻的地区）**，不是 cardId。
+			 *
+			 * 旧代码传的是 cardId（'17846#75'）→ 卡里 `Number(ctxSpace)` = NaN →
+			 * "该地区有没有本国陆军" 永远判定为空 → 17846 直接报「请选择发起单位」，
+			 * 与玩家看到的现象一致（无论选哪个单位都发不动）。
+			 */
+			const _cs = ((game.status_instant || []).find(x =>
+				String(x.card_id) === String(cardId)) || {}).space
+			const r = tr.precheck(game, owner, arg, _cs)
 			if (r && r.ok === false) return r
 		} catch (e) {
 			return { ok: false, reason: '预检异常：' + e.message }
@@ -9525,7 +9547,14 @@ function build_piece(game, nation, type, space) {
 	}
 	const __r = _build_piece_impl(game, nation, type, space)
 	if (__r && __r.ok) {
-		if (type === 'army' || type === 'navy') { game.last_built = { space: space, nation: nation, type: type } }
+		/*
+		 * 【2026-11-06 · B22】记下【本次建出来的那一支】的实例 id。
+		 * 17846《坦克运输》要求"以此陆军发起陆战"，但客户端只能列"相邻的本国陆军"，
+		 * 玩家看不出哪支是刚建成的（实测：猜错 → precheck 拒绝 → 看起来"无法发动"）。
+		 * 有了 piece_id，view 就能告诉客户端"刚建成的是这一支"。
+		 */
+		if (type === 'army' || type === 'navy')
+			game.last_built = { space: space, nation: nation, type: type, piece_id: (__r && __r.id) || null }
 		/*
 		 * 【2026-09-30 德国增强 B 组】建设海军/部署空军后，触发对应装载卡。
 		 * ctx.nation = 建设方；只有 actor 匹配的装载卡才会结算。
@@ -26182,6 +26211,15 @@ exports.view = function (state, current) {
 		} catch (e) {}
 		delete game.__status_firing_ba
 	}
+	/*
+	 * 【2026-11-06 · B22】清空前留一份给客户端看：
+	 * 「刚才建成的是哪一支」（17846《坦克运输》要"以此陆军发起陆战"，
+	 * 没这条信息时玩家只能在"相邻的全部陆军"里猜，猜错即被 precheck 拒绝）。
+	 * 只保留本回合内的记录（status_built.turn === game.turn 才下发）。
+	 */
+	if (game.last_built) {
+		game.status_built = Object.assign({}, game.last_built, { turn: game.turn })
+	}
 	game.last_built = null
 
 	/*
@@ -27321,6 +27359,17 @@ exports.view = function (state, current) {
 		 * 因此不会出现"进攻方顺手替防守方决定"的情况。
 		 */
 		pending_battle: pendingBattle,
+
+		/*
+		 * 【2026-11-06 · B22】「刚建成的那一支」——只给建设方看（对手不需要知道）。
+		 * 客户端用它把 17846《坦克运输》的发起单位锁定/高亮，避免"找不到是哪支"。
+		 */
+		last_built: (function () {
+			const sb = game.status_built
+			if (!sb || sb.turn !== game.turn) return null
+			if (faction_of_nation(sb.nation) !== side) return null   /* 只给建设方阵营 */
+			return { piece_id: sb.piece_id || null, space: sb.space, nation: sb.nation, type: sb.type }
+		})(),
 
 		/*
 		 * 响应卡挂起（2026-09-25 第 3 步）：持有方视角可见，
