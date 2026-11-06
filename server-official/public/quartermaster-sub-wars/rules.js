@@ -29108,6 +29108,8 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	/* 17513 战时生产委员会：美国选状态卡重置为未发动，仅美国可操作 */
 	if (game.us_wartime && game.us_wartime.candidates && faction_of_nation('美国') === side) {
 		acts.resolve_us_wartime = 1
+		/* 【2026-11-07 · B26】放弃：卡退回手牌、不付代价（避免挂起永远不清） */
+		acts.cancel_us_wartime = 1
 	}
 	/* 17531 现购自运政策：美国为友方英/苏/中/法征召部队（选国/选地区/选兵种），仅美国可操作 */
 	if (game.us_merchant && faction_of_nation('美国') === side) {
@@ -34193,6 +34195,19 @@ function do_action(state, current, action, arg) {
 						return game
 					}
 				}
+				/*
+				 * 【2026-11-07 · B26】17505《P-51 野马》要加成，必须先有"基数"。
+				 *
+				 * 卡面：「其要求地区内每有 1 支美国空军，损耗数加 2」——
+				 *   · 基数 = 这次轰炸【真的造成】的损耗。轰炸卡自身无效果时（例如 17517 要求
+				 *     半径内没有美国陆军 → 「无效果」）基数为 0，不该凭空罚对手 2 张；
+				 *   · “要求地区” = 该轰炸卡自己的要求半径（`bombing_radius`，17517 = 2 环），
+				 *     不是“大本营 + 相邻 1 环” —— 旧实现少算一圈（2 环的空军完全不计）。
+				 * 做法：run 之前记目标国总牌数，run 之后确实变少才加成。
+				 */
+				const _p51Before = (game.us_p51 && cfg.tag === '轰炸行动')
+					? ((game.decks[t] || []).length + (game.hands[t] || []).length)
+					: null
 				const r = cfg.run(game, nation, t)
 				try {
 							/* 【2026-11-05 · 15353】先收集 -> 逐张询问 -> 再结算（原来直接结算，拦不到） */
@@ -34200,22 +34215,24 @@ function do_action(state, current, action, arg) {
 							if (_econItems.length)
 								queue_status_react(game, 'econ', { tag: cfg.tag, target: t, actor: nation }, _econItems)
 						} catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
-				/* 17505 P-51 野马：打出[轰炸行动]时，目标地区每有1支美国空军，损耗数+2（追加受害方损耗） */
+				/*
+				 * 17505 P-51 野马：打出[轰炸行动]时，其要求地区每有 1 支美国空军，损耗数 +2。
+				 *
+				 * 【2026-11-07 · B26】两处修正（详见 docs/change-17505-17513.md）：
+				 *   ① 只有这次轰炸真的造成损耗才加成（`_p51Before` 对比，无效果不加）；
+				 *   ② 半径用轰炸卡自己的 `bombing_radius`（17517 = 2 环），不再只看 1 环。
+				 */
 				if (game.us_p51 && cfg.tag === '轰炸行动') {
-					/*
-					 * 【2026-10-28 #21】改用 effective_home_base（尊重迁都）。
-					 * 实际无差别：轰炸目标 t 是轴心国（德/日/意），而轴心没有迁都卡 ——
-					 * 这里只是让口径统一，避免日后给轴心加迁都卡时又漏一处。
-					 */
+					const _afterN = (game.decks[t] || []).length + (game.hands[t] || []).length
+					const _reallyLost = _p51Before != null && _afterN < _p51Before
+					/* 尊重迁都：目标大本营可能被 15344 之类改动 */
 					const hb = effective_home_base(game, t)
-					let usAir = 0
-					if (hb != null) {
-						const region = [hb].concat(get_connections(game, hb, '美国')).map(Number)
-						for (const s of region) {
-							if (!data.spaces[s]) continue
-							usAir += count_pieces(game, { space: s, nation: '美国', types: ['air'] })
-						}
-					}
+					const usAir = (_reallyLost && hb != null)
+						? count_pieces(game, {
+							space: hb, radius: bombing_radius(game, 2),
+							nation: '美国', types: ['air'],
+						})
+						: 0
 					if (usAir > 0) {
 						attrition_cards(game, t, 2 * usAir)
 						game.log.push('【美国】《P-51 野马》：' + t + ' 目标地区有 ' + usAir + ' 支美国空军，额外损耗 ' + (2 * usAir) + ' 张牌')
@@ -34892,6 +34909,30 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		resolve_us_wartime(game, arg || {})
+		return game
+	}
+	/*
+	 * 【2026-11-07 · B26】17513《战时生产委员会》：放弃发动。
+	 *
+	 * 旧实现只有 resolve_us_wartime：玩家打出后若不选目标，`us_wartime` 永不消失
+	 * （卡已离手、不进弃牌堆、代价也没付）—— 隐性死锁，且没有任何回退动作。
+	 * 玩家口径：**卡退回手牌、不付代价**。
+	 */
+	if (action === 'cancel_us_wartime') {
+		if (!game.us_wartime) {
+			game.log.push('当前没有待处理的《战时生产委员会》')
+			return game
+		}
+		if (faction_of_nation('美国') !== side) {
+			game.log.push('现在轮到【美国】操作《战时生产委员会》，另一阵营暂不能提交')
+			return game
+		}
+		const self = game.us_wartime.card_id
+		game.hands['美国'] = game.hands['美国'] || []
+		if (self && game.hands['美国'].indexOf(self) < 0) game.hands['美国'].push(self)
+		game.us_wartime = null
+		game.log.push('【美国】放弃发动《战时生产委员会》：卡退回手牌，未支付代价')
+		refresh(game)
 		return game
 	}
 	/* ---------- 17531 现购自运政策：美国为友方征召陆军 ---------- */
@@ -36060,6 +36101,18 @@ if (typeof module !== 'undefined') {
 		 */
 		CMD_IMPL: {
 			// —— 美国 EVENT（2026-10-17 补录，此前页面误红）——
+			/*
+			 * 【2026-11-07 · B26 补录】17505 / 17513 这两张是【被动修正 / 命令式特例】，
+			 * 效果写在 play_card 特例里、不进 ECHO_EFFECTS，导致预览页一直误显示"未实现"。
+			 */
+			'17505': {
+				kind: '被动修正（P-51 野马 / us_p51）',
+				desc: '装载后：打出[轰炸行动]且确实造成损耗时，其要求地区（bombing_radius）每有 1 支美国空军，目标额外损耗 2 张。',
+			},
+			'17513': {
+				kind: '命令式特例（战时生产委员会 / us_wartime）',
+				desc: '损耗 1 张：把 1 张本回合已发动的美国[状态卡]重置为未发动（可再发动 1 次）；可放弃（卡退回手牌、不付代价）。',
+			},
 			'17528': {
 				kind: '独立流程（广阔的资源 / us_replay）',
 				desc: '检视美国弃牌堆，选 1 张重打（结算后仍留弃牌堆）；由 offer_us_replay + resolve_us_replay 驱动。',

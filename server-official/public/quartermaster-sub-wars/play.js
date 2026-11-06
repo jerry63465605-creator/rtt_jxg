@@ -1784,6 +1784,19 @@ function update_us_wartime_box() {
 		send_action("resolve_us_wartime", { card: chosen })
 	}
 	foot.appendChild(ok)
+	/*
+	 * 【2026-11-07 · B26】「不发动」：原来只有「确认重置」，玩家一旦打出 17513，
+	 * 不选目标就永远挂着（卡已离手、不进弃牌堆、代价也没付）。
+	 * 服务端新增 cancel_us_wartime（卡退回手牌、不付代价），这里给它一个入口。
+	 */
+	const quit = document.createElement("button")
+	quit.className = "action"
+	quit.textContent = "不发动"
+	quit.onclick = () => {
+		us_wartime_sel = null
+		send_action("cancel_us_wartime", {})
+	}
+	foot.appendChild(quit)
 	box.appendChild(foot)
 }
 
