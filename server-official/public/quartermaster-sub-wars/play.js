@@ -6730,6 +6730,24 @@ function update_pending_battle_box() {
 		return
 	}
 
+	/*
+	 * 【2026-11-06 · 17811 特例】bureau_wait：抵消成立后、等玩家决定是否用《雅科夫列夫设计局》原地补机。
+	 *
+	 * ⚠ 这个阶段【绝不能】落到下面的"是否用空军代受"分支：
+	 *   那时 pb.airs 是空的（旧机已死、新机还没补），面板只会剩一个
+	 *   「不代受」按钮；点它发的是 resolve_battle，而服务端 bureau_wait
+	 *   只认 use_armed_offer / skip_armed_offer -> 不消费、界面又不再变 = 卡死。
+	 *
+	 * 正确做法：不画战斗询问框，把舞台让给【增强卡窗口】(view.armed_offer)，
+	 * 那里本来就有「使用《雅科夫列夫设计局》/ 不发动」两个按钮。
+	 */
+	if (pb.stage === "bureau_wait") {
+		ask_state = null
+		/* 必须显式清空，否则上一帧留下的旧按钮会继续挂在 #ask_box 上 */
+		render_ask_box(null, null, null)
+		return
+	}
+
 	ask_state = { kind: "defend", space: pb.space }
 
 	/*

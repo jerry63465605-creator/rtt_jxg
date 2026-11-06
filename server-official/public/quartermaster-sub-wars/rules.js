@@ -28152,6 +28152,8 @@ function pending_wait_nation(pb) {
 	if (pb.stage === 'kv2') return pb.attacker
 	/* 【2026-10-18】su_step_back：苏联 17853《一步也不许后退!》—— 由【苏联持有方】决定是否发动 */
 	if (pb.stage === 'su_step_back') return pb.su_owner_nation || pb.defender_nation
+	/* 【2026-11-06 · 17811 特例】bureau_wait：等防守方（17811 持有方）表态 */
+	if (pb.stage === 'bureau_wait') return pb.defender_nation
 	return (pb.stage === 'counter') ? pb.attacker : pb.defender_nation
 }
 
@@ -29894,12 +29896,18 @@ function do_action(state, current, action, arg) {
 	 * react / auto 类效果在结算前挂起等英国表态；若此时放任别的动作（出牌/推阶段），
 	 * 待结算的效果会一直悬着，或与新的结算交叉 —— 必须先处理询问。
 	 */
-	/* 【2026-11-06 · 17811 特例】bureau_wait 期间必须先表态（用设计局 / 不发动 / 二次代受） */
+	/*
+	 * 【2026-11-06 · 17811 特例】bureau_wait 期间必须先表态（用设计局 / 不发动）。
+	 *
+	 * ⚠ 不放行 resolve_battle：这个阶段 airs 为空，老客户端会画出"是否用空军代受"，
+	 * 点「不代受」发来的 resolve_battle 谁都不消费 -> 界面卡死（玩家实测）。
+	 * 现在一律拒绝并提示，客户端已改成不画那个框、只留增强卡窗口。
+	 */
 	if (game.pending_battle && game.pending_battle.stage === 'bureau_wait' &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
-		action !== 'resolve_battle' && action !== 'log' &&
+		action !== 'log' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
-		game.log.push('请先处理《雅科夫列夫设计局》的询问（是否补机保护本次陆军）')
+		game.log.push('请先处理《雅科夫列夫设计局》的询问（使用设计局补机 / 不发动）')
 		return game
 	}
 
