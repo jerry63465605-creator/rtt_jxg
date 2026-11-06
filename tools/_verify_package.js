@@ -30,7 +30,21 @@ ok('B22 17846 锁定建设地陆军', /const pid = cand\.length \? cand\[0\] : n
 ok('B23 15352 注册名 = 布莱切利园', /'15352': \{\s*\n\s*\/\*[\s\S]{0,260}name: '布莱切利园'/.test(R))
 ok('15226 巴巴罗萨回合开始快照', /refresh_barbarossa_snapshot/.test(R))
 
+/* —— 2026-11-07 新增修复 —— */
+ok('B25-a status_card_effective 归属三级回退', /let owner = cfg\.actor \|\| null/.test(R))
+ok('B25-c 成对邻接可压制（status_connections 带 card）', /side: onlyF, card: card_id/.test(R))
+ok('B26 17505 加成需基数（_p51Before）', /_p51Before/.test(R))
+ok('B26 17505 半径 = bombing_radius', /radius: bombing_radius\(game, 2\)/.test(R))
+ok('B26 17513 可取消（cancel_us_wartime）', /cancel_us_wartime/.test(R))
+ok('B26-b 17505 时点声明', /CARD_TRIGGERS\['17505'\]/.test(R))
+ok('B27 SUPP 入池', /c\.deck !== 'CORE' && c\.deck !== 'SUPP'/.test(R))
+ok('B28 调试损耗/复原/分数', /debug_attrition/.test(R) && /debug_restore/.test(R) && /debug_score/.test(R))
+ok('B28 调试动作带外豁免', /isDebugAction/.test(R))
+
 ok('客户端 bureau_wait 分支', /bureau_wait/.test(J))
+ok('客户端 17513 取消按钮', /cancel_us_wartime/.test(J))
+ok('客户端调试损耗/复原', /debug_do_attrition/.test(J) && /debug_do_restore/.test(J))
+ok('客户端调试分数 ±', /debug_do_score/.test(J))
 ok('客户端海军 40px', /\.unit\.navy\s*\{\s*width:\s*40px/.test(C))
 ok('客户端计分标记已回退（badge_h 常量）', /const badge_h = 23/.test(J))
 
