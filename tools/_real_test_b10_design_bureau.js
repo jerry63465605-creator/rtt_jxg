@@ -92,64 +92,27 @@ console.log('\n=== B. 用 17811 在【原地】部署新机 ===')
 		ok('★ 陆军仍在', g.location['su_e'] != null)
 	}
 }
-
-console.log('\n=== C. 抵消成立 → 双方空军死、victim 挂起、双方开窗 ===')
-let gC = null
+console.log('\n=== C. 抵消成立 → victim【立即】被移除（B10 部分回退后的底层行为）===')
 {
-	const g = setup(); gC = g
+	const g = setup();
 	const n0 = (g.log || []).length
 	I.do_battle(g, '德国', EAST(), 'su_e', 'land', { from: 'de_army', defend_air: 'su_air' })
 	R.action(g, 'Axis', 'resolve_battle', { counter_air: 'de_air' })
 	console.log('  log: ' + logSince(g, n0).slice(0, 300))
-	console.log('  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when + '×' + (w.cards || []).map(c => c.card_id))))
-	console.log('  pending_battle=' + JSON.stringify(g.pending_battle && g.pending_battle.stage) +
-		'  东欧=' + JSON.stringify(I.pieces_on(g, EAST()).map(p => p + '(' + g.piece_nation[p] + '/' + g.piece_type[p] + ')')))
-	ok('★★ 抵消后 victim【不】立即死亡（挂起）', g.location['su_e'] != null && g.pending_battle && g.pending_battle.stage === 'after_air_loss',
-		JSON.stringify({ alive: g.location['su_e'] != null, stage: g.pending_battle && g.pending_battle.stage }))
-	ok('★★ 苏联侧 17811 开窗', !!off17811(g), JSON.stringify((g.armed_offers || []).map(w => w.when)))
-	ok('★ 两架空军都已移除', g.location['su_air'] == null && g.location['de_air'] == null)
-}
-
-console.log('\n=== D. 苏联在【原地】补机 → 自动重新代受 → 陆军保住 ===')
-{
-	const g = gC
-	const off = off17811(g)
-	ok('★ 有 17811 可点', !!off)
-	if (off) {
-		const n0 = (g.log || []).length
-		R.action(g, 'Allies', 'use_armed_offer', { card: off.card })
-		R.action(g, 'Allies', 'use_armed_offer', { card: off.card, space: EAST() })
-		console.log('  补机 log: ' + logSince(g, n0).slice(0, 300))
-		console.log('  东欧=' + JSON.stringify(I.pieces_on(g, EAST()).map(p => p + '(' + g.piece_nation[p] + '/' + g.piece_type[p] + ')')))
-		ok('★★ 原地补机后重新进入代受（日志含"可以再次代替受创"）',
-			/再次代替受创/.test(logSince(g, n0)) || /等待【德国】决定是否用相邻的空军抵消/.test(logSince(g, n0)),
-			logSince(g, n0).slice(0, 160))
-		/* 德国此时已无空军可抵消 -> 代受成立，新机死、陆军保住 */
-		const n1 = (g.log || []).length
-		R.action(g, 'Axis', 'resolve_battle', { declined_counter: true })
-		console.log('  收尾 log: ' + logSince(g, n1).slice(0, 240))
-		ok('★★ 新机代死、陆军保住', g.location['su_e'] != null && !I.pieces_on(g, EAST()).some(p => g.piece_type[p] === 'air'),
-			JSON.stringify({ army: g.location['su_e'], east: I.pieces_on(g, EAST()) }))
-	}
-}
-
-console.log('\n=== E. 苏联在【相邻地区】补机 → 不参与代受 → 陆军被移除 ===')
-{
-	const g = setup()
-	I.do_battle(g, '德国', EAST(), 'su_e', 'land', { from: 'de_army', defend_air: 'su_air' })
-	R.action(g, 'Axis', 'resolve_battle', { counter_air: 'de_air' })
-	const off = off17811(g)
-	ok('★ 有 17811 可点', !!off)
-	if (off) {
-		R.action(g, 'Allies', 'use_armed_offer', { card: off.card })
-		const n0 = (g.log || []).length
-		R.action(g, 'Allies', 'use_armed_offer', { card: off.card, space: ROSS() })
-		console.log('  log: ' + logSince(g, n0).slice(0, 280))
-		console.log('  东欧=' + JSON.stringify(I.pieces_on(g, EAST()).map(p => p + '(' + g.piece_nation[p] + '/' + g.piece_type[p] + ')')))
-		ok('★★ 相邻补机不代受 → 陆军被移除', g.location['su_e'] == null, JSON.stringify(g.location['su_e']))
-		ok('★ 新机在罗斯', !!I.pieces_on(g, ROSS()).find(p => g.piece_type[p] === 'air'))
-		ok('★ 无残留挂起', !g.pending_battle, JSON.stringify(g.pending_battle && g.pending_battle.stage))
-	}
+	ok('★★ 抵消后不再挂起', !g.pending_battle, JSON.stringify(g.pending_battle && g.pending_battle.stage))
+	ok('★★ victim 立即被移除（核心战斗时序未改）', g.location['su_e'] == null, String(g.location['su_e']))
+	ok('★ 双方空军都阵亡', g.location['su_air'] == null && g.location['de_air'] == null)
+	ok('★★ 操作权归还 Axis', g.active === 'Axis' && !g.battle_return_active, g.active + '/' + g.battle_return_active)
+	/*
+	 * 已知缺口（已登记待办）：抵消成立时，victim 的 piece_removed 派发会覆盖掉
+	 * 刚刚由"空军被移除"打开的 17811 窗口（同一 when、不同国家），
+	 * 表现为"掉了飞机但设计局没得打"。本次回退不处理，见
+	 * docs/todo-2026-10-29.md「17811：抵消路径窗口被 victim 派发覆盖」。
+	 */
+	const has = !!off17811(g)
+	console.log('  17811 窗口（现状：被 victim 派发覆盖）= ' + has +
+		'  offers=' + JSON.stringify((g.armed_offers || []).map(w => w.when)))
+	ok('（现状记录）抵消路径 17811 窗口被覆盖 —— 已登记待办', has === false, String(has))
 }
 
 console.log('\n=== F. 苏联「不发动」→ 陆军按原结果被移除 ===')
@@ -184,8 +147,9 @@ console.log('\n=== H. 静态守卫 ===')
 	const src = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8')
 	ok('remove_air_with_piece_removed 已实现', /function remove_air_with_piece_removed/.test(src))
 	ok('17811 / 17808 都带 watch', /when: 'piece_removed', actor: '苏联', watch: true/.test(src))
-	ok('抵消后 victim 挂起（after_air_loss）', /stage: 'after_air_loss'/.test(src))
-	ok('resume_after_air_loss 已实现', /function resume_after_air_loss/.test(src))
+	/* 【2026-11-06 部分回退】"挂起 + 补机再代受"已撤除；保留空军派发窗口与 watch */
+	ok('已撤除 after_air_loss 挂起', !/stage: 'after_air_loss'/.test(src))
+	ok('已撤除 resume_after_air_loss', !/function resume_after_air_loss/.test(src))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : fail + ' FAIL / ' + pass + ' 项'))
