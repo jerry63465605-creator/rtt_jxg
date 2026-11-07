@@ -5365,6 +5365,35 @@ function cancel_peek() {
  */
 let echo_need_pick = null   /* { card, choice, cands } —— 等待玩家点地图 */
 
+/*
+ * 【2026-11-07 · B31-b】「选地区」不该弹模态框 —— 候选已经在地图上高亮，
+ * 弹框只会挡地图、还得再来回切。改成底部一条窄提示条（无遮罩、不挡地图），
+ * 玩家直接点地图上的高亮地区；提示条上只留一个「不发动」出口。
+ */
+let echo_space_bar = null
+function hide_echo_space_bar() {
+	if (echo_space_bar && echo_space_bar.parentNode) echo_space_bar.parentNode.removeChild(echo_space_bar)
+	echo_space_bar = null
+}
+function show_echo_space_bar(text, onCancel) {
+	hide_echo_space_bar()
+	const bar = document.createElement("div")
+	bar.id = "echo_space_bar"
+	bar.style.cssText = "position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:400;" +
+		"display:flex;align-items:center;gap:12px;background:#2b2b2b;border:2px solid #c90;" +
+		"border-radius:8px;padding:8px 14px;box-shadow:0 6px 20px #000c;color:#eee;font-size:14px"
+	const t = document.createElement("span")
+	t.textContent = text
+	bar.appendChild(t)
+	const b = document.createElement("button")
+	b.className = "btn echo-space-cancel"
+	b.textContent = "不发动"
+	b.onclick = onCancel
+	bar.appendChild(b)
+	document.body.appendChild(bar)
+	echo_space_bar = bar
+}
+
 function clear_echo_need_pick() {
 	if (!echo_need_pick) return
 	echo_need_pick = null
@@ -5383,9 +5412,25 @@ function update_pending_echo_box() {
 	 * 变成贴着左上角的一大块（玩家截图里那块"左上角多余 UI"就是这个）。
 	 * 同一函数里 4 处显示 + 1 处隐藏，统一改为 classList 操作。
 	 */
-	if (!pe) { modal.classList.add("hide"); clear_echo_need_pick(); return }
+	if (!pe) { modal.classList.add("hide"); hide_echo_space_bar(); clear_echo_need_pick(); return }
 	if (pe.kind !== 'echo_need') clear_echo_need_pick()
 	if (pe.kind === 'echo_need') {
+		/*
+		 * 【2026-11-07 · B31-b】选地区：**不弹模态框**。
+		 * 候选已在地图上高亮，弹框只会挡住地图；改为底部提示条 + 直接点地图。
+		 */
+		if (pe.step === 'space' && Array.isArray(pe.cands) && pe.cands.length) {
+			modal.classList.add("hide")
+			echo_need_pick = { card: pe.card, choice: (pe.choice != null ? pe.choice : null), cands: pe.cands.slice() }
+			highlight_targets(pe.cands)
+			show_echo_space_bar("请在地图上点选目标地区（共 " + pe.cands.length + " 个候选，已高亮）", function () {
+				clear_echo_need_pick()
+				hide_echo_space_bar()
+				send_action("play_card", { card: pe.card, __cancel_need: true })
+			})
+			return
+		}
+		hide_echo_space_bar()
 		modal.classList.remove("hide")
 		const box = modal.querySelector(".modal-box")
 		box.innerHTML = ""
@@ -5410,36 +5455,7 @@ function update_pending_echo_box() {
 			})
 		}
 
-		/* ② 选地区阶段：高亮候选，等玩家点地图 */
-		if (pe.step === 'space' && Array.isArray(pe.cands) && pe.cands.length) {
-			const p = document.createElement("p")
-			p.textContent = "请点击地图上的高亮地区（共 " + pe.cands.length + " 个候选）"
-			box.appendChild(p)
-			echo_need_pick = { card: pe.card, choice: (pe.choice != null ? pe.choice : null), cands: pe.cands.slice() }
-			highlight_targets(pe.cands)
-			/*
-			 * 【2026-11-07 · B31】候选地区同时列成按钮。
-			 * 原来只有一句"请点击地图上的高亮地区"，弹框里空荡荡一片；
-			 * 现在把 6 个候选地区名直接排出来，点名字等同于点地图（提交同一个 space）。
-			 */
-			const row = document.createElement("div")
-			row.className = "echo-cand-row"
-			pe.cands.forEach(sp => {
-				const b = document.createElement("button")
-				b.className = "btn echo-cand"
-				b.textContent = (view.spaces && view.spaces[sp] && view.spaces[sp].name) || ("地区 " + sp)
-				b.onclick = () => {
-					clear_echo_need_pick()
-					send_action("play_card", {
-						card: pe.card,
-						choice: (pe.choice != null ? pe.choice : null),
-						space: sp,
-					})
-				}
-				row.appendChild(b)
-			})
-			box.appendChild(row)
-		}
+		/* ② 选地区阶段已在上面提前 return：这里不再渲染任何地区列表（避免弹框挡住地图） */
 
 		/* ③ 允许放弃（卡未消耗，清掉挂起即可） */
 		const cancel = document.createElement("button")
@@ -5458,6 +5474,7 @@ function update_pending_echo_box() {
 	 * 点选即发 resolve_effect { pick: c.id }，由服务端 ECHO_EFFECTS.run 继续推进。
 	 * 与 15214 战术革新（kind 未设置）的硬编码分支互不干扰。
 	 */
+	hide_echo_space_bar()   /* 其它分支接管：确保底部提示条不残留 */
 	if (pe.kind === 'su') {
 		/* 【2026-10-07 苏联增强】通用多步选牌框（17812/17813）：沿用原实现，渲染与交互保持不变 */
 		modal.classList.remove("hide")
