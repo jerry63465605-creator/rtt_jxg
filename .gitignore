@@ -38,7 +38,9 @@ Thumbs.db
 /_*.txt
 /Desktop/
 /tmp/
-/.codebuddy/
+# .codebuddy：只放行项目级 skills（随仓库走），其余（缓存/日志）继续忽略
+/.codebuddy/*
+!/.codebuddy/skills/
 # 模块内历史临时脚本（正式回归统一放 tools/）
 server-official/public/quartermaster-sub-wars/_test*.js
 server-official/public/quartermaster-sub-wars/_verify_*.js
