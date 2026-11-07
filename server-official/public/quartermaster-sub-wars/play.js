@@ -9576,6 +9576,8 @@ function apply_aside() {
 	const a = document.querySelector("aside")
 	if (!a)
 		return
+	/* 关侧栏前先把询问面板搬出去（否则 aside[hidden] 会把它们一起 display:none） */
+	try { sync_ask_boxes() } catch (e) { }
 	a.hidden = !aside_open
 	const btn = document.getElementById("btn_aside")
 	if (btn)
@@ -9604,6 +9606,65 @@ let panel_mode_narrow = window.innerWidth <= 800
 function is_narrow_screen() {
 	return window.innerWidth <= 800
 }
+
+/*
+ * 【2026-11-08 · B32】窄屏：询问类面板必须脱离 <aside>
+ *
+ * 现象（玩家报障）：平板/手机上「该弹询问框的时候屏幕上完全没东西」，桌面正常。
+ * 根因：
+ *   · 窄屏（<=800px）时 `body > aside` 变成右侧浮层，客户端 apply_aside() 用
+ *     `a.hidden = !aside_open` 关掉侧栏 → aside[hidden] = display:none；
+ *   · 而 #ask_box / #resource_box / #national_skill_box 在 play.html 里是 aside 的
+ *     【子元素】→ 祖先 display:none 连 position:fixed 也救不了 → 整块不渲染；
+ *   · 桌面（>800px）aside 是常显网格列，所以看不到这个问题。
+ *
+ * 这跟 2026-11-01 给 #phase_panel 做的"移到 body + .floating"是同一类修法，
+ * 这里把三个询问面板一并按同样口径处理（双向迁移：变宽会插回原位）。
+ */
+const QM_ASK_IDS = ["ask_box", "resource_box", "national_skill_box"]
+
+function sync_ask_boxes() {
+	const narrow = is_narrow_screen()
+	const aside = document.querySelector("aside")
+	for (const id of QM_ASK_IDS) {
+		const el = document.getElementById(id)
+		if (!el)
+			continue
+		if (narrow) {
+			/* 首次迁移前记住原位置，供变宽时插回 */
+			if (!el.__qmHome)
+				el.__qmHome = { parent: el.parentNode, next: el.nextSibling }
+			if (el.parentNode !== document.body)
+				document.body.appendChild(el)
+			el.classList.add("floating-ask")
+		} else {
+			el.classList.remove("floating-ask")
+			const home = el.__qmHome
+			if (home && home.parent && home.parent.isConnected) {
+				if (el.parentNode !== home.parent) {
+					if (home.next && home.next.parentNode === home.parent)
+						home.parent.insertBefore(el, home.next)
+					else
+						home.parent.appendChild(el)
+				}
+			} else if (el.parentNode === document.body && aside) {
+				aside.appendChild(el)
+			}
+		}
+	}
+}
+
+/* 变宽/变窄（含平板旋转、拖窗）时重新判定；去抖，避免拖拽时抖动 */
+window.addEventListener("resize", function () {
+	clearTimeout(window.__qmAskT)
+	window.__qmAskT = setTimeout(sync_ask_boxes, 150)
+})
+
+/* 首次加载即判定一次（脚本在 body 末尾，元素已就绪） */
+if (document.readyState === "loading")
+	document.addEventListener("DOMContentLoaded", sync_ask_boxes)
+else
+	sync_ask_boxes()
 
 function place_phase_panel_back() {
 	const panel = document.getElementById("phase_panel")

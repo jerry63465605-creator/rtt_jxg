@@ -2797,6 +2797,26 @@ aside {
 		background-color: #f4f4f1;
 		box-shadow: -6px 0 20px #000a;
 	}
+	/*
+	 * 【2026-11-08 · B32】窄屏：询问类面板被 JS 移到 body 后，用这套固定浮层样式。
+	 * 它们本来就该"盖在地图上方"，不该受 aside 开关影响。
+	 */
+	#ask_box.floating-ask,
+	#resource_box.floating-ask,
+	#national_skill_box.floating-ask {
+		position: fixed;
+		left: 50%;
+		right: auto;
+		bottom: 18px;
+		top: auto;
+		transform: translateX(-50%);
+		z-index: 600;
+		width: auto;
+		max-width: 92vw;
+		max-height: 70dvh;
+		overflow-y: auto;
+		margin: 0;
+	}
 }
 
 /* ============================================================
