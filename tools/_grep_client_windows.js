@@ -1,0 +1,11 @@
+/* 客户端如何渲染 pending_trigger（响应窗口）与 armed_offer（待命窗口），是否会抢同一个容器 */
+const fs = require('fs')
+const path = require('path')
+const P = path.join(__dirname, '..', 'server-official', 'public', 'quartermaster-sub-wars', 'play.js')
+const lines = fs.readFileSync(P, 'utf8').replace(/\r\n/g, '\n').split('\n')
+console.log('=== pending_trigger 相关 ===')
+lines.forEach((l, i) => { if (/pending_trigger/.test(l)) console.log('L' + (i + 1) + ': ' + l.trim().slice(0, 120)) })
+console.log('\n=== armed_offer 相关 ===')
+lines.forEach((l, i) => { if (/armed_offer/.test(l)) console.log('L' + (i + 1) + ': ' + l.trim().slice(0, 120)) })
+console.log('\n=== render_ask_box 调用点 ===')
+lines.forEach((l, i) => { if (/render_ask_box\(/.test(l)) console.log('L' + (i + 1) + ': ' + l.trim().slice(0, 120)) })
