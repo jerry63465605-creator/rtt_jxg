@@ -2487,8 +2487,11 @@ function update_armed_offer_box() {
 							(names.length ? '：' + names.join(' / ') : ''))
 					}
 				} else if (isSpace) {
+			/*
+			 * 【2026-11-07 · B31-c 玩家口径】选地区只靠地图高亮，**不再弹 toast 提示**。
+			 * 与 pending_echo 的选地区保持一致：零额外 UI，点高亮处即选。
+			 */
 			highlight_targets({ spaces: (ao.pending.candidates || []).map(id => ({ id: id })) })
-			toast('请点击一个高亮的地区（' + (ao.cards[0] ? ao.cards[0].name : '') + '）')
 		}
 		ask_state = { kind: 'armed_offer' }
 		render_ask_box(
