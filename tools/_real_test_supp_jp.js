@@ -153,14 +153,22 @@ console.log('\n=== 3. 7902《澳洲海岸线攻势》[RESPONSE] ===')
 	const inst = armPlayStart(g, '7902')
 	console.log('  暗置响应 = ' + JSON.stringify((g.table_responses || []).map(x => faceOf(x.card_id))))
 	ok('★ ① 响应卡可暗置到桌面', !!inst, JSON.stringify((g.table_responses || []).map(x => faceOf(x.card_id))))
-	/* 日本从相邻地区对<澳大利亚>发起陆战 → 触发 after_battle 窗口 */
+	/*
+	 * 日本【海军】从相邻海域对<澳大利亚>发起陆战 → 触发 7902 窗口。
+	 * （上一轮误判成"陆军才能发起、澳洲只邻海域所以打不了"；实际
+	 *   battle_initiators 明确接受 navy —— 澳洲登陆战本来就是海军发起的。）
+	 */
 	const AU = d.id_of('澳大利亚')
-	const from = (d.spaces[AU].connections || []).find(x => d.spaces[x] && d.spaces[x].terrain !== 'sea')
-	place(g, 'jp_au', '日本', 'army', d.name_of(from))
+	const sea = (d.spaces[AU].connections || []).find(x => d.spaces[x] && d.spaces[x].terrain === 'sea')
+	place(g, 'jp_nv', '日本', 'navy', d.name_of(sea))
 	place(g, 'au_def', '英国', 'army', '澳大利亚')
 	I.refresh(g)
-	I.grant_supply(g, 'jp_au', g.turn)
+	I.grant_supply(g, 'jp_nv', g.turn)
 	I.refresh(g)
+	const inits = I.battle_initiators(g, '日本', AU, 'land')
+	console.log('  battle_initiators = ' + JSON.stringify((inits || []).map(x => x.type + '@' + x.space_name)))
+	ok('★ ① 海军可作陆战发起单位（引擎口径）',
+		(inits || []).some(x => x.type === 'navy'), JSON.stringify(inits))
 	give(g, '15401', '日本')
 	I.refresh(g)
 	const n0 = (g.log || []).length
@@ -174,17 +182,24 @@ console.log('\n=== 3. 7902《澳洲海岸线攻势》[RESPONSE] ===')
 	 * 真实对局里无法从陆地发起陆战 → 这里改为直接验 7902 的触发判据（trigger.filter），
 	 * 并保留\"响应卡能暗置到桌面\"这条真实动作断言。
 	 */
-	const cfg = (I.RESPONSE_EFFECTS || {})['7902'] || {}
-	const filt = cfg.trigger && cfg.trigger.filter
-	console.log('  filter(日本 对澳) = ' + (filt ? filt(g, { kind: 'land', nation: '日本', space: AU }) : '(无)') +
-		'  filter(英国 对澳) = ' + (filt ? filt(g, { kind: 'land', nation: '英国', space: AU }) : '(无)') +
-		'  filter(日本 对东南亚) = ' + (filt ? filt(g, { kind: 'land', nation: '日本', space: d.id_of('东南亚') }) : '(无)'))
-	ok('★★ ② 触发判据正确（日本打澳/新 → 开；他国/别处 → 不开）',
-		!!filt && filt(g, { kind: 'land', nation: '日本', space: AU }) === true &&
-		filt(g, { kind: 'land', nation: '英国', space: AU }) === false &&
-		filt(g, { kind: 'land', nation: '日本', space: d.id_of('东南亚') }) === false,
-		lg.slice(0, 120))
-	ok('★ ③ 新西兰同理', !!filt && filt(g, { kind: 'land', nation: '日本', space: d.id_of('新西兰') }) === true)
+	const ids = respIds(g)
+	console.log('  pending_trigger 候选 = ' + JSON.stringify(ids))
+	const offered = ids.map(String).some(x => x.indexOf('7902') >= 0) ||
+		(g.armed_offers || []).some(w => (w.cards || []).some(c => faceOf(c.card_id) === '7902'))
+	ok('★★ ② 对澳陆战后 7902 开出窗口', offered,
+		JSON.stringify({ ids, offers: (g.armed_offers || []).map(w => w.when) }))
+	if (offered) {
+		const n1 = (g.log || []).length
+		const id = ids.map(String).find(x => x.indexOf('7902') >= 0) || (inst && inst.card_id)
+		R.action(g, 'Axis', 'trigger_response', { card: id })
+		I.refresh(g)
+		const lg2 = logSince(g, n1)
+		console.log('  触发 log = ' + lg2.slice(0, 240))
+		console.log('  澳大利亚 = ' + JSON.stringify(I.pieces_on(g, AU).map(p => g.piece_nation[p] + '/' + g.piece_type[p])))
+		ok('★★ ③ 在战斗地区建设陆军（澳大利亚出现日本陆军）',
+			I.pieces_on(g, AU).some(p => g.piece_nation[p] === '日本' && g.piece_type[p] === 'army'),
+			lg2.slice(0, 140))
+	}
 }
 
 /* ============ 4. 8601 远东共和国（STATUS）============ */
