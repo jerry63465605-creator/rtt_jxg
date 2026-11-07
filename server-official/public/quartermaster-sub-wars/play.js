@@ -5400,6 +5400,26 @@ function clear_echo_need_pick() {
 	highlight_targets(null)
 }
 
+/*
+ * 【2026-11-07 · B31-c】选地区的"隐形出口"：Esc 或在地图上右键 = 放弃。
+ * 玩家口径：不要任何额外 UI，地图高亮足够；但得留一个不占屏幕的退路。
+ */
+function cancel_echo_space_pick() {
+	if (!echo_need_pick) return
+	const card = echo_need_pick.card
+	clear_echo_need_pick()
+	send_action("play_card", { card: card, __cancel_need: true })
+}
+document.addEventListener("keydown", function (e) {
+	if ((e.key === "Escape" || e.key === "Esc") && echo_need_pick) {
+		e.preventDefault()
+		cancel_echo_space_pick()
+	}
+})
+document.addEventListener("contextmenu", function (e) {
+	if (echo_need_pick) { e.preventDefault(); cancel_echo_space_pick() }
+})
+
 function update_pending_echo_box() {
 	const modal = document.getElementById("pending_echo_modal")
 	if (!modal) return
@@ -5420,14 +5440,14 @@ function update_pending_echo_box() {
 		 * 候选已在地图上高亮，弹框只会挡住地图；改为底部提示条 + 直接点地图。
 		 */
 		if (pe.step === 'space' && Array.isArray(pe.cands) && pe.cands.length) {
+			/*
+			 * 【2026-11-07 · B31-c 玩家口径】**不加任何额外 UI**：地图高亮本身就是提示。
+			 * 不弹框、不出提示条，只把候选高亮，玩家直接点地图；
+			 * 想放弃就按 Esc / 右键（隐形出口，不占屏幕）。
+			 */
 			modal.classList.add("hide")
 			echo_need_pick = { card: pe.card, choice: (pe.choice != null ? pe.choice : null), cands: pe.cands.slice() }
 			highlight_targets(pe.cands)
-			show_echo_space_bar("请在地图上点选目标地区（共 " + pe.cands.length + " 个候选，已高亮）", function () {
-				clear_echo_need_pick()
-				hide_echo_space_bar()
-				send_action("play_card", { card: pe.card, __cancel_need: true })
-			})
 			return
 		}
 		hide_echo_space_bar()

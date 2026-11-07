@@ -1,20 +1,19 @@
 /*
- * B31-b 真盘面 × 真客户端：选地区 ≠ 弹框
- *   game 13（美国·计分阶段，17509 已打出，pending_echo step='space' 挂着）
+ * B31-c 真盘面 × 真客户端：选地区【零 UI】——只有地图高亮
+ *   game 13（美国·计分阶段，17509 已打出，pending_echo step='space' cands=10）
  *
- *   A ★★ 不再弹模态框（pending_echo_modal 带 hide）
- *   B ★★ 改为底部提示条（#echo_space_bar），文字含候选数，且不遮挡（无 .modal 遮罩）
- *   C ★★ 候选已高亮（highlight_targets 收到 10 个地区）
- *   D ★★ 点地图高亮 → play_card{card, space}（真客户端点击链）
- *   E ★  提示条上的「不发动」→ __cancel_need
- *   F ★★ 服务端接受同一 space → 真的建成空军、挂起清空
+ *   A ★★ 不弹模态框（modal 带 hide）
+ *   B ★★ 也没有任何提示条（#echo_space_bar / #pending_echo_modal 都不显示）
+ *   C ★★ 候选已高亮（10 个）
+ *   D ★★ 点地图高亮 → play_card{card, space}
+ *   E ★  Esc / 右键 = 隐形放弃 → __cancel_need
+ *   F ★★ 服务端接受同一 space → 空军 +1、挂起清空
  */
 const path = require('path')
 const ROOT = path.join(__dirname, '..')
 const MOD = path.join(ROOT, 'server-official', 'public', 'quartermaster-sub-wars')
 const R = require(path.join(MOD, 'rules.js'))
 const I = R._internal
-const d = I.data
 const Database = require(path.join(ROOT, 'server-official', 'node_modules', 'better-sqlite3'))
 
 const GID = Number(process.argv[2] || 13)
@@ -42,9 +41,7 @@ const dom = new JSDOM(require('fs').readFileSync(path.join(MOD, 'play.html'), 'u
 	beforeParse(win) {
 		Object.defineProperty(win, 'innerWidth', { value: 1400, configurable: true })
 		win.player = 'Allies'; win.me = null; win.players = []; win.game_id = GID; win.view = null
-		win.sent = []
-		win.highlighted = null
-		win.__hl = []
+		win.sent = []; win.__hl = []
 		win.send_action = (a, arg) => { win.sent.push({ a, arg }) }
 		win.send_query = () => {}; win.send_chat = () => {}
 		win.update_log = () => {}
@@ -60,25 +57,23 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 ;(async () => {
 	await sleep(250)
-	/* 记录高亮调用 */
 	const origHl = win.highlight_targets
-	win.highlight_targets = function (list) {
-		win.__hl.push(list ? list.slice() : null)
-		if (typeof origHl === 'function') return origHl.apply(this, arguments)
-	}
+	win.highlight_targets = function (list) { win.__hl.push(list ? list.slice() : null); if (typeof origHl === 'function') return origHl.apply(this, arguments) }
 	win.view = view
 	win.on_update()
 	await sleep(150)
 	const doc = win.document
-	const modal = doc.getElementById('pending_echo_modal')
 
-	console.log('\n=== A/B. 不弹框，改底部提示条 ===')
+	console.log('\n=== A. 不弹模态框 ===')
+	const modal = doc.getElementById('pending_echo_modal')
 	console.log('  modal class = ' + modal.className)
-	ok('★★ 模态框保持隐藏', modal.classList.contains('hide'), modal.className)
+	ok('★★ 模态框隐藏', modal.classList.contains('hide'), modal.className)
+
+	console.log('\n=== B. 也没有任何提示条 ===')
 	const bar = doc.getElementById('echo_space_bar')
-	console.log('  提示条 = ' + (bar ? (bar.textContent || '').slice(0, 80) : '(没有)'))
-	ok('★★ 出现底部提示条', !!bar, bar ? 'ok' : 'missing')
-	ok('★ 提示条写明候选数', !!bar && /10 个候选/.test(bar.textContent || ''), bar && bar.textContent.slice(0, 40))
+	ok('★★ 页面上不存在提示条元素', !bar, bar ? '仍存在：' + (bar.textContent || '').slice(0, 40) : 'ok')
+	const anyFixedHint = [...doc.body.children].filter(el => el.id === 'echo_space_bar')
+	ok('★★ body 里没有注入任何提示容器', anyFixedHint.length === 0, String(anyFixedHint.length))
 
 	console.log('\n=== C. 候选已高亮 ===')
 	const hl = win.__hl.filter(Boolean).pop() || []
@@ -87,30 +82,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 	console.log('\n=== D. 点地图高亮 → play_card{space} ===')
 	win.sent = []
-	/* 模拟地图点击：直接调用客户端的地区点击入口（与真人点地图同一函数） */
 	const pick = (pe.cands || [])[0]
+	win.echo_need_pick = { card: pe.card, choice: null, cands: pe.cands.slice() }
 	if (typeof win.on_space_click === 'function') win.on_space_click(pick)
-	else {
-		/* 兜底：走 echo_need_pick 的既有提交路径 */
-		win.echo_need_pick = { card: pe.card, choice: null, cands: pe.cands.slice() }
-		win.send_action('play_card', { card: pe.card, space: pick })
-	}
+	else win.send_action('play_card', { card: pe.card, space: pick })
 	await sleep(60)
 	console.log('  sent = ' + JSON.stringify(win.sent))
-	ok('★★ 点地图提交了 space', !!win.sent[0] && win.sent[0].a === 'play_card' && win.sent[0].arg.space === pick,
+	ok('★★ 提交了 space', !!win.sent[0] && win.sent[0].a === 'play_card' && win.sent[0].arg.space === pick,
 		JSON.stringify(win.sent))
 
-	console.log('\n=== E. 提示条「不发动」===')
+	console.log('\n=== E. Esc = 隐形放弃 ===')
 	win.view = JSON.parse(JSON.stringify(view))
 	win.on_update()
-	await sleep(120)
-	const bar2 = doc.getElementById('echo_space_bar')
+	await sleep(100)
 	win.sent = []
-	const cancel = [...(bar2 ? bar2.querySelectorAll('button') : [])].find(b => (b.textContent || '').trim() === '不发动')
-	if (cancel) cancel.click()
+	const ev = new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+	doc.dispatchEvent(ev)
 	await sleep(60)
 	console.log('  sent = ' + JSON.stringify(win.sent))
-	ok('★ 不发动 → __cancel_need', !!win.sent[0] && win.sent[0].arg && win.sent[0].arg.__cancel_need === true,
+	ok('★ Esc → __cancel_need', !!win.sent[0] && win.sent[0].arg && win.sent[0].arg.__cancel_need === true,
 		JSON.stringify(win.sent))
 
 	console.log('\n=== F. 服务端接受同一 space（真 action）===')
