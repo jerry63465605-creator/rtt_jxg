@@ -12840,7 +12840,16 @@ const ECHO_EFFECTS = {
 						desc: '哈尔西：选择发起海战的地区',
 					}
 				}
-				if (arg.from == null) {
+				/*
+				 * 【2026-11-07 修复】need:'piece' 通道回传的字段名是 `piece`
+				 * （use_armed_offer 的 _sel 只持久化 piece/space/status/choice/drop/pick；
+				 *   客户端 play.js 也发 `{card, piece}`）。
+				 * 旧实现只读 arg.from —— 玩家在地图上点了部队也永远满足不了，
+				 * 表现为"点了没反应 / 一直让我选部队"（典型契约不一致）。
+				 * 现在两个键都认（兼容直接传 from 的调用方）。
+				 */
+				const _from = (arg.from != null) ? arg.from : (arg.piece != null ? arg.piece : null)
+				if (_from == null) {
 					const froms = us_launch_battle_froms(game, space, 'sea')
 					if (!froms.length)
 						return { ok: false, reason: '该海域无相邻补给美军海军' }
@@ -12849,7 +12858,7 @@ const ECHO_EFFECTS = {
 						desc: '选择发起海战的美军海军',
 					}
 				}
-				const r = do_battle(game, '美国', space, null, 'sea', { from: String(arg.from) })
+				const r = do_battle(game, '美国', space, null, 'sea', { from: String(_from) })
 				refresh(game)
 				return {
 					ok: r.ok,
@@ -12886,7 +12895,9 @@ const ECHO_EFFECTS = {
 						desc: '麦克阿瑟：选择发起陆战的地区',
 					}
 				}
-				if (arg.from == null) {
+				/* 同 16801：need:'piece' 回传键是 `piece`（兼容 from） */
+				const _from = (arg.from != null) ? arg.from : (arg.piece != null ? arg.piece : null)
+				if (_from == null) {
 					const froms = us_launch_battle_froms(game, space, 'land')
 					if (!froms.length)
 						return { ok: false, reason: '该地无相邻补给美军陆军' }
@@ -12895,7 +12906,7 @@ const ECHO_EFFECTS = {
 						desc: '选择发起陆战的美军陆军',
 					}
 				}
-				const r = do_battle(game, '美国', space, null, 'land', { from: String(arg.from) })
+				const r = do_battle(game, '美国', space, null, 'land', { from: String(_from) })
 				refresh(game)
 				return {
 					ok: r.ok,
