@@ -631,8 +631,11 @@ if (st && typeof st.spacesFn === 'function') { ... }               // ❶ 的后
    而 7900 第 1 步是**代价**弃牌（付不出就该能放弃），没有出口 = 只能刷新页面。
 
 **修法（方案 A：复用现成的共用弃牌框）**：
+- ⚠ **命名口径**（玩家 2026-11-07 纠正）：7900 在 `cards.js` 里是 **`type:'EFFECT'`（增强卡）**，
+  所以这是「**增强卡代价弃牌**」，不是"脚本卡专属玩法"；只是它的代价由**脚本状态机通道**收取
+  （EFFECT 分支一进来就按 `SCRIPT_CARD_KIND` 分流到 `script_start`，`cost:{discard:4}` 不生效）。
 - `#echo_discard_modal` 本来就是多用户共用框（增强卡代价 / 状态卡代价 / 保护卡 15410），
-  有卡片网格 + `n/N` 计数 + **取消按钮** → 把"脚本卡代价弃牌"接成**第 4 个用户**：
+  有卡片网格 + `n/N` 计数 + **取消按钮** → 把"脚本通道的增强卡代价弃牌"接成**第 4 个用户**：
   `update_echo_discard_box()` / `confirm_echo_discard()` / `cancel_echo_discard()` 各加一路分流，
   新增 `render_script_discard_box()`（照抄 `render_status_discard_box()`）。
 - 提交改 `{ discard: picked }`（数组）；**不在发送前清选择**，只在「来源卡#步号」变化时才清。
@@ -5599,7 +5602,7 @@ resolve_script{discard:[4 张]} → 「弃置 4 张手牌」→ stage 2 ✅（�
 | 端 | 文件 | 改什么 |
 |---|---|---|
 | 客户端 | `play.js` `confirm_script_pick()` | discard 步转发到新流程；彻底去掉 `picked[0]` 单张提交 |
-| 客户端 | `play.js` 新增 `render_script_discard_box / on_script_discard_pick / finish_script_discard / cancel_script_card` | 把 discard 步接成 `#echo_discard_modal` 的**第 4 个用户**（网格 + n/N + 取消） |
+| 客户端 | `play.js` 新增 `render_effect_cost_discard_box / on_effect_cost_discard_pick / finish_effect_cost_discard / cancel_script_card` | 把 discard 步接成 `#echo_discard_modal` 的**第 4 个用户**（网格 + n/N + 取消） |
 | 客户端 | `play.js` `update_pending_script_box()` | discard 步不再弹 `#script_modal`；`来源卡#步号` 变化才清选择（被拒不清） |
 | 客户端 | `play.js` `on_click_hand_card()` / `update_hand_panel()` | 点手牌也能 toggle；选中高亮 |
 | 客户端 | `play.html` | 共用框的取消按钮加 `id="echo_discard_cancel"`（供按 `cancellable` 置灰） |

@@ -3847,6 +3847,16 @@ function maybe_resume_autobahn(game) {
 /*
  * 哪些卡走【多步脚本】流程 -> 脚本 kind。
  * 与 cards.js 的卡面 id 对应；新增同类卡在这里加一行即可。
+ *
+ * 【2026-11-07 清点】当前共 5 张（⚠ 只有 7900 是增强卡，其余都是事件卡）：
+ *   15229 生产构思   EVENT 德国  play_status_from_deck —— pick 牌堆挑 1 张[状态卡]打出
+ *   15239 战略规划   EVENT 德国  draw_pick_discard     —— pick 牌堆挑 2 张 → discard 弃 1 张 → 可额外打出
+ *   14503 提尔比茨号 EVENT 德国  uk_facedown_discard   —— answer 让权英国暗弃 1 张桌面暗置响应
+ *   17530 代号Magic  EVENT 美国  jp_facedown_discard   —— answer 让权日本暗弃 1 张桌面暗置响应
+ *   7900  竭泽而渔   EFFECT 日本 discard_pay_pick      —— discard 弃 4 张（代价）→ pick 弃牌堆挑 1 张
+ *
+ * 只有 7900 / 15239 含 discard 步；客户端把 discard 步统一渲染在共用弃牌框
+ * （#echo_discard_modal），pick / answer 步仍在 #script_modal。
  */
 const SCRIPT_CARD_KIND = {
 	'15229': 'play_status_from_deck',
@@ -3900,6 +3910,9 @@ function script_clear(game) {
  * 口径（玩家 2026-11-07 拍板 · 方案 A）：
  *   · 只有【代价尚未支付】的步骤可以取消 —— 目前仅 7900《竭泽而渔》第 1 步
  *     （kind='discard_pay_pick' + stage=1）。
+ *     ⚠ 语义说明：7900 是【增强卡（EFFECT）】的代价弃牌，只是借用了脚本机通道
+ *     （EFFECT 分支开头就按 SCRIPT_CARD_KIND 分流）；不是"选牌/摊牌"类步骤，
+ *     所以取消安全（还没看到弃牌堆内容，不泄露信息 —— 见 pitfalls 教训 23）。
  *   · 取消的后果 = 卡【退回手牌】+ 不占出牌名额 + 恢复「出牌阶段开始时」窗口
  *     （代价没付 = 等同没打出）。
  *   · 15239《战略规划》等步骤已经抽/弃过牌，取消无法回滚 -> 一律不给取消，
@@ -14674,6 +14687,14 @@ const ECHO_EFFECTS = {
 	 */
 	'7900': {
 		name: '竭泽而渔', actor: '日本',
+		/*
+		 * ⚠【2026-11-07 注释】这张卡是【增强卡（EFFECT）】，但代价【不走】通用的
+		 * cost 通道：play_card 的 EFFECT 分支一进来就按 SCRIPT_CARD_KIND 分流到
+		 * script_start（rules.js 上方 ECHO 增强卡分支开头），由脚本机 stage 1
+		 * 收取"弃 4 张"（need_discard=4），客户端渲染在共用弃牌框里。
+		 * 这里的 cost.discard 只是【描述性字段】（便于阅读/将来若改走标准通道），
+		 * 当前运行期不会被扣费 —— 不要据此以为 play_card 的 cost 分支已经收过账。
+		 */
 		cost: { discard: 4 },
 		desc: '出牌阶段开始时：弃置4张手牌，检视弃牌堆，选择并将1张牌置入手牌',
 	},
