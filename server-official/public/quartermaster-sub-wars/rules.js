@@ -4839,7 +4839,7 @@ const STATUS_EFFECTS = {
 			window: 'piece_removed',
 			once_per_turn: true,
 			cost: { attrition: 2 },
-			desc: '一回合一次，美国海军被移除时：损耗2张牌，使其本回合内不会被移除（还原）',
+			desc: '一回合一次，美国海军被移除时：损耗2张牌，使其在本次战斗中不会被移除（还原）',
 			/*
 			 * 【2026-11-01 修复·范式对齐】声明式条件（与 17808/17811/15351 的 armed.ready 同款）。
 			 *
@@ -4865,6 +4865,13 @@ const STATUS_EFFECTS = {
 				register_modifier(game, {
 					key: 'protect', nation: '美国', type: 'navy',
 					spaces: [lp.space], untilTurn: game.turn,
+					/*
+					 * 【2026-11-07】卡面是「在【本次战斗】中不会被移除」-> battleOnly。
+					 * 状态卡窗口是【延迟结算】的：注册这一刻 do_battle 已经返回，
+					 * battle_active() 会是 false —— 不能按它决定，否则又退回"国家回合"。
+					 * 寿命由 has_modifier（战斗中才生效）+ do_battle 的两道清理决定。
+					 */
+					battleOnly: true,
 				})
 				game.last_piece_removed = null
 				refresh(game)
@@ -10723,6 +10730,15 @@ function obj_of(id) {
 }
 
 /*
+ * 【2026-11-07】"当前是否正处在一场战斗里"——给 battleOnly 修饰器用。
+ * 挂起待决（pending_battle，如空军代受 / 武士道 guard / KV-2）也算"战斗中"，
+ * 否则挂起期间保护会提前失效。
+ */
+function battle_active(game) {
+	return (game.battle_in_progress || 0) > 0 || !!game.pending_battle
+}
+
+/*
  * 查询：某支部队是否受到某类修正器保护。
  *
  * 这是 protect 的【唯一判定入口】——
@@ -10739,6 +10755,13 @@ function has_modifier(game, key, piece) {
 		/* 【2026-10-16】protect 仅在其"设保护时的国家回合"内有效
 		 * （与 echo_mod_active 同款 2026-09-30 裁定）。turnNation 为 null 时退出本语义（整轮）。 */
 		if (key === 'protect' && m.turnNation != null && m.turnNation !== game.current_nation) continue
+		/*
+		 * 【2026-11-07】battleOnly = 卡面「在【本次战斗】中不会被移除」
+		 * （17730/17735/17543/15410）。它比"国家回合"更短：战斗一结束就作废。
+		 * 物理清除在 do_battle 的 finally（战斗真正结束时），这里只是兜底判定，
+		 * 防止挂起/嵌套期间读到过期条目。
+		 */
+		if (m.battleOnly && !battle_active(game)) continue
 		if (m.nation != null && m.nation !== nation) continue
 		if (m.type != null && m.type !== type) continue
 		/*
@@ -14586,13 +14609,18 @@ const ECHO_EFFECTS = {
 				const pid = ctx && ctx.piece
 				if (!pid || game.location[pid] == null)
 					return { ok: true, skip: true, desc: '目标部队不存在' }
-				/* 用既有 protect 修饰器：本回合（本次战斗）内无法被移除 */
+				/*
+				 * 用既有 protect 修饰器：卡面是「在【本次战斗】中无法被移除」-> battleOnly。
+				 * 【2026-11-07】旧实现只有 untilTurn + turnNation（=国家回合），
+				 * 导致同一回合的下一场战斗仍然打不掉这支部队（已复现）。
+				 */
 				register_modifier(game, {
 					key: 'protect', nation: game.piece_nation[pid],
 					type: game.piece_type[pid],
 					spaces: [game.location[pid]], untilTurn: game.turn,
+					battleOnly: true,
 				})
-				return { ok: true, desc: '该日本陆军在本回合内不会被移除' }
+				return { ok: true, desc: '该日本陆军在本次战斗中不会被移除' }
 			},
 		},
 	},
@@ -17956,8 +17984,9 @@ const RESPONSE_EFFECT_IMPL = {
 	 * 全部复用原子：还原保护类 = restore_piece + register_modifier(protect)；
 	 * 消灭类 = eliminate_piece；征召类 = recruit_piece。
 	 */
+	/* 【2026-11-07】卡面是「在【本次战斗】中不会被移除」-> battleOnly（见 has_modifier） */
 	'17730': (game, side, ctx) =>
-		protect_restored(game, ctx, { desc: '还原<巴尔干/相邻>的意大利陆军并本回合保护' }),
+		protect_restored(game, ctx, { battleOnly: true, desc: '还原<巴尔干/相邻>的意大利陆军并本次战斗保护' }),
 	'17731': (game, side, ctx) => {
 		const r = eliminate_piece(game, first_nation_of_side(side), ctx.space, ctx.piece_id)
 		return { ok: r.ok, desc: r.ok ? '消灭苏联在' + data.name_of(ctx.space) + '建设的陆军'
@@ -17970,8 +17999,9 @@ const RESPONSE_EFFECT_IMPL = {
 		return { ok: r.ok, desc: r.ok ? '在' + data.name_of(ctx.space) + '征召意大利陆军'
 			: '（无法征召：' + (r.reason || '') + '）' }
 	},
+	/* 【2026-11-07】卡面是「在【本次战斗】中不会被移除」-> battleOnly（见 has_modifier） */
 	'17735': (game, side, ctx) =>
-		protect_restored(game, ctx, { desc: '还原<意大利/相邻>的意大利陆军并本回合保护' }),
+		protect_restored(game, ctx, { battleOnly: true, desc: '还原<意大利/相邻>的意大利陆军并本次战斗保护' }),
 	'17737': (game, side, ctx) => {
 		const it = space_id_of('意大利')
 		if (it == null) return { ok: false, desc: '（<意大利> 不存在）' }
@@ -18272,6 +18302,15 @@ function protect_restored(game, ctx, opt) {
 		spaces: (opt.spaces && opt.spaces.length) ? opt.spaces.slice()
 			: [(ctx && ctx.space)],
 		untilTurn: game.turn,
+		/*
+		 * 【2026-11-07】opt.battleOnly = 卡面「本次战斗中」。
+		 * 注意：响应栈 / 状态卡的结算是【延迟】的（piece_removed 之后才跑），
+		 * 那一刻 do_battle 已经返回，battle_active() 会是 false —— 所以这里
+		 * 【不能】按"当前是否在战斗中"决定是否打标记，否则又会退回"国家回合"。
+		 * 标记一旦打上，寿命由 has_modifier（战斗中才生效）+ do_battle 的两道清理
+		 * （本场结束 / 下一场开始）决定。
+		 */
+		battleOnly: opt.battleOnly ? true : undefined,
 	})
 	return { ok: true, desc: opt.desc || '该部队本回合不会被移除' }
 }
@@ -21321,11 +21360,31 @@ function dispatch_air_removed_window(game, ctx) {
 }
 
 function do_battle(game, nation, space, target_piece, kind, opt) {
+	/*
+	 * 【2026-11-07】新战斗开打前，先清掉上一场遗留的"本次战斗"级保护（battleOnly）。
+	 * 为什么需要两道清理：
+	 *   ① 战斗内注册的（15410 武士道）由下面的 finally 立刻清；
+	 *   ② 响应栈/状态卡是【延迟结算】的（17730/17735/17543 在 piece_removed 之后
+	 *      由 trigger_response 补结算，此时 do_battle 已返回），finally 抓不到，
+	 *      只能靠"下一场战斗开始时"清。
+	 * resume（guard / KV-2 / 一步也不许后退 / 代受重放）属于同一场战斗，不清。
+	 */
+	const isResume = !!(opt && opt.resume)
+	if (!isResume && (game.battle_in_progress || 0) === 0 && Array.isArray(game.modifiers))
+		game.modifiers = game.modifiers.filter(m => !m.battleOnly)
+
 	game.battle_in_progress = (game.battle_in_progress || 0) + 1
 	try {
 		return do_battle_inner(game, nation, space, target_piece, kind, opt)
 	} finally {
 		game.battle_in_progress = Math.max(0, (game.battle_in_progress || 0) - 1)
+		/*
+		 * 战斗【真正】结束时清掉"本次战斗"级保护。
+		 * 判据：没有嵌套战斗，且没有挂起待决（pending_battle = 空军代受 / 武士道 guard /
+		 * KV-2 等，此时战斗尚未结束，保护必须留到恢复后）。
+		 */
+		if (game.battle_in_progress === 0 && !game.pending_battle && Array.isArray(game.modifiers))
+			game.modifiers = game.modifiers.filter(m => !m.battleOnly)
 	}
 }
 
