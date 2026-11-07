@@ -10420,8 +10420,21 @@ function trigger_ready(game, card_id, nation) {
 		return { ok: true }
 	}
 
-	if (tr.kind === 'any')
+	/*
+	 * 【2026-11-08 · B31-d 玩家口径：按 B 处理】15311《马奇诺防线》这类"待命增强卡"
+	 * 本来就是【被事件触发时询问】，不能主动打出 —— 但旧文案一律说"是响应卡"，
+	 * 玩家（英国）点了手牌以为卡坏了。这里按"是否 armed 待命卡"给出不同的原因。
+	 */
+	if (tr.kind === 'any') {
+		const _cfg = ECHO_EFFECTS[String(inst_card_id(card_id))] || null
+		if (_cfg && _cfg.armed)
+			return {
+				ok: false,
+				reason: '《' + c.name + '》是【待命】增强卡：只在被触发的事件发生时才询问（' +
+					(_cfg.armed.desc || _cfg.armed.when || '触发时') + '），不能主动打出',
+			}
 		return { ok: false, reason: '《' + c.name + '》是响应卡，由触发事件驱动，不能主动打出' }
+	}
 
 	/*
 	 * 【2026-10-01 玩家最终口径】"打出XX后…"型增强卡（B 组）：
