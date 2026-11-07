@@ -1472,6 +1472,8 @@ const HUMAN_OPTIONS_CACHE = {
 }
 
 function parse_game_options(options_json) {
+	/* 【2026-11-08】空/坏 options（手工建的对局）不能让整个列表 500 */
+	if (options_json == null || options_json === "") options_json = "{}"
 	if (options_json in PARSE_OPTIONS_CACHE)
 		return PARSE_OPTIONS_CACHE[options_json]
 	return PARSE_OPTIONS_CACHE[options_json] = Object.freeze(JSON.parse(options_json))

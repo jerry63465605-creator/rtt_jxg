@@ -64,7 +64,7 @@ if (!exists) {
 	db.prepare(`insert into games (game_id, status, title_id, scenario, options, player_count,
 		join_count, invite_count, user_count, owner_id, notice, is_private, is_random, is_match,
 		ctime, mtime, xtime, moves)
-		values (?, 1, 'quartermaster-sub-wars', 'Standard', '', 2, 2, 0, 2, 1, '', 0, 0, 0,
+		values (?, 1, 'quartermaster-sub-wars', 'Standard', '{}', 2, 2, 0, 2, 1, '', 0, 0, 0,
 		current_timestamp, current_timestamp, current_timestamp, 0)`).run(GID)
 }
 db.prepare('insert or replace into game_state (game_id, state) values (?,?)').run(GID, JSON.stringify(g))
