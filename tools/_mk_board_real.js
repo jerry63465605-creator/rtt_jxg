@@ -20,7 +20,13 @@ const SEED = Number(process.argv[3] || 20261106)
 const NATIONS = ['英国', '德国', '日本', '苏联', '意大利', '美国']
 
 /* 1) 真实 setup（真实牌库 + 真实起手） */
-const g = R.setup(SEED)
+/*
+ * 【2026-11-08 铁律】建盘必须走 _board_lib.new_board()：
+ * 它内部完成 setup + **六国「摸 10 弃 3」初设（真实 opening_discard）**。
+ * 裸 R.setup() 会让各国手牌停在 10 张，与真实开局（7 张）不符。
+ */
+const L = require('./_board_lib')
+const g = L.new_board(SEED)
 console.log('=== 真实盘面（seed=' + SEED + '）===')
 console.log('当前国=' + g.current_nation + ' 阶段=' + g.turn_phase + ' active=' + g.active +
 	' 苏联参战=' + (g.neutral && g.neutral['苏联']) + ' 美国参战=' + (g.neutral && g.neutral['美国']))

@@ -19,7 +19,12 @@ const GID = Number(process.argv[2] || 13)
 const SEED = Number(process.argv[3] || 20261107)
 
 /* 1) 真实 setup + 布阵（只加"美国在太平洋有存在"这一必要前提） */
-const g = R.setup(SEED)
+/*
+ * 【2026-11-08 铁律】建盘必须走 _board_lib.new_board()（含六国「摸 10 弃 3」初设）。
+ * 裸 R.setup() 会让手牌停在 10 张 —— 本脚本首版就是这个问题。
+ */
+const L = require('./_board_lib')
+const g = L.new_board(SEED)
 g.pending_battle = null; g.pending_econ = null
 g.armed_offers = []; g.response_queue = []; g.response_stack = []
 g.pending_status_react = null; g.pending_echo = null; g.pending_script = null
