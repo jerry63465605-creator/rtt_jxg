@@ -41,6 +41,11 @@ ok('B27 SUPP 入池', /c\.deck !== 'CORE' && c\.deck !== 'SUPP'/.test(R))
 ok('B28 调试损耗/复原/分数', /debug_attrition/.test(R) && /debug_restore/.test(R) && /debug_score/.test(R))
 ok('B28 调试动作带外豁免', /isDebugAction/.test(R))
 
+/* —— 2026-11-07 第二批 —— */
+ok('B31 弹框显隐走 classList（不再覆盖 flex）', /modal\.classList\.remove\("hide"\)/.test(J))
+ok('B31 候选地区按钮', /echo-cand/.test(J))
+ok('免死加 battleOnly（本次战斗）', /battleOnly/.test(R))
+
 ok('客户端 bureau_wait 分支', /bureau_wait/.test(J))
 ok('客户端 17513 取消按钮', /cancel_us_wartime/.test(J))
 ok('客户端调试损耗/复原', /debug_do_attrition/.test(J) && /debug_do_restore/.test(J))
