@@ -3895,6 +3895,53 @@ function script_clear(game) {
 }
 
 /*
+ * 【2026-11-07】多步脚本卡「取消」的可行性与结算。
+ *
+ * 口径（玩家 2026-11-07 拍板 · 方案 A）：
+ *   · 只有【代价尚未支付】的步骤可以取消 —— 目前仅 7900《竭泽而渔》第 1 步
+ *     （kind='discard_pay_pick' + stage=1）。
+ *   · 取消的后果 = 卡【退回手牌】+ 不占出牌名额 + 恢复「出牌阶段开始时」窗口
+ *     （代价没付 = 等同没打出）。
+ *   · 15239《战略规划》等步骤已经抽/弃过牌，取消无法回滚 -> 一律不给取消，
+ *     避免出现"牌已入手却当作没打出"的悬空状态。
+ */
+function script_cancellable(ps) {
+	if (!ps) return false
+	if (ps.kind !== 'discard_pay_pick') return false
+	if (ps.stage !== 1) return false
+	return script_step_kind(ps) === 'discard'
+}
+
+function script_cancel(game, nation) {
+	const ps = game.pending_script
+	if (!ps) { game.log.push('当前没有进行中的结算'); return game }
+	if (nation !== script_answer_nation(game)) {
+		game.log.push('只有【' + script_answer_nation(game) + '】能放弃《' + ps.source_name + '》')
+		return game
+	}
+	if (!script_cancellable(ps)) {
+		game.log.push('《' + ps.source_name + '》：这一步不能取消（已经支付/结算过）')
+		return game
+	}
+	const nm = ps.source_name
+	/* 源卡在 script_start 里已 discard_card 进弃牌堆 -> 取回手牌（只取本次这一张实例） */
+	const pile = game.discard[ps.actor] || []
+	const i = pile.indexOf(ps.source_inst)
+	if (i >= 0) pile.splice(i, 1)
+	game.hands[ps.actor] = game.hands[ps.actor] || []
+	game.hands[ps.actor].push(ps.source_inst)
+	/*
+	 * 精确回滚「本回合已执行出牌动作」：只回滚本次 script_start 新设的那一位
+	 * （ps.set_acted），否则会把玩家之前打过的出牌动作一起抹掉、错误地重开窗口。
+	 */
+	if (ps.set_acted && game.play_done) delete game.play_done[PLAY_ACTED_KEY + ps.actor]
+	game.log.push('【' + ps.actor + '】放弃《' + nm + '》，卡退回手牌（未占出牌名额）')
+	script_clear(game)
+	refresh(game)
+	return game
+}
+
+/*
  * 各阶段该做什么。
  *   pick    —— 从【本国牌堆】挑 N 张（15229/15239）
  *             或从【本国弃牌堆】挑 N 张（7900 第 2 步）
@@ -4152,6 +4199,8 @@ function script_start(game, nation, card_id, timing, kind) {
 	}
 
 	discard_card(game, nation, card_id)
+	/* 记下「本次是否【新设】了 @acted」：取消时要精确回滚（见 script_cancel） */
+	ps.set_acted = !play_acted(game, nation)
 	mark_play_acted(game, nation); if (!timing) mark_play_done(game, nation)
 	game.log.push('【' + nation + '】打出《' + ps.source_name + '》')
 
@@ -28854,8 +28903,12 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	if (game.pending_script) {
 		const waitNation = script_answer_nation(game)
 		game.block_reason = 'pending_script: 多步脚本卡等待【' + (waitNation || '?') + '】'
-		if (waitNation && faction_of_nation(waitNation) === side)
-			return { resolve_script: 1, log: 1 }
+		if (waitNation && faction_of_nation(waitNation) === side) {
+			const acts = { resolve_script: 1, log: 1 }
+			/* 【2026-11-07】代价尚未支付的步骤额外放行「取消」（见 script_cancellable） */
+			if (script_cancellable(game.pending_script)) acts.cancel_script = 1
+			return acts
+		}
 		return { log: 1 }
 	}
 	/*
@@ -30312,8 +30365,9 @@ function do_action(state, current, action, arg) {
 	/*
 	 * 【2026-09-30】多步脚本卡结算中（15229/15239/14503）：
 	 * 同上，只放行 resolve_script。
+	 * 【2026-11-07】另放行 cancel_script（仅"代价未付"的步骤，入口里还会再校验一次）。
 	 */
-	if (game.pending_script && action !== 'resolve_script' &&
+	if (game.pending_script && action !== 'resolve_script' && action !== 'cancel_script' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push(script_prompt(game.pending_script) +
 			'（当前这一步：第 ' + game.pending_script.stage + '/' +
@@ -33622,6 +33676,25 @@ function do_action(state, current, action, arg) {
 	}
 
 
+	/*
+	 * 【2026-11-07 新增】放弃「代价尚未支付」的脚本卡（7900《竭泽而渔》第 1 步）：
+	 * 卡退回手牌 + 不占出牌名额（见 script_cancel 的注释）。
+	 * 校验口径与 resolve_script 完全一致：按【阵营】判定操作权。
+	 */
+	if (action === 'cancel_script') {
+		if (!game.pending_script) {
+			game.log.push('当前没有待结算的脚本卡')
+			return game
+		}
+		const waitNation = script_answer_nation(game)
+		if (faction_of_nation(waitNation) !== side) {
+			game.log.push('现在轮到【' + waitNation + '】选择，' +
+				(side === ALLIES ? '同盟' : '轴心') + '暂不能提交')
+			return game
+		}
+		return script_cancel(game, waitNation)
+	}
+
 	if (action === 'resolve_script') {
 		if (!game.pending_script) {
 			game.log.push('当前没有待结算的脚本卡')
@@ -36024,6 +36097,11 @@ exports.query = function (state, current, query, params) {
 			/* pick / discard 各自的数量要求（不足按候选数收敛） */
 			need: (stepKind === 'discard') ? ps.need_discard
 				: script_pick_need(ps, candsRaw),
+			/**
+			 * 【2026-11-07】能否"取消"（放弃这张卡）—— 判定同源：
+			 * 客户端只读这个标志决定是否显示取消按钮，不自己猜 kind/stage。
+			 */
+			cancellable: script_cancellable(ps),
 			candidates: cands,
 		}
 	}

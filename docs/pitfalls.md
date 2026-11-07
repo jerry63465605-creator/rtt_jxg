@@ -617,6 +617,38 @@ if (st && typeof st.spacesFn === 'function') { ... }               // ❶ 的后
 
 ---
 
+### 24. 【2026-11-07】多步选牌框的"三件套"：**张数 / 提交字段 / 取消通道**，缺一条就卡死
+
+**事故**：7900《竭泽而渔》（弃置 4 张手牌 → 从弃牌堆挑 1 张）在客户端**选 4 张只算 1 张**，
+点确认后服务端拒绝，弹窗回到 `0/4`，再选又只发 1 张 → **无限循环，页面卡死**（服务端期间锁住一切动作）。
+
+**根因（三层，缺一不可）**：
+1. **提交字段**：`confirm_script_pick()` 写死 `send_action('resolve_script', { discard: picked[0] })`
+   —— 只发第一张。服务端 `script_resolve` 的 discard 分支**本来就兼容数组**（`rules.js` 里
+   `Array.isArray(raw) ? raw : [raw]`），所以纯客户端 bug。
+2. **保留选择**：发送前先 `script_sel = []`，被拒后玩家得从头重选 → 每次都被拒 → 死循环。
+3. **取消通道**：`#script_modal` 当初按"这些步骤必须完成"设计，**刻意没有取消按钮**；
+   而 7900 第 1 步是**代价**弃牌（付不出就该能放弃），没有出口 = 只能刷新页面。
+
+**修法（方案 A：复用现成的共用弃牌框）**：
+- `#echo_discard_modal` 本来就是多用户共用框（增强卡代价 / 状态卡代价 / 保护卡 15410），
+  有卡片网格 + `n/N` 计数 + **取消按钮** → 把"脚本卡代价弃牌"接成**第 4 个用户**：
+  `update_echo_discard_box()` / `confirm_echo_discard()` / `cancel_echo_discard()` 各加一路分流，
+  新增 `render_script_discard_box()`（照抄 `render_status_discard_box()`）。
+- 提交改 `{ discard: picked }`（数组）；**不在发送前清选择**，只在「来源卡#步号」变化时才清。
+- 服务端新增 `cancel_script`（`build_actions` 登记 + 入口守卫放行）+ `script_state.cancellable`
+  同源下发；取消 = 源卡从弃牌堆**退回手牌** + 精确回滚 `@acted`（`ps.set_acted`）+ 清空 pending_script。
+- **可取消的范围**：只给"代价尚未支付"的步骤（`discard_pay_pick` + `stage===1`）；
+  15239 等已抽/已弃过牌的步骤一律不给（无法回滚，会造成牌数悬空）。与**教训 23**一致：
+  此时还没看到弃牌堆内容 → 取消不泄露信息，是安全的。
+
+**教训**：
+> 凡是"挑 N 张"的交互，落地前必须逐条核对：①`need` 到底几张（服务端下发）；
+> ②提交的是**数组还是单张**（必须与服务端 `Array.isArray` 兼容口径对齐）；
+> ③**被拒绝后选择是否保留**；④有没有**取消/退出通道**（代价类必须能放弃，选牌/摊牌类才不可取消）。
+
+---
+
 ## 二、RTT 契约类踩坑
 
 | # | 现象 | 成因 | 解法 |
@@ -5548,6 +5580,40 @@ open-ocean 海域（如中太平洋）即使邻接一艘已补给的本国海军
 
 
 **【续·已修】15248 合成燃料的同类争抢 + 预算面板统一进 HUD 容器**
+
+---
+
+## 【2026-11-07】7900《竭泽而渔》弃牌框：选 4 张只提交 1 张 → 卡死；并补上"取消"
+
+**玩家报告**：竭泽而渔选 4 张牌被视为 1 张、卡死；这种弃牌框应该有取消按钮。
+
+**复现（`tools/_smoke_7900.js` 第 2 段）**：
+```
+play_card{7900} → pending_script{kind:'discard_pay_pick', stage:1, need_discard:4, timing:true}
+                → 源卡已进弃牌堆、@acted 已置、play_done[日本] 未占
+resolve_script{discard:[1 张]} → 日志「需要弃置 4 张手牌，当前选了 1 张」，状态不变
+resolve_script{discard:[4 张]} → 「弃置 4 张手牌」→ stage 2 ✅（服务端本来就吃数组）
+```
+
+**改动清单**
+| 端 | 文件 | 改什么 |
+|---|---|---|
+| 客户端 | `play.js` `confirm_script_pick()` | discard 步转发到新流程；彻底去掉 `picked[0]` 单张提交 |
+| 客户端 | `play.js` 新增 `render_script_discard_box / on_script_discard_pick / finish_script_discard / cancel_script_card` | 把 discard 步接成 `#echo_discard_modal` 的**第 4 个用户**（网格 + n/N + 取消） |
+| 客户端 | `play.js` `update_pending_script_box()` | discard 步不再弹 `#script_modal`；`来源卡#步号` 变化才清选择（被拒不清） |
+| 客户端 | `play.js` `on_click_hand_card()` / `update_hand_panel()` | 点手牌也能 toggle；选中高亮 |
+| 客户端 | `play.html` | 共用框的取消按钮加 `id="echo_discard_cancel"`（供按 `cancellable` 置灰） |
+| 服务端 | `rules.js` `script_start()` | 记 `ps.set_acted`（本次是否新设 `@acted`，供精确回滚） |
+| 服务端 | `rules.js` 新增 `script_cancellable / script_cancel` | 取消 = 源卡退回手牌 + 回滚 `@acted` + `script_clear` |
+| 服务端 | `rules.js` `build_actions` / 入口守卫 / action 分发 | 登记并放行 `cancel_script`（仅 `discard_pay_pick` + stage 1） |
+| 服务端 | `rules.js` `query('script_state')` | 增 `cancellable`（判定同源，客户端不自己猜） |
+
+**口径**（玩家 2026-11-07）：取消 = 卡退回手牌 + 不占出牌名额 + 恢复「出牌阶段开始时」窗口；
+**只给 7900 第 1 步**，15239 等已抽/已弃过牌的步骤不给取消（无法回滚）。
+
+**验证**：`node tools/_smoke_7900.js` 23 项全绿；`test_basic_cards` 288/9；全量冒烟「未登记失败：无」。
+
+**⚠ 改 `rules.js` 后必须重启服务器**；改客户端文件刷新浏览器即可。
 
 1. **`on_click_space` 优先级**：原顺序里 `pending_autobahn` 在 `status_act_phase==='space'` 之前，
    于是高速公路期间点 15248（`STATUS_UI` 为 `sbuild:'army'`）进入选地后，**地图点击被 autobahn 分支整个吞掉**。

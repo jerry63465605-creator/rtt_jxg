@@ -3552,6 +3552,11 @@ function on_click_hand_card(c, d) {
 		on_status_discard_pick(c.id)
 		return
 	}
+	/* 【2026-11-07】脚本卡代价弃牌（7900 第 1 步）：点手牌 = 选/取消一张 */
+	if (script_discard_sel) {
+		on_script_discard_pick(c.id)
+		return
+	}
 	/* ① 资源再分配：选 / 取消 一张弃牌代价 */
 	if (pending_resource) {
 		const i = pending_resource.drop.indexOf(c.id)
@@ -4144,6 +4149,7 @@ function update_hand_panel() {
 			(openingMine && discard_pick.indexOf(c.id) >= 0) ||
 			(pending_echo_discard && pending_echo_discard.drop.indexOf(c.id) >= 0) ||
 			(status_discard_sel && status_discard_sel.picked.indexOf(c.id) >= 0) ||
+			(script_discard_sel && script_discard_sel.picked.indexOf(c.id) >= 0) ||
 			(pending_depression_discard && pending_depression_discard.drop.indexOf(c.id) >= 0)
 		d.classList.toggle("sel", !!isCostSelected)
 
@@ -4698,6 +4704,20 @@ function update_echo_discard_box() {
 		render_guard_discard_box()
 		return
 	}
+	/*
+	 * 【2026-11-07】第 4 个用户：脚本卡的弃牌代价（7900《竭泽而渔》第 1 步）。
+	 * 只有它需要把「取消」按钮的可用性按服务端 cancellable 置灰，
+	 * 其它三个用户一律恢复可用（避免上一个用户留下的 disabled 残留）。
+	 */
+	const _cb = document.getElementById("echo_discard_cancel")
+	if (_cb) {
+		_cb.disabled = false
+		_cb.title = ""
+	}
+	if (script_discard_sel) {
+		render_script_discard_box()
+		return
+	}
 
 	if (!pending_echo_discard) {
 		modal.classList.add("hide")
@@ -4798,6 +4818,11 @@ function cancel_echo_discard() {
 		cancel_status_act()
 		return
 	}
+	/* 【2026-11-07】脚本卡代价弃牌：取消 = 放弃这张卡（服务端退回手牌） */
+	if (script_discard_sel) {
+		cancel_script_card()
+		return
+	}
 	/* 【2026-10-06】保护卡的弃牌框：取消 = 回到"是否打出保护卡"的询问 */
 	if (pending_guard_sel) {
 		cancel_guard_discard()
@@ -4821,6 +4846,11 @@ function confirm_echo_discard() {
 	 */
 	if (status_discard_sel) {
 		finish_status_discard()
+		return
+	}
+	/* 【2026-11-07】脚本卡代价弃牌（7900 第 1 步）：选满 N 张 -> resolve_script{discard:[...]} */
+	if (script_discard_sel) {
+		finish_script_discard()
 		return
 	}
 	/* 【2026-10-06】保护卡的弃牌框：确认 = resolve_battle{guard, drop} */
@@ -7108,11 +7138,25 @@ function update_pending_theater_box() {
  *
  * 三种 step_kind：
  *   pick    —— 从本国牌堆挑 N 张（15229 挑 1 张状态卡；15239 挑 2 张抽入手牌）
- *   discard —— 从本国手牌挑 1 张弃置（15239 第 2 步）
+ *   discard —— 从本国手牌挑 N 张弃置（15239 第 2 步 1 张 / 7900 第 1 步 4 张）
+ *              ⚠【2026-11-07】改走共用弃牌框 #echo_discard_modal（见下），不再用 #script_modal
  *   answer  —— 让权后的英国挑 1 张桌面暗置响应暗弃（14503）
  * ============================================================ */
 let script_state = null    /* 服务端 script_state 的返回值 */
-let script_sel = []        /* 已选卡的实例 id */
+let script_sel = []        /* 已选卡的实例 id（pick / answer 步） */
+/*
+ * 【2026-11-07】discard 步改用【共用弃牌框】#echo_discard_modal（第 4 个用户）。
+ *
+ * 为什么不再用 #script_modal：那个框当初是给"必须完成、不可取消"的选牌步设计的，
+ * 而 7900《竭泽而渔》第 1 步是【代价弃牌】（选 4 张），付不出代价时必须能放弃，
+ * 否则玩家只能刷新页面（卡死）。共用框本来就有卡片网格 + 计数 + 取消按钮，
+ * 且 confirm 走的是一次性 send_action，正好能在这一步把"只发 picked[0]"的老 bug 修掉。
+ *
+ * 结构：{ need, picked:[实例 id], candidates:[card_info], source_name, source_inst, cancellable }
+ */
+let script_discard_sel = null
+/* 记录上一次的「来源卡#步号」，变化时清空旧选择（被服务端拒绝时不清，玩家的选择保留） */
+let script_state_key = null
 
 const SCRIPT_STEP_LABEL = {
 	pick: { name: '牌堆（点选切换）', confirm: '确认抽取' },
@@ -7125,8 +7169,12 @@ function update_pending_script_box() {
 	if (!ps) {
 		script_state = null
 		script_sel = []
+		script_discard_sel = null
+		script_state_key = null
 		const modal = document.getElementById('script_modal')
 		if (modal) modal.classList.add('hide')
+		/* 共用弃牌框可能正被本流程占用（7900 第 1 步）-> 一并关掉 */
+		update_echo_discard_box()
 		return
 	}
 	/*
@@ -7138,6 +7186,43 @@ function update_pending_script_box() {
 		send_query('script_state', {})
 		return
 	}
+	/*
+	 * 【2026-11-07】来源卡/步号变化 -> 清空旧选择。
+	 * 只在"真的换了步"时清：服务端拒绝（张数不足）时 stage 不变，
+	 * 玩家的选择要保留，否则每被拒一次就得从 0 重选（老版本就是这样卡死的）。
+	 */
+	const stageKey = String(ps.source) + '#' + ps.stage
+	if (script_state_key !== stageKey) {
+		script_state_key = stageKey
+		script_sel = []
+		script_discard_sel = null
+	}
+	/*
+	 * discard 步（挑 N 张手牌弃置）改走共用弃牌框：
+	 * 支持多选（数组提交）、有取消按钮、选满才可确认。
+	 * pick / answer 步仍用 #script_modal（从牌堆 / 弃牌堆 / 桌面暗牌挑）。
+	 */
+	if (script_state.step_kind === 'discard') {
+		const st = script_state
+		const srcInst = ps.source_inst
+		const cands = (st.candidates || []).filter(c => c.id !== srcInst)
+		const prev = (script_discard_sel && script_discard_sel.picked) || []
+		script_discard_sel = {
+			need: st.need || 1,
+			/* 只保留仍在候选里的旧选择（手牌可能已变） */
+			picked: prev.filter(id => cands.some(c => c.id === id)),
+			candidates: cands,
+			source_name: st.source_name || ps.source_name,
+			source_inst: srcInst,
+			cancellable: !!st.cancellable,
+		}
+		const modal = document.getElementById('script_modal')
+		if (modal) modal.classList.add('hide')
+		update_echo_discard_box()
+		return
+	}
+	script_discard_sel = null
+	update_echo_discard_box()
 	render_script_modal(ps)
 }
 
@@ -7212,17 +7297,148 @@ function on_script_pick_card(id) {
 function confirm_script_pick() {
 	const ps = view && view.pending_script
 	if (!ps || !script_state) return
+	/* 【2026-11-07】discard 步已改走共用弃牌框，这里只兜底转发（不再单张提交） */
+	if (script_state.step_kind === 'discard') {
+		finish_script_discard()
+		return
+	}
 	const picked = script_sel.slice()
 	if (picked.length !== (script_state.need || 1)) {
 		toast('还需选 ' + ((script_state.need || 1) - picked.length) + ' 张')
 		return
 	}
 	script_sel = []
-	/* 弃牌阶段是单张 —— 服务端 arg.discard；其余用 arg.pick 数组 */
-	if (script_state.step_kind === 'discard')
-		send_action('resolve_script', { discard: picked[0] })
-	else
-		send_action('resolve_script', { pick: picked })
+	send_action('resolve_script', { pick: picked })
+}
+
+/* ============================================================
+ * 【2026-11-07】脚本卡的「弃牌代价」步 —— 复用 #echo_discard_modal
+ * （第 4 个用户：增强卡代价 / 状态卡代价 / 保护卡 15410 / 本处 7900）
+ *
+ * 与 #script_modal 的关键差别：
+ *   · 支持【多选】并一次性提交数组（老实现只发 picked[0]，7900 要 4 张 -> 永远被拒）
+ *   · 有【取消】按钮（仅服务端 script_state.cancellable 为真时显示）
+ *   · 被服务端拒绝时不清空玩家的选择（stage 不变，只有换步才清）
+ * ============================================================ */
+function render_script_discard_box() {
+	const modal = document.getElementById('echo_discard_modal')
+	const s = script_discard_sel
+	if (!modal) {
+		/* 兜底：找不到弹框就退回文字框（不让玩家无路可走） */
+		if (!s) { render_ask_box(null); return }
+		const left = s.need - s.picked.length
+		const btns = []
+		if (left <= 0)
+			btns.push({
+				label: '确认弃置（' + s.need + ' 张）', cls: 'primary',
+				onClick: () => finish_script_discard(),
+			})
+		if (s.cancellable)
+			btns.push({ label: '放弃这张卡', onClick: () => cancel_script_card() })
+		render_ask_box('《' + s.source_name + '》：弃置手牌作为代价',
+			'需弃置 ' + s.need + ' 张手牌（还需 ' + Math.max(0, left) + ' 张）', btns)
+		return
+	}
+	if (!s) {
+		/* 共用框：只有【自己】开着的时候才关，别把别人的框关掉 */
+		if (!pending_echo_discard && !status_discard_sel && !pending_guard_sel)
+			modal.classList.add('hide')
+		return
+	}
+	modal.classList.remove('hide')
+
+	const title = document.getElementById('echo_discard_title')
+	if (title)
+		title.textContent = '《' + s.source_name + '》：选 ' + s.need + ' 张手牌作为代价'
+	const note = document.getElementById('echo_discard_note')
+	if (note) note.textContent = s.picked.length + '/' + s.need
+
+	const grid = document.getElementById('echo_discard_grid')
+	if (grid) {
+		grid.innerHTML = ''
+		for (const c of s.candidates) {
+			const picked = s.picked.indexOf(c.id) >= 0
+			const d = card_elt(c, () => on_script_discard_pick(c.id))
+			d.classList.toggle('sel', picked)
+			if (picked) {
+				const b = document.createElement('span')
+				b.className = 'badge'
+				b.textContent = '代价 ' + (s.picked.indexOf(c.id) + 1)
+				d.appendChild(b)
+			}
+			grid.appendChild(d)
+		}
+		if (!s.candidates.length) {
+			const p = document.createElement('div')
+			p.className = 'empty-note'
+			p.textContent = '手牌为空，无法支付代价'
+			grid.appendChild(p)
+		}
+	}
+
+	const ok = document.getElementById('echo_discard_confirm')
+	if (ok) ok.disabled = (s.picked.length !== s.need)
+	/* 取消按钮：服务端没说能取消就置灰（判定同源，客户端不自己猜） */
+	const cancelBtn = document.getElementById('echo_discard_cancel')
+	if (cancelBtn) {
+		cancelBtn.disabled = !s.cancellable
+		cancelBtn.title = s.cancellable
+			? '放弃这张卡：退回手牌，不占出牌名额'
+			: '这一步不能取消（已经支付/结算过）'
+	}
+	render_ask_box(null)
+	update_hand_panel()
+}
+
+function on_script_discard_pick(cardId) {
+	const s = script_discard_sel
+	if (!s) return false
+	if (!s.candidates.some(c => c.id === cardId)) {
+		toast('这张牌不能作为代价')
+		return true
+	}
+	const i = s.picked.indexOf(cardId)
+	if (i >= 0)
+		s.picked.splice(i, 1)
+	else if (s.picked.length < s.need)
+		s.picked.push(cardId)
+	else {
+		toast('这次需要弃置 ' + s.need + ' 张，请先取消一张')
+		return true
+	}
+	render_script_discard_box()
+	update_hand_panel()
+	return true
+}
+
+function finish_script_discard() {
+	const s = script_discard_sel
+	if (!s) return
+	if (s.picked.length !== s.need) {
+		toast('还需选 ' + (s.need - s.picked.length) + ' 张')
+		return
+	}
+	const picked = s.picked.slice()
+	/*
+	 * 刻意【不】在这里清选择：服务端若拒绝（手牌已变 / 非本方回合），
+	 * view 不变 -> stage 不变 -> 上一次的 4 张仍然在框里，玩家只需微调；
+	 * 成功时 step 会推进，update_pending_script_box 的 stageKey 变化会自动清空。
+	 */
+	send_action('resolve_script', { discard: picked })
+}
+
+/* 取消 = 放弃这张卡（服务端把卡退回手牌、回滚出牌时点） */
+function cancel_script_card() {
+	const s = script_discard_sel
+	if (!s) return
+	if (!s.cancellable) {
+		toast('这一步不能取消')
+		return
+	}
+	script_discard_sel = null
+	update_echo_discard_box()
+	update_hand_panel()
+	send_action('cancel_script', {})
 }
 
 /*
