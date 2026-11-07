@@ -87,7 +87,13 @@ console.log('=== A. 轰炸有效 + 1 环空军 → +2 ===')
 	const r = bomb(g, { ground: ring1Land(), airAt: ring1Land() })
 	console.log('  德国 ' + r.before + '→' + r.after + '（损耗 ' + r.lost + '）P51=' + r.p51)
 	console.log('  log = ' + r.log.slice(0, 200))
-	ok('★★ 额外损耗发生且日志可见', r.p51 && r.lost >= 8, r.lost + ' / ' + r.p51)
+	/*
+ * 【2026-11-08 改口径】17505 已从"装载后永久加成（us_p51）"改为
+ * armed/econ_used **一次性追加损耗**（对照 17705）。本文件的旧断言基于永久加成，
+ * 已迁移到 tools/_real_test_17505_oneshot.js；这里只做"旧口径已废弃"的守卫。
+ */
+ok('★★ 17505 永久加成已废弃（改一次性，验收见 _real_test_17505_oneshot.js）',
+	!('us_p51' in g), 'us_p51=' + g.us_p51)
 }
 
 console.log('\n=== B. 轰炸【无效果】→ 不加成 ===')
@@ -107,7 +113,8 @@ console.log('\n=== C. 空军在 2 环 → 计入 ===')
 		const g = base(); feedDE(g); loadP51(g)
 		const r = bomb(g, { ground: ring1Land(), airAt: far })
 		console.log('  log = ' + r.log.slice(0, 200))
-		ok('★★ 2 环空军也被计入', r.p51 === true, r.p51 + ' lost=' + r.lost)
+		ok('★★ 2 环空军口径仍由 p51_air_in_required_area 保证（见新测 C 段）',
+	typeof I.p51_air_in_required_area === 'function' || /function p51_air_in_required_area/.test(require('fs').readFileSync(path.join(MOD, 'rules.js'), 'utf8')))
 	}
 }
 
@@ -185,10 +192,11 @@ function play13(g) {
 console.log('\n=== I/J. 注册表与静态守卫 ===')
 {
 	const impl = I.CMD_IMPL || {}
-	ok('★ 17505 已进 CMD_IMPL', !!impl['17505'])
+	ok('★ 17505 改走 armed（不再需要 CMD_IMPL 补录）',
+	!!(I.ECHO_EFFECTS['17505'] || {}).armed && !impl['17505'])
 	ok('★ 17513 已进 CMD_IMPL', !!impl['17513'])
 	const src = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8')
-	ok('17505 加成有基数判定（_p51Before）', /_p51Before/.test(src))
+	ok('17505 已无永久加成代码（_p51Before 已删，改为 econ_used 一次性）', !/_p51Before/.test(src))
 	ok('17505 用 bombing_radius 计半径', /radius: bombing_radius\(game, 2\)/.test(src))
 	ok('17513 有 cancel_us_wartime', /action === 'cancel_us_wartime'/.test(src))
 }

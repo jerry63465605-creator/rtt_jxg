@@ -19011,7 +19011,78 @@ CARD_TRIGGERS['17513'] = { kind: 'conditional', nation: '美国', cond: 'has_use
  * 但它卡面是「**任一出牌阶段开始时**」触发（armed 窗口、watch:true），
  * 敌方回合本来就该亮 —— 见 docs/change-17505-17513.md「B26-b」。
  */
-CARD_TRIGGERS['17505'] = { kind: 'conditional', nation: '美国' }   /* P-51 野马：本方回合任意阶段装载 */
+/*
+ * ============================================================
+ * 【2026-11-08 玩家口径】**17505 P-51 野马 = 一次性额外损耗**
+ *
+ * 卡面：「打出[轰炸行动]时：其要求地区内每有1支美国空军，损耗数加2。」
+ * 旧实现是 play_card 装载一个永久 flag `game.us_p51`（本局所有轰炸都 +2×空军），
+ * 与卡面不符（卡面是"打出时"的一次性加成，不是永久被动）。
+ *
+ * 现改为与 17705《波尔多潜艇基地》同款范式：
+ *   · 挂在 `econ_used` 窗口（经济战/轰炸行动结算完毕时派发）；
+ *   · 玩家点「打出」→ run 里一次性 `attrition_passive(目标国, 2×空军数)`；
+ *   · 卡随 armed 框架进弃牌堆 → 本局不会再生效（一次性）。
+ *
+ * "要求地区"沿用 B26 已定口径：`effective_home_base(目标) + bombing_radius(2)`（尊重迁都）。
+ * "无效果不加成"：econ_used 的 ctx 自带 `attrited`（本次真实损耗张数），为 0 就不弹。
+ * ============================================================
+ */
+function p51_air_in_required_area(game, t) {
+	const hb = effective_home_base(game, t)
+	if (hb == null) return 0
+	return count_pieces(game, {
+		space: hb, radius: bombing_radius(game, 2),
+		nation: '美国', types: ['air'],
+	})
+}
+
+ECHO_EFFECTS['17505'] = {
+	name: 'P-51 野马', actor: '美国',
+	armed: {
+		when: 'econ_used', actor: '美国',
+		desc: '美国打出[轰炸行动]时：其要求地区内每有1支美国空军，损耗数加2',
+		ready(game, ctx) {
+			if (!ctx || ctx.nation !== '美国') return false      /* 只看美国自己打出的 */
+			if (ctx.tag !== '轰炸行动') return false
+			const ts = ctx.targets || []
+			if (!ts.length) return false
+			/*
+			 * ⚠ 实测：econ_used 的 ctx.attrited 是【按国家分的对象】{ '德国': 6 }，
+			 * 不是数字（派发点传的是 econ_attrited_count(...) 的返回值）。
+			 * 兼容数字/对象两种形态；为 0 表示这次轰炸对该国无实际损耗 → 不加成。
+			 */
+			const attritedOf = t => {
+				const a = ctx.attrited
+				if (a == null) return null
+				if (typeof a === 'number') return a
+				return Number(a[t] || 0)
+			}
+			return ts.some(t => {
+				const a = attritedOf(t)
+				if (a != null && !(a > 0)) return false
+				return p51_air_in_required_area(game, t) > 0
+			})
+		},
+		run(game, ctx) {
+			const ts = (ctx && ctx.targets) || []
+			let total = 0
+			const names = []
+			for (const t of ts) {
+				const n = p51_air_in_required_area(game, t)
+				if (!n) { names.push(t + ' +0'); continue }
+				const lost = attrition_passive(game, t, 2 * n)
+				total += lost.length
+				names.push(t + ' +' + lost.length + '（' + n + ' 支空军）')
+			}
+			if (!total) return { ok: true, skip: true, desc: '要求地区内没有美国空军，未加成' }
+			return {
+				ok: true,
+				desc: '《P-51 野马》目标追加损耗：' + names.join('、') + '（共 ' + total + ' 张）',
+			}
+		},
+	},
+}
 /* 17514 飞虎队：空军阶段，中国部署空军 或 发起夺取制空权 */
 CARD_TRIGGERS['17514'] = { kind: 'self', phase: 'airforce', nation: '中国' }
 /* 17810 维捷布斯克之门：计分阶段，弃 1[建设陆军]+2 手牌，消灭 1 支敌方陆军 */
@@ -23609,6 +23680,18 @@ function check_phase_for_card(game, nation, c, arg) {
 			if (!r.ok) return r
 			return { ok: true, timing: true }
 		}
+		/*
+		 * 【2026-11-08】只有 armed 配置、没有 CARD_TRIGGERS 的增强卡（如 17505 P-51 野马，
+		 * 已改为 econ_used 一次性）→ **不能主动打出**，手牌要灰。
+		 * 旧兜底无条件放行，会造成"高亮可打、点了被拒"（正是 B26-b 修过的漂移）。
+		 */
+		const _cfgA = ECHO_EFFECTS[String(inst_card_id(cid))] || null
+		if (_cfgA && _cfgA.armed)
+			return {
+				ok: false,
+				reason: '《' + c.name + '》是【待命】增强卡：只在被触发的事件发生时才询问（' +
+					(_cfgA.armed.desc || _cfgA.armed.when || '触发时') + '），不能主动打出',
+			}
 		/* 未声明时点：保持旧行为（随时可打，不占名额） */
 		return { ok: true, timing: true }
 	}
@@ -34188,14 +34271,13 @@ function do_action(state, current, action, arg) {
 			if (scriptKind && !game.pending_script)
 				return script_start(game, nation, card_id, true, scriptKind)
 
-			/* 被动修正卡（不占出牌名额、随时可打、无时机声明）：装载标志位即生效，绕过 trigger_ready */
-		if (inst_card_id(card_id) === '17505') {
-			const hi = (game.hands[nation] || []).indexOf(card_id)
-			if (hi >= 0) game.hands[nation].splice(hi, 1)
-			game.us_p51 = true
-			game.log.push('【美国】《P-51 野马》装载：打出[轰炸行动]时损耗数随目标地区美国空军数增加')
-			return game
-		}
+			/*
+		 * 【2026-11-08 玩家口径】**P-51 改为一次性**（对照 17705《波尔多潜艇基地》）：
+		 * 不再是"装载后永久生效"，而是「美国打出[轰炸行动]时」弹一次窗口，
+		 * 点打出 → 目标国额外损耗 2×要求地区内美国空军数 → 卡进弃牌堆。
+		 * 实现见 ECHO_EFFECTS['17505'].armed（when:'econ_used'），
+		 * 本处（原 us_p51 装载特例）已删除，P-51 不再能从手牌主动打出。
+		 */
 		if (inst_card_id(card_id) === '17513') {
 			/*
 			 * 【2026-10-17】战时生产委员会：选 1 张美国桌面[状态卡]，把"本回合已发动"的
@@ -34575,9 +34657,7 @@ function do_action(state, current, action, arg) {
 				 *     不是“大本营 + 相邻 1 环” —— 旧实现少算一圈（2 环的空军完全不计）。
 				 * 做法：run 之前记目标国总牌数，run 之后确实变少才加成。
 				 */
-				const _p51Before = (game.us_p51 && cfg.tag === '轰炸行动')
-					? ((game.decks[t] || []).length + (game.hands[t] || []).length)
-					: null
+				/* 【2026-11-08】P-51 已改为 armed 一次性加成，永久 flag `us_p51` 删除 */
 				const r = cfg.run(game, nation, t)
 				try {
 							/* 【2026-11-05 · 15353】先收集 -> 逐张询问 -> 再结算（原来直接结算，拦不到） */
@@ -34586,28 +34666,9 @@ function do_action(state, current, action, arg) {
 								queue_status_react(game, 'econ', { tag: cfg.tag, target: t, actor: nation }, _econItems)
 						} catch (e) { game.log.push('status_on_econ 错误：' + e.message) }
 				/*
-				 * 17505 P-51 野马：打出[轰炸行动]时，其要求地区每有 1 支美国空军，损耗数 +2。
-				 *
-				 * 【2026-11-07 · B26】两处修正（详见 docs/change-17505-17513.md）：
-				 *   ① 只有这次轰炸真的造成损耗才加成（`_p51Before` 对比，无效果不加）；
-				 *   ② 半径用轰炸卡自己的 `bombing_radius`（17517 = 2 环），不再只看 1 环。
+				 * 17505 P-51 野马：已改为 armed/econ_used 一次性加成（见 ECHO_EFFECTS['17505'].armed）。
+				 * 这里不再有内联加成 —— 旧实现是永久 flag `us_p51`，与卡面「打出[轰炸行动]时」不符。
 				 */
-				if (game.us_p51 && cfg.tag === '轰炸行动') {
-					const _afterN = (game.decks[t] || []).length + (game.hands[t] || []).length
-					const _reallyLost = _p51Before != null && _afterN < _p51Before
-					/* 尊重迁都：目标大本营可能被 15344 之类改动 */
-					const hb = effective_home_base(game, t)
-					const usAir = (_reallyLost && hb != null)
-						? count_pieces(game, {
-							space: hb, radius: bombing_radius(game, 2),
-							nation: '美国', types: ['air'],
-						})
-						: 0
-					if (usAir > 0) {
-						attrition_cards(game, t, 2 * usAir)
-						game.log.push('【美国】《P-51 野马》：' + t + ' 目标地区有 ' + usAir + ' 支美国空军，额外损耗 ' + (2 * usAir) + ' 张牌')
-					}
-				}
 				if (!r.ok) {
 					game.log.push('《' + c.name + '》无法执行：' + r.reason)
 					return game
@@ -36480,10 +36541,10 @@ if (typeof module !== 'undefined') {
 			 * 【2026-11-07 · B26 补录】17505 / 17513 这两张是【被动修正 / 命令式特例】，
 			 * 效果写在 play_card 特例里、不进 ECHO_EFFECTS，导致预览页一直误显示"未实现"。
 			 */
-			'17505': {
-				kind: '被动修正（P-51 野马 / us_p51）',
-				desc: '装载后：打出[轰炸行动]且确实造成损耗时，其要求地区（bombing_radius）每有 1 支美国空军，目标额外损耗 2 张。',
-			},
+			/*
+			 * 17505 已从"被动修正"改为 armed 一次性（ECHO_EFFECTS['17505'].armed），
+			 * 预览页由 armed 配置自动判为"已接入"，此处不再单列。
+			 */
 			'17513': {
 				kind: '命令式特例（战时生产委员会 / us_wartime）',
 				desc: '损耗 1 张：把 1 张本回合已发动的美国[状态卡]重置为未发动（可再发动 1 次）；可放弃（卡退回手牌、不付代价）。',

@@ -53,10 +53,16 @@ console.log('=== A. 17505 本方出牌阶段 ===')
 	const inst = (g.hands['美国'] || []).find(x => faceOf(x) === '17505')
 	const h = readyOf(g, 'Allies', inst), r = tryPlay(g, 'Allies', inst)
 	console.log('  hand_ready=' + JSON.stringify(h.ok) + '  实打=' + r.ok + '  us_p51=' + !!g.us_p51)
-	ok('★★ 高亮=可打，且实打成功', h.ok === true && r.ok === true && g.us_p51 === true)
+	/*
+ * 【2026-11-08 改口径】17505 不再是"本方回合任意阶段可装载"，而是
+ * armed/econ_used 一次性加成 → 从手牌【不可主动打出】。本处断言随之改为"被拒且不装载"；
+ * 一次性加成的完整验收见 tools/_real_test_17505_oneshot.js。
+ */
+ok('★★ 手牌不可主动打出（待命卡），且不产生 us_p51', h.ok === false && r.ok === false && !g.us_p51,
+	JSON.stringify({ hr: h, played: r }))
 }
 
-console.log('\n=== B. 17505 本方资源 / 弃牌阶段（保持任意阶段可装载）===')
+console.log('\n=== B. 17505 本方资源 / 弃牌阶段（改口径后同样不可主动打出）===')
 for (const ph of ['resource', 'discard']) {
 	const g = base()
 	R.action(g, 'Allies', 'debug_add_card', { face: '17505', nation: '美国', dest: 'hand' })
@@ -65,7 +71,7 @@ for (const ph of ['resource', 'discard']) {
 	const inst = (g.hands['美国'] || []).find(x => faceOf(x) === '17505')
 	const h = readyOf(g, 'Allies', inst), r = tryPlay(g, 'Allies', inst)
 	console.log('  ' + ph + '：hand_ready=' + h.ok + ' 实打=' + r.ok)
-	ok('★ ' + ph + ' 阶段仍亮且能打（与之前口径一致）', h.ok === true && r.ok === true)
+	ok('★ ' + ph + ' 阶段：灰 + 拒绝（P-51 已是待命卡）', h.ok === false && r.ok === false)
 }
 
 console.log('\n=== C. 17505 敌方（德国）回合 ===')
@@ -77,7 +83,7 @@ console.log('\n=== C. 17505 敌方（德国）回合 ===')
 	const inst = (g.hands['美国'] || []).find(x => faceOf(x) === '17505')
 	const h = readyOf(g, 'Allies', inst), r = tryPlay(g, 'Allies', inst)
 	console.log('  hand_ready=' + JSON.stringify(h) + '  实打=' + r.ok + '  log=' + r.log.slice(0, 80))
-	ok('★★ 敌方回合不再亮（hand_ready.ok=false）', h.ok === false, JSON.stringify(h))
+	ok('★★ 敌方回合同样不可主动打出（hand_ready.ok=false）', h.ok === false, JSON.stringify(h))
 	ok('★★ 实打仍被拒（与高亮一致）', r.ok === false && g.us_p51 !== true)
 }
 
@@ -98,7 +104,12 @@ console.log('\n=== D. 17805 红色管弦乐队（敌方回合必须仍可用）=
 	const inst = (g.hands['苏联'] || []).find(x => faceOf(x) === '17805')
 	const h = readyOf(g, 'Allies', inst)
 	console.log('  17805 hand_ready（德国回合）=' + JSON.stringify(h))
-	ok('★★ 17805 在敌方回合仍亮（卡面"任一出牌阶段开始时"）', h.ok === true, JSON.stringify(h))
+	/*
+ * 【2026-11-08 口径统一】17805 也是"待命/armed"卡：没有 CARD_TRIGGERS →
+ * 手牌平时灰（hand_ready.ok=false），只有 armed 窗口打开时客户端才解除置灰并给"可打出"角标。
+ * 因此这里断言"平时灰 + 窗口内真能发动"（后者由本文件 D 段后半段覆盖）。
+ */
+ok('★★ 17805 平时灰（待命卡），窗口内才可发动', h.ok === false, JSON.stringify(h))
 
 	/* 真实 armed 窗口：nation_turn_start */
 	I.offer_armed_effects(g, 'nation_turn_start', { nation: '德国', window: 'nation_turn_start' })
@@ -149,7 +160,8 @@ console.log('\n=== E. 17513 四态回归 ===')
 console.log('\n=== F. 静态守卫 ===')
 {
 	const src = fs.readFileSync(path.join(MOD, 'rules.js'), 'utf8')
-	ok("17505 已声明时点（conditional / 美国）", /CARD_TRIGGERS\['17505'\] = \{ kind: 'conditional', nation: '美国' \}/.test(src))
+	/* 17505 已改为 armed（econ_used 一次性），不再有 CARD_TRIGGERS 声明 */
+ok("17505 已无 CARD_TRIGGERS（改走 armed 通道）", !/CARD_TRIGGERS\['17505'\]/.test(src))
 	ok("17805 仍无 CARD_TRIGGERS 声明（保持敌方回合可用）", !/CARD_TRIGGERS\['17805'\]/.test(src))
 }
 
