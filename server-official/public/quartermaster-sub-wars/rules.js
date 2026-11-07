@@ -10390,7 +10390,21 @@ function trigger_ready(game, card_id, nation) {
 	 * 直接查会永远 undefined → 所有增强卡都被判定为"未声明时点"被拒。
 	 */
 	const tr = CARD_TRIGGERS[String(inst_card_id(card_id))]
-	if (!c || !tr) return { ok: false, reason: '《' + (c ? c.name : '?') + '》未声明时点' }
+	if (!c) return { ok: false, reason: '《?》未声明时点' }
+	/*
+	 * 【2026-11-08】只有 armed 配置、没有 CARD_TRIGGERS 的卡（15411 夜间运输）：
+	 * 玩家点手牌时不该看到"未声明时点"这种内部术语，给出"待命卡 + 什么时候会问"。
+	 */
+	if (!tr) {
+		const _cfg0 = ECHO_EFFECTS[String(inst_card_id(card_id))] || null
+		if (_cfg0 && _cfg0.armed)
+			return {
+				ok: false,
+				reason: '《' + c.name + '》是【待命】增强卡：只在被触发的事件发生时才询问（' +
+					(_cfg0.armed.desc || _cfg0.armed.when || '触发时') + '），不能主动打出',
+			}
+		return { ok: false, reason: '《' + c.name + '》未声明时点' }
+	}
 
 	if (tr.kind === 'anytime') return { ok: true }
 
@@ -14638,43 +14652,57 @@ const ECHO_EFFECTS = {
 		},
 	},
 
-	/* ---- 15411 夜间运输：补给阶段开始时，弃1响应 -> 选1支【无补给】的日本陆/海军 ---- */
+	/* ---- 15411 夜间运输：日本回合开始时（armed 询问），弃1响应 -> 选1支日本陆/海军 ---- */
 	'15411': {
 		name: '夜间运输', actor: '日本',
-		cost: { discard: 1, filter: 'response' },
 		/*
-		 * 【2026-10-06 玩家口径】两处都要改：
-		 *   ① 时点：任意时机 -> 【补给阶段开始时】（CARD_TRIGGERS 改 kind:'self',phase:'supply'）
-		 *   ② 目标：任意日本陆/海军 -> 必须由玩家【选择 1 支无补给的】
-		 *      （旧实现是"服务端自动挑第一支"，违反"服务端不替玩家做选择"）。
-		 * pickUnit 声明"需要玩家选一支部队"，候选由 pick_unit_candidates
-		 * 按 supplied:false 过滤（与 compute_supply 同源）。
+		 * 【2026-11-08 玩家口径 · 改 B】时点从「补给阶段主动打出」改为
+		 * 【日本回合开始（resource 阶段）弹窗询问】，走 armed 通道；
+		 *   · 不再能主动打出（CARD_TRIGGERS['15411'] 已删）；
+		 *   · 目标：任意 1 支日本陆军或海军（**不再限定"无补给"**）；
+		 *   · 两步交互：先弃 1 张[响应卡]（代价，客户端复用选牌框），
+		 *     再由 run 返回 need:'piece' 让玩家点高亮部队，第二次提交结算。
 		 */
-		pickUnit: { nation: '日本', types: ['army', 'navy'], supplied: false },
-		desc: '补给阶段开始时：弃1张响应卡，选择1支无补给的日本陆军或海军，其在本回合内总是处于补给状态',
-		run(game, ctx) {
-			/* 代价由 resolve_event_card 的通用代价段先付掉，这里只管效果 */
-			const arg = (ctx && ctx.arg) || {}
-			const spec = { nation: '日本', types: ['army', 'navy'], supplied: false }
-			const cands = pick_unit_candidates(game, spec)
-			const pick = (arg.piece != null) ? String(arg.piece) : null
-			if (!pick || cands.indexOf(pick) < 0)
+		armed: {
+			when: 'nation_turn_start',
+			actor: '日本',
+			cost: { discard: 1, filter: 'response' },
+			desc: '日本回合开始时：弃1张响应卡，选择1支日本陆军或海军，其在本回合内总是处于补给状态',
+			ready(game) {
+				/* ① 手里得有可弃的[响应卡]（本卡自身除外） ② 场上得有日本陆/海军 */
+				const canDrop = (game.hands['日本'] || []).some(cid => {
+					if (String(inst_card_id(cid)) === '15411') return false
+					const c = inst_card(cid)
+					return !!(c && String(c.type).toUpperCase() === 'RESPONSE')
+				})
+				if (!canDrop) return false
+				return pick_unit_candidates(game, { nation: '日本', types: ['army', 'navy'] }).length > 0
+			},
+			run(game, ctx, arg) {
+				const a = arg || {}
+				const cands = pick_unit_candidates(game, { nation: '日本', types: ['army', 'navy'] })
+				if (!cands.length)
+					return { ok: true, skip: true, desc: '场上没有日本陆军或海军' }
+				if (a.piece == null)
+					return {
+						need: 'piece', candidates: cands, pick: 1, pickMin: 1,
+						desc: '夜间运输：请选择 1 支日本陆军或海军',
+					}
+				const pick = String(a.piece)
+				if (cands.indexOf(pick) < 0)
+					return { ok: false, reason: '只能选择 1 支日本陆军或海军（当前可选 ' + cands.length + ' 支）' }
+				/* 复用既有补给覆盖机制 */
+				if (typeof ensure_supply_override === 'function')
+					ensure_supply_override(game)
+				grant_supply(game, pick, game.turn)
 				return {
-					ok: false,
-					reason: cands.length
-						? '只能选择 1 支【无补给】的日本陆军或海军（当前可选 ' + cands.length + ' 支）'
-						: '场上没有无补给的日本陆军或海军',
+					ok: true,
+					desc: data.name_of(game.location[pick]) + ' 的' +
+						piece_type_zh(game.piece_type[pick]) + '在本回合内总是处于补给状态',
 				}
-			/* 复用既有补给覆盖机制 */
-			if (typeof ensure_supply_override === 'function')
-				ensure_supply_override(game)
-			grant_supply(game, pick, game.turn)
-			return {
-				ok: true,
-				desc: data.name_of(game.location[pick]) + ' 的' +
-					piece_type_zh(game.piece_type[pick]) + '在本回合内总是处于补给状态',
-			}
+			},
 		},
+		desc: '日本回合开始时：弃1张响应卡，选择1支日本陆军或海军，其在本回合内总是处于补给状态',
 	},
 
 	/* ---- 15412 御前会议：摸牌阶段结束时，弃1响应 -> 打出1张响应卡 ---- */
@@ -15932,7 +15960,11 @@ CARD_TRIGGERS['15407'] = { kind: 'self', phase: 'discard', nation: '日本' }
 CARD_TRIGGERS['15408'] = { kind: 'play_start', nation: '日本' }
 CARD_TRIGGERS['15409'] = { kind: 'self', phase: 'scoring', nation: '日本' }
 CARD_TRIGGERS['15410'] = { kind: 'load', nation: '日本' }
-CARD_TRIGGERS['15411'] = { kind: 'self', phase: 'supply', nation: '日本' }
+/*
+ * 【2026-11-08 玩家口径·改 B】15411《夜间运输》不再声明主动打出时点 ——
+ * 改为 armed 通道（when:'nation_turn_start'，日本回合开始时询问），见 ECHO_EFFECTS['15411'].armed。
+ * 原来这一行是 { kind:'self', phase:'supply', nation:'日本' }。
+ */
 CARD_TRIGGERS['15412'] = { kind: 'self', phase: 'draw', nation: '日本' }
 CARD_TRIGGERS['15413'] = { kind: 'self', phase: 'scoring', nation: '日本' }
 CARD_TRIGGERS['7900'] = { kind: 'play_start', nation: '日本' }
@@ -20227,9 +20259,14 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 	 * trigger_ready 的 load 分支拦下。这里只是防御性兜底。
 	 */
 	if (eff.armed) {
+		/*
+		 * 【2026-11-08】文案补上"什么时候会被问"——只写"不能主动打出"玩家会以为卡坏了
+		 * （15411 夜间运输改成"日本回合开始时询问"后，玩家在补给阶段点它会走到这里）。
+		 */
 		return {
 			ok: false,
-			reason: '《' + (eff.name || card_id) + '》不能主动打出，仅在对应事件后被询问是否打出',
+			reason: '《' + (eff.name || card_id) + '》不能主动打出 —— 它是【待命】增强卡：' +
+				(eff.armed.desc || eff.armed.when || '对应事件发生时') + '（只在对应事件后被询问是否打出）',
 		}
 	}
 
@@ -23832,8 +23869,10 @@ function phase_resource(game, nation) {
 	game.resource_swaps[nation] = 0
 	game.phase_note = nation + ' 资源再分配阶段（可弃 3 张牌换 1 张基本卡，每回合一次）'
 	/* 【2026-10-19】17805 红色管弦乐队：苏/德/英 各自回合开始（resource 阶段进入 = 该国回合开始）
-	 * 触发苏联的 armed 窗口（when:'nation_turn_start'）。仍只这三国触发。 */
-	if (nation === '苏联' || nation === '德国' || nation === '英国')
+	 * 触发苏联的 armed 窗口（when:'nation_turn_start'）。
+	 * 【2026-11-08 新增日本】15411《夜间运输》改为"日本回合开始时询问"，
+	 * 因此日本也派发同一窗口（17805 自身 ready/actor 仍只认苏/德/英，不受影响）。 */
+	if (nation === '苏联' || nation === '德国' || nation === '英国' || nation === '日本')
 		offer_armed_effects(game, 'nation_turn_start', { nation })
 }
 
@@ -33217,11 +33256,22 @@ function do_action(state, current, action, arg) {
 		 */
 		const _discNeed0 = (ar.cost && ar.cost.discard) || 0
 		if (_discNeed0 > 0) {
-			const _picked = (gathered.drop || []).filter(id =>
+			let _picked = (gathered.drop || []).filter(id =>
 				(game.hands[owner] || []).indexOf(id) >= 0 && id !== cardId)
+			/*
+			 * 【2026-11-08】代价的【类型限定】必须在服务端校验。
+			 * 15411 夜间运输是「弃置 1 张[响应卡]」：此前只校验张数，
+			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意牌替代。
+			 */
+			if (ar.cost.filter === 'response')
+				_picked = _picked.filter(id => {
+					const _c = inst_card(id)
+					return !!(_c && String(_c.type).toUpperCase() === 'RESPONSE')
+				})
 			if (_picked.length < _discNeed0) {
 				game.log.push('《' + nm + '》需先选择弃置 ' + _discNeed0 +
-					' 张手牌作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
+					(ar.cost.filter === 'response' ? ' 张[响应卡]' : ' 张手牌') +
+					'作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
 				return game
 			}
 		}
