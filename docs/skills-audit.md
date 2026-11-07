@@ -6,9 +6,9 @@
 ## 一、总览
 
 ```
-本仓库相关 skill 数 = 32（用户级 23 / 项目级 9）
-描述合计 = 3206 字符（≈ 1282~2672 tokens，【每轮常驻】）
-正文合计 = 304.4 KB（按需加载，加载后本会话常驻）
+本仓库相关 skill 数 = 29（用户级 20 / 项目级 9）
+描述合计 = 2876 字符（≈ 1150~2397 tokens，【每轮常驻】）
+正文合计 = 277.4 KB（按需加载，加载后本会话常驻）
 ```
 
 > 说明：系统提示里显示「38 of 42」，缺的 4 条是**内置 skill**（非本仓库的 32 个），
@@ -22,38 +22,35 @@
 | 2 | `rtt-places-and-params` | 用户级 | 244 | 5.4 KB/68 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 3 | `rtt-card-bug-repro` | 用户级 | 236 | 8.9 KB/90 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 4 | `rtt-server-ops` | 用户级 | 226 | 6.4 KB/113 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 5 | `rtt-pending-clear-side` | 用户级 | 201 | 5.8 KB/66 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 6 | `rtt-turn-system` | 用户级 | 184 | 4.7 KB/69 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 7 | `rtt-card-id-face` | 用户级 | 112 | 3.4 KB/67 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 8 | `rtt-faction-case` | 用户级 | 99 | 6.9 KB/121 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 9 | `rtt-delegate-flip` | 用户级 | 97 | 6.7 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 10 | `web-form-datepicker` | 项目级 | 94 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 |  |
-| 11 | `rtt-play-quota-windows` | 用户级 | 84 | 8.7 KB/147 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 12 | `rtt-realboard-test` | 用户级 | 84 | 31.9 KB/448 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
-| 13 | `rtt-national-skill-framework` | 用户级 | 82 | 7.9 KB/110 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 14 | `rtt-response-stack` | 项目级 | 77 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
-| 15 | `comp5703-week6-progress-2026-09` | 项目级 | 73 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 |  |
-| 16 | `rtt-pending-suspend` | 用户级 | 71 | 9.1 KB/127 行 | 4 个/9.6 KB | rtt（军需官模块） |  |
-| 17 | `rtt-starred-card-authority` | 用户级 | 70 | 2.9 KB/29 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 18 | `comp5703-api-ecosystem-context` | 项目级 | 70 | 4 KB/75 行 | 3 个/9.1 KB | COMP5703 课程 |  |
-| 19 | `comp5703-week7-plan-2026-09` | 项目级 | 70 | 3.3 KB/62 行 | 0 个/0 KB | COMP5703 课程 |  |
-| 20 | `web-form-dropdown` | 项目级 | 70 | 6.3 KB/112 行 | 5 个/33.1 KB | web 表单填写 |  |
-| 21 | `rtt-atomic-operations` | 用户级 | 68 | 20 KB/347 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
-| 22 | `rtt-client-server-contract` | 用户级 | 63 | 10 KB/181 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 23 | `rtt-fix-workflow` | 用户级 | 63 | 7.6 KB/167 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 24 | `rtt-docs-to-skill` | 用户级 | 60 | 6.9 KB/134 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 25 | `rtt-release-packaging` | 用户级 | 60 | 9.1 KB/189 行 | 1 个/3.6 KB | rtt（军需官模块） |  |
-| 26 | `rtt-pending-whitelist-deadlock` | 用户级 | 59 | 6.4 KB/133 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 27 | `comp5703-week-sprint-2026-09` | 项目级 | 59 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 |  |
-| 28 | `rtt-handoff-authority` | 项目级 | 51 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） |  |
-| 29 | `rtt-avoid-hardcode` | 用户级 | 50 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 30 | `rtt-event-card-framework` | 用户级 | 50 | 41.9 KB/609 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
-| 31 | `chinahr-form-filler` | 项目级 | 44 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 |  |
-| 32 | `rtt-effect-recipes` | 用户级 | 43 | 13.5 KB/140 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 5 | `rtt-turn-system` | 用户级 | 184 | 4.7 KB/69 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 6 | `rtt-card-id-face` | 用户级 | 112 | 3.4 KB/67 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 7 | `rtt-faction-case` | 用户级 | 99 | 6.9 KB/121 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 8 | `rtt-delegate-flip` | 用户级 | 97 | 6.7 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 9 | `web-form-datepicker` | 项目级 | 94 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 |  |
+| 10 | `rtt-pending` | 用户级 | 85 | 3 KB/34 行 | 4 个/30.9 KB | rtt（军需官模块） |  |
+| 11 | `rtt-realboard-test` | 用户级 | 84 | 31.9 KB/448 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 12 | `rtt-national-skill-framework` | 用户级 | 82 | 7.9 KB/110 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 13 | `rtt-response-stack` | 项目级 | 77 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 14 | `comp5703-week6-progress-2026-09` | 项目级 | 73 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 |  |
+| 15 | `rtt-starred-card-authority` | 用户级 | 70 | 2.9 KB/29 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 16 | `comp5703-api-ecosystem-context` | 项目级 | 70 | 4 KB/75 行 | 3 个/9.1 KB | COMP5703 课程 |  |
+| 17 | `comp5703-week7-plan-2026-09` | 项目级 | 70 | 3.3 KB/62 行 | 0 个/0 KB | COMP5703 课程 |  |
+| 18 | `web-form-dropdown` | 项目级 | 70 | 6.3 KB/112 行 | 5 个/33.1 KB | web 表单填写 |  |
+| 19 | `rtt-atomic-operations` | 用户级 | 68 | 20 KB/347 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 20 | `rtt-client-server-contract` | 用户级 | 63 | 10 KB/181 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 21 | `rtt-fix-workflow` | 用户级 | 63 | 7.6 KB/167 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 22 | `rtt-docs-to-skill` | 用户级 | 60 | 6.9 KB/134 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 23 | `rtt-release-packaging` | 用户级 | 60 | 9.1 KB/189 行 | 1 个/3.6 KB | rtt（军需官模块） |  |
+| 24 | `comp5703-week-sprint-2026-09` | 项目级 | 59 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 |  |
+| 25 | `rtt-handoff-authority` | 项目级 | 51 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） |  |
+| 26 | `rtt-avoid-hardcode` | 用户级 | 50 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 27 | `rtt-event-card-framework` | 用户级 | 50 | 41.9 KB/609 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 28 | `chinahr-form-filler` | 项目级 | 44 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 |  |
+| 29 | `rtt-effect-recipes` | 用户级 | 43 | 13.5 KB/140 行 | 0 个/0 KB | rtt（军需官模块） |  |
 
 ## 三、同域碎片（建议合并）
 
-- **rtt（军需官模块）**（25 个）：`rtt-atomic-operations`、`rtt-avoid-hardcode`、`rtt-card-bug-repro`、`rtt-card-id-face`、`rtt-client-server-contract`、`rtt-delegate-flip`、`rtt-discard`、`rtt-docs-to-skill`、`rtt-effect-recipes`、`rtt-event-card-framework`、`rtt-faction-case`、`rtt-fix-workflow`、`rtt-national-skill-framework`、`rtt-pending-clear-side`、`rtt-pending-suspend`、`rtt-pending-whitelist-deadlock`、`rtt-places-and-params`、`rtt-play-quota-windows`、`rtt-realboard-test`、`rtt-release-packaging`、`rtt-server-ops`、`rtt-starred-card-authority`、`rtt-turn-system`、`rtt-handoff-authority`、`rtt-response-stack`
+- **rtt（军需官模块）**（22 个）：`rtt-atomic-operations`、`rtt-avoid-hardcode`、`rtt-card-bug-repro`、`rtt-card-id-face`、`rtt-client-server-contract`、`rtt-delegate-flip`、`rtt-discard`、`rtt-docs-to-skill`、`rtt-effect-recipes`、`rtt-event-card-framework`、`rtt-faction-case`、`rtt-fix-workflow`、`rtt-national-skill-framework`、`rtt-pending`、`rtt-places-and-params`、`rtt-realboard-test`、`rtt-release-packaging`、`rtt-server-ops`、`rtt-starred-card-authority`、`rtt-turn-system`、`rtt-handoff-authority`、`rtt-response-stack`
 - **web 表单填写**（3 个）：`chinahr-form-filler`、`web-form-datepicker`、`web-form-dropdown`
 - **COMP5703 课程**（4 个）：`comp5703-api-ecosystem-context`、`comp5703-week-sprint-2026-09`、`comp5703-week6-progress-2026-09`、`comp5703-week7-plan-2026-09`
 
@@ -65,8 +62,8 @@
 4. `rtt-response-stack` — 18.2 KB / 150 行
 5. `rtt-effect-recipes` — 13.5 KB / 140 行
 6. `rtt-client-server-contract` — 10 KB / 181 行
-7. `rtt-pending-suspend` — 9.1 KB / 127 行
-8. `rtt-release-packaging` — 9.1 KB / 189 行
+7. `rtt-release-packaging` — 9.1 KB / 189 行
+8. `rtt-avoid-hardcode` — 9 KB / 169 行
 
 ## 五、低频 / 一次性（可迁出用户级）
 
@@ -112,11 +109,6 @@
 - 描述首句：操作 RTT（rally-the-troops）本地服务器的运维技能，覆盖军需官·次要战场（quartermaster-sub-wars）模块的对局服务器 server.js 与卡牌预览静态服务器 p
 - 正文：6.4 KB / 113 行；附件 0 个（0 KB）
 
-### `rtt-pending-clear-side`（用户级，描述 201 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars 的【挂起窗口清理的阵营判定】排查手册
-- 正文：5.8 KB / 66 行；附件 0 个（0 KB）
-
 ### `rtt-turn-system`（用户级，描述 184 字）
 
 - 描述首句：RTT 模块 quartermaster-sub-wars 的"回合 / 轮"术语权威口径与代码映射
@@ -142,10 +134,10 @@
 - 描述首句：日期/年月选择器填不动时用（Element-UI .el-date-editor、AntD .ant-calendar-picker）：点了没反应、面板停在年视图、单元格点不动、无法提交
 - 正文：8.9 KB / 159 行；附件 2 个（19.9 KB）
 
-### `rtt-play-quota-windows`（用户级，描述 84 字）
+### `rtt-pending`（用户级，描述 85 字）
 
-- 描述首句：RTT 出牌配额×时点窗口×让权：play_done / play_acted / skip_play_done 三者区分，额外打出/按时机/跳过/让权他国的接线铁律
-- 正文：8.7 KB / 147 行；附件 0 个（0 KB）
+- 描述首句：RTT 挂起/让权/出牌配额总纲：窗口凭空消失、点了没动或打不出、跨 action 丢状态、额外打出或跳过出牌后还能再打一次时，先查这里再进 references 细则
+- 正文：3 KB / 34 行；附件 4 个（30.9 KB）
 
 ### `rtt-realboard-test`（用户级，描述 84 字）
 
@@ -166,11 +158,6 @@
 
 - 描述首句：查 COMP5703 第 6 周（2026-09-12~13）会议结论与个人进度（BP Builder 产 YAML、认证/repo 状态）时用
 - 正文：1.7 KB / 32 行；附件 1 个（2 KB）
-
-### `rtt-pending-suspend`（用户级，描述 71 字）
-
-- 描述首句：RTT 挂起（pending/让权/委派）机制：build_actions 守卫、active 翻转还原、跨 action 状态落盘、让权链
-- 正文：9.1 KB / 127 行；附件 4 个（9.6 KB）
 
 ### `rtt-starred-card-authority`（用户级，描述 70 字）
 
@@ -216,11 +203,6 @@
 
 - 描述首句：RTT 出包/上线时用：普通版与 full 版口径、排除清单、版本串 bump、ZipFile 打包、体积自检与已知坑
 - 正文：9.1 KB / 189 行；附件 1 个（3.6 KB）
-
-### `rtt-pending-whitelist-deadlock`（用户级，描述 59 字）
-
-- 描述首句：排查"点了没反应/某张牌打不出/清挂起要先清挂起"时用
-- 正文：6.4 KB / 133 行；附件 0 个（0 KB）
 
 ### `comp5703-week-sprint-2026-09`（项目级，描述 59 字）
 
