@@ -5375,10 +5375,18 @@ function update_pending_echo_box() {
 	const modal = document.getElementById("pending_echo_modal")
 	if (!modal) return
 	const pe = view.pending_echo
-	if (!pe) { modal.style.display = "none"; clear_echo_need_pick(); return }
+	/*
+	 * 【2026-11-07 · B31】显隐必须走 `.hide` 类，不能用 `style.display` 覆盖。
+	 *
+	 * `.modal` 的居中完全依赖 `display:flex` + `align-items/justify-content:center`；
+	 * 旧代码写 `modal.style.display = "block"` 会把 flex 覆盖掉 → 弹框失去居中，
+	 * 变成贴着左上角的一大块（玩家截图里那块"左上角多余 UI"就是这个）。
+	 * 同一函数里 4 处显示 + 1 处隐藏，统一改为 classList 操作。
+	 */
+	if (!pe) { modal.classList.add("hide"); clear_echo_need_pick(); return }
 	if (pe.kind !== 'echo_need') clear_echo_need_pick()
 	if (pe.kind === 'echo_need') {
-		modal.style.display = "block"
+		modal.classList.remove("hide")
 		const box = modal.querySelector(".modal-box")
 		box.innerHTML = ""
 		const h = document.createElement("h3")
@@ -5409,6 +5417,28 @@ function update_pending_echo_box() {
 			box.appendChild(p)
 			echo_need_pick = { card: pe.card, choice: (pe.choice != null ? pe.choice : null), cands: pe.cands.slice() }
 			highlight_targets(pe.cands)
+			/*
+			 * 【2026-11-07 · B31】候选地区同时列成按钮。
+			 * 原来只有一句"请点击地图上的高亮地区"，弹框里空荡荡一片；
+			 * 现在把 6 个候选地区名直接排出来，点名字等同于点地图（提交同一个 space）。
+			 */
+			const row = document.createElement("div")
+			row.className = "echo-cand-row"
+			pe.cands.forEach(sp => {
+				const b = document.createElement("button")
+				b.className = "btn echo-cand"
+				b.textContent = (view.spaces && view.spaces[sp] && view.spaces[sp].name) || ("地区 " + sp)
+				b.onclick = () => {
+					clear_echo_need_pick()
+					send_action("play_card", {
+						card: pe.card,
+						choice: (pe.choice != null ? pe.choice : null),
+						space: sp,
+					})
+				}
+				row.appendChild(b)
+			})
+			box.appendChild(row)
 		}
 
 		/* ③ 允许放弃（卡未消耗，清掉挂起即可） */
@@ -5430,7 +5460,7 @@ function update_pending_echo_box() {
 	 */
 	if (pe.kind === 'su') {
 		/* 【2026-10-07 苏联增强】通用多步选牌框（17812/17813）：沿用原实现，渲染与交互保持不变 */
-		modal.style.display = "block"
+		modal.classList.remove("hide")
 		const box = modal.querySelector(".modal-box")
 		box.innerHTML = ""
 		const h = document.createElement("h3")
@@ -5469,7 +5499,7 @@ function update_pending_echo_box() {
 	 * 视觉一致；服务端协议（resolve_effect {pick}/{done}）不变，仅改善展示与文案。
 	 */
 	if (pe.kind === 'status') {
-		modal.style.display = "block"
+		modal.classList.remove("hide")
 		const box = modal.querySelector(".modal-box")
 		box.innerHTML = ""
 		const isStep2 = pe.step === 'second'
@@ -5553,7 +5583,7 @@ function update_pending_echo_box() {
 		}
 		return
 	}
-	modal.style.display = "block"
+	modal.classList.remove("hide")
 	const box = modal.querySelector(".modal-box")
 	box.innerHTML = ""
 	const h = document.createElement("h3")
