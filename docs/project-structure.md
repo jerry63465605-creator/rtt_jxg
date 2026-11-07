@@ -281,7 +281,7 @@ resource(资源再分配) → play(出牌) → airforce(空军) → supply(补�
 | **`talkthrough-2026-10-21.md`** | 2026-10-21 改动复盘**讲解稿**（吞牌 / 重打真实化 / 连带小 bug / UI 对齐），适合讲给别人听 |
 | `status-cards-design.md` | 状态卡口径真源（玩家逐条确认） |
 | `todo-deferred.md` | 延后事项（法国 183 / 中国 180） |
-| `HANDOFF.md` | ⚠ 已过时（2026-09-25），结构部分以本文为准 |
+| `handoff-arch-20260925.md` | ⚠ 已过时（2026-09-25），结构部分以本文为准 |
 | `design.md` / `turn-flow.md` / `supply.md` / `connectivity.md` | 各机制设计 |
 | `<国>-cards-ocr-task.md`（德/日/苏/意/美） | 各国 OCR 识别记录 |
 | `easy-rule.md` | 规则书九章文字提取 |

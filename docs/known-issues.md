@@ -251,7 +251,7 @@
 1. **`tools/` 下有大量一次性临时脚本未清理**：`_dbg_*`、`_chk_*`、`_fix_*`、`_probe_*`、`_dump_*` 等。
    - 建议：保留有复用价值的（`_check_all_space_refs.js`、`_check_status_spaces.js`、`gen_module_cards.js` 等），
      其余一次性脚本可归档或删除。
-2. **`docs/HANDOFF.md` 已过时**（最后更新 2026-09-25）：
+2. **`docs/handoff-arch-20260925.md` 已过时**（最后更新 2026-09-25）：
    - 它写「响应卡 Step3 未实现」，但**现已实现**（`pass_response`/`trigger_response` 已在 action 列表）。
    - 它写 rules.js ~6500 行，**现为 10198 行**。
    - 结构类内容已被 `docs/project-structure.md`（2026-09-28）取代，交接时应先读后者。

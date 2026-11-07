@@ -1,4 +1,10 @@
-# 军需官·次要战场（quartermaster-sub-wars）交接文档
+# 军需官·次要战场 架构交接（ARCH HANDOFF）— 2026-09-25 版
+
+> **本文定位：架构/结构交接（ARCH HANDOFF），最后更新 2026-09-25。**
+> 它回答"这个项目长什么样"（文件规模、卡分布、已实现范围、工具链）。
+> **进度与下一步**请读 `docs/handoff-20261107.md`（PROGRESS HANDOFF）。
+> 结构如有冲突，以 `docs/project-structure.md` 为准；遗留问题见 `docs/known-issues.md`。
+
 
 > 本文档供「切换模型后」的新 AI 快速接手本项目使用。它描述**当前真实架构**，不做重复踩坑叙事——踩坑细节请直接看 `docs/pitfalls.md` 与 `docs/triggers.md`，本文只做索引与必读摘要。
 > 最后更新：2026-09-25
