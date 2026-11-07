@@ -60,10 +60,16 @@ ok('targets 含德国（海军半径2）', (tf['16805'].targets_fn(g, '美国') 
 g.hands['美国'] = ['16805#1']
 const ukHand0 = (g.hands['英国'] || []).length
 g = rules.action(g, 'Allies', 'play_card', { card: '16805#1', target: '德国' })
-ok('置入英国手牌', (g.hands['英国'] || []).indexOf('16805#1') >= 0,
+/*
+ * 【2026-11-08 改口径】16805 结算后不再把自身塞给英国（引擎无"实例改国籍"），
+ * 改为生成**独立的英国版衍生卡 16899**（deck:'TOKEN'，不入牌堆）；
+ * 16805 自己正常进美国弃牌堆。
+ */
+const ukHasToken = (g.hands['英国'] || []).some(x => String(x).indexOf('16899#') === 0)
+ok('英国手牌获得英国版 16899（衍生卡）', ukHasToken,
 	'ukHand=' + JSON.stringify(g.hands['英国']))
 ok('英国手牌 +1', (g.hands['英国'] || []).length === ukHand0 + 1)
-ok('不在美国弃牌堆（已取出）', (g.discard['美国'] || []).indexOf('16805#1') < 0)
+ok('16805 留在美国弃牌堆（不再被取回）', (g.discard['美国'] || []).indexOf('16805#1') >= 0)
 
 console.log('\n=== 4. 17522 小男孩&胖子：需场上有[曼哈顿计划] ===')
 g = fresh()

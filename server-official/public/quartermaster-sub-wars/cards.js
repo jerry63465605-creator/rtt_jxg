@@ -4323,6 +4323,16 @@ const CARDS = [
   "nation": "美国"
  },
  {
+  "id": 16899,
+  "deck": "TOKEN",
+  "name": "B-25 米切尔（英国）",
+  "type": "ECON",
+  "ops": 1,
+  "text": "[轰炸行动]选择1个大本营2地区内有{英国}海军的敌方国家：其损耗4张牌。",
+  "img": "sheet168_r0_c5.png",
+  "nation": "英国"
+ },
+ {
   "id": 16806,
   "deck": "SUPP",
   "name": "大规模部署",
@@ -4526,7 +4536,8 @@ for (const c of CARDS) {
 
 /* ---------- 按国家 / 类型 筛选 ---------- */
 function cards_of_nation(nation) {
-	return CARDS.filter(c => c.nation === nation)
+	/* 【2026-11-08】deck:'TOKEN' = 衍生卡（如 16899 B-25 英国版），只在效果里生成，不进牌堆 */
+	return CARDS.filter(c => c.nation === nation && c.deck !== 'TOKEN')
 }
 function cards_of_type(type, nation) {
 	return CARDS.filter(c => c.type === type && (!nation || c.nation === nation))

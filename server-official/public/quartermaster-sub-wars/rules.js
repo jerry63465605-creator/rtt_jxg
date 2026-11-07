@@ -1494,6 +1494,18 @@ function inst_card_name(card) {
 	return c ? c.name : String(card)
 }
 
+/*
+ * 【2026-11-08】生成一张【衍生卡】实例（不来自牌堆）。
+ * 16805《B-25 米切尔》结算后要给英国一张"英国版"经济战卡（16806），
+ * 它不是牌库里的牌，必须自己铸一个实例 id；沿用 card_inst[nation] 计数避免撞号。
+ */
+function mint_card_instance(game, face, nation) {
+	init_nation_deck(game, nation)
+	game.card_inst = game.card_inst || {}
+	game.card_inst[nation] = Number(game.card_inst[nation] || 0) + 1
+	return String(face) + '#' + game.card_inst[nation]
+}
+
 /* 用国家名算一个稳定的散列，让各国洗牌结果互不相同又可复现 */
 function nation_hash(nation) {
 	let h = 0
@@ -2297,29 +2309,66 @@ const ECON_CARDS = {
 	},
 
 	/* ---- 16805 B-25 米切尔（增援）：选择 1 个【大本营 2 地区内有美国海军】的敌方国家：其损耗 4。
-	 * 打出后：置入英国手牌，改为{英国}（所有权转移，复用 cfg.post）。 ---- */
+	 * 打出后：**换成英国版 16806** 置入英国手牌（卡面「改为{英国}」）。
+	 *
+	 * 【2026-11-08 玩家口径】不再把 16805 本身塞给英国（引擎没有"实例改国籍"机制，
+	 * 那样英国打出时仍按"美国海军"判定，与卡面矛盾）。改为生成一张**独立的英国经济战卡** 16806：
+	 *   · 卡表 `deck:'TOKEN'` → 不进任何牌堆（init_nation_deck 只收 CORE/SUPP）；
+	 *   · 判据用【英国海军】，与卡面一致；
+	 *   · 16805 自己正常进美国弃牌堆（不再被取回）。
+	 * 另：大本营口径从 home_base_of 改为 effective_home_base（尊重迁都，与 B-26 统一）。
+	 * ---- */
 	'16805': {
 		tag: '轰炸行动',
 		targets_fn(game, actor) {
-			return econ_enemy_nations(game, actor).filter(n =>
-				count_pieces(game, { space: home_base_of(n), radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) >= 1)
+			return econ_enemy_nations(game, actor).filter(n => {
+				const hb = effective_home_base(game, n)
+				if (hb == null) return false
+				return count_pieces(game, { space: hb, radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) >= 1
+			})
 		},
 		run(game, actor, target) {
-			if (count_pieces(game, { space: home_base_of(target), radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) < 1)
-				return { ok: false, reason: '<' + home_base_of(target) + '>2 地区内无美国海军' }
+			const hb = effective_home_base(game, target)
+			if (hb == null || count_pieces(game, { space: hb, radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) < 1)
+				return { ok: false, reason: '<' + data.name_of(hb) + '>2 地区内无美国海军' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
 		},
-		/* 打出后：置入英国手牌，改为{英国}（结算后由 play_card 的 cfg.post 调用）。
-		 * 注意：结算流程已把此牌 discard 进美国弃牌堆，这里要把它【取出】再给英国。 */
 		post(game, card_id, nation) {
 			try {
-				const di = (game.discard[nation] || []).indexOf(card_id)
-				if (di >= 0) game.discard[nation].splice(di, 1)
+				/* 幂等：英国手里/弃牌堆已有 16806 就不再塞（16805 只有 1 张，防回手重打） */
+				const ukHas = (game.hands['英国'] || []).some(x => String(inst_card_id(x)) === '16899')
+					|| (game.discard['英国'] || []).some(x => String(inst_card_id(x)) === '16899')
+				if (ukHas) {
+					game.log.push('《B-25 米切尔》：英国已持有英国版，不再重复生成')
+					return
+				}
 				game.hands['英国'] = game.hands['英国'] || []
-				game.hands['英国'].push(card_id)
-				game.log.push('《B-25 米切尔》置入英国手牌，改为{英国}')
+				game.hands['英国'].push(mint_card_instance(game, '16899', '英国'))
+				game.log.push('《B-25 米切尔》置入英国手牌：换为英国版（{英国}海军判据，损耗 4）')
 			} catch (e) { game.log.push('B-25 转移失败：' + e.message) }
+		},
+	},
+
+	/* ---- 16899 B-25 米切尔（英国版 / 衍生 token）：16805 结算后生成，不入牌堆 ----
+	 * 卡面：[轰炸行动]选择1个大本营2地区内有{英国}海军的敌方国家：其损耗4张牌。
+	 * （id 用 16899 是因为 16806 已被美国《大规模部署》占用）
+	 */
+	'16899': {
+		tag: '轰炸行动',
+		targets_fn(game, actor) {
+			return econ_enemy_nations(game, actor).filter(n => {
+				const hb = effective_home_base(game, n)
+				if (hb == null) return false
+				return count_pieces(game, { space: hb, radius: bombing_radius(game, 2), types: ['navy'], nation: '英国' }) >= 1
+			})
+		},
+		run(game, actor, target) {
+			const hb = effective_home_base(game, target)
+			if (hb == null || count_pieces(game, { space: hb, radius: bombing_radius(game, 2), types: ['navy'], nation: '英国' }) < 1)
+				return { ok: false, reason: '<' + (hb == null ? '大本营' : data.name_of(hb)) + '>2 地区内无英国海军' }
+			const lost = attrition_passive(game, target, 4)
+			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
 		},
 	},
 

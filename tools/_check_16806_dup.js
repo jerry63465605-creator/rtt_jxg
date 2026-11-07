@@ -1,0 +1,8 @@
+const path = require('path')
+const c = require(path.join(__dirname, '..', 'server-official', 'public', 'quartermaster-sub-wars', 'cards.js'))
+const hits = c.CARDS.filter(x => String(x.id) === '16806')
+console.log('16806 条数 = ' + hits.length)
+hits.forEach(x => console.log('  ' + JSON.stringify({ id: x.id, name: x.name, nation: x.nation, deck: x.deck, type: x.type })))
+console.log('\n美国 cards_of_nation 里含 16806 = ' + c.cards_of_nation('美国').filter(x => String(x.id) === '16806').length)
+console.log('英国 cards_of_nation 里含 16806 = ' + c.cards_of_nation('英国').filter(x => String(x.id) === '16806').length)
+console.log('\n美国 CARDS 总数 = ' + c.cards_of_nation('美国').length + '　英国 = ' + c.cards_of_nation('英国').length)
