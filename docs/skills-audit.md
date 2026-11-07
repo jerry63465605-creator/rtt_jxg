@@ -8,7 +8,7 @@
 ```
 本仓库相关 skill 数 = 29（用户级 20 / 项目级 9）
 描述合计 = 2909 字符（≈ 1164~2424 tokens，【每轮常驻】）
-正文合计 = 280.3 KB（按需加载，加载后本会话常驻）
+正文合计 = 246.0 KB（按需加载，加载后本会话常驻）
 ```
 
 > 说明：系统提示里显示「38 of 42」，缺的 4 条是**内置 skill**（非本仓库的 32 个），
@@ -44,7 +44,7 @@
 | 24 | `comp5703-week-sprint-2026-09` | 项目级 | 59 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 |  |
 | 25 | `rtt-handoff-authority` | 项目级 | 51 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） |  |
 | 26 | `rtt-avoid-hardcode` | 用户级 | 50 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 27 | `rtt-event-card-framework` | 用户级 | 50 | 42.5 KB/619 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 27 | `rtt-event-card-framework` | 用户级 | 50 | 8.2 KB/134 行 | 4 个/35.2 KB | rtt（军需官模块） |  |
 | 28 | `chinahr-form-filler` | 项目级 | 44 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 |  |
 | 29 | `rtt-effect-recipes` | 用户级 | 43 | 14 KB/148 行 | 0 个/0 KB | rtt（军需官模块） |  |
 
@@ -56,14 +56,14 @@
 
 ## 四、正文体积 Top 8（一次加载即几万字符）
 
-1. `rtt-event-card-framework` — 42.5 KB / 619 行
-2. `rtt-realboard-test` — 32.5 KB / 456 行
-3. `rtt-atomic-operations` — 20.5 KB / 355 行
-4. `rtt-response-stack` — 18.2 KB / 150 行
-5. `rtt-effect-recipes` — 14 KB / 148 行
-6. `rtt-client-server-contract` — 10 KB / 181 行
-7. `rtt-card-bug-repro` — 9.4 KB / 98 行
-8. `rtt-release-packaging` — 9.1 KB / 189 行
+1. `rtt-realboard-test` — 32.5 KB / 456 行
+2. `rtt-atomic-operations` — 20.5 KB / 355 行
+3. `rtt-response-stack` — 18.2 KB / 150 行
+4. `rtt-effect-recipes` — 14 KB / 148 行
+5. `rtt-client-server-contract` — 10 KB / 181 行
+6. `rtt-card-bug-repro` — 9.4 KB / 98 行
+7. `rtt-release-packaging` — 9.1 KB / 189 行
+8. `rtt-avoid-hardcode` — 9 KB / 169 行
 
 ## 五、低频 / 一次性（可迁出用户级）
 
@@ -222,7 +222,7 @@
 ### `rtt-event-card-framework`（用户级，描述 50 字）
 
 - 描述首句：实现/排查 RTT 卡牌效果时先查此表：事件/增强/触发卡的声明式字段、六类分类判据、分步原子范式
-- 正文：42.5 KB / 619 行；附件 0 个（0 KB）
+- 正文：8.2 KB / 134 行；附件 4 个（35.2 KB）
 
 ### `chinahr-form-filler`（项目级，描述 44 字）
 
