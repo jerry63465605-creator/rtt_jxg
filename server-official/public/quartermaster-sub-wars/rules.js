@@ -15423,6 +15423,15 @@ function suspend_armed_use_for_intercept(game, off, cardId, owner, gathered, nm)
 	if (via === 'trigger') {
 		game.__trigger_intercept_done = game.__trigger_intercept_done || {}
 		if (game.__trigger_intercept_done[key] === freq_key(game)) return false
+		/*
+		 * 【2026-11-08 修复】派发时就把"已问过"登记下来。
+		 *
+		 * 旧实现只在**判断**时读这个表、从不写入 → 多步增强卡（如 17506 沉睡的巨人
+		 * 走 need:'choice' → need:'space'）每提交一步都会重新派发 enemy_echo_played，
+		 * 于是意大利 16700 被问 2~3 次（玩家实测"一次 17506 问了 3 次"）。
+		 * 现在：一次发动只在**第一步**问一次；后续步骤直接续跑。
+		 */
+		game.__trigger_intercept_done[key] = freq_key(game)
 	}
 	game.__echo_chain_depth = (game.__echo_chain_depth || 0) + 1
 	/* 先把"待用的这张卡"从窗口摘下（它已被玩家选定），再派发拦截窗口 */
