@@ -7,8 +7,8 @@
 
 ```
 本仓库相关 skill 数 = 29（用户级 20 / 项目级 9）
-描述合计 = 2876 字符（≈ 1150~2397 tokens，【每轮常驻】）
-正文合计 = 277.4 KB（按需加载，加载后本会话常驻）
+描述合计 = 2909 字符（≈ 1164~2424 tokens，【每轮常驻】）
+正文合计 = 280.3 KB（按需加载，加载后本会话常驻）
 ```
 
 > 说明：系统提示里显示「38 of 42」，缺的 4 条是**内置 skill**（非本仓库的 32 个），
@@ -20,15 +20,15 @@
 |---|---|---|---|---|---|---|---|
 | 1 | `rtt-discard` | 用户级 | 292 | 8.1 KB/89 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 2 | `rtt-places-and-params` | 用户级 | 244 | 5.4 KB/68 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 3 | `rtt-card-bug-repro` | 用户级 | 236 | 8.9 KB/90 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 3 | `rtt-card-bug-repro` | 用户级 | 236 | 9.4 KB/98 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 4 | `rtt-server-ops` | 用户级 | 226 | 6.4 KB/113 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 5 | `rtt-turn-system` | 用户级 | 184 | 4.7 KB/69 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 6 | `rtt-card-id-face` | 用户级 | 112 | 3.4 KB/67 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 7 | `rtt-faction-case` | 用户级 | 99 | 6.9 KB/121 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 8 | `rtt-delegate-flip` | 用户级 | 97 | 6.7 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 6 | `rtt-faction-case` | 用户级 | 130 | 6.9 KB/121 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 7 | `rtt-card-id-face` | 用户级 | 114 | 3.4 KB/67 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 8 | `rtt-delegate-flip` | 用户级 | 97 | 6.8 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 9 | `web-form-datepicker` | 项目级 | 94 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 |  |
 | 10 | `rtt-pending` | 用户级 | 85 | 3 KB/34 行 | 4 个/30.9 KB | rtt（军需官模块） |  |
-| 11 | `rtt-realboard-test` | 用户级 | 84 | 31.9 KB/448 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 11 | `rtt-realboard-test` | 用户级 | 84 | 32.5 KB/456 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
 | 12 | `rtt-national-skill-framework` | 用户级 | 82 | 7.9 KB/110 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 13 | `rtt-response-stack` | 项目级 | 77 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
 | 14 | `comp5703-week6-progress-2026-09` | 项目级 | 73 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 |  |
@@ -36,17 +36,17 @@
 | 16 | `comp5703-api-ecosystem-context` | 项目级 | 70 | 4 KB/75 行 | 3 个/9.1 KB | COMP5703 课程 |  |
 | 17 | `comp5703-week7-plan-2026-09` | 项目级 | 70 | 3.3 KB/62 行 | 0 个/0 KB | COMP5703 课程 |  |
 | 18 | `web-form-dropdown` | 项目级 | 70 | 6.3 KB/112 行 | 5 个/33.1 KB | web 表单填写 |  |
-| 19 | `rtt-atomic-operations` | 用户级 | 68 | 20 KB/347 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 19 | `rtt-atomic-operations` | 用户级 | 68 | 20.5 KB/355 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
 | 20 | `rtt-client-server-contract` | 用户级 | 63 | 10 KB/181 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 21 | `rtt-fix-workflow` | 用户级 | 63 | 7.6 KB/167 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 22 | `rtt-docs-to-skill` | 用户级 | 60 | 6.9 KB/134 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 22 | `rtt-docs-to-skill` | 用户级 | 60 | 7 KB/134 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 23 | `rtt-release-packaging` | 用户级 | 60 | 9.1 KB/189 行 | 1 个/3.6 KB | rtt（军需官模块） |  |
 | 24 | `comp5703-week-sprint-2026-09` | 项目级 | 59 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 |  |
 | 25 | `rtt-handoff-authority` | 项目级 | 51 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） |  |
 | 26 | `rtt-avoid-hardcode` | 用户级 | 50 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 27 | `rtt-event-card-framework` | 用户级 | 50 | 41.9 KB/609 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 27 | `rtt-event-card-framework` | 用户级 | 50 | 42.5 KB/619 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
 | 28 | `chinahr-form-filler` | 项目级 | 44 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 |  |
-| 29 | `rtt-effect-recipes` | 用户级 | 43 | 13.5 KB/140 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 29 | `rtt-effect-recipes` | 用户级 | 43 | 14 KB/148 行 | 0 个/0 KB | rtt（军需官模块） |  |
 
 ## 三、同域碎片（建议合并）
 
@@ -56,14 +56,14 @@
 
 ## 四、正文体积 Top 8（一次加载即几万字符）
 
-1. `rtt-event-card-framework` — 41.9 KB / 609 行
-2. `rtt-realboard-test` — 31.9 KB / 448 行
-3. `rtt-atomic-operations` — 20 KB / 347 行
+1. `rtt-event-card-framework` — 42.5 KB / 619 行
+2. `rtt-realboard-test` — 32.5 KB / 456 行
+3. `rtt-atomic-operations` — 20.5 KB / 355 行
 4. `rtt-response-stack` — 18.2 KB / 150 行
-5. `rtt-effect-recipes` — 13.5 KB / 140 行
+5. `rtt-effect-recipes` — 14 KB / 148 行
 6. `rtt-client-server-contract` — 10 KB / 181 行
-7. `rtt-release-packaging` — 9.1 KB / 189 行
-8. `rtt-avoid-hardcode` — 9 KB / 169 行
+7. `rtt-card-bug-repro` — 9.4 KB / 98 行
+8. `rtt-release-packaging` — 9.1 KB / 189 行
 
 ## 五、低频 / 一次性（可迁出用户级）
 
@@ -102,7 +102,7 @@
 ### `rtt-card-bug-repro`（用户级，描述 236 字）
 
 - 描述首句：RTT 模块 quartermaster-sub-wars 的【卡牌 bug 忠实复现方法论】
-- 正文：8.9 KB / 90 行；附件 0 个（0 KB）
+- 正文：9.4 KB / 98 行；附件 0 个（0 KB）
 
 ### `rtt-server-ops`（用户级，描述 226 字）
 
@@ -114,20 +114,20 @@
 - 描述首句：RTT 模块 quartermaster-sub-wars 的"回合 / 轮"术语权威口径与代码映射
 - 正文：4.7 KB / 69 行；附件 0 个（0 KB）
 
-### `rtt-card-id-face`（用户级，描述 112 字）
+### `rtt-faction-case`（用户级，描述 130 字）
 
-- 描述首句：RTT 卡牌身份判定：实例 id（15430#1）vs 面 id（15430）不能混用
-- 正文：3.4 KB / 67 行；附件 0 个（0 KB）
-
-### `rtt-faction-case`（用户级，描述 99 字）
-
-- 描述首句：RTT 阵营字段大小写铁律：game.score/active/winner、response_queue.owner_side、view.current_faction 各用哪种
+- 描述首句：RTT 阵营/国家名铁律：凡涉及【阵营 axis/allies 与国家名字符串】时用（game.score/active/winner、response_queue.owner_side、view.c
 - 正文：6.9 KB / 121 行；附件 0 个（0 KB）
+
+### `rtt-card-id-face`（用户级，描述 114 字）
+
+- 描述首句：RTT 卡牌身份判定：凡涉及【实例 id（15430#1）与面 id（15430）】区分时用（response_queue、pending_*、request_responses、建设结算、候选列表、
+- 正文：3.4 KB / 67 行；附件 0 个（0 KB）
 
 ### `rtt-delegate-flip`（用户级，描述 97 字）
 
 - 描述首句：RTT 翻转类委托（钢铁条约/铁卫团/卡佩里尼/租借法案）：set_pending_delegate 与 finish_delegate 成对、game.delegate 单状态、控制翻转成对
-- 正文：6.7 KB / 104 行；附件 0 个（0 KB）
+- 正文：6.8 KB / 104 行；附件 0 个（0 KB）
 
 ### `web-form-datepicker`（项目级，描述 94 字）
 
@@ -142,7 +142,7 @@
 ### `rtt-realboard-test`（用户级，描述 84 字）
 
 - 描述首句：RTT 真实端到端测试方法论：读 db/fixture 真盘面或用 debug_* 合成，全用真实 action 驱动，三层断言（服务端/view/日志）+ 残留检查
-- 正文：31.9 KB / 448 行；附件 0 个（0 KB）
+- 正文：32.5 KB / 456 行；附件 0 个（0 KB）
 
 ### `rtt-national-skill-framework`（用户级，描述 82 字）
 
@@ -182,7 +182,7 @@
 ### `rtt-atomic-operations`（用户级，描述 68 字）
 
 - 描述首句：实现/修任何卡牌效果或规则前查此表：rules.js 经 _internal 导出的建设/战斗/补给/计分原子与用法，禁止自己重写遍历
-- 正文：20 KB / 347 行；附件 0 个（0 KB）
+- 正文：20.5 KB / 355 行；附件 0 个（0 KB）
 
 ### `rtt-client-server-contract`（用户级，描述 63 字）
 
@@ -197,7 +197,7 @@
 ### `rtt-docs-to-skill`（用户级，描述 60 字）
 
 - 描述首句：要把项目文档沉淀成 Skill，或判断某知识该进 skill/docs/memory 哪一处时用：写法规范与五步提炼法
-- 正文：6.9 KB / 134 行；附件 0 个（0 KB）
+- 正文：7 KB / 134 行；附件 0 个（0 KB）
 
 ### `rtt-release-packaging`（用户级，描述 60 字）
 
@@ -222,7 +222,7 @@
 ### `rtt-event-card-framework`（用户级，描述 50 字）
 
 - 描述首句：实现/排查 RTT 卡牌效果时先查此表：事件/增强/触发卡的声明式字段、六类分类判据、分步原子范式
-- 正文：41.9 KB / 609 行；附件 0 个（0 KB）
+- 正文：42.5 KB / 619 行；附件 0 个（0 KB）
 
 ### `chinahr-form-filler`（项目级，描述 44 字）
 
@@ -232,4 +232,4 @@
 ### `rtt-effect-recipes`（用户级，描述 43 字）
 
 - 描述首句：实现卡牌效果前查这张配方表：某效果已有哪张卡实现过、代码在哪段，照抄骨架，别另造一套
-- 正文：13.5 KB / 140 行；附件 0 个（0 KB）
+- 正文：14 KB / 148 行；附件 0 个（0 KB）
