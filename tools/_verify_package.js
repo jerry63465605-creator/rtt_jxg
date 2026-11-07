@@ -43,7 +43,8 @@ ok('B28 调试动作带外豁免', /isDebugAction/.test(R))
 
 /* —— 2026-11-07 第二批 —— */
 ok('B31 弹框显隐走 classList（不再覆盖 flex）', /modal\.classList\.remove\("hide"\)/.test(J))
-ok('B31 候选地区按钮', /echo-cand/.test(J))
+ok('B31-c 选地区零 UI（不再有候选按钮/提示条）', !/echo-cand\b/.test(J) && !/echo_space_bar"\)/.test(J))
+ok('B31-c 选地区只走地图高亮', /highlight_targets\(pe\.cands\)/.test(J))
 ok('免死加 battleOnly（本次战斗）', /battleOnly/.test(R))
 
 ok('客户端 bureau_wait 分支', /bureau_wait/.test(J))
