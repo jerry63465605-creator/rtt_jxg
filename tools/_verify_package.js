@@ -13,6 +13,8 @@ let pass = 0, fail = 0
 const ok = (m, c, extra) => { if (c) { pass++; console.log('  ✓ ' + m) } else { fail++; console.log('  ✗ ' + m + (extra ? '  | ' + extra : '')) } }
 
 const R = read('rules.js'), H = read('play.html'), J = read('play.js'), C = read('play.css')
+/* 2026-11-08 起校验也要读 cards.js（16899 衍生卡 / TOKEN 不入池） */
+const CA = read('cards.js')
 
 const vers = [...new Set([...H.matchAll(/\?v=(\w+)/g)].map(m => m[1]))]
 console.log('包内 play.html 版本串 = ' + JSON.stringify(vers))
@@ -45,6 +47,17 @@ ok('B28 调试动作带外豁免', /isDebugAction/.test(R))
 ok('B31 弹框显隐走 classList（不再覆盖 flex）', /modal\.classList\.remove\("hide"\)/.test(J))
 ok('B31-c 选地区零 UI（不再有候选按钮/提示条）', !/echo-cand\b/.test(J) && !/echo_space_bar"\)/.test(J))
 ok('B31-c 选地区只走地图高亮', /highlight_targets\(pe\.cands\)/.test(J))
+
+/* —— 2026-11-08 批次 —— */
+ok('B32 窄屏询问面板移到 body（floating-ask）', /floating-ask/.test(J) && /floating-ask/.test(C))
+ok('B32 sync_ask_boxes（双向迁移）', /function sync_ask_boxes/.test(J))
+ok('B33 15411 改 armed（nation_turn_start）', /armed:\s*\{[\s\S]{0,120}when: 'nation_turn_start'/.test(R))
+ok('17505 改 armed 一次性（econ_used）', /p51_air_in_required_area/.test(R) && /when: 'econ_used'/.test(R))
+ok('17505 无永久 flag（us_p51 已删）', !/game\.us_p51/.test(R))
+ok('16899 英国衍生卡（deck:TOKEN）', /"id": 16899/.test(CA) && /"deck": "TOKEN"/.test(CA))
+ok('cards_of_nation 排除 TOKEN（不入池）', /c\.deck !== 'TOKEN'/.test(CA))
+ok('多步增强卡拦截只问一次（__trigger_intercept_done 记账）',
+	/__trigger_intercept_done\[key\] = freq_key\(game\)/.test(R))
 ok('免死加 battleOnly（本次战斗）', /battleOnly/.test(R))
 
 ok('客户端 bureau_wait 分支', /bureau_wait/.test(J))

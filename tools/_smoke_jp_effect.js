@@ -77,7 +77,10 @@ console.log('\n=== 0. 10 张均已登记 CARD_TRIGGERS + ECHO_EFFECTS ===')
 	const echo = I.ECHO_EFFECTS || {}
 	const noTrig = IDS.filter(i => !trig[i])
 	const noEcho = IDS.filter(i => !echo[i])
-	ok('10 张都有 CARD_TRIGGERS', noTrig.length === 0, 'missing=' + noTrig.join(','))
+	/* 【2026-11-08】15411 改为 armed 通道后不再有 CARD_TRIGGERS —— 有 armed 配置即算已登记 */
+	ok('10 张都有 CARD_TRIGGERS 或 armed 配置',
+		noTrig.length === 0 || noTrig.every(i => !!(echo[i] && echo[i].armed)),
+		'missing=' + noTrig.join(','))
 	ok('10 张都有 ECHO_EFFECTS', noEcho.length === 0, 'missing=' + noEcho.join(','))
 }
 
@@ -86,7 +89,7 @@ console.log('\n=== 1. 代价支持「弃置 1 张【响应卡】」(cost.filter)
 	/* 15408 / 15413 / 15412 / 15411 的代价都是 discard:1 + filter:response */
 	for (const id of ['15408', '15413', '15412', '15411']) {
 		const eff = (I.ECHO_EFFECTS || {})[id]
-		const cost = eff && eff.cost
+		const cost = (eff && eff.cost) || (eff && eff.armed && eff.armed.cost)   /* 15411 已改 armed：代价在 armed.cost */
 		ok(id + ' 代价 discard=1', cost && cost.discard === 1,
 			'cost=' + JSON.stringify(cost))
 		ok(id + ' 代价 filter=response', cost && cost.filter === 'response',
@@ -319,72 +322,23 @@ console.log('\n=== 5. 7900 竭泽而渔：复用德国脚本机（弃4张 -> 弃
 		'hand=' + JSON.stringify(g3.hands['日本']))
 }
 
-console.log('\n=== 6. 15411 夜间运输：补给阶段开始时 + 选 1 支【无补给】单位 ===')
+console.log('\n=== 6. 15411 夜间运输：已改为 armed（日本回合开始时询问）===')
 {
 	/*
-	 * 【2026-10-06 玩家口径】两处改动：
-	 *   ① 时点：anytime -> 补给阶段开始时
-	 *   ② 目标：任意日本陆/海军 -> 必须玩家【选 1 支无补给的】
-	 *      （旧实现是服务端自动挑第一支，违反"服务端不替玩家做选择"）
+	 * 【2026-11-08 玩家口径·改 B】时点从「补给阶段主动打出」改为
+	 * 「日本回合开始（resource）弹窗询问」，走 armed 通道，且目标不再限定"无补给"。
+	 * 完整的交互链（窗口/弃 1 响应/选部队/结算）见 tools/_real_test_15411_armed.js。
 	 */
-	const trig = (I.CARD_TRIGGERS || {})['15411']
-	ok('15411 时点改为补给阶段',
-		trig && trig.kind === 'self' && trig.phase === 'supply',
-		'trig=' + JSON.stringify(trig))
 	const eff = (I.ECHO_EFFECTS || {})['15411']
-	ok('15411 声明 pickUnit', !!(eff && eff.pickUnit),
-		'pickUnit=' + JSON.stringify(eff && eff.pickUnit))
-	ok('15411 pickUnit.supplied=false（只收无补给的）',
-		eff && eff.pickUnit && eff.pickUnit.supplied === false)
-
-	const g = freshJp('supply')
-	/*
-	 * 造一支【无补给】的日本海军：没接补给点、不邻接补给中的友军。
-	 *
-	 * 【2026-10-28 基线清理】原来放在<东海>——但东海邻<日本>（日本大本营），
-	 * 而 freshJp() 用 setup(1) 未清盘，开局部署里日本本土有部队，
-	 * 于是这支海军被判「有港口 = 有补给」，与造局意图相反。
-	 * 改用<南大西洋>（陆邻全空、无日本部队，纯海区）。
-	 */
-	const sid = I.space_id_of('南大西洋')
-	g.location['jp_bad'] = sid
-	g.piece_nation['jp_bad'] = '日本'
-	g.piece_type['jp_bad'] = 'navy'
-	I.compute_supply(g)
-	const cands = I.pick_unit_candidates(g, eff.pickUnit)
-	console.log('    -> candidates=' + JSON.stringify(cands))
-	ok('无补给部队进入候选', cands.indexOf('jp_bad') >= 0, JSON.stringify(cands))
-
-	/* ① 未选 -> need:'piece'（服务端不替玩家挑） */
-	const need = I.event_card_needs(g, '日本', '15411#1', { cards: ['x#1'] })
-	ok('未指定 piece -> need=piece', need && need.need === 'piece',
-		JSON.stringify(need))
-	ok('need.candidates 含 jp_bad',
-		need && (need.candidates || []).indexOf('jp_bad') >= 0)
-
-	/* ② 选了无补给部队 -> 成功并授予补给 */
-	const r = eff.run(g, { arg: { piece: 'jp_bad' } })
-	console.log('    -> ' + JSON.stringify(r))
-	ok('触发成功', r && r.ok, JSON.stringify(r))
-	ok('已登记补给授予', !!(g.supply_granted && g.supply_granted['jp_bad']),
-		'granted=' + JSON.stringify(g.supply_granted))
-
-	/* ③ 选【有补给】的部队 -> 拒绝（这是本次改动的核心） */
-	const g2 = freshJp('supply')
-	g2.location['jp_ok'] = sid
-	g2.piece_nation['jp_ok'] = '日本'
-	g2.piece_type['jp_ok'] = 'navy'
-	I.grant_supply(g2, 'jp_ok', g2.turn)
-	I.compute_supply(g2)
-	const cands2 = I.pick_unit_candidates(g2, eff.pickUnit)
-	ok('补给中的部队【不在】候选', cands2.indexOf('jp_ok') < 0, JSON.stringify(cands2))
-	const r2 = eff.run(g2, { arg: { piece: 'jp_ok' } })
-	ok('选补给中的部队 -> 拒绝', !(r2 && r2.ok), JSON.stringify(r2))
-
-	/* ④ 场上没有无补给部队 -> 拒绝 */
-	const g3 = freshJp('supply')
-	const r3 = eff.run(g3, { arg: { piece: 'nobody' } })
-	ok('无合法目标 -> 拒绝', !(r3 && r3.ok), JSON.stringify(r3))
+	ok('15411 走 armed 通道', !!(eff && eff.armed && eff.armed.when === 'nation_turn_start'),
+		'armed=' + JSON.stringify(eff && eff.armed && { when: eff.armed.when, actor: eff.armed.actor }))
+	ok('15411 armed.actor=日本', !!(eff && eff.armed && eff.armed.actor === '日本'))
+	ok('15411 代价 discard=1 + filter=response',
+		!!(eff && eff.armed && eff.armed.cost && eff.armed.cost.discard === 1 && eff.armed.cost.filter === 'response'),
+		'cost=' + JSON.stringify(eff && eff.armed && eff.armed.cost))
+	ok('15411 不再声明主动打出时点（CARD_TRIGGERS 已删）', !(I.CARD_TRIGGERS || {})['15411'])
+	ok('15411 armed.ready 是函数', !!(eff && eff.armed && typeof eff.armed.ready === 'function'))
+	ok('15411 armed.run 是函数', !!(eff && eff.armed && typeof eff.armed.run === 'function'))
 }
 
 console.log('\n=== 7. 装载卡(armed)配置：15405 / 15406 / 15410 ===')
