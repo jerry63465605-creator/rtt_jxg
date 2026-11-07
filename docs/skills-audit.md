@@ -8,7 +8,7 @@
 ```
 本仓库相关 skill 数 = 29（用户级 20 / 项目级 9）
 描述合计 = 2909 字符（≈ 1164~2424 tokens，【每轮常驻】）
-正文合计 = 246.0 KB（按需加载，加载后本会话常驻）
+正文合计 = 219.0 KB（按需加载，加载后本会话常驻）
 ```
 
 > 说明：系统提示里显示「38 of 42」，缺的 4 条是**内置 skill**（非本仓库的 32 个），
@@ -28,7 +28,7 @@
 | 8 | `rtt-delegate-flip` | 用户级 | 97 | 6.8 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 9 | `web-form-datepicker` | 项目级 | 94 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 |  |
 | 10 | `rtt-pending` | 用户级 | 85 | 3 KB/34 行 | 4 个/30.9 KB | rtt（军需官模块） |  |
-| 11 | `rtt-realboard-test` | 用户级 | 84 | 32.5 KB/456 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 11 | `rtt-realboard-test` | 用户级 | 84 | 5.5 KB/88 行 | 3 个/27.7 KB | rtt（军需官模块） |  |
 | 12 | `rtt-national-skill-framework` | 用户级 | 82 | 7.9 KB/110 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 13 | `rtt-response-stack` | 项目级 | 77 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
 | 14 | `comp5703-week6-progress-2026-09` | 项目级 | 73 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 |  |
@@ -56,14 +56,14 @@
 
 ## 四、正文体积 Top 8（一次加载即几万字符）
 
-1. `rtt-realboard-test` — 32.5 KB / 456 行
-2. `rtt-atomic-operations` — 20.5 KB / 355 行
-3. `rtt-response-stack` — 18.2 KB / 150 行
-4. `rtt-effect-recipes` — 14 KB / 148 行
-5. `rtt-client-server-contract` — 10 KB / 181 行
-6. `rtt-card-bug-repro` — 9.4 KB / 98 行
-7. `rtt-release-packaging` — 9.1 KB / 189 行
-8. `rtt-avoid-hardcode` — 9 KB / 169 行
+1. `rtt-atomic-operations` — 20.5 KB / 355 行
+2. `rtt-response-stack` — 18.2 KB / 150 行
+3. `rtt-effect-recipes` — 14 KB / 148 行
+4. `rtt-client-server-contract` — 10 KB / 181 行
+5. `rtt-card-bug-repro` — 9.4 KB / 98 行
+6. `rtt-release-packaging` — 9.1 KB / 189 行
+7. `rtt-avoid-hardcode` — 9 KB / 169 行
+8. `web-form-datepicker` — 8.9 KB / 159 行
 
 ## 五、低频 / 一次性（可迁出用户级）
 
@@ -142,7 +142,7 @@
 ### `rtt-realboard-test`（用户级，描述 84 字）
 
 - 描述首句：RTT 真实端到端测试方法论：读 db/fixture 真盘面或用 debug_* 合成，全用真实 action 驱动，三层断言（服务端/view/日志）+ 残留检查
-- 正文：32.5 KB / 456 行；附件 0 个（0 KB）
+- 正文：5.5 KB / 88 行；附件 3 个（27.7 KB）
 
 ### `rtt-national-skill-framework`（用户级，描述 82 字）
 
