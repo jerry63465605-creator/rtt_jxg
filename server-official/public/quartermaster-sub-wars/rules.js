@@ -5250,6 +5250,17 @@ const STATUS_EFFECTS = {
 		},
 		trigger: {
 			window: 'after_build_army',
+			/*
+			 * 【2026-11-07 修复】卡面限定"在<罗斯>建设陆军后" -> 声明式限定建设地区。
+			 *
+			 * 旧实现只按【窗口名 + 同阵营桌面卡】武装（arm_status_instant），不看地区，
+			 * 于是任何友方在任何地区建陆军都会让本卡点亮，玩家点下去 run 才拒
+			 * "仅当在<罗斯>建设陆军后发动" —— 典型"能点的 ≠ 能成功的"（通用教训 3），
+			 * 与 17544《丘克群岛》的 space_group 属同一类。
+			 * 现在由 arm_status_instant 按本字段过滤：地区不符就【不武装】，
+			 * view.ready 与 build_actions.activate_status 白名单自动同源置灰。
+			 */
+			build_space: '罗斯',
 			once_per_turn: true,
 			desc: '在<罗斯>建设陆军后：在相邻地区建设 1 支陆军',
 			run(game, ctx) {
@@ -8014,6 +8025,18 @@ function arm_status_instant(game, window, nation, space) {
 		for (const cid of (game.table[own] || [])) {
 			const cfg = status_config_of(cid)
 			if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
+			/*
+			 * 【2026-11-07】声明式「限定建设地区」（17901 工业心脏：在<罗斯>建设陆军后）。
+			 *
+			 * 与 17544《丘克群岛》的 space_group、17843 的 build_scope 同属「声明式限制」范式，
+			 * 只是这里限【单个地区】：地区不符就不武装，窗口根本不存在 ->
+			 * view.table_status.ready 与 build_actions 的 activate_status 白名单自动同源置灰，
+			 * 从源头消除"亮了点不动"（通用教训 3）。
+			 */
+			if (cfg.trigger.build_space != null) {
+				const _bs = space_id(cfg.trigger.build_space)
+				if (_bs == null || String(_bs) !== String(space)) continue
+			}
 			if (!status_active(game, cid, own)) continue
 			if (cfg.trigger.once_per_turn && (game.status_used || {})[cid] === freq_key(game)) continue
 			/*
