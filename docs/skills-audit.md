@@ -7,7 +7,7 @@
 
 ```
 本仓库相关 skill 数 = 32（用户级 30 / 项目级 2）
-描述合计 = 9725 字符（≈ 3890~8104 tokens，【每轮常驻】）
+描述合计 = 1688 字符（≈ 675~1407 tokens，【每轮常驻】）
 正文合计 = 304.4 KB（按需加载，加载后本会话常驻）
 ```
 
@@ -18,26 +18,26 @@
 
 | # | skill | 归属 | 描述字数 | 正文 | 附件 | 域 | 标注 |
 |---|---|---|---|---|---|---|---|
-| 1 | `web-form-datepicker` | 用户级 | 844 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 | 描述过长，**建议重写** |
-| 2 | `web-form-dropdown` | 用户级 | 705 | 6.3 KB/112 行 | 5 个/33.1 KB | web 表单填写 | 描述过长，**建议重写** |
-| 3 | `chinahr-form-filler` | 用户级 | 630 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 | 描述过长，**建议重写** |
-| 4 | `rtt-fix-workflow` | 用户级 | 613 | 7.6 KB/167 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长，**建议重写** |
-| 5 | `rtt-event-card-framework` | 用户级 | 600 | 41.9 KB/609 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长，**建议重写**，正文大（慎加载） |
-| 6 | `comp5703-week6-progress-2026-09` | 用户级 | 592 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 | 描述过长，**建议重写** |
-| 7 | `rtt-response-stack` | 项目级 | 553 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长，**建议重写**，正文大（慎加载） |
-| 8 | `rtt-release-packaging` | 用户级 | 547 | 9.1 KB/189 行 | 1 个/3.6 KB | rtt（军需官模块） | 描述过长，**建议重写** |
-| 9 | `comp5703-api-ecosystem-context` | 用户级 | 464 | 4 KB/75 行 | 3 个/9.1 KB | COMP5703 课程 | 描述过长 |
-| 10 | `rtt-pending-suspend` | 用户级 | 459 | 9.1 KB/127 行 | 4 个/9.6 KB | rtt（军需官模块） | 描述过长 |
-| 11 | `rtt-handoff-authority` | 项目级 | 456 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） | 描述过长 |
-| 12 | `rtt-atomic-operations` | 用户级 | 439 | 20 KB/347 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长，正文大（慎加载） |
-| 13 | `comp5703-week-sprint-2026-09` | 用户级 | 435 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 | 描述过长 |
-| 14 | `rtt-avoid-hardcode` | 用户级 | 395 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长 |
-| 15 | `rtt-client-server-contract` | 用户级 | 387 | 10 KB/181 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长 |
-| 16 | `rtt-docs-to-skill` | 用户级 | 377 | 6.9 KB/134 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长 |
-| 17 | `rtt-pending-whitelist-deadlock` | 用户级 | 364 | 6.4 KB/133 行 | 0 个/0 KB | rtt（军需官模块） | 描述过长 |
-| 18 | `comp5703-week7-plan-2026-09` | 用户级 | 329 | 3.3 KB/62 行 | 0 个/0 KB | COMP5703 课程 | 描述过长 |
-| 19 | `rtt-discard` | 用户级 | 292 | 8.1 KB/89 行 | 0 个/0 KB | rtt（军需官模块） |  |
-| 20 | `rtt-server-ops` | 用户级 | 226 | 6.4 KB/113 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 1 | `rtt-discard` | 用户级 | 292 | 8.1 KB/89 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 2 | `rtt-server-ops` | 用户级 | 226 | 6.4 KB/113 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 3 | `web-form-datepicker` | 用户级 | 94 | 8.9 KB/159 行 | 2 个/19.9 KB | web 表单填写 |  |
+| 4 | `rtt-response-stack` | 项目级 | 77 | 18.2 KB/150 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 5 | `comp5703-week6-progress-2026-09` | 用户级 | 73 | 1.7 KB/32 行 | 1 个/2 KB | COMP5703 课程 |  |
+| 6 | `rtt-pending-suspend` | 用户级 | 71 | 9.1 KB/127 行 | 4 个/9.6 KB | rtt（军需官模块） |  |
+| 7 | `comp5703-api-ecosystem-context` | 用户级 | 70 | 4 KB/75 行 | 3 个/9.1 KB | COMP5703 课程 |  |
+| 8 | `comp5703-week7-plan-2026-09` | 用户级 | 70 | 3.3 KB/62 行 | 0 个/0 KB | COMP5703 课程 |  |
+| 9 | `web-form-dropdown` | 用户级 | 70 | 6.3 KB/112 行 | 5 个/33.1 KB | web 表单填写 |  |
+| 10 | `rtt-atomic-operations` | 用户级 | 68 | 20 KB/347 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 11 | `rtt-client-server-contract` | 用户级 | 63 | 10 KB/181 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 12 | `rtt-fix-workflow` | 用户级 | 63 | 7.6 KB/167 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 13 | `rtt-docs-to-skill` | 用户级 | 60 | 6.9 KB/134 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 14 | `rtt-release-packaging` | 用户级 | 60 | 9.1 KB/189 行 | 1 个/3.6 KB | rtt（军需官模块） |  |
+| 15 | `comp5703-week-sprint-2026-09` | 用户级 | 59 | 6.5 KB/84 行 | 2 个/6.8 KB | COMP5703 课程 |  |
+| 16 | `rtt-pending-whitelist-deadlock` | 用户级 | 59 | 6.4 KB/133 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 17 | `rtt-handoff-authority` | 项目级 | 51 | 6.6 KB/64 行 | 1 个/6.3 KB | rtt（军需官模块） |  |
+| 18 | `rtt-avoid-hardcode` | 用户级 | 50 | 9 KB/169 行 | 0 个/0 KB | rtt（军需官模块） |  |
+| 19 | `rtt-event-card-framework` | 用户级 | 50 | 41.9 KB/609 行 | 0 个/0 KB | rtt（军需官模块） | 正文大（慎加载） |
+| 20 | `chinahr-form-filler` | 用户级 | 44 | 7.7 KB/120 行 | 8 个/47.9 KB | web 表单填写 |  |
 | 21 | `rtt-card-bug-repro` | 用户级 | 2 | 8.9 KB/90 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 22 | `rtt-card-id-face` | 用户级 | 2 | 3.4 KB/67 行 | 0 个/0 KB | rtt（军需官模块） |  |
 | 23 | `rtt-delegate-flip` | 用户级 | 2 | 6.7 KB/104 行 | 0 个/0 KB | rtt（军需官模块） |  |
@@ -72,115 +72,25 @@
 
 | skill | 描述字数 | 正文 | 理由 |
 |---|---|---|---|
-| `chinahr-form-filler` | 630 | 7.7 KB | 招聘网站表单填写（与 RTT 无关，低频） |
-| `comp5703-api-ecosystem-context` | 464 | 4 KB | 课程作业上下文（一次性，与代码库无关） |
-| `comp5703-week-sprint-2026-09` | 435 | 6.5 KB | 课程作业上下文（一次性，与代码库无关） |
-| `comp5703-week6-progress-2026-09` | 592 | 1.7 KB | 课程作业上下文（一次性，与代码库无关） |
-| `comp5703-week7-plan-2026-09` | 329 | 3.3 KB | 课程作业上下文（一次性，与代码库无关） |
-| `web-form-datepicker` | 844 | 8.9 KB | 招聘网站表单填写（与 RTT 无关，低频） |
-| `web-form-dropdown` | 705 | 6.3 KB | 招聘网站表单填写（与 RTT 无关，低频） |
+| `chinahr-form-filler` | 44 | 7.7 KB | 招聘网站表单填写（与 RTT 无关，低频） |
+| `comp5703-api-ecosystem-context` | 70 | 4 KB | 课程作业上下文（一次性，与代码库无关） |
+| `comp5703-week-sprint-2026-09` | 59 | 6.5 KB | 课程作业上下文（一次性，与代码库无关） |
+| `comp5703-week6-progress-2026-09` | 73 | 1.7 KB | 课程作业上下文（一次性，与代码库无关） |
+| `comp5703-week7-plan-2026-09` | 70 | 3.3 KB | 课程作业上下文（一次性，与代码库无关） |
+| `web-form-datepicker` | 94 | 8.9 KB | 招聘网站表单填写（与 RTT 无关，低频） |
+| `web-form-dropdown` | 70 | 6.3 KB | 招聘网站表单填写（与 RTT 无关，低频） |
 
 ## 六、建议动作（按性价比）
 
 | # | 动作 | 影响 | 预估收益 |
 |---|---|---|---|
-| 1 | 重写 >300 字的描述（只改 frontmatter，不动正文） | 18 个 | 常驻可降 ~40% |
+| 1 | 重写 >300 字的描述（只改 frontmatter，不动正文） | 0 个 | 常驻可降 ~40% |
 | 2 | 合并 `rtt-pending-*`（4 个）为 1 个「挂起/让权总纲」 | 4 → 1 | 条目 -3，撞车减少 |
 | 3 | 合并 `web-form-*` + `chinahr` 为 1 个「中文招聘表单」 | 3 → 1 | 条目 -2 |
 | 4 | `comp5703-*`（4 个）迁到项目级或归档 | 用户级 -4 | 换项目不再污染 |
 | 5 | 大正文（>20 KB）在描述里明写「只在 X 场景加载」 | 3 个 | 避免误加载 43 KB |
 
 ## 七、明细（每条描述首句）
-
-### `web-form-datepicker`（用户级，描述 844 字）
-
-- 描述首句：Fill date / month / year pickers (Element-UI `.el-date-editor`, Ant Design `.ant-calendar-picker`) i
-- 正文：8.9 KB / 159 行；附件 2 个（19.9 KB）
-
-### `web-form-dropdown`（用户级，描述 705 字）
-
-- 描述首句：Fill Ant Design / Element-UI dropdowns, cascaders and date pickers in Chinese recruiting-site resume
-- 正文：6.3 KB / 112 行；附件 5 个（33.1 KB）
-
-### `chinahr-form-filler`（用户级，描述 630 字）
-
-- 描述首句：Fill job-application / resume forms on Chinese recruiting sites (中华英才网 applyjob.chinahr.com and simi
-- 正文：7.7 KB / 120 行；附件 8 个（47.9 KB）
-
-### `rtt-fix-workflow`（用户级，描述 613 字）
-
-- 描述首句：RTT（rally-the-troops）quartermaster-sub-wars 模块「从登记待办到提交推送」的标准修复流程 SOP：逐条编号登记（B 编号）→ 只读探针定性 → 给方案待确认 
-- 正文：7.6 KB / 167 行；附件 0 个（0 KB）
-
-### `rtt-event-card-framework`（用户级，描述 600 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars「事件卡（EVENT/ECHO）/ 增强卡（EFFECT）/ armed 触发卡按实现方式分类并落地」的方法论与框架手册
-- 正文：41.9 KB / 609 行；附件 0 个（0 KB）
-
-### `comp5703-week6-progress-2026-09`（用户级，描述 592 字）
-
-- 描述首句：COMP5703 CS-9 Week 6 (Sep 12-13, 2026) meeting outcomes and Jianrui Zhou's individual progress repor
-- 正文：1.7 KB / 32 行；附件 1 个（2 KB）
-
-### `rtt-response-stack`（项目级，描述 553 字）
-
-- 描述首句：RTT quartermaster-sub-wars 模块【响应栈（response stack）】机制手册——涵盖 request_responses 压栈、栈顶帧两阶段判定（待发动 candida
-- 正文：18.2 KB / 150 行；附件 0 个（0 KB）
-
-### `rtt-release-packaging`（用户级，描述 547 字）
-
-- 描述首句：RTT（rally-the-troops）quartermaster-sub-wars 模块出测试分发包与部署上线的 SOP，覆盖普通版 / full 版两个出包口径、排除清单（cards_tts 原
-- 正文：9.1 KB / 189 行；附件 1 个（3.6 KB）
-
-### `comp5703-api-ecosystem-context`（用户级，描述 464 字）
-
-- 描述首句：COMP5703 Capstone CS-9「Business API Ecosystem」项目的环境事实与操作知识库，覆盖 Supabase 数据项目（项目 ref、组织、business_apis
-- 正文：4 KB / 75 行；附件 3 个（9.1 KB）
-
-### `rtt-pending-suspend`（用户级，描述 459 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars（server-official/public/quartermaster-sub-wars/）的「挂起（pending / 让权 / 委派）
-- 正文：9.1 KB / 127 行；附件 4 个（9.6 KB）
-
-### `rtt-handoff-authority`（项目级，描述 456 字）
-
-- 描述首句：RTT quartermaster-sub-wars 模块【让权/挂起给另一国执行】的范式手册
-- 正文：6.6 KB / 64 行；附件 1 个（6.3 KB）
-
-### `rtt-atomic-operations`（用户级，描述 439 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars 的【原子操作与可复用函数手册】
-- 正文：20 KB / 347 行；附件 0 个（0 KB）
-
-### `comp5703-week-sprint-2026-09`（用户级，描述 435 字）
-
-- 描述首句：COMP5703 CS-9 团队 2026-09-07~09-13 本周冲刺分工与验收知识库，含 8 人角色职责与验收标准、周健睿（用户）的 Auth/User 任务范围、本周最终验收链路（登录→列表
-- 正文：6.5 KB / 84 行；附件 2 个（6.8 KB）
-
-### `rtt-avoid-hardcode`（用户级，描述 395 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars 的【反硬编码清单】
-- 正文：9 KB / 169 行；附件 0 个（0 KB）
-
-### `rtt-client-server-contract`（用户级，描述 387 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars 的【客户端/服务端契约与同步改动清单】
-- 正文：10 KB / 181 行；附件 0 个（0 KB）
-
-### `rtt-docs-to-skill`（用户级，描述 377 字）
-
-- 描述首句：【元技能】如何从项目文档中总结、提炼并创建 CodeBuddy Skill
-- 正文：6.9 KB / 134 行；附件 0 个（0 KB）
-
-### `rtt-pending-whitelist-deadlock`（用户级，描述 364 字）
-
-- 描述首句：RTT 模块 quartermaster-sub-wars 的【挂起状态 × 动作白名单 死锁】排查与预防手册，含【服务器访问判据】（端口须现场判定不可凭记忆、IPv6-only 必须用 localh
-- 正文：6.4 KB / 133 行；附件 0 个（0 KB）
-
-### `comp5703-week7-plan-2026-09`（用户级，描述 329 字）
-
-- 描述首句：COMP5703 CS-9 第 7 周（2026-09-15 起）8 人分工计划「BPBuilder 字段级校验与 API Publisher」的要点、依赖与风险
-- 正文：3.3 KB / 62 行；附件 0 个（0 KB）
 
 ### `rtt-discard`（用户级，描述 292 字）
 
@@ -191,6 +101,96 @@
 
 - 描述首句：操作 RTT（rally-the-troops）本地服务器的运维技能，覆盖军需官·次要战场（quartermaster-sub-wars）模块的对局服务器 server.js 与卡牌预览静态服务器 p
 - 正文：6.4 KB / 113 行；附件 0 个（0 KB）
+
+### `web-form-datepicker`（用户级，描述 94 字）
+
+- 描述首句：日期/年月选择器填不动时用（Element-UI .el-date-editor、AntD .ant-calendar-picker）：点了没反应、面板停在年视图、单元格点不动、无法提交
+- 正文：8.9 KB / 159 行；附件 2 个（19.9 KB）
+
+### `rtt-response-stack`（项目级，描述 77 字）
+
+- 描述首句：RTT 响应栈机制：request_responses 压栈、栈顶两阶段判定、trigger/pass/resolve、响应让权与 deferred 帧
+- 正文：18.2 KB / 150 行；附件 0 个（0 KB）
+
+### `comp5703-week6-progress-2026-09`（用户级，描述 73 字）
+
+- 描述首句：查 COMP5703 第 6 周（2026-09-12~13）会议结论与个人进度（BP Builder 产 YAML、认证/repo 状态）时用
+- 正文：1.7 KB / 32 行；附件 1 个（2 KB）
+
+### `rtt-pending-suspend`（用户级，描述 71 字）
+
+- 描述首句：RTT 挂起（pending/让权/委派）机制：build_actions 守卫、active 翻转还原、跨 action 状态落盘、让权链
+- 正文：9.1 KB / 127 行；附件 4 个（9.6 KB）
+
+### `comp5703-api-ecosystem-context`（用户级，描述 70 字）
+
+- 描述首句：做 COMP5703 CS-9 项目时用：Supabase 数据、business_apis 表、报告写作约定、PowerShell 踩坑
+- 正文：4 KB / 75 行；附件 3 个（9.1 KB）
+
+### `comp5703-week7-plan-2026-09`（用户级，描述 70 字）
+
+- 描述首句：查 COMP5703 第 7 周（2026-09-15 起）分工（BPBuilder 字段级校验、API Publisher）与里程碑时用
+- 正文：3.3 KB / 62 行；附件 0 个（0 KB）
+
+### `web-form-dropdown`（用户级，描述 70 字）
+
+- 描述首句：AntD/Element 下拉、级联、日期面板"点了不生效/打开错的下拉/选了不回填"时用
+- 正文：6.3 KB / 112 行；附件 5 个（33.1 KB）
+
+### `rtt-atomic-operations`（用户级，描述 68 字）
+
+- 描述首句：实现/修任何卡牌效果或规则前查此表：rules.js 经 _internal 导出的建设/战斗/补给/计分原子与用法，禁止自己重写遍历
+- 正文：20 KB / 347 行；附件 0 个（0 KB）
+
+### `rtt-client-server-contract`（用户级，描述 63 字）
+
+- 描述首句：排查"点了没反应/看得见点不中/高亮但无效/客户端与服务端判定不一致"时用：action 白名单、query 只读、判定同源
+- 正文：10 KB / 181 行；附件 0 个（0 KB）
+
+### `rtt-fix-workflow`（用户级，描述 63 字）
+
+- 描述首句：RTT 军需官模块"从登记待办到提交推送"的标准修复流程：只读探针定性→给方案→最小改动→编号测试→分层回归→文档→单条提交
+- 正文：7.6 KB / 167 行；附件 0 个（0 KB）
+
+### `rtt-docs-to-skill`（用户级，描述 60 字）
+
+- 描述首句：要把项目文档沉淀成 Skill，或判断某知识该进 skill/docs/memory 哪一处时用：写法规范与五步提炼法
+- 正文：6.9 KB / 134 行；附件 0 个（0 KB）
+
+### `rtt-release-packaging`（用户级，描述 60 字）
+
+- 描述首句：RTT 出包/上线时用：普通版与 full 版口径、排除清单、版本串 bump、ZipFile 打包、体积自检与已知坑
+- 正文：9.1 KB / 189 行；附件 1 个（3.6 KB）
+
+### `comp5703-week-sprint-2026-09`（用户级，描述 59 字）
+
+- 描述首句：查 COMP5703 2026-09-07 周冲刺分工、Auth/User 任务范围、分支与 commit 约定时用
+- 正文：6.5 KB / 84 行；附件 2 个（6.8 KB）
+
+### `rtt-pending-whitelist-deadlock`（用户级，描述 59 字）
+
+- 描述首句：排查"点了没反应/某张牌打不出/清挂起要先清挂起"时用
+- 正文：6.4 KB / 133 行；附件 0 个（0 KB）
+
+### `rtt-handoff-authority`（项目级，描述 51 字）
+
+- 描述首句：RTT 让权/委托（让另一国执行建设、征召、出牌、弃牌、结算）时用：两级主体模型与同/跨阵营两种范式
+- 正文：6.6 KB / 64 行；附件 1 个（6.3 KB）
+
+### `rtt-avoid-hardcode`（用户级，描述 50 字）
+
+- 描述首句：新增国家技能/卡效果/阶段钩子/UI 文案，或怀疑某处硬编码了国家名、阶段名、卡 id、地区名时用
+- 正文：9 KB / 169 行；附件 0 个（0 KB）
+
+### `rtt-event-card-framework`（用户级，描述 50 字）
+
+- 描述首句：实现/排查 RTT 卡牌效果时先查此表：事件/增强/触发卡的声明式字段、六类分类判据、分步原子范式
+- 正文：41.9 KB / 609 行；附件 0 个（0 KB）
+
+### `chinahr-form-filler`（用户级，描述 44 字）
+
+- 描述首句：在中华英才网等中文招聘站自动填简历/申请表时用（含分段表单续填、JS 注入、字段定位）
+- 正文：7.7 KB / 120 行；附件 8 个（47.9 KB）
 
 ### `rtt-card-bug-repro`（用户级，描述 2 字）
 
