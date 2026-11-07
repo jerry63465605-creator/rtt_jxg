@@ -78,7 +78,16 @@ const r210 = (function () {
 	} catch (e) { return 'err:' + e.message }
 })()
 console.log('  15210 未入列原因：' + r210 + '（窗口候选=' + JSON.stringify(ids) + '）')
-ok('窗口候选张数 = 1（15210 未 ready，不是同卡多份）', ids.length === 1, String(ids.length))
+/*
+ * 【2026-11-08 更新】B7（cf620c4）之后 15210《施佩伯爵》的 ready 放宽为
+ * 「<亚速尔>存在即可」——它会在 after_build_navy 窗口与 15208 同时出现，
+ * 这是设计如此（无目标时点它会 ok:false 且不扣代价）。
+ * 因此本处不再断言"只有 1 张"，改为：必须含 15208；若含 15210，其 ready 必为 true。
+ */
+ok('窗口必含 15208（15210 允许同时出现，B7 后口径）',
+	ids.some(x => String(x).indexOf('15208') >= 0) &&
+	ids.every(x => String(x).indexOf('15210') < 0 || r210 === 'ready=true'),
+	'ids=' + JSON.stringify(ids) + ' r210=' + r210)
 
 console.log('\n=== §2-B 德国触发 15208 -> 英国 15352 拦（via=trigger）===')
 n0 = (g.log || []).length
