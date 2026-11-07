@@ -21,7 +21,7 @@ is_empty_echo_frame(pe)  在 rules.js 出现 7 次
 
 实测：17509 / 16800 / 16803 打完后 `pending_echo` 均为 `null` 或空框被清，`view.pending_echo` 也为 `null`，`next_phase` 不被冻结 → **不会再有遮罩挡地图**。
 
-## 3. B29（新）：名将系列"要选地区"时，客户端拿不到候选 → 点了没反应
+## 3. ~~B29~~ **误报**：名将系列的候选其实一直在 `armed_offer.pending` 里
 
 **复现**（16800，其余三张同构）：
 
@@ -54,7 +54,34 @@ use_armed_offer{card, space:阿拉斯加}
 **建议修法**：在 armed `run` 返回 `need` 的统一处理处，把 `candidates` 归一化进 `cands`（或反之），
 并让 `is_empty_echo_frame` 只在"两个字段都空"时才判空（现在应已如此，但要确认归一化顺序在守卫之前）。
 
-## 4. B30（新）：17509 无合法空军地时，白扣损耗且提示像"未实现"
+
+### 3.1 更正（2026-11-07 复核）
+
+上一版结论"客户端拿不到候选"是**我探针看漏了**。实测同一状态：
+
+```js
+view.armed_offer.pending = {
+  need: "space", candidates: [25, 30], pick: 1, pickMin: 1,
+  revealNation: null, choiceOptions: null, spaceCandidates: null
+}
+server off.pending     = 与上面完全一致
+```
+
+且客户端确实读它：`play.js`
+
+```
+L1993   if (view && view.armed_offer && view.armed_offer.pending) return
+L2348   need: ao.pending.need,
+L2362   candidates: (ao.pending.candidates || []).map(...)
+```
+
+→ 服务器把候选写进 `game.armed_offers[].pending`（`rules.js:33197-33221`），
+  view 原样下发，客户端据此渲染地区选择器。**B29 不成立，已关闭。**
+
+> 教训：排查 armed 卡时，候选在 **`view.armed_offer.pending`**，
+> 不是 `pending_echo` / `pending_ask`（那两个是"通用挂起"通道）。
+
+## 4. B30（真）：17509 无合法空军地时，白扣损耗且提示像"未实现"：17509 无合法空军地时，白扣损耗且提示像"未实现"
 
 ```
 计分阶段打 17509（中太平洋及相邻 10 格全空、无可部署空军的合法地）
