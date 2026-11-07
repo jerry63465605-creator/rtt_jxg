@@ -171,8 +171,52 @@ console.log('\n=== 5. 已付代价后调 cancel_script：必须被拒 ===')
 		JSON.stringify(g.pending_script && g.pending_script.stage))
 }
 
-/* ---------- 6. 复位：无异常残留 ---------- */
-console.log('\n=== 6. 残留检查 ===')
+/* ---------- 6. 脚本机里的另一个 discard 步：15239《战略规划》仍可走，但不可取消 ---------- */
+console.log('\n=== 6. 15239《战略规划》第 2 步（discard 1）：同一套框，但不可取消 ===')
+{
+	const g = R.setup(20261107)
+	g.opening = null
+	R.action(g, 'Axis', 'debug_set_phase', { nation: '德国', phase: 'play' })
+	R.action(g, 'Axis', 'debug_add_card', { face: '15239', nation: '德国', dest: 'hand' })
+	I.refresh(g)
+	const card = (g.hands['德国'] || []).find(x => faceOf(x) === '15239')
+	R.action(g, 'Axis', 'play_card', { card })
+	I.refresh(g)
+	console.log('  第 1 步 pending_script = ' + JSON.stringify(g.pending_script && {
+		kind: g.pending_script.kind, stage: g.pending_script.stage,
+		need_pick: g.pending_script.need_pick, need_discard: g.pending_script.need_discard,
+	}))
+	ok('① 进入 draw_pick_discard 第 1 步（牌堆挑 2 张）',
+		g.pending_script && g.pending_script.kind === 'draw_pick_discard' &&
+		g.pending_script.stage === 1, JSON.stringify(g.pending_script && g.pending_script.kind))
+
+	let st = R.query(g, 'Axis', 'script_state', {}) || {}
+	ok('② 第 1 步 cancellable=false（挑牌步不可退）', st.cancellable === false, JSON.stringify(st.cancellable))
+	const two = (st.candidates || []).slice(0, 2).map(c => c.id)
+	R.action(g, 'Axis', 'resolve_script', { pick: two })
+	I.refresh(g)
+	st = R.query(g, 'Axis', 'script_state', {}) || {}
+	console.log('  第 2 步 script_state = ' + JSON.stringify({
+		step_kind: st.step_kind, need: st.need, cancellable: st.cancellable,
+	}))
+	ok('③ 第 2 步是 discard（走共用弃牌框），且 cancellable=false',
+		g.pending_script && g.pending_script.stage === 2 &&
+		st.step_kind === 'discard' && st.cancellable === false,
+		JSON.stringify({ stage: g.pending_script && g.pending_script.stage, kind: st.step_kind, c: st.cancellable }))
+	const acts = R.view(g, 'Axis').actions || {}
+	ok('④ 该步 build_actions 不含 cancel_script', !acts.cancel_script, JSON.stringify(acts))
+
+	const one = (g.hands['德国'] || [])[0]
+	R.action(g, 'Axis', 'resolve_script', { discard: [one] })
+	I.refresh(g)
+	console.log('  弃 1 张后日志：' + lastLog(g))
+	ok('⑤ 弃 1 张后脚本结束（pending_script 清空）', !g.pending_script,
+		JSON.stringify({ ps: !!g.pending_script, stage: g.pending_script && g.pending_script.stage }))
+	ok('⑥ 该牌已进弃牌堆', (g.discard['德国'] || []).includes(one), String(one))
+}
+
+/* ---------- 7. 复位：无异常残留 ---------- */
+console.log('\n=== 7. 残留检查 ===')
 {
 	const g = R.setup(20261107)
 	ok('① 干净开局：无 pending_script / 无 cancel 残留',
