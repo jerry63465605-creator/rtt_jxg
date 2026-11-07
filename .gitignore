@@ -77,3 +77,5 @@ out/
 # 根目录个人文件（图片 / 简历 / 无关 PDF）
 /photo.jpg
 /*.pdf
+__pycache__/
+*.pyc
