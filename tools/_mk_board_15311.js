@@ -83,16 +83,15 @@ console.log('  当前：' + g.current_nation + ' · ' + g.turn_phase)
 
 /* ④ 落库 */
 const Database = require(path.join(ROOT, 'server-official', 'node_modules', 'better-sqlite3'))
+const { upsert_game } = require('./_db_game_rows')
 const db = new Database(path.join(ROOT, 'server-official', 'db'))
-if (!db.prepare('select game_id from games where game_id=?').get(GID)) {
-	db.prepare(`insert into games (game_id, status, title_id, scenario, options, player_count,
-		join_count, invite_count, user_count, owner_id, notice, is_private, is_random, is_match,
-		ctime, mtime, xtime, moves)
-		values (?, 1, 'quartermaster-sub-wars', 'Standard', '{}', 2, 2, 0, 2, 1, '', 0, 0, 0,
-		current_timestamp, current_timestamp, current_timestamp, 0)`).run(GID)
-}
+/*
+ * 【2026-11-08】必须走 upsert_game：手工建局过去只写 games 行，
+ * 缺 players 行 + user_count/is_private/active 不对 → 对局列表里「看不到」、
+ * 页面也进不去。现在与 UI 建局一致（players 两角色都绑 owner，active=当前方）。
+ */
+upsert_game(db, GID, { active: ['德国', '日本', '意大利'].indexOf(g.current_nation) >= 0 ? 'Axis' : 'Allies' })
 db.prepare('insert or replace into game_state (game_id, state) values (?,?)').run(GID, JSON.stringify(g))
-db.prepare('update games set status=1, mtime=current_timestamp where game_id=?').run(GID)
 db.close()
 
 console.log('\n已写入 game ' + GID + '（' + Math.round(JSON.stringify(g).length / 1024) + ' KB）')
