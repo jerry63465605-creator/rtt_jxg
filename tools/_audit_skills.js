@@ -18,8 +18,27 @@ function parseSkill(file) {
 	const fm = m ? m[1] : ''
 	const body = m ? txt.slice(m[0].length) : txt
 	const get = k => {
-		const r = new RegExp('^' + k + ':\\s*([\\s\\S]*?)(?=^[A-Za-z_]+:|$)', 'm').exec(fm)
-		return r ? r[1].trim().replace(/^['"]|['"]$/g, '') : ''
+		const lines = fm.split(/\r?\n/)
+		const i = lines.findIndex(l => new RegExp('^' + k + ':').test(l))
+		if (i < 0) return ''
+		const first = lines[i].replace(new RegExp('^' + k + ':\\s*'), '')
+		/* YAML 块标量：description: >- / > / | 后面是缩进多行 */
+		if (/^[>|][+-]?\s*$/.test(first)) {
+			const buf = []
+			for (let j = i + 1; j < lines.length; j++) {
+				if (/^[A-Za-z_]+:/.test(lines[j])) break
+				buf.push(lines[j].trim())
+			}
+			return buf.join(' ').replace(/\s+/g, ' ').trim()
+		}
+		/* 普通单行 / 多行续写（缩进行也算进来） */
+		const buf = [first]
+		for (let j = i + 1; j < lines.length; j++) {
+			if (/^[A-Za-z_]+:/.test(lines[j])) break
+			if (!lines[j].trim()) continue
+			buf.push(lines[j].trim())
+		}
+		return buf.join(' ').replace(/\s+/g, ' ').replace(/^['"]|['"]$/g, '').trim()
 	}
 	return {
 		name: get('name'),

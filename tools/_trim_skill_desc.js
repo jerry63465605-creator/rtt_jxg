@@ -30,6 +30,15 @@ const NEW = {
 	'comp5703-week-sprint-2026-09': '查 COMP5703 2026-09-07 周冲刺分工、Auth/User 任务范围、分支与 commit 约定时用。',
 	'comp5703-week6-progress-2026-09': '查 COMP5703 第 6 周（2026-09-12~13）会议结论与个人进度（BP Builder 产 YAML、认证/repo 状态）时用。',
 	'comp5703-week7-plan-2026-09': '查 COMP5703 第 7 周（2026-09-15 起）分工（BPBuilder 字段级校验、API Publisher）与里程碑时用。',
+	/* —— 2026-11-07 第二批：frontmatter 用 `>-` 块标量，上一轮解析漏掉，实际都是 300~600 字 —— */
+	'rtt-card-id-face': 'RTT 卡牌身份判定：实例 id（15430#1）vs 面 id（15430）不能混用；涉及 response_queue、pending_response_choice、request_responses、建设结算时必查。',
+	'rtt-realboard-test': 'RTT 真实端到端测试方法论：读 db/fixture 真盘面或用 debug_* 合成，全用真实 action 驱动，三层断言（服务端/view/日志）+ 残留检查。',
+	'rtt-play-quota-windows': 'RTT 出牌配额×时点窗口×让权：play_done / play_acted / skip_play_done 三者区分，额外打出/按时机/跳过/让权他国的接线铁律。',
+	'rtt-effect-recipes': '实现卡牌效果前查这张配方表：某效果已有哪张卡实现过、代码在哪段，照抄骨架，别另造一套。',
+	'rtt-faction-case': 'RTT 阵营字段大小写铁律：game.score/active/winner、response_queue.owner_side、view.current_faction 各用哪种；混用会静默丢分。',
+	'rtt-starred-card-authority': '判定一张卡是否★卡时用：唯一权威是 rules.js 的 STARRED_CARDS；cards.js 没有 star 字段，别据此下结论。',
+	'rtt-delegate-flip': 'RTT 翻转类委托（钢铁条约/铁卫团/卡佩里尼/租借法案）：set_pending_delegate 与 finish_delegate 成对、game.delegate 单状态、控制翻转成对。',
+	'rtt-national-skill-framework': 'RTT 国家技能框架：NATIONAL_SKILL 三要素（trigger/cost/grant）、one_step 模式与两种执行通道、客户端弹窗与白名单死锁坑。',
 }
 
 function setDesc(file, desc) {
