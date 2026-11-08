@@ -29103,9 +29103,26 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 */
 	if (game.pending_echo && !is_empty_echo_frame(game.pending_echo)) {
 		const card = inst_card(game.pending_echo.card)
-		if (card && faction_of_nation(card.nation) === side)
-			return { resolve_effect: 1, log: 1 }
-		return { log: 1 }
+		const acts = (card && faction_of_nation(card.nation) === side)
+			? { resolve_effect: 1, log: 1 }
+			: { log: 1 }
+		/*
+		 * 【2026-11-08 修复·16804 卡死】排他分支必须放行"同侧武装窗口"。
+		 *
+		 * 现象（玩家实测 game 5986）：日本多步事件留下 pending_echo（选地区）期间，
+		 * 美国手里 16804《花园口决堤》的 armed 窗口弹了出来，但点「发动」/「不发动」
+		 * 都毫无反应 —— 因为本分支只给 {log:1}，客户端 send_action 因 view.actions
+		 * 无 use_armed_offer / skip_armed_offer 静默 return false。
+		 *
+		 * 与 pending_theater（L29132）/ pending_autobahn（L29165）两处同款口径：
+		 * 武装窗口的合法性由 use_armed_offer / skip_armed_offer 自己校验，
+		 * 加进白名单不会与挂起冲突。之前那两处修过、这里漏了。
+		 */
+		if (hasArmedOfferForSide(game, side)) {
+			acts.use_armed_offer = 1
+			acts.skip_armed_offer = 1
+		}
+		return acts
 	}
 	/*
 	 * 【2026-09-28】高速公路（15228）结算：玩家逐一在地图选建设位置期间，
@@ -30573,30 +30590,45 @@ function do_action(state, current, action, arg) {
 		return game
 	}
 	const _emptyEcho = is_empty_echo_frame(game.pending_echo)
-	if (game.pending_echo && !_emptyEcho &&
-		(
+	/*
+	 * 【2026-11-08 修复·16804《花园口决堤》卡死】
+	 *
+	 * echo_need 期间（他方多步事件还留着"选地区"）原本只放行 play_card/log，
+	 * 于是**同侧武装窗口**点了也被这道门禁拒回「等待你选择目标」——
+	 * 玩家看到弹窗、点「发动/不发动」都毫无反应（与 pending_theater / pending_autobahn
+	 * 的白名单口径不一致，那两处早就放行了武装窗口）。
+	 * 武装窗口的合法性由 use_armed_offer / skip_armed_offer 自身校验，放行不会冲突。
+	 */
+	const _echoArmedOk = hasArmedOfferForSide(game, side)
+	const _isArmedAct = (action === 'use_armed_offer' || action === 'skip_armed_offer')
+	const _isDebugAct = !!(arg && arg.__debug) || String(action).startsWith('debug_')
+
+	if (game.pending_echo && !_emptyEcho) {
+		const pe = game.pending_echo
+		let allowed
+		if (pe.kind === 'echo_need') {
 			/*
-			 * 【2026-10-31】kind='echo_need'：多步增强卡在等"补参重发"——
-			 * 此时必须放行 play_card（客户端用同一张卡再发一次，带上 space/choice），
-			 * 否则玩家选完地区也提交不了（17514 飞虎队 / 17815 Z 计划）。
+			 * 【2026-10-31】多步增强卡在等"补参重发"：放行 play_card（同一张卡再发一次）。
+			 * 【2026-11-08】追加：本方武装窗口的 use/skip 也放行（见上方注释）。
 			 */
-			game.pending_echo.kind === 'echo_need'
-				? (action !== 'play_card' && action !== 'log' &&
-					!(arg && arg.__debug) && !String(action).startsWith('debug_'))
-				: (!game.pending_echo.wait_intercept
-					? (action !== 'resolve_effect' &&
-						!(arg && arg.__debug) && !String(action).startsWith('debug_'))
-					: (action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
-						action !== 'trigger_response' && action !== 'pass_response' &&
-						action !== 'resolve_response_choice' && action !== 'response_reorder' &&
-						action !== 'response_confirm' && action !== 'log' &&
-						!(arg && arg.__debug) && !String(action).startsWith('debug_'))))) {
-		game.log.push(game.pending_echo.kind === 'echo_need'
-			? '《' + (game.pending_echo.name || '增强卡') + '》等待你选择目标（请点地图高亮地区）'
-			: (game.pending_echo.wait_intercept
-				? '《战术革新》已付代价，等待敌方拦截应答（此时只能由拦截方表态）'
-				: '《战术革新》结算中：请选择要弃置/免费打出的状态卡，期间不能进行其它操作'))
-		return game
+			allowed = action === 'play_card' || action === 'log' ||
+				(_echoArmedOk && _isArmedAct) || _isDebugAct
+		} else if (!pe.wait_intercept) {
+			allowed = action === 'resolve_effect' || _isDebugAct
+		} else {
+			/* 战术革新：代价已付、等敌方拦截应答 → 放行拦截方表态与响应栈动作 */
+			allowed = _isArmedAct || action === 'trigger_response' || action === 'pass_response' ||
+				action === 'resolve_response_choice' || action === 'response_reorder' ||
+				action === 'response_confirm' || action === 'log' || _isDebugAct
+		}
+		if (!allowed) {
+			game.log.push(pe.kind === 'echo_need'
+				? '《' + (pe.name || '增强卡') + '》等待你选择目标（请点地图高亮地区）'
+				: (pe.wait_intercept
+					? '《战术革新》已付代价，等待敌方拦截应答（此时只能由拦截方表态）'
+					: '《战术革新》结算中：请选择要弃置/免费打出的状态卡，期间不能进行其它操作'))
+			return game
+		}
 	}
 
 	/* 【2026-10-15】战斗打断的高速公路：挂起解除后原样恢复（状态正确性安全网） */
