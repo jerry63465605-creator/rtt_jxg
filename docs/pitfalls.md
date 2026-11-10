@@ -7582,4 +7582,3 @@ kill 前后都要列出命中的 pid / cmd 再动手。
 
 **因果实证**：`git stash` 对照 HEAD，探针在 HEAD 下复现
 （`debug_attrition/restore/score=0`、挂起期 7/10），修复后 10/10。
-
