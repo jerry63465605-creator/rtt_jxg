@@ -11262,12 +11262,47 @@ const EVENT_EFFECTS = {
 		],
 	},
 	'16300': {
-		/* 火炬行动：在<非洲北部>或相邻建设1支部队。对<非洲北部>发起1次陆战。 */
+		/* 火炬行动：按任意顺序执行：在<非洲北部>或相邻建设1支部队。对<非洲北部>发起1次陆战。 */
 		name: '火炬行动',
 		actor: '美国',
-		steps: [
-			{ op: 'build', type: 'army', around: '非洲北部' },
-			{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['非洲北部']) },
+		/*
+		 * 【2026-11-10 · #9】旧实现写死 steps:[build army → battle]：
+		 * ① 建不出海军（报障"火炬无法建设海军"）；② 强制先建设后陆战，
+		 * 与卡面「按任意顺序执行」不符（玩家想先发动陆战时做不到）。
+		 *
+		 * 全部复用现成范式，不新增引擎机制、不改客户端：
+		 *   · 17532《战区移动》：eff.choice + choiceLabels 表达"任意顺序"；
+		 *   · 12502《告法国人民书》：4 选项 choice 先例；
+		 *   · 15225《阿登闪击战》：[battle → build] 陆战先行（战斗预算结算后
+		 *     由 resumeStep 续跑后续建设步）；
+		 *   · 15230《海狮计划》：useNewPiece 的新海军同样可作陆战发起单位。
+		 *
+		 * 4 分支 = 2 种顺序 × 2 种兵种。「先陆战」分支不带 useNewPiece
+		 * （此刻尚无新单位，用现有发起单位）；「先建设」分支保留 useNewPiece。
+		 */
+		choiceLabels: [
+			'先对〈非洲北部〉发起陆战，再建设 1 支陆军',
+			'先对〈非洲北部〉发起陆战，再建设 1 支海军',
+			'先建设 1 支陆军，再对〈非洲北部〉发起陆战',
+			'先建设 1 支海军，再对〈非洲北部〉发起陆战',
+		],
+		choice: [
+			[
+				{ op: 'battle', kind: 'land', spaces: space_ids_of(['非洲北部']) },
+				{ op: 'build', type: 'army', around: '非洲北部' },
+			],
+			[
+				{ op: 'battle', kind: 'land', spaces: space_ids_of(['非洲北部']) },
+				{ op: 'build', type: 'navy', around: '非洲北部' },
+			],
+			[
+				{ op: 'build', type: 'army', around: '非洲北部' },
+				{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['非洲北部']) },
+			],
+			[
+				{ op: 'build', type: 'navy', around: '非洲北部' },
+				{ op: 'battle', kind: 'land', useNewPiece: true, spaces: space_ids_of(['非洲北部']) },
+			],
 		],
 	},
 	'16301': {
@@ -21090,6 +21125,14 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 				useNewPiece: !!(st.useNewPiece),
 				newPiece: (st.useNewPiece ? newPiece : null),
 				choice: arg.choice,     /* 回传给 event_battle_targets，供 choice 型卡定位分支 */
+				/*
+				 * 【2026-11-10 · #9】预算结算续跑要沿用玩家【已选】的 spaces/picks 等参数，
+				 * 与 pending_event_step.accum 同款浅拷。否则 event_finish 只回传 choice，
+				 * resolve_event_card 会回落到 cands.slice(0,need) 自动挑第一个候选 ——
+				 * 16300《火炬行动》「先陆战」分支选<地中海>却建在<北海>即此坑。
+				 * 打出时未传这些参数的卡（写死单候选）行为不变，仍走自动回落。
+				 */
+				accum: Object.assign({}, arg),
 				descs: [], battleOk: 0,
 				/* 【2026-10-11】预算结算后续跑断点：若 battle 之后还有 step（build/recruit 等），
 				 * 记录下一个 step 下标；event_finish 关预算后从第 resumeStep 步继续跑。
@@ -32434,8 +32477,10 @@ function do_action(state, current, action, arg) {
 				? (_eff.choice ? (_eff.choice[b.choice] || []) : (_eff.steps || []))
 				: []
 			if (b.resumeStep < _steps.length) {
+				/* 【2026-11-10 · #9】把打出时玩家已选的 spaces/picks 一并带回续跑，
+				 * 不再只传 choice（否则后续 build/recruit 步由服务端自动挑第一个候选）。 */
 				const res = resolve_event_card(game, b.nation, b.card_id,
-					{ choice: b.choice }, b.resumeStep)
+					Object.assign({}, b.accum || {}, { choice: b.choice }), b.resumeStep)
 				if (res && res.ok && res.desc)
 					game.log.push('《' + nm + '》后续步骤：' + res.desc)
 				else if (res && res.reason)

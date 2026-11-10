@@ -7508,3 +7508,44 @@ hands[n] = hand_view(game, n, (n === my_nation || n === _costVisible) ? n : my_n
 · 15410《武士道》是 `kind:'any'` 机会卡，**不能主动打出、也不需要装载**，留在手里即可；
 · 17837《KV-2》的 `kv2_ask` 由【苏联持有方】用 `resolve_battle{kv2_trigger:true}` 发动，之后
   `stage='kv2'` 等待方变成**攻击方**，再由攻击方选 `{kv2:'discard'|'protect', drop:[4张]}`。
+
+---
+
+## 2026-11-10 · #9《火炬行动》16300 四分支 choice：两则踩坑
+
+### 坑 1：`event_finish` 续跑丢玩家已选地区（服务端替玩家挑）
+
+**现象**：16300 改成「2 种顺序 × 2 种兵种」4 分支后，「先陆战」分支选〈地中海〉，
+点「结束《火炬行动》」后却建在〈北海〉。
+
+**成因**：战斗预算 `event_budget` 只存了 `choice` 与 `resumeStep`；
+`event_finish` 续跑调 `resolve_event_card(game, …, { choice: b.choice }, b.resumeStep)`，
+没带打出时的 `spaces[stepIndex]`。多步卡（`total > 1`）的 `pick_space_for` 读
+`arg.spaces[i]`，缺参就回落 `cands.slice(0, need)` —— **自动挑第一个候选**。
+这是框架既有缺陷；`15225《阿登闪击战》` 因 build 写死单候选，看不出来。
+
+**改法**（与 `pending_event_step.accum` 同款，2 处约 3 行）：
+① 建预算时 `accum: Object.assign({}, arg)`；
+② 续跑 `Object.assign({}, b.accum || {}, { choice: b.choice })`。
+打出时未传 `spaces` 的卡与原 `{choice}` 等价 —— 已用 `git stash` 对照 HEAD，
+15225 的续跑日志前后完全相同，无回归。
+
+**判据**：凡「battle 在前、后面还有 build/recruit」的 steps，续跑必须带着 `accum`。
+写测试要**故意选最后一个候选**，否则「服务端自动挑第一个」与「按玩家选择」结果重合、
+断言形同虚设 —— 本次第一版选了第一个海域，38 项全绿却漏掉真 bug。
+
+### 坑 2：重启服务器时 `server\.js` 过滤会误杀 `preview-server.js`
+
+**现象**：按运维 skill 的 kill 命令
+`Get-CimInstance … | Where-Object { $_.CommandLine -match 'server\.js' }`，
+本机同时命中两个进程：`node server.js`（8091，对局）与
+`node preview-server.js 8090`（卡牌预览）。照抄会把预览服务器一起杀掉。
+
+**正确过滤**：`-match 'server\.js' -and -notmatch 'preview-server'`。
+本次只 kill 对局进程；重启后 8090 / 8091 各就各位，
+`curl.exe http://localhost:8091/` = 200，并反查
+`Get-NetTCPConnection -LocalPort 8091` 的 OwningProcess 确为 `node.exe`
+（8080 是 `steamwebhelper`，别碰；`127.0.0.1` 连不上属正常，服务器只监听 `::1`）。
+
+**判据**：进程过滤要按【命令行全文】排除已知同名前缀，不能只靠子串匹配；
+kill 前后都要列出命中的 pid / cmd 再动手。
