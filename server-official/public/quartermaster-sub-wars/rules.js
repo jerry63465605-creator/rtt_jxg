@@ -30251,13 +30251,35 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 		const pd = game.pending_armed_delegate
 		game.block_reason = 'pending_armed_delegate: 让权委托进行中，待点「结束委托」归还'
 		const acts = {
-			log: 1,
-			resolve_battle: 1,
-			clear_ask: 1, toggle_ask_remove: 1, air_support: 1,
-			trigger_response: 1, pass_response: 1,
-			resolve_response_choice: 1, response_confirm: 1, response_reorder: 1,
+			log: 1, clear_ask: 1, toggle_ask_remove: 1, air_support: 1,
 		}
 		if (faction_of_nation(pd.nation) === side) acts.finish_armed_delegate = 1
+		/* 战斗表态：只给【当前等待方】（防守方 defend / 发起方 counter），不无脑给双方 */
+		if (game.pending_battle &&
+			faction_of_nation(pending_wait_nation(game.pending_battle)) === side)
+			acts.resolve_battle = 1
+		/* 响应表态：只给栈顶帧 owner 方 */
+		const _tf = top_response_frame(game)
+		if (_tf && _tf.owner_side === side) {
+			acts.trigger_response = 1
+			acts.pass_response = 1
+			acts.resolve_response_choice = 1
+			acts.response_confirm = 1
+			acts.response_reorder = 1
+		}
+		/*
+		 * 【2026-11-11 修复·实测 game 19】委托进行中正是玩家要发动
+		 * after_land 状态卡（17842 喀秋莎）的时机，必须与 inner 同源登记
+		 * activate_status / activate_status:<cid>。
+		 *
+		 * 漏了这一步的后果（玩家实测"喀秋莎未生效"）：view.actions 里只有
+		 * finish_armed_delegate，客户端 send_action('activate_status') 查不到
+		 * 白名单键 -> **静默不发** -> 点了完全没反应。
+		 * 服务端 R.action 直发其实能成功（所以只测服务端会漏掉这类 bug）。
+		 * register_status_actions 内部仍按 status_actions_frozen 保守：
+		 * 战斗/响应未决时只放行"正处在立刻窗口"的那张卡，不会放宽到任意状态卡。
+		 */
+		register_status_actions(game, side, acts)
 		for (const k of ['debug_place', 'debug_remove', 'debug_clear', 'debug_draw',
 			'debug_add_card', 'debug_set_phase', 'debug_set_view_nation',
 			'debug_attrition', 'debug_restore', 'debug_score'])

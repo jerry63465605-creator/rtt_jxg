@@ -7930,7 +7930,17 @@ pending_event_step、event_budget、各类 delegate。
 `_smoke_air_retreat_restore` 72/0、`_smoke_seq` 52/0。
 详见 `docs/change-17842-katyusha-window.md`。
 
-**教训 4：收紧"只认卡主本人"时必须排查【借用】这类跨归属机制。**
+**教训 4（最要命）：服务端 `R.action` 直发能成功 ≠ 玩家点得到 —— 必须断言 `view.actions`。**
+玩家实测「喀秋莎未生效」，而我用 `R.action` 直发测试全绿。读真实 `game_state`（game 19）才看到：
+喀秋莎 `ready=true`、窗口 `space=22`、目标在 22，但 **`view.actions` 里只有
+`finish_armed_delegate`，没有 `activate_status`** → 客户端 `send_action` 查不到键 → **静默不发**。
+根因是 `build_actions` 外层「委托进行中」的收口早退，漏了 `register_status_actions`。
+判据：**凡是新增/收窄挂起白名单，测试里必须断言 `view.actions` 含目标 verb
+（还有 `verb:<cid>` 后缀键）**，只跑 `R.action` 会系统性地漏掉整类"点了没反应"的 bug。
+最可靠的验证是**加载真实对局 state 回放**（`tools/_repro_game19_katyusha.js`），
+因为合成的 `new_board` 场景常常缺了触发该分支的真实组合。
+
+**教训 5：收紧"只认卡主本人"时必须排查【借用】这类跨归属机制。**
 17732《德国军事顾问》让意大利借用一张德国状态卡，而德国 15253《闪电战》/
 15245《俯冲式轰炸机》正是 `after_land` 卡。按 `own !== nation` 一刀切后，
 借用方发起陆战时该卡不再被武装；而 `status_window_ready` / `activate_status`

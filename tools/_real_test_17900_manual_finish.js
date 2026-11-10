@@ -131,6 +131,33 @@ console.log('\n=== B. 日本不代受、战斗结算完后 ===')
 		/喀秋莎/.test(lg) && !/尚未参战/.test(lg), lg.slice(0, 180))
 }
 
+/* ================= B'. 白名单（客户端能不能真的发出去） ================= */
+console.log('\n=== B\'. 委托进行中：view.actions 必须含 activate_status ===')
+{
+	const g = scene()
+	toBattlePending(g)
+	R.action(g, 'Axis', 'resolve_battle', { declined: true, retreat: null })
+	I.refresh(g)
+	const cid = (g.table['苏联'] || []).find(x => faceOf(x) === '17842')
+	const aA = Object.keys(R.view(g, 'Allies').actions || {})
+	const aX = Object.keys(R.view(g, 'Axis').actions || {})
+	/*
+	 * 实测 game 19 的教训：委托进行中只登记 finish_armed_delegate，
+	 * 喀秋莎虽然 ready=true，但客户端 send_action('activate_status') 查不到
+	 * 白名单键 → 静默不发 → 玩家看到"点了没反应/没生效"。
+	 */
+	ok('★★ B\'1 Allies 白名单含 activate_status',
+		aA.includes('activate_status'), J(aA.filter(k => /activate/.test(k))))
+	ok('★★ B\'2 Allies 白名单含 activate_status:' + cid,
+		aA.includes('activate_status:' + cid), J(aA.filter(k => /activate/.test(k))))
+	ok('B\'3 Allies 白名单含 finish_armed_delegate', aA.includes('finish_armed_delegate'))
+	ok('B\'4 非本方（Axis）不得有 activate_status / finish',
+		!aX.includes('activate_status') && !aX.includes('finish_armed_delegate'),
+		J(aX.filter(k => /activate|finish/.test(k))))
+	ok('B\'5 战斗已结算 -> 双方都不该有 resolve_battle',
+		!aA.includes('resolve_battle') && !aX.includes('resolve_battle'))
+}
+
 /* ================= C. 手动结束才归还 ================= */
 console.log('\n=== C. 点「结束委托」才归还控制权 ===')
 {

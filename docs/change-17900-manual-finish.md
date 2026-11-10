@@ -81,3 +81,52 @@
 - 委托进行中会屏蔽 `play_card` / 推进阶段等常规动作（只留战斗表态、响应、结束委托、debug），避免"打着打着委托被搁置"。
 - 17729 未改：它已有 `waiting_battle`（等 `battle_reconcile_active` 续跑）与 `pending_event_step`（状态卡先行窗口），机制上已等价于手动。
 - 若将来新增「涉及战斗的让权」，应复用 `armed_delegate_can_finish` + `finish_armed_delegate` 这套，而不是让它自动归还。
+
+## 7. 实测回归：委托期间漏登记 `activate_status`（玩家 game 19 报障）
+
+**玩家报障**：「我实际测试噶秋沙未能生效啊？你怎么测试生效的？」
+`http://localhost:8091/quartermaster-sub-wars/play.html?game=19&role=Allies`
+
+**真实存档（`game_state` game=19）**：
+
+```
+current_nation = 苏联, phase = play
+status_instant = [{ card_id:'17842#82', window:'after_land', space:22, by:'苏联',
+                    ctx:{ space:21, piece:'dbg_11', ... } }]
+pending_armed_delegate = { card_id:'17900#86', played:true, return_nation:'英国' }
+last_piece_removed = { nation:'日本', space:21, piece:'dbg_11' }
+space22 = [ dbg_10:日本/army ]      <-- 喀秋莎要打的目标
+苏联陆军东北邻域 = [ dbg_7@24, p12@21 ]
+```
+
+**根因**：`view.actions` 里只有 `finish_armed_delegate`，**没有 `activate_status`**：
+
+```
+Allies: activate_status = false | activate_status:17842#82 = false | finish_armed_delegate = true
+```
+
+客户端 `send_action` 先查 `view.actions[verb]`，查不到就**静默不发** →
+玩家点喀秋莎完全没反应。而服务端 `R.action` 直发其实**能成功**
+（真实 state 回放：弃 1 张、发起陆战、移除 `dbg_10`、写 `status_used`）——
+这正是我此前"测试生效"的原因：**测试全用 `R.action` 直发，绕过了白名单**。
+
+**漏洞来源**：§3 第 5 项在 `build_actions` 外层加的 `pending_armed_delegate.played` 收口
+**早退**，只给了 `finish_armed_delegate` + 战斗/响应表态，**没调用 `register_status_actions`**。
+而委托进行中恰恰是玩家要发动 `after_land` 状态卡（喀秋莎）的时机。
+
+**修法**：
+1. 外层收口补 `register_status_actions(game, side, acts)`（与 inner 同源；它内部仍按
+   `status_actions_frozen` 保守：战斗/响应未决时只放行"正处在立刻窗口"的那张卡）；
+2. 顺带按 side 收窄：`resolve_battle` 只给 `pending_wait_nation(pb)` 所属方；
+   `trigger_response/pass_response/resolve_response_choice/...` 只给 `top_response_frame(game).owner_side`。
+
+**新增测试**（`_real_test_17900_manual_finish.js` B' 组，5 项）：
+- Allies 白名单**含** `activate_status` 与 `activate_status:<cid>`；
+- Allies 含 `finish_armed_delegate`；
+- Axis **不得**有 `activate_status` / `finish_armed_delegate`；
+- 战斗已结算 → 双方都**不该**有 `resolve_battle`。
+
+**排查工具**（只读，可复验）：
+- `tools/_dump_game19.js [gameId]`：打印真实对局的关键状态；
+- `tools/_repro_game19_katyusha.js [gameId]`：加载真实 state，打印 `view.table_status`、
+  模拟点击看服务端日志 —— **实测发现该类问题的唯一可靠方式**。
