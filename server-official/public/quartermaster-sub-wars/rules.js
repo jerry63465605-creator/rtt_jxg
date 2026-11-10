@@ -3238,13 +3238,17 @@ function maybe_offer_national_skill(game, nation, trigger) {
 	 * ⚠ 是【延后】不是【丢弃】—— 与仓库既有两个先例同口径：
 	 *   · 17526《民主兵工厂》finish_uk_build_delegate：英国建设委托结束后
 	 *     after_card_resolved(美国,'17526') 补开（注释明写"仿 17535《租借法案》先例"）；
-	 *   · 17721《钢铁条约》pending_17721_skill：意大利打出时跳过开窗，
-	 *     等德国的状态卡结算收尾（且在其 after_card_resolved 之后）再补开。
-	 * 让权归还后由 resolve_us_japan_delegate 触发补开，★卡权益不丢。
+	 *   · 17721《钢铁条约》：意大利打出时跳过开窗，等德国让权链结束再补开。
+	 *
+	 * 【2026-11-11 · 统一】判据从「仅跨阵营 17553」扩成 delegate_skill_reason
+	 * （任意未决 game.delegate / 跨阵营让权 / 声明式让权链），
+	 * 补开统一由 exports.action 出口的 flush_deferred_national_skill 负责。
+	 * 16703 与 17721 共走这一条路径，不再各自维护专用标记。
 	 */
-	if (pending_cross_faction_handoff(game)) {
+	const _defer = delegate_skill_reason(game)
+	if (_defer) {
 		game.national_skill_deferred = { nation: nation, trigger: trigger }
-		game.log.push('（' + pending_cross_faction_handoff(game) +
+		game.log.push('（' + _defer +
 			'让权未决，【' + nation + '】的国家技能窗口延后至让权归还后弹出）')
 		return game
 	}
@@ -6394,6 +6398,54 @@ function pending_cross_faction_handoff(game) {
 	return null
 }
 
+/*
+ * 【2026-11-11 · 通用「让权 × 国家技能」延后判据】
+ *
+ * 玩家口径：16703《罗马尼亚铁卫团》参考 17721《钢铁条约》——
+ * 让权未决期间【不弹】意大利国家技能窗口（两者都要 active / current_nation，
+ * 同阵营时还会被 do_action 的"错过即失效"守卫按 side 误清），归还后立刻补开。
+ *
+ * 返回【人话原因】= 让权仍未决、技能窗口须延后；null = 可立即开窗。
+ * 三类形态都是【状态/声明式】判据，不在逻辑里写死卡面 id：
+ *   ① game.delegate 对象仍在（16703 german_draw / 17721 chain /
+ *      17729 order / 17535 single，共用 set/finish_delegate 原语）
+ *   ② 跨阵营让权（17553 us_japan_delegate，既有 pending_cross_faction_handoff）
+ *   ③ 让权链【尚未建立但已在排队】：卡配置声明 deferSkillUntilDelegateEnd，
+ *      且它发出的 extra_play 仍在。17721 打出后先给意大利一张响应牌
+ *      extra_play，德国的 delegate 要等这张响应牌打出才建立 ——
+ *      没有这条，打出 17721 的那一帧就会提前补开窗口。
+ */
+function delegate_skill_reason(game) {
+	if (game.delegate)
+		return 'delegate[' + (game.delegate.mode || '?') + ']'
+	const cross = pending_cross_faction_handoff(game)
+	if (cross) return cross
+	const ep = game.extra_play
+	if (ep && ep.source) {
+		const eff = card_effect_of(String(inst_card_id(ep.source)))
+		if (eff && eff.deferSkillUntilDelegateEnd)
+			return (eff.name || '让权链') + '（等待让权链结束）'
+	}
+	return null
+}
+
+/*
+ * 归还后【立刻】补开被延后的国家技能窗口。
+ * 放在 exports.action 的统一出口（finally）而不是 finish_delegate 内部：
+ * 17721 德国打出状态卡时，finish_delegate 发生在 play_card 的 extra_play 钩子，
+ * 后面还会跑德国状态卡的 after_card_resolved —— 若那张状态卡是★，
+ * 会覆盖刚补开的意大利窗口（这正是旧 pending_17721_skill 要排在
+ * play_status_card_impl 的 after_card_resolved 之后的原因）。
+ * 统一出口保证所有 after_card_resolved / 清窗逻辑都跑完才补开，且不漏任何收尾路径。
+ */
+function flush_deferred_national_skill(game) {
+	if (!game.national_skill_deferred) return
+	if (delegate_skill_reason(game)) return      /* 让权仍未结束，继续等 */
+	const def = game.national_skill_deferred
+	game.national_skill_deferred = null
+	maybe_offer_national_skill(game, def.nation, def.trigger)
+}
+
 function offer_us_japan_delegate(game, reason) {
 	/* 仅在美国桌面持有 17553 时触发 */
 	if (!table_has(game, '美国', 17553)) return
@@ -6483,20 +6535,12 @@ function resolve_us_japan_delegate(game, arg) {
 	if (game.econ_return_active) { game.active = game.econ_return_active; game.econ_return_active = null }
 	game.log.push('【抗日义勇军】日本结算完毕，操作权归还' + (dg.return_nation || ''))
 	/*
-	 * 【2026-10-26 ②】补开被让权【推迟】的国家技能窗口。
-	 *
-	 * 对齐 17526《民主兵工厂》/ 17721《钢铁条约》的既有范式：
-	 * 让权期间不开窗（避免与让权抢 active），【归还后】再开，★卡权益不丢。
-	 *
-	 * ⚠ 必须放在【归还操作权之后】：此时 us_japan_delegate 已清、active 已正确，
-	 *   补开的窗口不会再与让权打架（17721 那条注释强调的同款顺序要求）。
-	 * 可用性（一回合一次 / 付得起 / 有得打）由 maybe_offer_national_skill 内部 guard 保证。
+	 * 【2026-10-26 ② / 2026-11-11 统一】让权期间不开窗（避免与让权抢 active），
+	 * 归还后立刻补开，★卡权益不丢。此处只负责【归还操作权】：
+	 * 真正的补开由 exports.action 出口的 flush_deferred_national_skill 统一执行
+	 * （判据 delegate_skill_reason 已含 pending_cross_faction_handoff），
+	 * 与 16703 / 17721 共走一条路径，不再各自维护一份补开代码。
 	 */
-	if (game.national_skill_deferred) {
-		const _def = game.national_skill_deferred
-		game.national_skill_deferred = null
-		maybe_offer_national_skill(game, _def.nation, _def.trigger)
-	}
 }
 
 /* ============================================================
@@ -12168,6 +12212,13 @@ const EVENT_EFFECTS = {
 	/* 17721 钢铁条约 */
 	'17721': {
 		name: '钢铁条约', actor: '意大利',
+		/*
+		 * 【2026-11-11】声明式：本卡打出后会让权给德国（链式，
+		 * delegate 要等意大利打出响应牌才建立），国家技能窗口须等
+		 * 让权链结束后再开。判据由 delegate_skill_reason 统一读取，
+		 * 不在 play_card / after_card_resolved 里写死卡面 id。
+		 */
+		deferSkillUntilDelegateEnd: true,
 		run: function (game, ctx) {
 			/*
 			 * 【2026-10-25 修复·手牌无响应牌时流程断链】
@@ -12177,8 +12228,9 @@ const EVENT_EFFECTS = {
 			 * ep.source==='17721' && ep.nation==='意大利'），于是意大利手牌里
 			 * 没有响应牌时 ① 永远做不到 -> ② 永远不建立：
 			 *   界面停在"等意大利打响应牌"，【不会切到德国】，
-			 *   且 pending_17721_skill（意大利国家技能窗口，刻意延迟到德国
-			 *   归还后才弹）也一起丢失。
+			 *   且意大利国家技能窗口（2026-11-11 起统一由
+			 *   delegate_skill_reason / flush_deferred_national_skill 延后到
+			 *   德国归还后补开）也一起丢失。
 			 *
 			 * 玩家口径（2026-10-25）：无响应牌时按"能做的部分尽量做"处理 ——
 			 * 跳过 ①，直接把链交给德国。
@@ -12191,8 +12243,8 @@ const EVENT_EFFECTS = {
 			if (!hasResp) {
 				/*
 				 * 与 ① 成功后的建链分支【完全同参】，保证两条路径殊途同归：
-				 * 德国打完 -> finish_delegate(29214) -> pending_17721_skill；
-				 * 德国放弃 -> event_delegate_decline 分支照常归还并弹技能窗口。
+				 * 德国打完 / 德国放弃 -> finish_delegate 归还，
+				 * 意大利国家技能窗口由 exports.action 出口统一补开。
 				 */
 				set_pending_delegate(game, {
 					mode: 'chain', delegate: '德国',
@@ -30166,15 +30218,10 @@ function play_status_card_impl(game, nation, card_id) {
 	request_responses(game, 'play_card', { nation: nation, card: card_id, card_obj: c }, false)
 	after_card_resolved(game, nation, card_id)
 	/*
-	 * 【2026-10-11 修复】17721《钢铁条约》链式：德国打出状态卡结算后，
-	 * 才弹出意大利国家技能窗口（由 play_card 的 17721 归还分支预置
-	 * pending_17721_skill）。必须放在上方 after_card_resolved 之后，
-	 * 否则会被德国状态卡（非★）的 after_card_resolved 清掉。
+	 * 【2026-11-11 · 方案 B】删掉 pending_17721_skill 的专用消费点：
+	 * 让权链结束后由 exports.action 出口的 flush_deferred_national_skill
+	 * 统一补开，且天然排在所有 after_card_resolved 之后（不会误清）。
 	 */
-	if (game.pending_17721_skill) {
-		game.pending_17721_skill = false
-		after_card_resolved(game, '意大利', '17721')
-	}
 	return { ok: true }
 }
 
@@ -34351,14 +34398,21 @@ function do_action(state, current, action, arg) {
 			}
 			return game
 		}
-	/* 【2026-10-08】17721 钢铁条约：德国放弃状态卡打出，控制权归还意大利 */
+	/*
+	 * 让权链的「放弃」出口：17721（德国放弃打状态卡）/ 16703（德国放弃弃牌摸牌）
+	 * 共用，按 mode 分流文案；控制权一律走 finish_delegate 成对归还。
+	 * 【2026-11-11】删掉写死的 after_card_resolved('意大利','17721')：
+	 * 技能窗口由 exports.action 出口的 flush_deferred_national_skill 统一补开，
+	 * 两条 mode 都不再各写一份补开逻辑。
+	 */
 	if (action === 'event_delegate_decline') {
 		if (game.delegate) {
+			const _mode = game.delegate.mode
 			finish_delegate(game, game.delegate)
 			clear_extra_play(game)
-			game.log.push('【德国】放弃《钢铁条约》的状态卡打出，控制权归还意大利')
-			/* 【2026-10-11 修复】德国放弃后，意大利 17721 国家技能窗口弹出 */
-			after_card_resolved(game, '意大利', '17721')
+			game.log.push(_mode === 'german_draw'
+				? '【德国】放弃《罗马尼亚铁卫团》的弃牌摸牌，控制权归还意大利'
+				: '【德国】放弃《钢铁条约》的状态卡打出，控制权归还意大利')
 		}
 		return game
 	}
@@ -34830,8 +34884,7 @@ function do_action(state, current, action, arg) {
 			} else if (ep && ep.source === '17721' && ep.nation === '德国') {
 				finish_delegate(game, game.delegate)
 				game.log.push('【钢铁条约】德国已打出状态卡，控制权归还意大利')
-				/* 【2026-10-11 修复】延迟意大利国家技能窗口到状态卡结算收尾 */
-				game.pending_17721_skill = true
+				/* 【2026-11-11】技能窗口由 exports.action 出口统一补开，不再预置专用标记 */
 			}
 		}
 
@@ -35646,16 +35699,13 @@ function do_action(state, current, action, arg) {
 			 */
 			if (!r.cardResolved) {
 				/*
-				 * 【2026-10-11 修复】17721《钢铁条约》的国家技能窗口不应在
-				 * 卡打出时立即弹出，而应等【德国归还控制权之后】再弹出
-				 * （意大利→德国链式委托结束后）。真正的触发点在 play_card 的
-				 * 17721 委托归还分支（L21279 附近）与 event_delegate_decline
-				 * （L20908 附近）。其余★事件卡仍按原逻辑立即开窗。
+				 * 【2026-11-11 · 方案 B】去掉 `!== '17721'` 卡面硬编码：
+				 * 所有★事件卡一律走 after_card_resolved，是否延后开窗由
+				 * maybe_offer_national_skill 内的 delegate_skill_reason 统一判定
+				 * （读 EVENT_EFFECTS[face].deferSkillUntilDelegateEnd 或 game.delegate）。
+				 * 归还后由 exports.action 出口的 flush_deferred_national_skill 补开。
 				 */
-				if (inst_card_id(card_id) !== '17721')
-					after_card_resolved(game, nation, card_id)
-				else
-					game.log.push('（17721《钢铁条约》国家技能窗口延迟至德国归还后弹出）')
+				after_card_resolved(game, nation, card_id)
 				/*
 				 * 【2026-10-28 #13 修复】事件卡结算完成 = 卡牌生效，必须派发 play_card。
 				 *
@@ -36396,6 +36446,15 @@ exports.action = function (state, current, action, arg) {
 		try { flush_piece_removed_offers(game) } catch (e) { game.log.push('空军窗口续派错误：' + e.message) }
 		/* 【2026-11-06 · 17811 特例】窗口都处理完后推进 bureau_wait */
 		try { maybe_ask_bureau(game) } catch (e) { game.log.push('17811 特例续跑错误：' + e.message) }
+		/*
+		 * 【2026-11-11】让权归还后【立刻】补开被延后的国家技能窗口。
+		 * 放在 finally 末尾：本次动作里的所有 after_card_resolved / 清窗 /
+		 * finish_delegate 都已跑完，补开的窗口不会再被覆盖或误清。
+		 * 让权仍未决时 flush 内部直接返回（继续等归还）。
+		 */
+		try { flush_deferred_national_skill(game) } catch (e) {
+			game.log.push('国家技能延后补开错误：' + e.message)
+		}
 		/* 先补写"部队具体怎么动"的明细，再记历史 —— 这样明细属于本次动作的日志区间 */
 		try { qm_log_piece_diff(game, before_pieces) } catch (e) {}
 		try {

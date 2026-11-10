@@ -7724,3 +7724,57 @@ C 组补完目标重提真的走通并进入战斗预算。
 **验证**：`tools/_real_test_17543_radar_pause.js` 57/0、旧测试重写为真实栈帧 8/0、
 `_smoke_facedown_privacy` 20/0；`git stash` 对照 HEAD 确认其余失败均预存。
 详见 `docs/change-17543-radar-pause.md`。
+
+---
+
+## 2026-11-11 · 16703 让权 × 意大利国家技能：同阵营让权按 side 判定会误清窗口
+
+**现象**：玩家报「16703 的让权参考 17721，保证不会让意大利国家技能和让权冲突」。
+真实探针坐实：16703（★分步卡）第 2 步建 `delegate[german_draw]` 时
+`national_skill_offer` 已 OPEN；德国点手牌收尾后窗口被误清、★卡权益丢失；
+德国点「放弃」却靠硬编码 `after_card_resolved('意大利','17721')` 补回，
+日志还错写《钢铁条约》。
+
+**教训 1：同阵营让权不能用 `side` 判「谁的窗口」。**
+`do_action` 的「错过即失效」守卫按
+`faction_of_nation(off.nation) === side` 判定；意大利与德国同属 axis，
+于是德国的让权答复动作会把意大利的技能窗口当作「本方已放弃」清掉。
+判据一律用【窗口归属国本人】，不能拿阵营 side 代理（与通用教训 10、
+`rtt-pending-clear-side` 同源）。
+
+**教训 2：让权与技能窗口【不要并存】，要延后。**
+#4（`0c92156`）走的是「两窗口共存 + 白名单叠加谁先答都行」，
+但两个窗口都抢 `active`/`current_nation`，同阵营时必然出事。
+正确口径是 17721 的：**让权期间不开窗，`national_skill_deferred` 记权益，
+归还后补开**。这是【延后】不是【丢弃】—— 与 17526/17553 先例同款。
+
+**教训 3：补开必须挂在【动作统一出口】，不能挂在归还原语内部。**
+第一反应是在 `finish_delegate` 里补开，但 17721 德国打出状态卡时
+`finish_delegate` 发生在 `play_card` 的 extra_play 钩子，后面还会跑
+德国状态卡的 `after_card_resolved` —— 若那张状态卡是★，会覆盖刚补开的
+意大利窗口。旧 `pending_17721_skill` 正是为此特意排在
+`play_status_card_impl` 的 `after_card_resolved` 之后。
+统一放在 `exports.action` 的 finally 末尾，所有 `after_card_resolved`/
+清窗/归还都跑完才补开，一处覆盖全部收尾路径且不漏。
+
+**教训 4：不要为每张让权卡各写一个专用标记 / 卡面硬编码。**
+旧实现有三份：`pending_17721_skill`、`play_card` 里 `!== '17721'`、
+`event_delegate_decline` 里写死 `after_card_resolved('意大利','17721')`。
+两份延后状态、两条收尾路径结果不一致。收敛成：
+一个通用判据 `delegate_skill_reason`（`game.delegate` / 跨阵营让权 /
+声明式 `deferSkillUntilDelegateEnd`）+ 一个统一出口 `flush_deferred_national_skill`
++ 一个既有字段 `national_skill_deferred`。声明式配置读卡效果，逻辑里不写卡 id
+（`rtt-avoid-hardcode`）。
+
+**教训 5：手工塞挂起对象的测试会同时【假绿】和【锁住错误口径】。**
+`_real_test_16703_delegate_skill.js` 旧版手工塞
+`g.delegate`/`national_skill_offer`，断言「两窗口并存时白名单叠加」——
+既绕过了真实时序，又把错误口径写进回归。改为真实 `play_card` +
+`event_step_next` 推进分步机后，断言才真正覆盖「让权期间不开窗 /
+两条收尾都补开 / 技能真能结算」。
+
+**验证**：`tools/_real_test_16703_delegate_skill.js` 37/0、
+`tools/_real_test_17721_skill_defer.js` 23/0；
+`git stash` 对照 HEAD 确认 `_smoke_17721` 1 / `_smoke_delegate` 8
+及全量冒烟 2 个未登记失败均预存。
+详见 `docs/change-16703-skill-defer.md`。
