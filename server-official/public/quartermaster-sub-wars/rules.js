@@ -30815,8 +30815,8 @@ function do_action(state, current, action, arg) {
 
 	/* 调试用：直接把一个部队放到某格位，用于验证海峡动态 */
 	if (action === 'debug_place') {
-		const { piece, nation, type, space } = arg || {}
-		if (!piece || !space) return game
+		const { piece: reqPiece, nation, type, space } = arg || {}
+		if (!reqPiece || !space) return game
 		if (!data.spaces[space]) return game
 		/* 同一格位不能有敌方部队（与建设/征召规则一致） */
 		const faction = faction_of_nation(nation)
@@ -30824,11 +30824,30 @@ function do_action(state, current, action, arg) {
 			const other = faction_of_nation(game.piece_nation[p])
 			if (other && faction && other !== faction) return game
 		}
+		/*
+		 * 【2026-11-11 修复·第二次放置覆盖第一次】撞号自动顺延，绝不覆盖已有单位。
+		 *
+		 * 客户端的 `dbg_N` 序号是【页面级变量】（`let debug_seq = 0`），刷新页面/
+		 * 重开对局就归零；再放一支就撞上服务器上早已存在的 `dbg_1`。
+		 * 旧实现直接 `game.location[piece] = space` + 改写 nation/type，
+		 * 于是第一次放的那支被【静默覆盖】——玩家看到的就是"第二次放置覆盖第一次"。
+		 *
+		 * 现在：请求 id 已被占用时，从 1 起找下一个空闲 `dbg_N`，并在日志里写明换号。
+		 * 调试动作不该因为刷新而报错，所以选择自动换号而不是拒绝。
+		 */
+		let piece = reqPiece
+		if (game.location[piece] != null) {
+			const m = /^dbg_(\d+)$/.exec(String(reqPiece))
+			let n = m ? Number(m[1]) : 1
+			while (game.location['dbg_' + n] != null) n++
+			piece = 'dbg_' + n
+		}
 		game.location[piece] = space
 		game.piece_nation[piece] = nation
 		game.piece_type[piece] = type || 'army'
 		refresh(game)
-		game.log.push(side + ' 放置 ' + piece + '(' + nation + ') 到 ' + data.name_of(space))
+		game.log.push(side + ' 放置 ' + piece + '(' + nation + ') 到 ' + data.name_of(space) +
+			(piece !== reqPiece ? '（请求 ' + reqPiece + ' 已被占用，改用 ' + piece + '）' : ''))
 		return game
 	}
 

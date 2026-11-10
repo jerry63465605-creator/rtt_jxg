@@ -12108,6 +12108,26 @@ function on_reply(q, params) {
 
 let debug_seq = 0
 
+/*
+ * 【2026-11-11 修复·第二次放置覆盖第一次】
+ *
+ * 旧实现 `dbg_${++debug_seq}` 的序号只活在页面内存里：刷新页面/重开对局
+ * 就归零，再放一支就撞上服务器上已有的 `dbg_1`，服务端把它当成同一支改写
+ * -> 第一次放的那支被静默覆盖。
+ *
+ * 现在每次放置前先从 view.pieces 里取已有 `dbg_N` 的最大编号并取大值，
+ * 让客户端序号与服务器实时对齐（服务端另有撞号顺延兜底，双保险）。
+ */
+function next_debug_piece_id() {
+	let max = 0
+	for (const p of (view && view.pieces) || []) {
+		const m = /^dbg_(\d+)$/.exec(String(p.id))
+		if (m) max = Math.max(max, Number(m[1]))
+	}
+	debug_seq = Math.max(debug_seq, max) + 1
+	return "dbg_" + debug_seq
+}
+
 function toggle_debug() {
 	const el = document.getElementById("debug_panel")
 	if (!el)
@@ -12153,7 +12173,7 @@ function debug_do_place(space_id) {
 		return
 	}
 
-	const piece = `dbg_${++debug_seq}`
+	const piece = next_debug_piece_id()
 	send_action("debug_place", { piece: piece, nation: nation, type: type, space: space_id })
 	set_debug_hint(`${nation}${TYPE_LABEL[type]} → ${sp.name}`)
 }

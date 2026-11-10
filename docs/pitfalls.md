@@ -7940,7 +7940,16 @@ pending_event_step、event_budget、各类 delegate。
 最可靠的验证是**加载真实对局 state 回放**（`tools/_repro_game19_katyusha.js`），
 因为合成的 `new_board` 场景常常缺了触发该分支的真实组合。
 
-**教训 5：收紧"只认卡主本人"时必须排查【借用】这类跨归属机制。**
+**教训 5（调试工具同样适用）：别信任客户端生成的实体 id。**
+调试面板用 `dbg_${++debug_seq}` 生成 id，而 `debug_seq` 是**页面级变量**（刷新归零）；
+服务端 `debug_place` 又直接 `game.location[piece] = space` 覆盖同 id →
+刷新后再放一支就把服务器上已有的 `dbg_1` 静默改写（位置/国籍/兵种全换），
+玩家看到的是"第二次放置覆盖第一次"。
+判据：**客户端提供的 id 只能当"建议值"**，服务端必须做占用检查并顺延（或拒绝）；
+同时客户端侧用 `view` 里的既有 id 对齐序号，双向兜底。
+（`tools/_real_test_debug_place.js` 11/0）
+
+**教训 6：收紧"只认卡主本人"时必须排查【借用】这类跨归属机制。**
 17732《德国军事顾问》让意大利借用一张德国状态卡，而德国 15253《闪电战》/
 15245《俯冲式轰炸机》正是 `after_land` 卡。按 `own !== nation` 一刀切后，
 借用方发起陆战时该卡不再被武装；而 `status_window_ready` / `activate_status`
