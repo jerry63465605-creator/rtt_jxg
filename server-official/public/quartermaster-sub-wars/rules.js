@@ -29659,7 +29659,47 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	} else if (!game.game_over && is_my_turn && rollback_points_of(game).length) {
 		acts.propose_rollback = 1
 	}
+	/*
+	 * 【2026-11-10 · P0】统一出口兜底：本方持有武装窗口 → 补 use/skip_armed_offer。
+	 * 放在【外层】而不是 13 个排他分支里，正是为了避免"新增挂起又忘了登记"。
+	 */
+	return finish_acts(game, side, acts)
+}
+
+/*
+ * ============================================================
+ * 【2026-11-10 · P0】应答窗口 × 排他挂起的统一兜底（配套函数）
+ *
+ * 这一类问题的成因：排他挂起是逐个卡牌需求长出来的，每加一种就在
+ * build_actions 手写白名单、在 do_action 手写冻结，而"本方持有 armed 窗口"
+ * 这个兜底只补进过 3 处 → 「弹窗出现但点不动」反复复发
+ * （16804 花园口决堤 / 15311 马奇诺 / 15351 敦刻尔克 …）。
+ *
+ * 现在：
+ *   · build_actions 出口统一 finish_acts()；
+ *   · do_action 的冻结门禁统一用 p0_armed_escape() 豁免。
+ * 合法性仍由 use_armed_offer / skip_armed_offer 自身校验（窗口存在/阵营/代价）。
+ * ============================================================
+ */
+
+/* 只在"本方确实持有武装窗口"时补两个键（内部重放不补，避免污染内部动作表） */
+function finish_acts(game, side, acts) {
+	if (!acts || game.__internal_depth) return acts
+	if (typeof hasArmedOfferForSide === 'function' && hasArmedOfferForSide(game, side)) {
+		acts.use_armed_offer = 1
+		acts.skip_armed_offer = 1
+	}
 	return acts
+}
+
+/*
+ * 统一的"武装表态豁免"：true = 该动作不该被排他挂起冻结。
+ * do_action 里所有针对 armed 的冻结判断都带上 `!p0_armed_escape(...)`。
+ */
+function p0_armed_escape(game, side, action) {
+	if (game.__internal_depth) return false
+	if (action !== 'use_armed_offer' && action !== 'skip_armed_offer') return false
+	return typeof hasArmedOfferForSide === 'function' && hasArmedOfferForSide(game, side)
 }
 
 /*
@@ -30428,6 +30468,7 @@ function do_action(state, current, action, arg) {
 	 * 因此界面顶栏会切到那一方，不会"挂着看不出来"（R22 的教训）。
 	 */
 	if (game.pending_econ && action !== 'resolve_econ' &&
+		!p0_armed_escape(game, side, action) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('经济战结算中：正在等待【' +
 			econ_waiting_nation(game) + '】选择（损耗 3 张牌 / 移除地中海的 1 支海军），' +
@@ -30437,6 +30478,7 @@ function do_action(state, current, action, arg) {
 	/* 17805 红色管弦乐队挂起：等待德国抉择期间，除 resolve_red 外一切动作冻结
 	 * （含原行动方，与经济战/战斗代受/友方让权一致）。让权由 set_pending_red 负责。 */
 	if (game.pending_red && action !== 'resolve_red' &&
+		!p0_armed_escape(game, side, action) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('《红色管弦乐队》等待德国选择中，当前只能提交德国抉择')
 		return game
@@ -30444,6 +30486,7 @@ function do_action(state, current, action, arg) {
 
 	/* 【2026-10-18】17851 天王星行动：菜单挂起期间，除 uranus_choice 外一切动作冻结 */
 	if (game.pending_uranus && action !== 'uranus_choice' &&
+		!p0_armed_escape(game, side, action) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('天王星行动选择中，当前只能提交选择（发起陆战 / 建设陆军 / 结束）')
 		return game
@@ -30493,6 +30536,7 @@ function do_action(state, current, action, arg) {
 	 * 更糟的是 next_phase 也被放行：阶段推进后挂起残留，新阶段全部点不动。
 	 */
 	if (game.pending_status_play && action !== 'su_status_play' && action !== 'su_status_skip' &&
+		!p0_armed_escape(game, side, action) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('《罗科索夫斯基 朱可夫 科涅夫》等待选择状态卡中，当前只能提交「打出」或「结束」')
 		return game
@@ -30673,6 +30717,7 @@ function do_action(state, current, action, arg) {
 	 * 【2026-11-07】另放行 cancel_script（仅"代价未付"的步骤，入口里还会再校验一次）。
 	 */
 	if (game.pending_script && action !== 'resolve_script' && action !== 'cancel_script' &&
+		!p0_armed_escape(game, side, action) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push(script_prompt(game.pending_script) +
 			'（当前这一步：第 ' + game.pending_script.stage + '/' +
