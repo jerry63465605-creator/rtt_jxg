@@ -114,3 +114,54 @@
 - 台账 #4 的 `#4 叠加` 白名单保留作防御性兜底，主路径不再依赖「两窗口并存」。
 - `national_skill_deferred` 是既有字段（原只服务 17553），本次未新增状态字段，
   无需旧存档迁移。
+
+## 7. 两套机制并存：新卡该复用哪一套
+
+> 本节是 `rtt-effect-recipes` §2.3 / `rtt-national-skill-framework` §4
+> 新增判定的实现细节落点（skill 只留判定，细节留 docs 可 git 追溯）。
+
+玩家可见语义是同一条（让权未决期间不弹国家技能窗口，归还后给），
+但引擎里是**两条不同路径**，不是「一个通用方法」：
+
+| | 旧套：推迟整个 ★卡结算 | 新套：延后开窗 |
+|---|---|---|
+| 适用卡 | 17526 / 17529 / 17535 | 16703 / 17721 / 17553 |
+| ★卡何时结算 | 委托结束后才第一次结算 | **打出时就结算完**（分步卡 `finish_event_card` 或 EVENT 常规分支） |
+| 打出时 | `play_card` 分支直接 `return game`，**从不调** `after_card_resolved`，窗口从未被请求 | 会调 `after_card_resolved` → `maybe_offer_national_skill`，窗口「本该开」 |
+| 让权载体 | 独立字段 `uk_build_delegate` / `su_build_delegate`（17526/17529）；`game.delegate` `mode:'single'`（17535） | `game.delegate`（翻转类）/ `us_japan_delegate`（17553 跨阵营）/ 声明式 `deferSkillUntilDelegateEnd`（17721 链式） |
+| 补开方式 | 各自 `finish_*` 里手写 `after_card_resolved(game, return_nation, '<face>')`：`finish_uk_build_delegate`、`finish_su_build_budget`、`finish_su_build_delegate`、`finish_us_lend_lease`，共 4 份 | `delegate_skill_reason` 判让权未决 → 写 `national_skill_deferred` → `exports.action` 出口 `flush_deferred_national_skill` 归还后立刻补开，**一处覆盖所有收尾路径** |
+| 是否通用 | ❌ 人工照抄（17526 注释自写「仿 17535 先例」） | ✅ 统一判据 + 统一出口 |
+
+**为什么旧套没被判据误伤**：它们的 `finish_*` 都先把独立字段置 null **再**补调
+`after_card_resolved`（如 `rules.js:6639` 清空 → `6645` 补开），所以
+`maybe_offer_national_skill` 走到 `delegate_skill_reason` 时让权已结束，
+判据返回 null → 正常开窗。它们靠「补开时让权已经没了」绕过判据，
+不是靠判据识别它们。
+
+**`delegate_skill_reason` 的实际覆盖范围**（`rules.js:6418`）：只认三条 ——
+① `game.delegate`；② `us_japan_delegate`；③ `extra_play.source` 声明了
+`deferSkillUntilDelegateEnd`。**不认** `uk_build_delegate` / `su_build_delegate` /
+`us_china_delegate` / `us_theater_delegate` / `su_purge_delegate`。这是「维持现状」
+的既定边界，不是遗漏。
+
+### 新卡复用判据
+
+1. **控制层一律走 `game.delegate` + `set_pending_delegate` / `finish_delegate`**
+   （`rtt-delegate-flip` 铁律 1「单一状态对象」）。不要再新开 `xxx_delegate`
+   独立字段 —— 那样判据①认不到，只能再手写一份补开，等于复制旧套的债。
+2. **若 ★卡打出即结算完**（绝大多数）→ 用新套，通常**零接线**：
+   判据①自动识别 `game.delegate`，补开由统一出口负责。
+3. **若让权链要等后续 `extra_play` 才建立**（17721 型）→ 卡配置加声明式
+   `deferSkillUntilDelegateEnd: true`，让判据③覆盖「打出瞬间 delegate 还不存在」的窗口。
+4. **仅当卡面明确要求「委托完成后才结算」**（17526/17529/17535 型）才用旧套：
+   `play_card` 分支 `return game`，在 `finish_*` 里先清字段/归还控制权，
+   **再**补调 `after_card_resolved`。注意这是「推迟结算」，不是「延后开窗」。
+5. **补开顺序铁律不变**：先归还 `current_nation` / `active`，再补开；
+   且必须排在所有 `after_card_resolved` 之后（否则被让权方的★卡会覆盖窗口）。
+
+### 若将来要真正收敛成一个机制（未实施，玩家裁定「维持现状」）
+
+- 把 `delegate_skill_reason` 扩成**声明式让权注册表**，登记各 `*_delegate` 字段；
+- 把旧套 4 份 `finish_*` 手写补开收敛到「延后登记 + 统一出口补开」。
+- 风险：会碰 17535 刚修过的委托残留（`bb4906c`）、17529 建设预算收尾、
+  17526 的「大萧条的余波」前置挂起；当前没有玩家可见 bug，收益仅为消除重复。
