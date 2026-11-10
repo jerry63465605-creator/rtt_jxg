@@ -128,13 +128,28 @@ console.log('=== 1. 17900《八月风暴》[EFFECT · 友方攻击<中国东北>
 		(g.discard['苏联'] || []).indexOf(c17800) >= 0,
 		hand0 + '→' + handOf(g, '苏联').length +
 		' 弃牌堆含 17800=' + ((g.discard['苏联'] || []).indexOf(c17800) >= 0))
-	ok('★ ⑨ 17900 打出后离手进弃牌堆、窗口清空',
+	/*
+	 * 【2026-11-11 口径变更】涉及战斗的让权改为【手动归还】：
+	 * 打出后窗口保留、委托仍在（played=true），玩家点「结束委托」才归还。
+	 * 旧断言「窗口立刻清空 / 自动归还」已按新口径反转。
+	 */
+	ok('★ ⑨ 17900 打出后离手进弃牌堆，窗口保留（手动结束）',
 		handOf(g, '苏联').indexOf(c17900) < 0 &&
 		(g.discard['苏联'] || []).indexOf(c17900) >= 0 &&
-		!(g.armed_offers || []).some(w => (w.cards || []).some(c => faceOf(c.card_id) === '17900')),
-		JSON.stringify({ hand: handOf(g, '苏联').length, offers: (g.armed_offers || []).length }))
-	ok('★ ⑩ 结算后归还行动权（current_nation 回到英国）',
-		g.current_nation === '英国' && !g.pending_armed_delegate, String(g.current_nation))
+		!!(g.pending_armed_delegate && g.pending_armed_delegate.played) &&
+		(g.armed_offers || []).some(w => w.kind === 'special'),
+		JSON.stringify({
+			hand: handOf(g, '苏联').length,
+			offers: (g.armed_offers || []).length,
+			played: !!(g.pending_armed_delegate && g.pending_armed_delegate.played),
+		}))
+	ok('★ ⑩ 未结束前控制权仍归苏联（不自动归还）',
+		g.current_nation === '苏联' && !!g.pending_armed_delegate, String(g.current_nation))
+	R.action(g, 'Allies', 'finish_armed_delegate', {})
+	I.refresh(g)
+	ok('★ ⑩b 点「结束委托」后归还英国、委托清空',
+		g.current_nation === '英国' && !g.pending_armed_delegate,
+		String(g.current_nation) + ' pd=' + JSON.stringify(g.pending_armed_delegate))
 
 	/* 反例：手牌缺[建设陆军]时不给窗口 */
 	const g2 = base('英国', 'play')

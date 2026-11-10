@@ -2385,6 +2385,36 @@ function update_armed_offer_box() {
 	 * 故 17855 每帧最后写入不会被覆盖；且仅在 ao.pending 时接管，避免罕见同屏误关 17535 弹框。
 	 * 显隐统一用 .hide 类（与 update_us_lend_lease 一致），勿用 inline style.display。 */
 	if (statusModal && ao && ao.pending) statusModal.classList.add('hide')
+	/*
+	 * 【2026-11-11 · 涉及战斗的让权手动归还】17900 打出后进入"委托进行中"：
+	 * 不再显示"打出/不打出"，只显示「结束委托」。按钮可用性读服务端
+	 * view.pending_armed_delegate.can_finish（客户端不自己判，避免两端漂移）；
+	 * 未结算完（战斗/响应还在）时点了只 toast 提示，服务端也会兜底拒绝。
+	 */
+	const _pd = view && view.pending_armed_delegate
+	if (_pd && _pd.played) {
+		ask_state = { kind: 'armed_offer' }
+		render_ask_box(
+			'让权委托进行中',
+			'《' + (_pd.name || '增强卡') + '》已打出。' +
+				(_pd.can_finish
+					? '请先发动需要触发的状态卡，再点「结束委托」归还控制权。'
+					: '当前仍有战斗/响应未结算完，结算后即可结束委托。'),
+			[{
+				label: '结束委托',
+				cls: _pd.can_finish ? 'primary' : '',
+				onClick: () => {
+					if (!_pd.can_finish) {
+						toast('仍有战斗/响应未结算完，暂不能结束委托')
+						return
+					}
+					ask_state = null
+					render_ask_box(null, null, null)
+					send_action('finish_armed_delegate', {})
+				},
+			}])
+		return
+	}
 	if (!ao || !ao.cards || !ao.cards.length) {
 		/* 窗口消失：清掉多步选择态与高亮 */
 		if (pending_armed) {

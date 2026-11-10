@@ -7850,3 +7850,48 @@ space/air 传反了，靠开头一刀切先返回「尚未参战」才通过；
 「点打出 → 弹框 → 标题/候选正确 → 选牌确认 → 发 drop」全链路，并验证服务端拒非法代价）；
 `_real_test_supp_su` 25/0、`_real_test_neutral_17900` 33/0、`_smoke_us_status3` 41/0。
 详见 `docs/change-17900-discard-modal.md`。
+
+---
+
+## 2026-11-11 · 涉及战斗的让权自动归还 → 状态窗口落在"别人回合"
+
+**现象**：17900《八月风暴》第二步对<中国东部>发起陆战，该地有日本陆军 + 同地区日本空军
+→ `do_battle` 挂起 `pending_battle` 等日本决定代受。此时委托**已被自动归还**：
+`current_nation` 回英国，而战斗结算后武装的喀秋莎(after_land)窗口属于苏联 ——
+状态窗口落在别人回合，6 人模式收不到，玩家也以为委托已结束。
+
+**教训 1：有后续时点的让权不能"打完一张就自动收尾"。**
+`use_armed_offer` 成功后 `refresh_armed_window` 扫手牌（卡已离手）→
+`removeArmedWindow` → `clear_pending_armed_delegate`。对**不涉战斗**的卡没问题；
+但一旦效果里会发起战斗（可能挂起代受/响应），后续 `after_land` 还没触发，
+提前归还会把状态窗口甩到别人回合。判据：**效果可能产生后续时点 → 手动归还**。
+
+**教训 2：白名单必须在外层收口，否则会被 inner 的挂起分支抢先。**
+`build_actions_inner` 的 `pending_battle` 分支先返回 `{use/skip armed, ...}`，
+导致 `pending_armed_delegate.played` 的排他分支走不到 →
+被让权方看不到「结束委托」、防守方也点不到 `resolve_battle`
+= **"委托结束不了、战斗也打不完"的双向死锁**。
+正确做法：在 `build_actions` **外层最前面**单一收口，明确列出允许的动作。
+
+**教训 3：新动作名要加进 `isSameMomentWindow` 豁免。**
+`do_action` 顶部「发起方做别的动作 => 视为放弃 armed 窗口」会调
+`clear_armed_offer_for_side`，把委托先清掉。于是点「结束委托」只得到
+"当前没有待结束的让权委托"、且控制权已被提前归还（**动作看着失败、其实状态已错**）。
+凡是"窗口自身的答复动作"（`activate_status` / `finish_armed_delegate`）都要豁免。
+
+**教训 4：结束闸门要列全硬挂起，并保持三处同源。**
+`armed_delegate_can_finish` 覆盖 response_stack/queue、pending_battle、pending_trigger、
+pending_response_choice、pending_econ、pending_status_play、pending_uranus、
+pending_autobahn、pending_theater、pending_echo、pending_script、pending_status_ask、
+pending_event_step、event_budget、各类 delegate。
+`build_actions` / `exports.action` / `view.can_finish` 三处共用同一函数，避免两端漂移。
+
+**范围判定（避免过度改动）**：17721 只打状态卡（不涉战斗，自动归还正确）；
+17729 已有 `waiting_battle` 等战斗结算 + `pending_event_step` 停步给状态卡先行；
+17535 早已手动归还（`finish_lend_lease`）。**只改 17900**。
+
+**验证**：`tools/_real_test_17900_manual_finish.js` 28/0（含真实组合：
+战斗挂起时委托仍在、未结算不能结束、答完喀秋莎能发动、点结束才归还）；
+`_real_test_supp_su` 26/0、`_real_test_neutral_17900` 33/0、
+`_dom_test_17900_discard` 19/0、`_smoke_us_status3` 41/0。
+详见 `docs/change-17900-manual-finish.md`。

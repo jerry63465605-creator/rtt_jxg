@@ -257,7 +257,13 @@ console.log('\n=== F. 组合：英国打<中国东北> → 17900 → <中国东�
 	ok('★★ F8 喀秋莎窗口转绿且指向<中国东部>',
 		!!(ts && ts.ready === true && Number(ts.ready_space) === Number(CE)),
 		J(ts && { ready: ts.ready, space: ts.ready_space }))
-	ok('F9 17900 已结算并归还控制权', !g.pending_armed_delegate && g.current_nation === '英国',
+	/*
+	 * 【2026-11-11 口径变更】涉及战斗的让权改手动归还：战斗结算后委托仍在、
+	 * current_nation 仍归苏联，玩家点「结束委托」才回英国。
+	 */
+	ok('F9 17900 战斗结算后委托仍在、控制权仍归苏联（不自动归还）',
+		!!(g.pending_armed_delegate && g.pending_armed_delegate.played) &&
+		g.current_nation === '苏联',
 		J({ pd: g.pending_armed_delegate, cur: g.current_nation }))
 
 	/* ⑥ 喀秋莎对战斗地区再发起陆战（目标已空 -> 苏联中立空打，必须放行） */

@@ -15342,6 +15342,23 @@ function removeArmedWindowByWhen(game, when) {
 
 /* 打完一张后按原窗口 when+ctx 重扫手牌，刷新剩余候选（支持同窗口连打多张） */
 function refresh_armed_window(game, win) {
+	/*
+	 * 【2026-11-11 · 涉及战斗的让权手动归还】17900 这类 special（让权委托）窗口，
+	 * 卡打出后【不自动收尾】：
+	 *   · 第二步可能发起陆战并挂起 pending_battle（等防守方决定空军代受）；
+	 *   · 战斗结算完 after_land 状态窗口才武装（如 17842《喀秋莎》）；
+	 * 若此处按"扫手牌为空"就 removeArmedWindow -> clear_pending_armed_delegate，
+	 * 委托会提前结束、current_nation 提前归还，状态窗口就落在别人回合。
+	 * 改为只置 played，等玩家点「结束委托」（finish_armed_delegate，要求无硬挂起）。
+	 */
+	if (win.kind === 'special' && game.pending_armed_delegate) {
+		game.pending_armed_delegate.played = true
+		win.pending = undefined
+		win.arg = undefined
+		sync_armed_offer(game)
+		sync_armed_handoff(game)
+		return
+	}
 	const cards = scan_armed_cards(game, win.when, win.ctx || {})
 	win.arg = undefined
 	win.pending = undefined
@@ -16061,6 +16078,52 @@ function clear_pending_armed_delegate(game) {
 	if (pd && pd.return_nation) game.current_nation = pd.return_nation
 	reconcile_handoff(game, 'armed_delegate')
 	return pd
+}
+
+/*
+ * 【2026-11-11 · 玩家口径】涉及战斗的让权必须【手动归还】。
+ *
+ * 17900《八月风暴》第二步会发起陆战；若目标地有敌方空军，do_battle 会挂起
+ * pending_battle 等防守方决定代受 —— 此时战斗尚未结算，after_land 状态窗口
+ * （如苏联 17842《喀秋莎》）也还没武装。旧实现在 use_armed_offer 成功后
+ * 立刻 refresh_armed_window -> 扫手牌为空 -> removeArmedWindow ->
+ * clear_pending_armed_delegate：委托提前结束、current_nation 提前回原行动国，
+ * 战斗打完时状态窗口就落在"别人回合"，6 人模式收不到、也点不动。
+ *
+ * 改为：special 窗口打出后只置 played，等玩家点「结束委托」才归还。
+ * 结束闸门【要求无硬挂起】（与 17535 lend_lease_can_finish 同口径）：
+ * 战斗 / 响应 / 其它排他挂起还在时按钮置灰，避免战斗没结算完就归还。
+ * 可选窗口（armed_offers 自身 / status_instant）不算硬挂起 —— 它们正是
+ * 玩家要在结束委托前先发动的东西。
+ */
+function armed_delegate_can_finish(game) {
+	const pd = game.pending_armed_delegate
+	if (!pd || !pd.played) return false
+	if ((game.response_stack || []).length || (game.response_queue || []).length) return false
+	if (game.pending_battle || game.pending_econ || game.pending_status_play ||
+		game.pending_uranus || game.pending_autobahn || game.pending_autobahn_suspended ||
+		game.pending_theater || game.pending_echo || game.pending_script ||
+		game.pending_trigger || game.pending_response_choice ||
+		game.pending_status_ask || game.pending_event_step || game.event_budget ||
+		game.us_theater_delegate || game.us_japan_delegate || game.delegate) return false
+	return true
+}
+
+/* 玩家显式结束「让权委托」：清挂起 + 归还 current_nation/active + 移除 special 窗口。 */
+function finish_armed_delegate(game) {
+	const pd = game.pending_armed_delegate
+	if (!pd) return
+	const win = (game.armed_offers || []).find(w => w.kind === 'special' &&
+		w.nation === pd.nation &&
+		(w.cards || []).some(c => String(c.card_id) === String(pd.card_id)))
+	clear_pending_armed_delegate(game)
+	if (win) {
+		const i = (game.armed_offers || []).indexOf(win)
+		if (i >= 0) game.armed_offers.splice(i, 1)
+		sync_armed_offer(game)
+		sync_armed_handoff(game)
+	}
+	game.log.push('【' + (pd.return_nation || '?') + '】让权委托结束，控制权已归还')
 }
 
 		/* ============================================================
@@ -28216,8 +28279,26 @@ exports.view = function (state, current) {
 		pending_econ: pendingEcon,
 		pending_red: pendingRed,
 
-		/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态 */
-		pending_armed_delegate: game.pending_armed_delegate || null,
+		/*
+		 * 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态。
+		 * 【2026-11-11】补下发 played / can_finish / name —— 涉及战斗的让权改为
+		 * 手动归还：客户端据此在打出后显示「结束委托」按钮，未结算完时置灰并说明原因
+		 * （判定由服务端算，客户端照抄；三处同源见 build_actions / exports.action）。
+		 */
+		pending_armed_delegate: (() => {
+			const pd = game.pending_armed_delegate
+			if (!pd) return null
+			const cardName = (inst_card(pd.card_id) || {}).name || ''
+			return {
+				card_id: pd.card_id,
+				nation: pd.nation,
+				space: pd.space,
+				attacker: pd.attacker,
+				played: !!pd.played,
+				can_finish: armed_delegate_can_finish(game),
+				name: cardName,
+			}
+		})(),
 
 		/*
 		 * 【2026-11-11】"立刻窗口"排他询问（当前仅 17543《雷达》）。
@@ -29700,10 +29781,20 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 挂起期间只放行 打出/放弃，其余动作全拦（让权语义：友方须等苏联决定）。
 	 */
 	if (game.pending_armed_delegate) {
+		const _pd = game.pending_armed_delegate
+		const _mine = faction_of_nation(_pd.nation) === side
+		/*
+		 * 【2026-11-11 · 涉及战斗的让权手动归还】已打出（played）后进入"委托进行中"：
+		 * 只放行「结束委托」，玩家先把战斗结算完 / 先发动 after_land 状态卡。
+		 * 未结算完（can_finish=false）时仍给按钮（客户端置灰并显示原因），
+		 * 但服务端 do_action 会兜底拒绝 —— 三处同源。
+		 */
+		if (_pd.played) {
+			game.block_reason = 'pending_armed_delegate: 让权委托进行中，待点「结束委托」归还'
+			return _mine ? { finish_armed_delegate: 1, log: 1 } : { log: 1 }
+		}
 		game.block_reason = 'pending_armed_delegate: 苏联《八月风暴》让权挂起待 打出/放弃'
-		const delNation = game.pending_armed_delegate.nation
-		if (faction_of_nation(delNation) === side)
-			return { use_armed_offer: 1, skip_armed_offer: 1, log: 1 }
+		if (_mine) return { use_armed_offer: 1, skip_armed_offer: 1, log: 1 }
 		return { log: 1 }
 	}
 
@@ -30111,6 +30202,37 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	 * 响应栈帧【原地不动】（不 defer、不搬帧），答完由 close_immediate_status_ask
 	 * 按原栈顶继续 —— 复用现成栈机制，不另造「暂停/恢复」状态机。
 	 */
+	/*
+	 * 【2026-11-11 · 涉及战斗的让权手动归还】17900 等 special 委托进行中（played）：
+	 * 在外层做【单一收口】，先于 inner 的所有战斗/响应/挂起分支。
+	 *
+	 * 为什么必须在最前：inner 的 pending_battle 分支会先返回
+	 * `{use_armed_offer, skip_armed_offer, ...}`，于是
+	 *   ① 被让权方看不到「结束委托」按钮；
+	 *   ② 防守方点不到 resolve_battle（被那套白名单排除），战斗永远结算不完；
+	 * 形成"委托结束不了、战斗也打不完"的双向死锁。
+	 *
+	 * 只给：被让权方 finish_armed_delegate / 防守方 resolve_battle /
+	 * 响应表态（若同时有响应链）/ debug_*（带外工具）。
+	 */
+	if (game.pending_armed_delegate && game.pending_armed_delegate.played) {
+		const pd = game.pending_armed_delegate
+		game.block_reason = 'pending_armed_delegate: 让权委托进行中，待点「结束委托」归还'
+		const acts = {
+			log: 1,
+			resolve_battle: 1,
+			clear_ask: 1, toggle_ask_remove: 1, air_support: 1,
+			trigger_response: 1, pass_response: 1,
+			resolve_response_choice: 1, response_confirm: 1, response_reorder: 1,
+		}
+		if (faction_of_nation(pd.nation) === side) acts.finish_armed_delegate = 1
+		for (const k of ['debug_place', 'debug_remove', 'debug_clear', 'debug_draw',
+			'debug_add_card', 'debug_set_phase', 'debug_set_view_nation',
+			'debug_attrition', 'debug_restore', 'debug_score'])
+			acts[k] = 1
+		return acts
+	}
+
 	if (game.pending_status_ask) {
 		const ask = game.pending_status_ask
 		const acts = { log: 1 }
@@ -30486,7 +30608,14 @@ function do_action(state, current, action, arg) {
 		 * 翻转成"必须先点人工港"，两个窗口依旧不对等。
 		 * 与响应动作（同一事件的多张独立响应互不误清）同口径。
 		 */
-		const isSameMomentWindow = action === 'activate_status'
+		/*
+		 * 【2026-11-11 · 涉及战斗的让权手动归还】finish_armed_delegate 是
+		 * 「窗口自身的答复动作」，不能算"发起方转向其它动作"：
+		 * 否则本函数会先 clear_armed_offer_for_side 把委托清掉，
+		 * 玩家点「结束委托」只得到"当前没有待结束的让权委托"（且控制权已提前归还）。
+		 */
+		const isSameMomentWindow = action === 'activate_status' ||
+			action === 'finish_armed_delegate'
 		/*
 		 * 【2026-11-07 · B28】调试动作一律【不打断】进行中的窗口。
 		 *
@@ -30950,6 +31079,12 @@ function do_action(state, current, action, arg) {
 		 */
 		!(game.pending_status_ask &&
 			(action === 'activate_status' || action === 'skip_status_ask')) &&
+		/*
+		 * 【2026-11-11 · 涉及战斗的让权手动归还】放行「结束委托」到业务层：
+		 * 由 armed_delegate_can_finish 给出准确原因（"委托尚未结算完"），
+		 * 而不是被通用战斗守卫一句"战斗结算中"挡掉。
+		 */
+		action !== 'finish_armed_delegate' &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('战斗结算中：正在等待【' +
 			pending_wait_nation(game.pending_battle) + '】' +
@@ -31009,6 +31144,8 @@ function do_action(state, current, action, arg) {
 		action !== 'response_reorder' && action !== 'response_confirm' &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
 		action !== 'activate_status' && action !== 'skip_status_ask' &&
+		/* 【2026-11-11】让权委托的「结束委托」也须穿过响应挂起守卫到业务层判原因 */
+		action !== 'finish_armed_delegate' &&
 		/*
 		 * 【2026-10-25 修复·甲】放行 resolve_battle —— 与上方战斗守卫对称。
 		 * 响应未表态期间若同时存在战斗挂起（KV-2 / 17853 / 武士道 / 空军代受），
@@ -31164,6 +31301,13 @@ function do_action(state, current, action, arg) {
 		return !!f && f !== side
 	})
 	if (_oppMoment && !game.__internal_depth && action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
+		/*
+		 * 【2026-11-11 · 涉及战斗的让权手动归还】委托进行中（played）时：
+		 *   · 被让权方要能点「结束委托」；
+		 *   · 战斗挂起（空军代受）时防守方要能点「不代受」——
+		 * 否则两者都被"对方时点"拦死，战斗永远结算不完、委托也结束不了。
+		 */
+		action !== 'finish_armed_delegate' && action !== 'resolve_battle' &&
 		action !== 'log' && !(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		const c0 = _oppMoment.cards[0] || {}
 		const who = c0.nation || (_oppMoment.ctx && _oppMoment.ctx.piece_nation) || '对方'
@@ -34020,6 +34164,30 @@ function do_action(state, current, action, arg) {
 	 *   run 返回 skip（本次条件不满足，如"相邻无敌舰"）时不扣牌、不消耗卡，
 	 *   玩家不白亏；卡留在手牌等下一次同样的事件。
 	 */
+	/*
+	 * 【2026-11-11 · 玩家口径】涉及战斗的让权必须【手动归还】。
+	 * 17900 打出 1 张后进入"委托进行中"（pd.played=true），
+	 * 玩家先把战斗结算完 / 先发动 after_land 状态卡，再点「结束委托」归还控制权。
+	 * 三重门禁：有挂起 / 阵营匹配 / armed_delegate_can_finish（要求无硬挂起）。
+	 */
+	if (action === 'finish_armed_delegate') {
+		const pd = game.pending_armed_delegate
+		if (!pd || !pd.played) {
+			game.log.push('当前没有待结束的让权委托')
+			return game
+		}
+		if (faction_of_nation(pd.nation) !== side) {
+			game.log.push('当前不是【' + pd.nation + '】的让权委托，不能结束')
+			return game
+		}
+		if (!armed_delegate_can_finish(game)) {
+			game.log.push('委托尚未结算完（仍有战斗/响应等挂起），不能结束')
+			return game
+		}
+		finish_armed_delegate(game)
+		return game
+	}
+
 	if (action === 'use_armed_offer') {
 		const cardId = arg && arg.card
 		const off = (game.armed_offers || []).find(w => (w.cards || []).some(x => x.card_id === cardId))
