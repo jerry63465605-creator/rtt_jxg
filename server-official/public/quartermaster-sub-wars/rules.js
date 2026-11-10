@@ -29803,9 +29803,43 @@ function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
  * ============================================================
  */
 
+/*
+ * 【2026-11-10 · #2】调试面板动作白名单的【单一来源】。
+ *
+ * B28（2026-11-07）给 exports.action 加了 debug_attrition / debug_restore /
+ * debug_score 三条分支，却漏同步 build_actions —— client.js:1063 查
+ * view.actions[verb] 不在册就静默 return false，于是"执行损耗 / 复原 / 分数±"
+ * 点了没效果（而客户端 hint 是无条件弹的，看起来像"有反应但没生效"）。
+ *
+ * 以后新增 debug_* 分支只需改这里 + exports.action 处理分支，
+ * 不要再往 build_actions_inner 的 base 里加：那里有 13 个排他式提前 return
+ * （return {log:1, xxx:1}），挂起期间会把整个 base 丢掉 —— 而调试面板恰恰是
+ * 卡死时用来清理局面的带外工具。与回退动作 / use_skip_armed_offer / 国家技能
+ * 同款，统一在 finish_acts 外层【追加】（"追加，不要替换"）。
+ *
+ * 服务端口径同源：do_action 各挂起守卫都已用 !isDebugAction 豁免；
+ * 唯独终局冻结 / 回退提议待确认两处硬冻结一律不接 debug，故下面同步排除，
+ * 避免"客户端按钮能点、服务端却拒绝"。
+ */
+const DEBUG_ACTION_KEYS = [
+	'debug_place', 'debug_remove', 'debug_clear', 'debug_draw',
+	'debug_add_card', 'debug_set_phase', 'debug_set_view_nation',
+	'debug_attrition', 'debug_restore', 'debug_score',
+]
+
 /* 只在"本方确实持有武装窗口"时补两个键（内部重放不补，避免污染内部动作表） */
 function finish_acts(game, side, acts) {
 	if (!acts || game.__internal_depth) return acts
+	/*
+	 * 【判定同源】do_action 的两处硬冻结（终局 game_over / 回退提议待确认）
+	 * 一律不接 debug_*（连 log 都不例外）。客户端也不该给出可提交项，
+	 * 否则就是"按钮能点、服务端拒绝"（rtt-client-server-contract 第四节）。
+	 * 其它挂起（响应队列 / 分步 / armed / theater…）服务端都已豁免 debug_*，
+	 * 故这里照常放行 —— 调试面板正是卡死时用来清理局面的带外工具。
+	 */
+	if (!game.game_over && !game.rollback_proposal) {
+		for (const k of DEBUG_ACTION_KEYS) acts[k] = 1
+	}
 	if (typeof hasArmedOfferForSide === 'function' && hasArmedOfferForSide(game, side)) {
 		acts.use_armed_offer = 1
 		acts.skip_armed_offer = 1

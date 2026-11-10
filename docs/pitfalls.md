@@ -7549,3 +7549,37 @@ hands[n] = hand_view(game, n, (n === my_nation || n === _costVisible) ? n : my_n
 
 **判据**：进程过滤要按【命令行全文】排除已知同名前缀，不能只靠子串匹配；
 kill 前后都要列出命中的 pid / cmd 再动手。
+
+---
+
+## 2026-11-10 · #2 调试面板「点了没生效」：新增 action 漏同步白名单（第 4 次复发）
+
+**现象**：点「执行损耗 / 复原到牌库顶 / 分数 ±」只有 hint 文字变化，分数与牌库不动。
+玩家口径纠正：服务端三种动作实测正常，「法国/中国损耗落到宗主国牌库」是设计如此，
+**不要再往牌库映射方向查**。
+
+**成因**：B28 给 `exports.action` 加了 `debug_attrition` / `debug_restore` /
+`debug_score` 三条分支，却漏了 `build_actions` 白名单。
+`client.js:1063` 查 `view.actions[verb]` 不在册就静默 return false。
+客户端 hint 是**无条件**写的（"已请求损耗 N 张"），所以看起来"点了有反应"——
+**hint 不能当作请求已发出的证据**，排查要先看控制台有没有 `SEND action`。
+
+**三条新判据**（在通用教训 18 / R28 / R29 之上补充）：
+
+1. **登记点选外层，不选内层 `base`**：`build_actions_inner` 有 13 个排他式提前
+   return，`event_budget` 的 `rules.js:29564 return bacts` 会丢掉整个 `base`。
+   回退动作 / `use_skip_armed_offer` / 国家技能早已确立 `finish_acts()` 外层
+   统一追加范式（"追加，不要替换"）。新增 `debug_*` 只改 `DEBUG_ACTION_KEYS`
+   **单一来源**，别再往 `base` 里加。
+2. **补白名单时要同步核对服务端硬冻结**：终局 `game.game_over`、回退提议待确认
+   这两处 `do_action` 一律不接 `debug_*`；若客户端照常给按钮就成了
+   "按钮能点、服务端拒绝"（判定不同源）。本次 `finish_acts` 的补键因此带
+   `!game.game_over && !game.rollback_proposal` 条件。
+3. **验证要挑真正的排他 return**：17555《大萧条的余波》前置弃牌挂起**并不**走
+   排他 return（修复前是 7/10），只有 `event_budget` 的 `return bacts` 才会
+   丢掉整个 `base`（修复前 0/10）。用真实 `play_card` 建立预算再断言，
+   否则测试全绿也可能漏掉挂起期失效。
+
+**因果实证**：`git stash` 对照 HEAD，探针在 HEAD 下复现
+（`debug_attrition/restore/score=0`、挂起期 7/10），修复后 10/10。
+
