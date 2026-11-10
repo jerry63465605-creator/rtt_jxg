@@ -7778,3 +7778,43 @@ C 组补完目标重提真的走通并进入战斗预算。
 `git stash` 对照 HEAD 确认 `_smoke_17721` 1 / `_smoke_delegate` 8
 及全量冒烟 2 个未登记失败均预存。
 详见 `docs/change-16703-skill-defer.md`。
+
+---
+
+## 2026-11-11 · 中立规则一刀切 + 17900「让权了但没切国家」
+
+**现象**：玩家报「苏联中立时应该仍然可以攻击日本，仅仅不能攻击意大利和德国」
+（实际空打被拒、夺取日本制空权被拒），以及「仍有 17900 未让权的问题」
+（英国打<中国东北>后 17900 窗口弹出，但苏联《喀秋莎》仍灰显
+「只能在苏联的回合发动（当前是英国）」）。
+
+**教训 1：中立/权限类「静态拦截」必须按【目标国】判，不能只看本国是否中立。**
+`do_battle` 空打分支和 `seize_air` 开头都用
+`is_neutral(nation) && NEUTRAL_RULES[nation].enemies.length` 一刀切。
+苏联的 `enemies` 只有德/意（不含日本），却因此连打日本/空打全被拦。
+更糟的是 `seize_air` **下面本就有**按目标空军国籍的 `neutral_attack_check`，
+被提前 return 挡住；而候选高亮按目标国判 → 「高亮但点不动」（通用教训 3 的反面）。
+修法：空打改用「敌对方是否覆盖整个敌对阵营」推导（不写死国名）；
+`seize_air` 从敌方空军里挑 `neutral_attack_check` 放行的 `targetAir`，
+后续移除/参战/计分全用它。
+
+**教训 2：同阵营让权只 `handoff_to` 翻 active = 没让权。**
+英/苏同属 Allies，`active` 本来就一样；**必须切 `current_nation`**，
+否则被让权国的状态卡守卫（`nation === game.current_nation`）不认、
+6 人模式收不到。`offer_uk_build_delegate` / `offer_su_build_delegate`
+在 2026-10-17 已踩过并修过，`set_pending_armed_delegate`（17900 / 16304 共用）
+当时漏改。修法：记录 `return_nation` → 切 `current_nation` → 统一归还函数
+`clear_pending_armed_delegate`。**新增清空点必须复用该函数，禁止裸置 null**，
+否则 `current_nation` 永久停在被让权国（让权不成对，铁律 5）。
+
+**教训 3：靠"提前 return"掩盖的测试会同时假绿和锁死错误参数。**
+`test_neutral.js` 4 组把 `seize_air(game, nation, space, air)` 的
+space/air 传反了，靠开头一刀切先返回「尚未参战」才通过；
+13 组则把「中立苏联空打被拒」写成断言 —— 都是旧口径的固化。
+修完产品代码后这两组立刻暴露，需按玩家新裁定更新（13 组反转为放行 + 补美国对照）。
+
+**验证**：`tools/_real_test_neutral_17900.js` 33/0（含完整组合：
+英国打<中国东北>→17900 征召→打<中国东部>（日军+日机）→空军代受挂起→
+日本不代受→喀秋莎转绿→空打发动成功）；`_real_test_supp_su` 25/0；
+`test_neutral` 102/4（剩余 4 项与 HEAD 一致）；全量冒烟仅 2 个预存失败。
+详见 `docs/change-neutral-su-japan.md`。

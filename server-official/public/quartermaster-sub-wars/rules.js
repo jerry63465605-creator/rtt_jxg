@@ -15301,10 +15301,8 @@ function removeArmedWindow(game, win) {
 	if (!game.armed_offers) return
 	const i = game.armed_offers.indexOf(win)
 	if (i >= 0) game.armed_offers.splice(i, 1)
-	if (win.kind === 'special' && game.pending_armed_delegate) {
-		game.pending_armed_delegate = null
-		reconcile_handoff(game, 'armed_delegate')
-	}
+	if (win.kind === 'special' && game.pending_armed_delegate)
+		clear_pending_armed_delegate(game)
 	sync_armed_offer(game)
 	sync_armed_handoff(game)
 	/* 【2026-10-21】窗口清空 -> 解除战区移动的推进冻结（本函数是 skip_armed_offer 的真实路径） */
@@ -15978,11 +15976,7 @@ function clear_armed_offer(game) {
 	sync_armed_handoff(game)
 	/* 【2026-10-21】窗口全清 -> 解除战区移动的推进冻结 */
 	clear_theater_armed_pause(game)
-	if (game.pending_armed_delegate) {
-		game.pending_armed_delegate = null
-		reconcile_handoff(game, 'armed_delegate')
-	}
-	/* 【2026-10-16】增强窗口清空后，落账 17749 轴心协定的真实击杀信用 */
+	if (game.pending_armed_delegate) clear_pending_armed_delegate(game)
 	maybe_settle_axis_pact(game)
 	/*
 	 * 【2026-10-20 修复】armed 增强窗口结算清空后，提升被 defer 的续打帧
@@ -16017,10 +16011,9 @@ function clear_armed_offer_for_side(game, side) {
 	clear_theater_armed_pause(game)
 	if (game.pending_armed_delegate) {
 		const pd = game.pending_armed_delegate
-		if (!pd.nation || faction_of_nation(pd.nation) === side) {
-			game.pending_armed_delegate = null
-			reconcile_handoff(game, 'armed_delegate')
-		}
+		/* 挂起归被让权国所有；同阵营才由本方清（同时归还 current_nation） */
+		if (!pd.nation || faction_of_nation(pd.nation) === side)
+			clear_pending_armed_delegate(game)
 	}
 	/* 【2026-10-16】增强窗口清空后，落账 17749 轴心协定的真实击杀信用 */
 	maybe_settle_axis_pact(game)
@@ -16036,11 +16029,37 @@ function clear_armed_offer_for_side(game, side) {
 }
 
 /* 【2026-10-07】17900 八月风暴的"友方攻击 -> 让权苏联"挂起。
- * 把 active 翻到被让权方（苏联）的一方，并记录原 active 以便还原。 */
+ *
+ * 【2026-11-11 修复·17900 未让权】旧写法只 handoff_to 翻 active ——
+ * 英/苏同属 Allies，active 本来就一样，等于什么都没做，也【不切 current_nation】：
+ *   · 被让权国的状态卡触发守卫（nation === game.current_nation）不认；
+ *   · 6 人模式下苏联玩家收不到（view.my_nation 跟随 current_nation）；
+ *   典型表现：英国攻击<中国东北>后 17900 窗口弹出，但苏联桌面的
+ *   《喀秋莎》(after_land) 仍判「只能在苏联的回合发动（当前是英国）」点不动。
+ * 改为与 offer_uk_build_delegate / offer_su_build_delegate 同款：
+ * 记录 return_nation -> 切 current_nation='苏联' -> 结束用
+ * clear_pending_armed_delegate 成对归还。active 仍由 handoff_to 走栈。
+ */
 function set_pending_armed_delegate(game, pd) {
 	game.pending_armed_delegate = pd
-	if (pd && pd.nation) handoff_to(game, pd.nation, 'armed_delegate')
-	else reconcile_handoff(game, 'armed_delegate')
+	if (pd && pd.nation) {
+		if (pd.return_nation == null) pd.return_nation = game.current_nation
+		game.current_nation = pd.nation
+		handoff_to(game, pd.nation, 'armed_delegate')
+	} else {
+		clear_pending_armed_delegate(game)
+	}
+	return pd
+}
+
+/* 【2026-11-11】统一归还：清挂起 + 还 current_nation + 交还 active。
+ * 所有清空 pending_armed_delegate 的地方都必须走这里，禁止裸置 null，
+ * 否则 current_nation 会永久停在被让权国（让权不成对，rtt-handoff-authority 铁律 5）。 */
+function clear_pending_armed_delegate(game) {
+	const pd = game.pending_armed_delegate
+	game.pending_armed_delegate = null
+	if (pd && pd.return_nation) game.current_nation = pd.return_nation
+	reconcile_handoff(game, 'armed_delegate')
 	return pd
 }
 
@@ -22017,21 +22036,35 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 					'（空军不能作为攻击目标），只能选择攻击地块本身',
 			}
 		/*
-		 * 【空打也要过中立检查】(2026-09-22)
-		 * 中立的苏联/美国"不可以对德/意/日发动战斗"——
-		 * 空打同样是"发动战斗"，只是没有目标可移除。
-		 * 目标地块上没有敌军时无法判定国籍，故此处只对
-		 * 【本国中立】做一次静态拦截：攻击方向若包含中立国的敌对方，
-		 * 一律拒绝（原文禁止的是"对某国发动战斗"，空打也属发动战斗）。
+		 * 【空打也要过中立检查】(2026-09-22；2026-11-11 修正为按国判定)
+		 *
+		 * 空打没有守军、无法按 `neutral_attack_check` 精判目标国。
+		 * 玩家口径：中立的苏联仍可攻击日本，只不能攻击德国/意大利
+		 * （NEUTRAL_RULES['苏联'].enemies = ['德国','意大利']）。
+		 * 因此不能"只要本国中立且敌对方非空就一律拒绝" —— 那会把
+		 * 苏联对日本的空打也拦掉（旧写法正是如此，导致 17900/喀秋莎的
+		 * 第二次陆战在目标已被清空时报『尚未参战』）。
+		 *
+		 * 判据：只有当本国中立的敌对方【已覆盖整个敌对阵营】时，
+		 * 空打才必然是对敌作战，予以拒绝（如美国 enemies 含德/意/日）；
+		 * 若仍有敌方阵营国家不在 enemies 里（苏联缺日本），说明存在可攻击对象，
+		 * 空打放行。判据从配置推导，不写死国名。
 		 */
-		if (is_neutral(game, nation) &&
-			NEUTRAL_RULES[nation].enemies.length)
-			return {
-				ok: false,
-				neutral: true,
-				reason: '【' + nation + '】尚未参战（中立），不可以发动战斗或夺取制空权' +
-					'（可执行卡牌效果中的"消灭"）',
-			}
+		if (is_neutral(game, nation) && NEUTRAL_RULES[nation].enemies.length) {
+			const _myF = faction_of_nation(nation)
+			const _foes = NEUTRAL_RULES[nation].enemies
+			const _allFoes = ORDER_OF_NATIONS.filter(n =>
+				n !== nation && faction_of_nation(n) !== _myF)
+			const _coversAll = _allFoes.length > 0 &&
+				_allFoes.every(n => _foes.indexOf(n) >= 0)
+			if (_coversAll)
+				return {
+					ok: false,
+					neutral: true,
+					reason: '【' + nation + '】尚未参战（中立），不可以发动战斗或夺取制空权' +
+						'（可执行卡牌效果中的"消灭"）',
+				}
+		}
 		/*
 		 * 【2026-10-12 修复】空打也是"发起战斗成功"，必须派发 battle 时点
 		 * （与"抵消成立分支"是同一类遗漏）。
@@ -22814,23 +22847,29 @@ function seize_air(game, nation, space, air_piece, opts) {
 	const myFaction = faction_of_nation(nation)
 	const supNow = compute_supply(game)
 
-	/* 中立检查（与 do_battle 一致，先行拦截）：中立的苏联/美国不可夺取制空权 */
-	if (is_neutral(game, nation) && NEUTRAL_RULES[nation] && NEUTRAL_RULES[nation].enemies.length) {
-		return {
-			ok: false, neutral: true,
-			reason: '【' + nation + '】尚未参战（中立），不可以发动战斗或夺取制空权（可执行卡牌效果中的"消灭"）',
-		}
-	}
-
 	/* 目标地必须有敌方空军 */
 	const enemies = pieces_on(game, space).filter(p =>
 		game.piece_type[p] === 'air' && faction_of_nation(game.piece_nation[p]) !== myFaction)
 	if (!enemies.length)
 		return { ok: false, reason: data.name_of(space) + ' 没有敌方空军' }
 
-	/* 中立检查（针对具体敌对方再确认一次） */
-	const neutralCheck = neutral_attack_check(game, nation, game.piece_nation[enemies[0]])
-	if (!neutralCheck.ok) return neutralCheck
+	/*
+	 * 【2026-11-11 修复】中立检查改为【按目标空军国籍逐支判定】，不再一刀切。
+	 *
+	 * 玩家口径：中立的苏联仍可攻击日本，只不能攻击德国/意大利
+	 * （NEUTRAL_RULES['苏联'].enemies = ['德国','意大利']，不含日本）。
+	 * 旧写法在本函数开头用 `is_neutral && enemies.length` 直接拒绝所有空战，
+	 * 下面这句本该生效的精判永远走不到 —— 表现为"候选高亮（basic_targets 按目标国判）
+	 * 但点下去报『尚未参战』"（能点的 ≠ 能成功的）。
+	 * 现在：只从敌方空军里挑出【中立规则允许攻击】的那几支；一支都没有才拒绝。
+	 */
+	const attackable = enemies.filter(p =>
+		neutral_attack_check(game, nation, game.piece_nation[p]).ok)
+	if (!attackable.length) {
+		const nc = neutral_attack_check(game, nation, game.piece_nation[enemies[0]])
+		return nc.ok ? { ok: false, reason: data.name_of(space) + ' 没有可攻击的敌方空军' } : nc
+	}
+	const targetAir = attackable[0]
 
 	/* 发起方：本国处于补给状态、且与目标地区相邻的空军 */
 	let initiator = null
@@ -22862,7 +22901,7 @@ function seize_air(game, nation, space, air_piece, opts) {
 	 * 【2026-10-30】卡牌效果消灭（by==='card'）不算攻击 —— 玩家口径。
 	 */
 	if (by === 'action')
-		maybe_end_neutral_by_attack(game, game.piece_nation[enemies[0]], nation)
+		maybe_end_neutral_by_attack(game, game.piece_nation[targetAir], nation)
 
 	/* 仅移除敌方飞机；本国发起飞机留在原地（不进驻，与陆战发起单位一致） */
 	/*
@@ -22873,15 +22912,15 @@ function seize_air(game, nation, space, air_piece, opts) {
 	 * 于是"夺取制空权 / 秋水 / 特种空勤团 / 中国卡"打掉的飞机永远不给 17811 等窗口。
 	 * 该助手内部已完成 note_removed（17512《战俘》计数），故此处不再重复调用。
 	 */
-	remove_air_with_piece_removed(game, enemies[0], space, nation)
+	remove_air_with_piece_removed(game, targetAir, space, nation)
 	refresh(game)
 	/* 轴心协定(17749)：敌方空军被"消灭"也计分（卡面"被攻击或消灭"；
 	   与 do_battle 攻击路径一致，复用同一钩子；该函数内部有 table_has 守卫，
 	   仅当轴心桌面有已激活的 17749 时才计分，无阶段限制） */
 	/* 【2026-10-16】17749 轴心协定：登记真实击杀信用并落账（制空权无异步窗口，立即 +1） */
-	axis_pact_register(game, nation, space, enemies[0])
+	axis_pact_register(game, nation, space, targetAir)
 	maybe_settle_axis_pact(game)
-	return { ok: true, removed: enemies[0], space: space, initiator: initiator }
+	return { ok: true, removed: targetAir, space: space, initiator: initiator }
 }
 
 /* 【2026-10-22 已并入】原 my_air_pieces(game, nation)

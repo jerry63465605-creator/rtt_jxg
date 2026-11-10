@@ -121,7 +121,12 @@ console.log('=== 4. 夺取制空权的中立限制 ===')
 	place(g, '苏联', 'air', SP('莫斯科'), 's2')
 	place(g, '德国', 'army', SP('罗斯'), 'g1')
 	place(g, '德国', 'air', SP('罗斯'), 'g2')
-	const r = I.seize_air(g, '苏联', 's2', SP('罗斯'))
+	/*
+	 * 【2026-11-11 修正】seize_air 签名是 (game, nation, space, air_piece)，
+	 * 旧测试把飞机 id 与地区传反了（'s2', SP('罗斯')）—— 之前靠开头的中立
+	 * 一刀切提前返回"尚未参战"才侥幸通过；一刀切按目标国判定后必须修正参数。
+	 */
+	const r = I.seize_air(g, '苏联', SP('罗斯'), 's2')
 	eq(r.ok, false, '4.1 中立苏联夺取德国制空权被拒')
 	ok(/尚未参战/.test(r.reason || ''), '4.2 文案正确', r.reason)
 }
@@ -368,14 +373,28 @@ console.log('=== 12. 美国被轴心攻击即参战 ===')
 	eq(I.is_neutral(g, '苏联'), true, '12.8 苏联不受德国被攻击影响')
 }
 
-console.log('=== 13. 空打也受中立限制 ===')
+console.log('=== 13. 空打的中立限制（2026-11-11 玩家口径）===')
 {
+	/*
+	 * 【2026-11-11 口径变更】玩家裁定：中立苏联仍可攻击日本，
+	 * 仅不能攻击德国/意大利（NEUTRAL_RULES['苏联'].enemies=['德国','意大利']）。
+	 * 空打没有守军、无法精判目标国，故判据改为：
+	 * 只有当本国中立的敌对方【覆盖整个敌对阵营】时才拒绝。
+	 * 原断言「中立苏联空打也被拒」属旧口径，已按裁定反转。
+	 */
 	const g = fresh()
 	placeInSupply(g, '苏联', 'army', '莫斯科', 's1')
 	/* 打一个空的陆地地块（罗 斯 无守军） */
 	const r = I.do_battle(g, '苏联', SP('罗斯'), null, 'land', { from: 's1' })
-	eq(r.ok, false, '13.1 中立苏联空打被拒')
-	eq(r.neutral, true, '13.2 标记中立')
+	eq(r.ok, true, '13.1 中立苏联空打【放行】（只禁德/意）')
+}
+{
+	/* 对照：美国 enemies 含德/意/日，覆盖整个敌对阵营 -> 空打仍被拒 */
+	const g = fresh()
+	placeInSupply(g, '美国', 'army', '莫斯科', 'u1')
+	const r = I.do_battle(g, '美国', SP('罗斯'), null, 'land', { from: 'u1' })
+	eq(r.ok, false, '13.2 中立美国空打仍被拒')
+	eq(r.neutral, true, '13.3 标记中立')
 }
 
 console.log('=== 14. 参战后限制全部解除 ===')
