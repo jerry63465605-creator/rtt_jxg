@@ -190,8 +190,16 @@ console.log('\n=== E. 17900 让权：current_nation 必须切到苏联 ===')
 		!!(g.pending_armed_delegate && g.pending_armed_delegate.return_nation === '英国'),
 		J(g.pending_armed_delegate))
 	const ts = (R.view(g, 'Allies').table_status || []).find(x => faceOf(x.card) === '17842')
-	ok('★★ E6 让权期间喀秋莎 ready=true（旧实现灰显"当前是英国"）',
-		!!(ts && ts.ready === true), J(ts && { ready: ts.ready, why: ts.ready_reason }))
+	/*
+	 * 【2026-11-11 方案 A】after_land 只武装【发起国本人】。
+	 * 本场景是【英国】发起陆战，苏联喀秋莎不应入窗口（旧实现会按同阵营塞入
+	 * 假窗口，点了报「不能触发非本方的状态卡」）。
+	 * 苏联自己发起的情形见 tools/_real_test_17842_katyusha.js A 组。
+	 */
+	ok('★★ E6 英国发起 → 苏联喀秋莎【不入窗口】（方案 A：只认发起国本人）',
+		!(g.status_instant || []).some(e => faceOf(e.card_id) === '17842') &&
+		!(ts && ts.ready === true),
+		J({ instant: (g.status_instant || []).map(e => faceOf(e.card_id)), ts: ts && { ready: ts.ready, why: ts.ready_reason } }))
 }
 
 /* ================= F. 组合场景：17900 + 喀秋莎 + 日陆军/飞机 ================= */

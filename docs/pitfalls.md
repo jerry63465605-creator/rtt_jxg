@@ -7895,3 +7895,37 @@ pending_event_step、event_budget、各类 delegate。
 `_real_test_supp_su` 26/0、`_real_test_neutral_17900` 33/0、
 `_dom_test_17900_discard` 19/0、`_smoke_us_status3` 41/0。
 详见 `docs/change-17900-manual-finish.md`。
+
+---
+
+## 2026-11-11 · 17842 喀秋莎「未生效」：同阵营武装 + owner 判据 = 假窗口
+
+**现象**：玩家报「噶秋沙疑似未能实际生效」。探查结论：苏联**自己**发起陆战时
+一切正常（弃 1 张、发起陆战、移除剩余日军、次数消耗）；但在**英国/美国发起陆战**时
+喀秋莎窗口被点亮却点不动，点了报「不能触发非本方的状态卡」，日军不动、代价不扣。
+
+**教训 1：`arm_status_instant` 是【同阵营 + 窗口名】武装，别把"本国"写成"同阵营"。**
+`for (const own of table) if (faction_of_nation(own) !== fac) continue`
+会把同阵营所有国的同窗口卡都塞进 `status_instant`。
+但 `after_land` 的卡面主语是**卡主本人**（"（本国）发起陆战后"），
+`after_ally_battle` 才是"友方"。两者必须区分：
+`if (window === 'after_land' && own !== nation) continue`。
+
+**教训 2：假窗口是"三处判据互相矛盾"的合成结果，必须一起看。**
+① 同阵营武装让它进窗口；
+② `status_window_ready` 的 owner 判据要求 `nation === current_nation`（英国回合时苏联不满足）；
+③ `status_instant_covers` 要求 `delegate_of_nation(by) === delegate_of_nation(owner)`，
+   且 `CROSS_NATION_STATUS_WINDOWS` 不含 `after_land` → 不放行。
+三处单独看都"合理"，合起来就是"亮着点不动"。判据：**能被武装，就必须能被发动**，
+否则不要武装（在原地收紧，而不是放宽 owner 判据）。
+
+**教训 3：这是同族问题的第三次。**
+#8（15432 阵营视角过宽 → 不相邻也触发）、17543（雷达同阵营武装 → 白亏代价）、
+17842（喀秋莎同阵营武装 → 假窗口）都源于"用阵营代理国家"。
+凡是"主语是某国本人"的判定，一律用国名，不要用 `faction_of_nation` 代理。
+
+**验证**：`tools/_real_test_17842_katyusha.js` 20/0（苏联发起真实生效 /
+英国发起不入窗口 / 德国跨阵营发起不入窗口 / 17848 同款 / 静态守卫）；
+`_real_test_neutral_17900` 33/0（E6 反转）、`_real_test_17900_manual_finish` 28/0、
+`_smoke_air_retreat_restore` 72/0、`_smoke_seq` 52/0。
+详见 `docs/change-17842-katyusha-window.md`。
