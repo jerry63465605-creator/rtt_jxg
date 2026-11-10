@@ -8288,27 +8288,41 @@ function arm_status_instant(game, window, nation, space) {
 	const fac = faction_of_nation(nation)
 	for (const own of Object.keys(game.table || {})) {
 		if (faction_of_nation(own) !== fac) continue
-		/*
-		 * 【2026-11-11 · 方案 A】after_land 只武装【发起国本人】的状态卡。
-		 *
-		 * 卡面「（本国）发起陆战后」的主语是卡主本人（苏联 17842《喀秋莎》/
-		 * 17848《正面攻击》/ 17846《坦克运输》、德国 15253《闪电战》），
-		 * 不是"同阵营任一友方发起"。
-		 *
-		 * 旧实现按同阵营武装：英国/美国发起陆战时，苏联桌面的喀秋莎也被塞进
-		 * game.status_instant；但
-		 *   · status_window_ready 的 owner 判据要求 nation === current_nation（当前是英国）；
-		 *   · status_instant_covers 又因 delegate_of_nation(by=英国) ≠ (owner=苏联) 不放行
-		 *     （CROSS_NATION_STATUS_WINDOWS 里没有 after_land）；
-		 * → 窗口亮着却点不动，点了报「不能触发非本方的状态卡」= **假窗口**。
-		 * 与 #8（15432 阵营视角过宽）、17543《雷达》同类问题。
-		 *
-		 * 注意：after_ally_battle 的卡面明确写"友方"，继续保持同阵营，不收窄。
-		 */
-		if (window === 'after_land' && own !== nation) continue
 		for (const cid of (game.table[own] || [])) {
 			const cfg = status_config_of(cid)
 			if (!cfg || !cfg.trigger || cfg.trigger.window !== window) continue
+			/*
+			 * 【2026-11-11 · 方案 A】after_land 只武装【发起国本人】的状态卡。
+			 *
+			 * 卡面「（本国）发起陆战后」的主语是卡主本人（苏联 17842《喀秋莎》/
+			 * 17848《正面攻击》/ 17846《坦克运输》、德国 15253《闪电战》），
+			 * 不是"同阵营任一友方发起"。
+			 *
+			 * 旧实现按同阵营武装：英国/美国发起陆战时，苏联桌面的喀秋莎也被塞进
+			 * game.status_instant；但
+			 *   · status_window_ready 的 owner 判据要求 nation === current_nation（当前是英国）；
+			 *   · status_instant_covers 又因 delegate_of_nation(by=英国) ≠ (owner=苏联) 不放行
+			 *     （CROSS_NATION_STATUS_WINDOWS 里没有 after_land）；
+			 * → 窗口亮着却点不动，点了报「不能触发非本方的状态卡」= **假窗口**。
+			 * 与 #8（15432 阵营视角过宽）、17543《雷达》同类问题。
+			 *
+			 * 【17732 德国军事顾问 · 借用兼容】意大利可借用一张【德国状态卡】
+			 * 本回合由自己使用（game.italy_borrow.card_face = 该卡实例 id）。
+			 * 德国桌面 15253《闪电战》/15245《俯冲式轰炸机》正是 after_land 卡：
+			 * 若上面这条按 own!==nation 直接跳掉，借用方发起陆战时它不会被武装，
+			 * 而 status_window_ready / activate_status 里的 `borrowed` 豁免只解决
+			 * 「能不能发动」，救不了「有没有被武装」→ 借用彻底失效。
+			 * 因此收紧下沉到【单卡】层：只放行"正被 nation 借用的那一张"，
+			 * 不会连带点亮德国其它 after_land 卡。
+			 *
+			 * 注意：after_ally_battle 的卡面明确写"友方"，继续保持同阵营，不收窄。
+			 */
+			if (window === 'after_land' && own !== nation) {
+				const _ib = game.italy_borrow
+				const _isBorrowed = !!(_ib && _ib.turn === game.turn &&
+					_ib.nation === nation && String(_ib.card_face) === String(cid))
+				if (!_isBorrowed) continue
+			}
 			/*
 			 * 【2026-11-07】声明式「限定建设地区」（17901 工业心脏：在<罗斯>建设陆军后）。
 			 *

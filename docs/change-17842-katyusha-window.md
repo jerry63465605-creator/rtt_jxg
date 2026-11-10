@@ -79,3 +79,39 @@ if (window === 'after_land' && own !== nation) continue
   `trigger.ready` 并把 `after_land` 加进 `CROSS_NATION_STATUS_WINDOWS`，同时处理
   `current_nation` 判定（6 人模式下跨玩家发动），成本较高。
 - 苏联自己回合路径未受影响（A 组 9 项真测覆盖）。
+
+## 7. 17732《德国军事顾问》借用兼容（同日补修）
+
+**玩家追问**：「本次改动对 17732 会有影响吗？」—— 会，是真回归。
+
+`17732` 让意大利**借用一张德国状态卡**本回合自用（`game.italy_borrow = { nation, card_face:<德国卡实例id>, turn }`）。
+德国桌面的 `after_land` 卡正是：
+- `15253《闪电战》`（发起陆战后损耗 1 张 → 在战斗地区建设陆军）
+- `15245《俯冲式轰炸机》`（发起陆战后损耗 1 张 → 在战斗地区或相邻发起 1 次陆战）
+
+若收紧按 `own !== nation` 一刀切：意大利借用 15253 后自己发起陆战，`own='德国'≠'意大利'` → 不武装。
+而 `status_window_ready`（`rules.js:7927`）与 `activate_status`（`rules.js:33340`）里的 `borrowed`
+豁免只解决「**能不能发动**」，救不了「**有没有被武装**」→ 借用彻底失效。
+
+**改法**：收紧下沉到**单卡**层，并对「正被 `nation` 借用的那一张」放行：
+
+```js
+if (window === 'after_land' && own !== nation) {
+    const _ib = game.italy_borrow
+    const _isBorrowed = !!(_ib && _ib.turn === game.turn &&
+        _ib.nation === nation && String(_ib.card_face) === String(cid))
+    if (!_isBorrowed) continue
+}
+```
+
+只放行被借的那一张，不会连带点亮德国其它 `after_land` 卡；英/美发起时苏联喀秋莎仍不武装（方案 A 不回归）。
+
+`tools/_real_test_17732_borrow_after_land.js` — **15 项全过**：
+
+| 组 | 覆盖 | 结果 |
+|---|---|---|
+| A | 借用 15253 → 意大利发起陆战 → 入窗口、`by=意大利`、`ready`、发动后**真在战斗地区建设意大利陆军** | 8/8 |
+| B | 窗口只含 15253；苏联喀秋莎不被连带点亮 | 2/2 |
+| C | 对照：德国自己发起 → 15253 正常入窗口（`own===nation` 未破坏） | 2/2 |
+| D | 对照：英国发起 → 苏联喀秋莎仍不入窗口（方案 A 不回归） | 1/1 |
+| E | 静态守卫：收紧仍在 + 借用豁免存在 | 2/2 |

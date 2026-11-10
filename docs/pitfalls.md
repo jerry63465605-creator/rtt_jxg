@@ -7929,3 +7929,13 @@ pending_event_step、event_budget、各类 delegate。
 `_real_test_neutral_17900` 33/0（E6 反转）、`_real_test_17900_manual_finish` 28/0、
 `_smoke_air_retreat_restore` 72/0、`_smoke_seq` 52/0。
 详见 `docs/change-17842-katyusha-window.md`。
+
+**教训 4：收紧"只认卡主本人"时必须排查【借用】这类跨归属机制。**
+17732《德国军事顾问》让意大利借用一张德国状态卡，而德国 15253《闪电战》/
+15245《俯冲式轰炸机》正是 `after_land` 卡。按 `own !== nation` 一刀切后，
+借用方发起陆战时该卡不再被武装；而 `status_window_ready` / `activate_status`
+里的 `borrowed` 豁免只解决「能不能发动」，**救不了「有没有被武装」**。
+判据：改「谁算本人」之前，先 grep `borrow` / `delegate` / `owner` 这类跨归属字段，
+把"被授权视同本人"的那一份一并放行（本例：`_ib.card_face === cid`）。
+且要收到**单卡**粒度 —— 放行整个 `own` 国会把德国其它 `after_land` 卡连带点亮。
+（`tools/_real_test_17732_borrow_after_land.js` 15/0）
