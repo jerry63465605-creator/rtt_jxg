@@ -5382,18 +5382,29 @@ const STATUS_EFFECTS = {
 			once_per_turn: true,
 			desc: '在<罗斯>建设陆军后：在相邻地区建设 1 支陆军',
 			run(game, ctx) {
-				const sp = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space : (game.last_built && game.last_built.space)
-				if (sp == null) return { ok: false, reason: '未指定建设地区' }
-				if (data.name_of(sp) !== '罗斯') return { ok: false, reason: '仅当在<罗斯>建设陆军后发动' }
-				const nbrs = get_neighbors(sp)
-				const tgt = nbrs.find(nb => {
-					const ss = data.spaces[Number(nb)]
-					return ss && ss.terrain !== 'sea' && can_build_at(game, '苏联', Number(nb), 'army').ok
-				})
-				if (tgt == null) return { ok: true, desc: '<罗斯>相邻无可建设陆军地区，未建设' }
-				const r = build_piece(game, '苏联', 'army', Number(tgt))
+				const base = (ctx && ctx.ctx && ctx.ctx.space != null) ? ctx.ctx.space
+					: (game.last_built && game.last_built.space)
+				if (base == null) return { ok: false, reason: '未指定建设地区' }
+				if (data.name_of(base) !== '罗斯') return { ok: false, reason: '仅当在<罗斯>建设陆军后发动' }
+				/*
+				 * 【2026-11-10 · #1 玩家报障「工业心脏没给可选，自动建设了」】
+				 *
+				 * 旧实现用 `nbrs.find(可建设)` 由服务端擅自挑第一个相邻地区直接建设 ——
+				 * 卡面是「在**相邻地区**建设 1 支陆军」，相邻往往有多个，必须由玩家选。
+				 *
+				 * 现对齐 17552《战时生产》/ 17547《人工港》/ 15248《合成燃料》的既有范式：
+				 *   · 客户端 STATUS_UI['17901'] = { sbuild:'army' } → 走"地图高亮选地"两步；
+				 *   · 候选由服务端 `status_build_spaces` 现算（base=罗斯，scope=near）；
+				 *   · 本处只认 `ctx.arg.space`，并用 `status_build_ok` 做同源校验。
+				 */
+				const space = (ctx.arg && ctx.arg.space != null) ? Number(ctx.arg.space) : null
+				if (space == null) return { ok: false, reason: '请选择建设地区' }
+				if (!status_build_ok(game, '苏联', 'army', base, space, 'near'))
+					return { ok: false, reason: '该地区不可建设（需与<罗斯>相邻的空地）' }
+				const r = build_piece(game, '苏联', 'army', space)
 				refresh(game)
-				return { ok: true, desc: '在' + data.name_of(Number(tgt)) + '建设 1 支陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+				if (!r.ok) return { ok: false, reason: '建设失败：' + r.reason }
+				return { ok: true, desc: '在' + data.name_of(space) + '建设 1 支陆军' }
 			},
 		},
 		desc: '工业心脏',

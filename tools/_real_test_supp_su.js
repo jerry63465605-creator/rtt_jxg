@@ -200,7 +200,20 @@ console.log('\n=== 2. 17901《工业心脏》[STATUS] ===')
 	const armyBefore = new Set(Object.keys(g.location)
 		.filter(p => g.piece_nation[p] === '苏联' && g.piece_type[p] === 'army'))
 	const n2 = (g.log || []).length
-	R.action(g, 'Allies', 'activate_status', { card: cardId })
+	/*
+	 * 【2026-11-10 改口径】17901 改为"玩家选相邻地区"两步（同 17552/17547）：
+	 * 先取 status_build_spaces 候选，再带 space 提交；不带 space 会被拒「请选择建设地区」。
+	 */
+	let _sp = null
+	try {
+		const q = R.query(g, 'Allies', 'status_build_spaces', { card: cardId, nation: '苏联', type: 'army' })
+		_sp = q && q.spaces && q.spaces.length ? Number(q.spaces[0]) : null
+	} catch (e) { _sp = null }
+	if (_sp == null) {
+		/* 兜底：直接取<罗斯>的第一个相邻陆地 */
+		_sp = Number((d.spaces[d.id_of('罗斯')].connections || [])[0])
+	}
+	R.action(g, 'Allies', 'activate_status', { card: cardId, space: _sp })
 	I.refresh(g)
 	const lg2 = logSince(g, n2)
 	const newArmy = Object.keys(g.location).filter(p =>
