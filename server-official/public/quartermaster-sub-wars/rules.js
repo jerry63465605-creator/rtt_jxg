@@ -4890,6 +4890,17 @@ const STATUS_EFFECTS = {
 			window: 'piece_removed',
 			once_per_turn: true,
 			cost: { attrition: 2 },
+			/*
+			 * 【2026-11-11 · 雷达询问】声明式开关：这张卡的「立刻窗口」不是可选软窗口，
+			 * 而是【必须回答】的排他挂起 —— 派发点会暂停响应链、让权给窗口归属方，
+			 * 玩家答完（发动 / 不发动）再按原栈顶继续响应链。
+			 *
+			 * 用配置开关而不是写死卡面 id：arm_status_instant 的通用遍历据此决定是否
+			 * 建立挂起，将来若还有同类「立即询问」状态卡只需在此声明即可。
+			 * 一回合一次沿用 once_per_turn + status_used（只在【发动成功】时记账）：
+			 * 玩家选「不发动」不消耗次数，本回合下一次美国海军被移除仍会再问（玩家口径 B）。
+			 */
+			askImmediately: true,
 			desc: '一回合一次，美国海军被移除时：损耗2张牌，使其在本次战斗中不会被移除（还原）',
 			/*
 			 * 【2026-11-01 修复·范式对齐】声明式条件（与 17808/17811/15351 的 armed.ready 同款）。
@@ -4907,26 +4918,37 @@ const STATUS_EFFECTS = {
 				if (typ !== 'navy') return false
 				return true
 			},
-			run(game, ctx) {
-				const lp = game.last_piece_removed
-				if (!lp || lp.nation !== '美国' || lp.type !== 'navy' || lp.piece == null)
+			run(game) {
+				/*
+				 * 【2026-11-11 · 等价一次免死】改走通用原子 protect_restored，与
+				 * 17730《贝尔萨列里神射手团》/15311《马奇诺防线》同类免死卡完全同源：
+				 *   restore_piece 救回海军 -> 其内部 restore_retreated_airs 把同场
+				 *   因「不代受」撤退（含无处可撤被移除）的空军一并拉回原地区；
+				 *   register_modifier 注册 battleOnly 的 protect（本次战斗内不会被移除）。
+				 *
+				 * ⚠ ctx 必须带 piece_nation / piece_type / piece / space / retreated_airs。
+				 * 旧实现读 game.last_piece_removed（字段是 nation / type），若直接交给
+				 * protect_restored 会注册 nation/type=undefined 的假保护（幽灵保护）。
+				 * 故优先取派发点存进 pending_radar 的完整 ctx，并对旧形状做归一兜底。
+				 */
+				const ask = game.pending_status_ask
+				const src = (ask && ask.ctx) || game.last_piece_removed
+				if (!src) return { ok: false, reason: '仅当美国海军被移除后发动' }
+				const nat = src.piece_nation != null ? src.piece_nation : src.nation
+				const typ = src.piece_type != null ? src.piece_type : src.type
+				const pid = src.piece != null ? src.piece : src.piece_id
+				if (nat !== '美国' || typ !== 'navy' || pid == null)
 					return { ok: false, reason: '仅当美国海军被移除后发动' }
-				/* 还原该海军（与英国响应 15334 驱逐舰同款：restore_piece + protect） */
-				restore_piece(game, lp)
-				register_modifier(game, {
-					key: 'protect', nation: '美国', type: 'navy',
-					spaces: [lp.space], untilTurn: game.turn,
-					/*
-					 * 【2026-11-07】卡面是「在【本次战斗】中不会被移除」-> battleOnly。
-					 * 状态卡窗口是【延迟结算】的：注册这一刻 do_battle 已经返回，
-					 * battle_active() 会是 false —— 不能按它决定，否则又退回"国家回合"。
-					 * 寿命由 has_modifier（战斗中才生效）+ do_battle 的两道清理决定。
-					 */
+				const ctx = {
+					piece: pid, piece_nation: nat, piece_type: typ,
+					space: src.space, retreated_airs: src.retreated_airs || [],
+				}
+				const r = protect_restored(game, ctx, {
 					battleOnly: true,
+					desc: '美国海军在' + data.name_of(ctx.space) + ' 不被移除（已还原）',
 				})
 				game.last_piece_removed = null
-				refresh(game)
-				return { ok: true, desc: '美国海军在' + data.name_of(lp.space) + ' 不被移除（已还原）' }
+				return r
 			},
 		},
 		desc: '雷达',
@@ -8277,7 +8299,78 @@ function arm_status_instant(game, window, nation, space) {
 			})
 		}
 	}
+	/*
+	 * 【2026-11-11】统一入口：把声明了 trigger.askImmediately 的窗口升级成
+	 * 「必须回答」的排他挂起。放在 arm_status_instant 末尾而不是逐个派发点，
+	 * 是为了覆盖 piece_removed 的【全部】路径（战斗移除 / 断补 / 经济战 /
+	 * 消灭 / 空军代死），玩家口径「每次美国海军被移除都立刻弹框」不会漏挂。
+	 * 其它窗口（after_land 等）没有声明该开关，open 内部按 window 过滤后自然 no-op。
+	 */
+	open_immediate_status_ask(game, window)
 }
+
+/*
+ * 【2026-11-11 · 玩家口径】"立刻窗口"升级为【必须回答】的排他挂起。
+ *
+ * 场景（15428《舰队决战》+15430《奇袭》+15438《偷袭珍珠港》+17543《雷达》）：
+ * 日本出牌阶段开始的响应链正在结算，中途打掉美国海军 -> piece_removed 派发。
+ * 旧行为只把《雷达》写进 status_instant（可选软窗口），响应链继续由轴心推进，
+ * 美国既看不到询问框、桌面卡也被"配给优先"置灰；等链路清空时"本次战斗"已过。
+ *
+ * 新行为：在派发点把该窗口变成排他挂起 —— 响应【栈帧原地不动】（不 defer、不搬帧，
+ * 避开 rtt-response-stack 铁律 8 的"之上/之下"边界坑），只是：
+ *   · view 不再下发 pending_trigger / response_choice（响应框不弹 = 链暂停）
+ *   · build_actions 只放行「发动 / 不发动」
+ *   · 让权给窗口归属方（handoff_to 成对归还）
+ * 答完后 reconcile_handoff 归还控制权，响应栈顶帧自然继续，无需新增状态机。
+ *
+ * 【判定同源】不重写 ready / once_per_turn / status_active 判定 —— 直接读
+ * arm_status_instant 刚武装好的 status_instant 条目；只对声明了
+ * trigger.askImmediately 的卡生效（当前仅 17543，配置驱动、不写死卡面 id）。
+ */
+function open_immediate_status_ask(game, window) {
+	if (!window || game.pending_status_ask) return false
+	for (const e of (game.status_instant || [])) {
+		if (!e || e.consumed === true || e.window !== window) continue
+		const cfg = status_config_of(e.card_id)
+		if (!cfg || !cfg.trigger || !cfg.trigger.askImmediately) continue
+		const face = String(inst_card_id(e.card_id))
+		const card = inst_card(e.card_id) || {}
+		const nation = e.nation || game.current_nation
+		/*
+		 * once_per_turn 只在【发动成功】时由 activate_status 写 status_used；
+		 * 玩家选「不发动」不写 -> 本回合下一次美国海军被移除仍会再问（口径 B）。
+		 */
+		if (cfg.trigger.once_per_turn && (game.status_used || {})[e.card_id] === freq_key(game))
+			continue
+		game.pending_status_ask = {
+			card_id: e.card_id,
+			face: face,
+			name: card.name || cfg.name || '',
+			nation: nation,
+			side: faction_of_nation(nation),
+			window: window,
+			/* arm_status_instant 存的 readyCtx 已含 piece_nation/piece_type/space/
+			 * piece/retreated_airs —— 正是 protect_restored 需要的完整形状。 */
+			ctx: Object.assign({}, e.ctx || {}),
+			desc: cfg.trigger.desc || cfg.desc || '',
+			cost: Object.assign({}, cfg.trigger.cost || {}),
+		}
+		handoff_to(game, nation, 'status_ask')
+		return true
+	}
+	return false
+}
+
+/* 收尾：清挂起 + 成对归还让权 + 让响应链按原栈顶继续。两个答复动作共用。 */
+function close_immediate_status_ask(game) {
+	if (!game.pending_status_ask) return false
+	game.pending_status_ask = null
+	reconcile_handoff(game, 'status_ask')
+	response_reconcile_active(game)
+	return true
+}
+
 /*
  * 【2026-09-30 修复】发起陆战/海战"成功"后，武装本国/同阵营的"X 后立刻"状态卡
  * （闪电战 15253/15245 的 after_land、德国 after_naval、同盟 after_ally_battle）。
@@ -15243,6 +15336,21 @@ function handoff_to(game, holder, id) {
 	if (!game.handoff_stack.length) game._handoff_base = game.active
 	const existing = game.handoff_stack.find(h => h.id === id)
 	if (!existing) game.handoff_stack.push({ id: id, return_active: game.active, holder_role: role })
+	/*
+	 * 【2026-11-11】雷达排他询问期间：其它让权（response / battle / armed…）
+	 * 仍要登记进 handoff_stack（保留归还信息），但【不能改 active】——
+	 * 否则 piece_removed 之后压入的 battle 响应帧会把 active 让回轴心，
+	 * 顶栏显示错阵营。把 status_ask 重新置顶，保证 rectify_active 仍归还应答方。
+	 * 守卫条件很窄：只在挂起存在且不是挂起自己的让权时生效。
+	 */
+	if (game.pending_status_ask && id !== 'status_ask') {
+		const sa = game.handoff_stack.find(h => h.id === 'status_ask')
+		if (sa) {
+			game.handoff_stack = game.handoff_stack.filter(h => h !== sa)
+			game.handoff_stack.push(sa)
+		}
+		return
+	}
 	if (game.active !== role) game.active = role
 }
 
@@ -18818,6 +18926,15 @@ function request_responses(game, on, ctx, pre, opt) {
  *   · 队列空了     -> 交还原先让权的一方（response_return_active），无则不动
  */
 function response_reconcile_active(game) {
+	/*
+	 * 【2026-11-11】雷达排他询问期间响应链【暂停】：栈帧原地不动，
+	 * 不能按栈顶帧把 active 让回轴心 —— 否则 deferToTail / trigger_response 的
+	 * 收尾会覆盖 open_immediate_status_ask 的让权，顶栏显示错阵营、
+	 * 应答方反而"不是行动方"。
+	 * 答完 close_immediate_status_ask 先清挂起、reconcile_handoff 归还，
+	 * 再调本函数；那时挂起已清，按原栈顶正常继续，无需任何恢复状态机。
+	 */
+	if (game.pending_status_ask) return
 	/*
 	 * 【栈重构·第二期】栈顶帧优先作为真相源；response_queue 仅作聚合兼容层。
 	 * 栈非空（pending/defer 续打帧在栈上）时按栈顶帧持有方让权；
@@ -22492,6 +22609,13 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 			 * 因此这里也必须带 retreated_airs，否则它们救回海军后飞机留在撤退地。 */
 			retreated_airs: victimProtected ? [] : guardAirs.slice().sort(),
 		}
+		/*
+		 * 【2026-11-11 · 玩家口径】美国海军被移除时《雷达》必须【立刻挂起询问美国】。
+		 * 与 17730《贝尔萨列里神射手团》/15311《马奇诺防线》同在 piece_removed 派发点，
+		 * 但状态卡不能进响应栈（会被 stillOnTable 判作废 / consume_response 丢进弃牌堆，
+		 * 破坏 A3①「触发后卡保留桌面」），故由 arm_status_instant 末尾统一建立排他挂起；
+		 * 响应栈帧原地不动，答完由 close_immediate_status_ask 按原栈顶继续。
+		 */
 		arm_status_instant(game, 'piece_removed', rmvNation, space)
 		/* 16304 中国远征军：让权美国选相邻地区征召 */
 		offer_us_china_delegate(game, space, rmvNation, rmvType)
@@ -26991,6 +27115,13 @@ exports.view = function (state, current) {
 	 */
 	const pendingTrigger = (() => {
 		/*
+		 * 【2026-11-11】"立刻窗口"排他询问期间【暂停响应链】：
+		 * 栈帧原地不动，但双方都不下发 pending_trigger（响应框不弹）。
+		 * 否则客户端 update_pending_trigger_box 会与雷达询问框争抢同一个 #ask_box。
+		 * 答完 close_immediate_status_ask 后，这里自动按原栈顶恢复。
+		 */
+		if (game.pending_status_ask) return null
+		/*
 		 * 【2026-10-25 修复·真相源】改为直接读【栈顶帧】top_response_frame。
 		 *
 		 * 旧实现读 game.response_queue —— 那只是 sync_response_queue_view 维护的派生缓存，
@@ -27815,6 +27946,8 @@ exports.view = function (state, current) {
 			}
 		}),
 		response_choice: (() => {
+			/* 【2026-11-11】雷达排他询问期间不下发响应选目标框（链暂停，避免弹框互抢） */
+			if (game.pending_status_ask) return null
 			/* 真相源 = 栈顶帧（纯栈模型下 pending_response_choice 已删除） */
 			const pc = top_response_frame(game)
 			if (!pc) return null
@@ -27984,6 +28117,26 @@ exports.view = function (state, current) {
 
 		/* 【2026-10-07】17900 八月风暴：友方攻击中国东北后让权苏联的挂起状态 */
 		pending_armed_delegate: game.pending_armed_delegate || null,
+
+		/*
+		 * 【2026-11-11】"立刻窗口"排他询问（当前仅 17543《雷达》）。
+		 * 只发给【应答方】：文案、代价由服务端算好下发，客户端照抄不二次拼
+		 * （rtt-client-server-contract 第四节 / rtt-avoid-hardcode 第三节）。
+		 */
+		pending_status_ask: (() => {
+			const ask = game.pending_status_ask
+			if (!ask || ask.side !== side) return null
+			return {
+				card: ask.card_id,
+				name: ask.name,
+				desc: ask.desc,
+				cost: ask.cost || {},
+				nation: ask.nation,
+				space: ask.ctx && ask.ctx.space != null ? ask.ctx.space : null,
+				space_name: (ask.ctx && ask.ctx.space != null)
+					? (data.name_of(ask.ctx.space) || '') : '',
+			}
+		})(),
 
 		/* 【2026-10-08】17721 钢铁条约：意大利→德国链式委托（德国可打1状态卡，打完归还） */
 		it_delegate: (game.delegate && (game.delegate.mode === 'chain' || game.delegate.mode === 'german_draw')) ? game.delegate : null,
@@ -28325,7 +28478,17 @@ exports.view = function (state, current) {
 					 * 现在两侧都先查 status_active，再查窗口。
 					 */
 					let ready
-					if (!trig)
+					/*
+					 * 【2026-11-11 · 玩家口径 5：仅对雷达例外】
+					 * 2026-10-17「配给优先」裁定要求响应窗口开着时【所有】状态卡一律置灰，
+					 * 这条裁定不推翻 —— 只对当前正处在"立刻询问"的那一张卡放开，
+					 * 让桌面状态卡也能作为「发动」入口（弹框之外多一个同源入口）。
+					 */
+					if (game.pending_status_ask &&
+						String(game.pending_status_ask.card_id) === String(cid) &&
+						game.pending_status_ask.side === side)
+						ready = { ok: true, reason: '' }
+					else if (!trig)
 						ready = { ok: false, reason: '该卡没有可触发效果' }
 					else if (!status_active(game, cid, n))
 						ready = { ok: false, reason: '被敌方《霍巴特滑稽坦克》压制' }
@@ -28457,6 +28620,17 @@ exports.view = function (state, current) {
 		 * 这里给它一句明确的话，客户端据此显示"等待【英国】…"。
 		 */
 		waiting_for: (() => {
+			/* 【2026-11-11】雷达排他询问优先级最高：非应答方顶部明确显示"等谁决定什么" */
+			const ask0 = game.pending_status_ask
+			if (ask0) {
+				/* 应答方自己有询问框，不再重复显示"等待响应卡"的旧提示 */
+				if (ask0.side === side) return null
+				return {
+					kind: 'status_ask',
+					nation: ask0.nation,
+					text: '等待【' + ask0.nation + '】决定是否发动《' + ask0.name + '》',
+				}
+			}
 			const pb = game.pending_battle
 			if (pb) {
 				const wait = pending_wait_nation(pb)
@@ -28758,6 +28932,9 @@ exports.view = function (state, current) {
 		 * "【德国】…阶段"而不是"请决定是否代受"。
 		 */
 		prompt: (() => {
+			/* 【2026-11-11】雷达排他询问：应答方顶部明确"请决定是否发动" */
+			if (game.pending_status_ask && game.pending_status_ask.side === side)
+				return '《' + game.pending_status_ask.name + '》：请决定是否发动（必须回答）'
 			if (pendingBattle)
 				return '战斗结算中：请决定【' + pending_wait_nation(pendingBattle) +
 					'】' + pending_stage_zh(pendingBattle)
@@ -29818,6 +29995,36 @@ function view_intercept_target(ctx, fallbackWindow) {
 }
 
 function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
+	/*
+	 * 【2026-11-11 · 玩家口径】"立刻窗口"排他挂起（当前仅 17543《雷达》）。
+	 *
+	 * 【为什么放在外层、且在 build_actions_inner 之前】
+	 * 旧实现里响应栈帧存在时，inner 的 `if (pendingTrigger || top_response_frame(game))`
+	 * 会提前 return，走不到 register_status_actions —— 这是 #7「服务端能点、
+	 * 客户端静默不发」假绿的根因。若只在 inner 开头加分支，本函数后续的
+	 * peek / pending_echo / rollback / finish_acts(armed、国家技能、debug) 又会
+	 * 往白名单里追加动作，客户端看得见却会被 do_action 守卫拒（通用教训 3）。
+	 * 故在这里【单一判据】直接返回最终动作表：只给应答方「发动 / 不发动」，
+	 * debug_* 与 P0 同口径保留（带外工具，卡死时可清理局面）。
+	 *
+	 * 响应栈帧【原地不动】（不 defer、不搬帧），答完由 close_immediate_status_ask
+	 * 按原栈顶继续 —— 复用现成栈机制，不另造「暂停/恢复」状态机。
+	 */
+	if (game.pending_status_ask) {
+		const ask = game.pending_status_ask
+		const acts = { log: 1 }
+		if (ask.side === side) {
+			acts.activate_status = 1
+			acts['activate_status:' + ask.card_id] = 1
+			acts.skip_status_ask = 1
+		}
+		if (!game.game_over && !game.rollback_proposal && !game.__internal_depth)
+			for (const k of DEBUG_ACTION_KEYS) acts[k] = 1
+		game.block_reason = 'pending_status_ask: 等待【' + ask.nation +
+			'】决定是否发动《' + ask.name + '》（必须回答后才能继续）'
+		return acts
+	}
+
 	const acts = build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigger)
 	if (game.peek && (game.peek.cards || []).length && game.peek.card) {
 		const cd = CARD_BY_ID[String(inst_card_id(game.peek.card))]
@@ -30262,6 +30469,8 @@ function do_action(state, current, action, arg) {
 	 */
 	const hasSuspended = (game.response_stack || []).length > 0 ||
 		(game.response_queue || []).length > 0 ||
+		/* 【2026-11-11】雷达排他询问本身也是未决挂起，窗口不能被答复数之外的动作清掉 */
+		!!game.pending_status_ask ||
 		(game.armed_offers && game.armed_offers.length > 0) || game.armed_offer ||
 		game.pending_battle || game.pending_econ || game.pending_status_play ||
 		game.pending_uranus || game.pending_autobahn ||
@@ -30638,6 +30847,13 @@ function do_action(state, current, action, arg) {
 	if (game.pending_battle && action !== 'resolve_battle' &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
 		!_isResponseVerb &&
+		/*
+		 * 【2026-11-11 · 口径 3】雷达排他询问优先于战斗挂起：
+		 * 玩家必须能先答「发动 / 不发动」，否则两个守卫互相挡死。
+		 * 答完 close_immediate_status_ask 归还让权，pending_battle 照常继续。
+		 */
+		!(game.pending_status_ask &&
+			(action === 'activate_status' || action === 'skip_status_ask')) &&
 		!(arg && arg.__debug) && !String(action).startsWith('debug_')) {
 		game.log.push('战斗结算中：正在等待【' +
 			pending_wait_nation(game.pending_battle) + '】' +
@@ -30670,6 +30886,25 @@ function do_action(state, current, action, arg) {
 	 * 否则会卡死（白名单死锁：不在册=静默不发）。armed 窗口的合法性由 use_armed_offer /
 	 * skip_armed_offer 自身校验（窗口存在、阵营匹配），与响应解析互不冲突。
 	 */
+	/*
+	 * 【2026-11-11 · 玩家口径】雷达《雷达》排他询问：必须回答。
+	 *
+	 * 与 build_actions 的排他白名单同源（双门禁）：挂起期间除「发动 / 不发动」
+	 * 与带外工具（log / debug_* / 引擎内部动作）外，一律拒绝 —— 包括响应链的
+	 * trigger_response / pass_response（这就是"暂停响应链"的服务端一侧）。
+	 * 不拦截内部重放（__internal_depth），否则响应链恢复时的内部动作会被自己挡死。
+	 */
+	if (game.pending_status_ask &&
+		action !== 'activate_status' && action !== 'skip_status_ask' &&
+		action !== 'log' && !isDebugAction &&
+		!(arg && arg.__debug) && String(action).charAt(0) !== '.' &&
+		!game.__internal_depth) {
+		/* 固定文案：暗置语境的日志不得插值明文卡名（_smoke_facedown_privacy）；
+		 * 卡名由 view.pending_status_ask 下发给应答方的询问框显示。 */
+		game.log.push('状态卡询问未决：请先作答（发动 / 放弃）')
+		return game
+	}
+
 	/* 【栈重构·第一期】响应挂起判定：队列非空 或 栈非空（栈化后语义一致） */
 	if ((game.response_queue && game.response_queue.length ||
 		game.response_stack && game.response_stack.length) &&
@@ -30677,7 +30912,7 @@ function do_action(state, current, action, arg) {
 		action !== 'resolve_response_choice' &&
 		action !== 'response_reorder' && action !== 'response_confirm' &&
 		action !== 'use_armed_offer' && action !== 'skip_armed_offer' &&
-		action !== 'activate_status' &&
+		action !== 'activate_status' && action !== 'skip_status_ask' &&
 		/*
 		 * 【2026-10-25 修复·甲】放行 resolve_battle —— 与上方战斗守卫对称。
 		 * 响应未表态期间若同时存在战斗挂起（KV-2 / 17853 / 武士道 / 空军代受），
@@ -32797,6 +33032,36 @@ function do_action(state, current, action, arg) {
 	 *   victim  = 被攻击目标（战斗类）
 	 *   discard = [card_id...] 弃牌代价所选的牌
 	 */
+	/*
+	 * 【2026-11-11 · 玩家口径 B】"不发动《雷达》"：必须回答，但【不消耗次数】。
+	 * once_per_turn 的 status_used 只在 activate_status 成功时写（见下方），
+	 * 故这里只清本次窗口/挂起，本回合下一次美国海军被移除仍会再问一次。
+	 * 窗口条目必须就地作废，否则下次任意动作又会把它当成"立刻窗口"点亮。
+	 */
+	if (action === 'skip_status_ask') {
+		const ask = game.pending_status_ask
+		if (!ask) {
+			game.log.push('当前没有等待决定的状态卡询问')
+			return game
+		}
+		if (ask.side !== side) {
+			game.log.push('只有【' + ask.nation + '】可以决定是否发动《' + ask.name + '》')
+			return game
+		}
+		game.status_instant = (game.status_instant || []).filter(e =>
+			String(e.card_id) !== String(ask.card_id))
+		/*
+		 * 不动 game.last_piece_removed：同一次移除可能还武装了别的 piece_removed
+		 * 状态卡（如 17808），清掉会误伤它们。本卡窗口条目已作废，
+		 * 下次移除会重新武装（口径 B：不发动不消耗次数）。
+		 */
+		close_immediate_status_ask(game)
+		/* 固定文案（暗置语境不插值明文卡名，_smoke_facedown_privacy）：
+		 * 卡名只在应答方的询问框里显示，日志双方共享。 */
+		game.log.push('【' + ask.nation + '】放弃本次状态卡询问（本回合机会保留，下一次仍可询问）')
+		return game
+	}
+
 	if (action === 'activate_status') {
 		const cardId = arg && arg.card
 		if (!cardId) {
@@ -33341,6 +33606,17 @@ function do_action(state, current, action, arg) {
 			 */
 			game.log.push('《' + cName + '》发动完毕 —— 本回合出牌阶段已用完')
 		}
+		/*
+		 * 【2026-11-11】"立刻窗口"排他询问的收尾放在【分支最末尾】：
+		 * 上面的 play_card 响应派发 / 上报都已完成，此时清挂起 + 成对归还让权，
+		 * 才会让被暂停的响应链按原栈顶继续（不能提前清，否则新压的 play_card
+		 * 帧会插到链首，改变既有响应顺序）。
+		 * 只认同一个 card_id：别的状态卡发动不会误清别人的挂起。
+		 * 位置在 status_used 记账之后：口径 B 只在成功发动时消耗本回合机会。
+		 */
+		if (game.pending_status_ask &&
+			String(game.pending_status_ask.card_id) === String(cardId))
+			close_immediate_status_ask(game)
 		return game
 	}
 
@@ -36156,6 +36432,8 @@ function clear_all_pending_for_debug(game, nation) {
 	game.deferred_response_stack = []
 	game.status_instant = []
 	game.pending_status = null
+	/* 【2026-11-11】雷达排他询问也是挂起态，跳阶段前必须一并清掉 */
+	game.pending_status_ask = null
 	game.pending_status_play = null
 	game.pending_battle = null
 	game.pending_econ = null

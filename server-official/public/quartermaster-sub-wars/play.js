@@ -306,6 +306,46 @@ function update_map() {
 	 * 本函数幂等：pending_trigger 为空时只清理自己的 ask_state。
 	 */
 	update_pending_trigger_box()
+	/*
+	 * 【2026-11-11】雷达《雷达》"立刻窗口"的排他询问框。
+	 * 必须排在 update_pending_trigger_box() 之后：响应框是"最后渲染"的兜底，
+	 * 本框再补一次才能占住 #ask_box（挂起期间服务端已把 pending_trigger 置 null，
+	 * 响应框只会清自己的 ask_state，不会覆盖本框）。
+	 */
+	update_pending_status_ask_box()
+}
+
+/*
+ * 【2026-11-11 · 玩家口径】"立刻窗口"排他询问（当前仅 17543《雷达》）。
+ *
+ * 全部文案/候选由服务端 view.pending_status_ask 下发，客户端不二次拼判定
+ * （rtt-client-server-contract 第四节 / rtt-avoid-hardcode 第三节）。
+ * 两个按钮都是【必须回答】的答复：发动走 activate_status，不发动走
+ * skip_status_ask；后者不消耗 once_per_turn 次数，本回合下次仍会再问。
+ */
+function update_pending_status_ask_box() {
+	const ask = view && view.pending_status_ask
+	if (!ask) {
+		if (ask_state && ask_state.kind === 'status_ask') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		return
+	}
+	ask_state = { kind: 'status_ask' }
+	const costTxt = (ask.cost && ask.cost.attrition)
+		? '（代价：损耗 ' + ask.cost.attrition + ' 张牌）' : ''
+	render_ask_box(
+		'《' + ask.name + '》等待决定',
+		'【' + ask.nation + '】海军在' + (ask.space_name || '该地区') + '被移除。' +
+		(ask.desc ? ask.desc + '\n' : '') +
+		'是否发动？' + costTxt,
+		[
+			{ label: '发动', cls: 'primary', onClick: () =>
+				send_action('activate_status', { card: ask.card }) },
+			{ label: '不发动', cls: '', onClick: () =>
+				send_action('skip_status_ask', {}) },
+		])
 }
 
 /*
@@ -889,6 +929,8 @@ function is_my_turn() {
  */
 function can_act_in_turn() {
 	return is_my_turn() && !view.opening && !view.pending_battle &&
+		/* 【2026-11-11】雷达排他询问：必须回答，期间不能顺手打牌/推进 */
+		!view.pending_status_ask &&
 		!view.pending_trigger && !view.pending_econ && !view.pending_uranus && !view.pending_status_play && !view.pending_autobahn &&
 		!view.pending_script && !view.pending_armed_delegate &&
 		!(view.delegate && (view.delegate.mode === 'order' || view.delegate.mode === 'german_draw')) &&
@@ -3525,7 +3567,7 @@ function on_click_hand_card(c, d) {
 	 * 有待决事项时手牌不可点：此时只能回答挂起的那一个问题
 	 * （服务端也会拦下其它动作，这里提前挡掉，免得"点了没反应"）。
 	 */
-	if (view.pending_battle || view.pending_trigger || view.pending_econ ||
+	if (view.pending_status_ask || view.pending_battle || view.pending_trigger || view.pending_econ ||
 		view.pending_uranus || view.pending_status_play || view.pending_autobahn || view.pending_script || view.pending_armed_delegate ||
 		view.uk_build_delegate || view.su_build_delegate ||
 		view.us_china_build ||
@@ -7965,6 +8007,16 @@ function status_ready_space(id) {
 }
 
 function on_click_table_status(cardId) {
+	/*
+	 * 【2026-11-11】"立刻窗口"排他询问期间：点桌面上的那张卡 = 直接【发动】，
+	 * 与询问框按钮同源（都发 activate_status）。不能落到下面的通用确认框，
+	 * 否则二次弹框会盖掉 #ask_box 的雷达询问框。
+	 */
+	const ask0 = view && view.pending_status_ask
+	if (ask0 && ask0.card === cardId) {
+		send_action('activate_status', { card: cardId })
+		return
+	}
 	const c = (view.table_status || []).find(x => x.card === cardId)
 	if (!c) return
 	/* 【2026-10-18】喷气式战斗机(15251)：点击仅只读查看德国损耗记录，

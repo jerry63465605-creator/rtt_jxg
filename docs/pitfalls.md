@@ -7667,3 +7667,60 @@ C 组补完目标重提真的走通并进入战斗预算。
 
 **关联**：通用教训 26（判定）、`docs/plan-17535-pending-target.md`（方案）、
 `docs/change-17535-pending-target.md`（实施）。
+
+---
+
+## 2026-11-11 · #7 雷达 17543「立刻挂起询问」：手工塞派生队列造成的假绿
+
+**现象**：玩家报「15428+15430+15438+雷达」——日本响应链结算途中打掉美国海军，
+《雷达》窗口当场武装（`status_instant` 里确实有），却没有任何询问框给美国；
+响应链继续由轴心推进 8 步，链清空时「本次战斗」已过、免死失去意义。
+
+**教训 1（最要命）：测试手填 `response_queue` = 假绿。**
+`game.response_queue` 只是 `response_stack` 的**派生只读视图**。
+旧 `_real_test_17543_radar.js` 的 4 项真测手工塞
+`g.response_queue = [{owner_side:'axis', candidates:[], card_id:'15432#1'}]`、
+栈为空，于是 `build_actions_inner` 的
+`if (pendingTrigger || top_response_frame(game))` 不成立，
+得以走到 `register_status_actions` → 4 项全绿。
+真实对局压的是 `response_stack` 帧，那个分支会**提前 return**，
+`activate_status` 根本不在白名单 → 客户端 `send_action` 静默不发。
+判据口诀：**凡涉及响应栈的测试，必须暗置真实响应卡 + `R.action` 驱动，
+绝不手填 queue**（与 `rtt-card-bug-repro` 第一节同一个坑）。
+
+**教训 2：只在 `build_actions_inner` 加分支会被外层污染。**
+`build_actions` 外层还有 `peek` / `pending_echo` / `rollback` / `finish_acts`
+（armed、国家技能、debug_*）往白名单**追加**动作。
+若排他分支放在 inner，客户端看得见这些键、点了却会被 `do_action` 守卫拒
+（通用教训 3「能点的 ≠ 能成功的」）。
+正确做法：**排他判据放 `build_actions` 外层最前面直接 return**，
+只放行本挂起的答复动作 + `debug_*`（带外工具）。
+
+**教训 3：暂停响应链 ≠ 搬响应帧。**
+第一反应是 `defer_response_frame` / `promote_deferred_response`，但那是
+「续打帧」语义，搬整条链会踩响应栈铁律 8 的「之上=嵌套/之下=外层」边界。
+本次用「栈帧原地不动 + view 不下发 `pending_trigger`/`response_choice` +
+白名单排他 + 让权」表达暂停；答完 `reconcile_handoff` +
+`response_reconcile_active` 按原栈顶自然继续，无需新增状态机。
+配套守卫：`deferToTail` / `trigger_response` 收尾会调
+`response_reconcile_active` → `handoff_to(...,'response')` 把 `active` 让回轴心，
+**必须在 `handoff_to` 与 `response_reconcile_active` 里对挂起加窄守卫**，
+否则顶栏显示错阵营。
+
+**教训 4：`protect_restored` 只认 `piece_nation` / `piece_type`。**
+把雷达 `run` 从「手写 `restore_piece` + `register_modifier`」改成通用原子时，
+若直接传 `game.last_piece_removed`（字段是 `nation` / `type`），
+会注册 `nation/type = undefined` 的**假保护**（与「幽灵部队」同源）。
+必须传派发点 ctx（含 `piece_*` / `space` / `piece` / `retreated_airs`），
+才能同时拿到 `restore_retreated_airs` 的飞机复原。
+
+**教训 5：暗置语境日志不能插值明文卡名。**
+新增的「询问未决」「放弃询问」日志一开始写了
+`'《' + ask.name + '》'`，被 `tools/_smoke_facedown_privacy.js` 静态守卫拦下
+（`KEY.test(buf) && /《'\s*\+/`）。改为固定文案，卡名只放
+`view.pending_status_ask` 给应答方显示。全量冒烟里这个脚本在 HEAD 是 20/0，
+改动后变 19/1 —— **用 `git stash` 对照 HEAD 才能在 114 个脚本里揪出这一条**。
+
+**验证**：`tools/_real_test_17543_radar_pause.js` 57/0、旧测试重写为真实栈帧 8/0、
+`_smoke_facedown_privacy` 20/0；`git stash` 对照 HEAD 确认其余失败均预存。
+详见 `docs/change-17543-radar-pause.md`。
