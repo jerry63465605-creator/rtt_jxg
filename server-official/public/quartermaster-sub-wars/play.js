@@ -2600,7 +2600,11 @@ function update_armed_offer_box() {
 				armed_resolving_card = c.card   /* 记住正在结算的卡，供多步第一步回传 */
 				if (dis) {
 					/* 弃牌代价：复用 echo_discard_modal 选牌（与 ECHO 卡代价同款） */
-					pending_echo_discard = { card: { id: c.card }, need_targets: null, drop: [], limit: dis, filter: (c.cost && c.cost.filter) || null, armed: true, armed_card: c.card }
+					/*
+					 * 【2026-11-11】补 name：update_echo_discard_box 的标题用 pd.card.name，
+					 * 旧代码只传 {id} 会渲染成「《undefined》」（所有 armed 弃牌代价都受影响）。
+					 */
+					pending_echo_discard = { card: { id: c.card, name: c.name }, need_targets: null, drop: [], limit: dis, filter: (c.cost && c.cost.filter) || null, armed: true, armed_card: c.card }
 					render_ask_box(null, null, null)
 					ask_state = null
 					update_echo_discard_box()

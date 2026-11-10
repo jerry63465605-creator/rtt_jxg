@@ -7818,3 +7818,35 @@ space/air 传反了，靠开头一刀切先返回「尚未参战」才通过；
 日本不代受→喀秋莎转绿→空打发动成功）；`_real_test_supp_su` 25/0；
 `test_neutral` 102/4（剩余 4 项与 HEAD 一致）；全量冒烟仅 2 个预存失败。
 详见 `docs/change-neutral-su-japan.md`。
+
+---
+
+## 2026-11-11 · 手工构造增强卡窗口时，`cost` 被压成数字 → 弃牌框不弹、点「打出」死锁
+
+**现象**：玩家报「缺失通用增强打出的弃牌框，复用其他苏联增强的弃牌代价实现，例如 17809」。
+17900《八月风暴》窗口弹出后点「打出」→ 服务端报「需先选择弃置 1 张[建设陆军]」→
+窗口保留 → 再点还是同样报错，**永远打不出去**。
+
+**教训 1：窗口数据形状必须与通用通道同源。**
+`maybe_arm_su_augstorm` 手工 `pushArmedWindow` 时写
+`cost: (eff.armed.cost && eff.armed.cost.discard) || 0` —— 压成了数字。
+而客户端 `update_armed_offer_box` 读 `c.cost.discard` / `c.cost.filter`，
+数字上取属性得 `undefined` → `dis=0` → **不弹弃牌框**、直接发 `use_armed_offer{card}`；
+服务端却读卡配置 `ar.cost.discard=1` 要求 `drop` → 收到空 → 拒绝。
+一条链上两处读同一语义却用两种形状，就成了「静默不弹框 + 反复被拒」的死锁。
+判据：**手工构造窗口时把 `ar.cost` 原样透传**，不要自己拆字段重拼。
+
+**教训 2：客户端的 filter 只是「不给错误选项」，服务端必须同源校验。**
+`_picked` 原来只校验 `filter === 'response'`，`'build'` 没校验 →
+直接调 action 可以拿《发起陆战》替代《建设陆军》当代价（客户端不显示 ≠ 服务端拒绝）。
+补 `'build'`（BASIC 且 name=建设陆军）后才算判定同源（`rtt-client-server-contract` 第四节）。
+
+**教训 3：共用弹框的标题字段要一起传。**
+`pending_echo_discard.card` 只传 `{id}`，而 `update_echo_discard_box` 用
+`pd.card.name` 拼标题 → 所有 armed 弃牌代价都渲染成「《undefined》」。
+共用组件要按它读的字段给全，别只给最小 id。
+
+**验证**：新增 `tools/_dom_test_17900_discard.js` 19/0（真 jsdom 走完
+「点打出 → 弹框 → 标题/候选正确 → 选牌确认 → 发 drop」全链路，并验证服务端拒非法代价）；
+`_real_test_supp_su` 25/0、`_real_test_neutral_17900` 33/0、`_smoke_us_status3` 41/0。
+详见 `docs/change-17900-discard-modal.md`。

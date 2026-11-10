@@ -16135,7 +16135,17 @@ function maybe_arm_su_augstorm(game, space, kind, attackerNation) {
 			nation: '苏联',
 			name: (inst_card(cid17900) || { name: '?' }).name,
 			desc: eff.armed.desc || '',
-			cost: (eff.armed.cost && eff.armed.cost.discard) || 0,
+			/*
+			 * 【2026-11-11 修复·弃牌框缺失】必须原样下发【代价对象】（{discard, filter}），
+			 * 不能压成数字：
+			 *   · 客户端 update_armed_offer_box 读的是 c.cost.discard / c.cost.filter
+			 *     （数字上取 .discard = undefined -> dis=0 -> 不弹选牌框，直接发
+			 *      use_armed_offer{card}）；
+			 *   · 服务端 use_armed_offer 读的是卡配置 ar.cost.discard=1 -> 要求 drop，
+			 *     收到空 -> 拒绝并保留窗口 -> 玩家反复点"打出"永远失败（死锁）。
+			 * 与 scan_armed_cards / offer_armed_effects 下发的形状保持同源。
+			 */
+			cost: eff.armed.cost || {},
 		}],
 		ctx: { space: space, attacker: attackerNation, kind: kind },
 	})
@@ -34090,9 +34100,21 @@ function do_action(state, current, action, arg) {
 					const _c = inst_card(id)
 					return !!(_c && String(_c.type).toUpperCase() === 'RESPONSE')
 				})
+			/*
+			 * 【2026-11-11】补 'build'（[建设陆军]）类型限定。
+			 * 17900《八月风暴》代价是"弃 1 张[建设陆军]"：此前只校验张数，
+			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意手牌替代
+			 * （判定不同源）。与 2026-11-08 给 'response' 补的类型校验同口径。
+			 */
+			if (ar.cost.filter === 'build')
+				_picked = _picked.filter(id => {
+					const _c = inst_card(id)
+					return !!(_c && String(_c.type).toUpperCase() === 'BASIC' && _c.name === '建设陆军')
+				})
 			if (_picked.length < _discNeed0) {
 				game.log.push('《' + nm + '》需先选择弃置 ' + _discNeed0 +
-					(ar.cost.filter === 'response' ? ' 张[响应卡]' : ' 张手牌') +
+					(ar.cost.filter === 'response' ? ' 张[响应卡]'
+						: (ar.cost.filter === 'build' ? ' 张[建设陆军]' : ' 张手牌')) +
 					'作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
 				return game
 			}
