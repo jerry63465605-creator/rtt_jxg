@@ -690,6 +690,25 @@ if (st && typeof st.spacesFn === 'function') { ... }               // ❶ 的后
 
 ---
 
+### 26. 【2026-11-10】挂起对象跨 action 重建时，「写入字段」与「读取判据」必须同源
+
+**事故**：17535《租借法案》委托苏联打 17828/17829（`pending:true` 需补目标），
+5 处挂起钩子重建 `game.delegate` 时写 `nation:null` + `nat:'苏联'`，
+而「继续打牌」链路 6 处仍裸读 `nation` —— 打牌动作不在白名单、view 弹回选国框、
+重提被门禁拒「现在轮到【null】打牌」，委托既不能续跑也不能收尾。
+（上一提交刚统一了「结束委托」链路，却漏了「续跑」链路。）
+
+**判据**：
+> 只要一个挂起对象会在中途被**重建**，就必须有一个**唯一的取值函数**
+> （本项目 `lend_lease_nat(dg)`），并且 `build_actions` / `exports.action` /
+> `view` / 执行函数 / 客户端路由**全部**走它；只统一收尾链路、漏掉续跑链路
+> = 静默卡死。重建时顺手把主字段也写回，别只留别名。
+
+细节与行号见 `docs/change-17535-pending-target.md`，档案见本文
+`## 2026-11-10 · 委托对象重建时「写入字段」与「读取判据」不同源 …`。
+
+---
+
 ## 二、RTT 契约类踩坑
 
 | # | 现象 | 成因 | 解法 |
@@ -7617,3 +7636,34 @@ kill 前后都要列出命中的 pid / cmd 再动手。
 **因果实证**：`git stash` 对照 HEAD，旧代码下 `my_nation=美国`、
 弃牌框候选为美国手牌；修复后 `my_nation=苏联`、候选全为苏联手牌，
 `_real_test_17535_manual_return.js` 31/31。
+
+---
+
+## 2026-11-10 · 委托对象重建时「写入字段」与「读取判据」不同源 → 17828/17829 委托残留
+
+**现象**：17535《租借法案》委托苏联打出 17828《百团大战》/17829《毛泽东》这类
+「需补目标」多步卡，`resolve_event_card` 返回 `pending:true` 后委托残留：
+打牌动作从白名单消失、选国动作反倒回来、`view` 弹回「选择委托国」，
+补完目标重提被 `exports.action` 门禁拒绝「现在轮到【null】打牌，另一阵营暂不能提交」，
+`finish_lend_lease` 也因 `played` 缺失不在册 —— 既不能续跑、也不能收尾。
+
+**成因**（字段二义，不是翻转机制本身的问题）：
+
+- `resolve_us_lend_lease_select` 写 `dg.delegate` / `dg.nation`；
+- 5 处挂起钩子（`cardResolved` / `pending` / `armedPause` / `pending_autobahn` /
+  BASIC 战斗）重建 `game.delegate` 时写 `nation:null` + `nat:nat`，且不带 `played`；
+- 上一提交 `08bec5b` 加的 `lend_lease_nat(dg)` 只被「结束委托」链路 4 处使用，
+  「继续打牌」链路 6 处仍裸读 `nation`：`select` 已选国判据 / `play` 入口 /
+  `exports.action` 门禁 / `build_actions` / `view.us_lend_lease` /
+  客户端 `lend_lease_active`（由 view 下发驱动）。
+
+**修法**（方案 A）：5 处判据统一走 `lend_lease_nat(dg)`；5 处重建写回
+`nation:nat` + 显式 `played:false`。客户端零改动（改前确认重提路由已实现，非 TODO）。
+
+**因果实证**：`tools/_real_test_17535_pending_target.js` 修复前 **FAIL 8 / PASS 10**
+（D 组即时结算卡对照全绿，排除测试环境问题），修复后 **ALL PASS 18 项**；
+C 组补完目标重提真的走通并进入战斗预算。
+`git stash` 对照 HEAD 确认全量冒烟的 2 个未登记失败为 `08bec5b` 遗留过期断言。
+
+**关联**：通用教训 26（判定）、`docs/plan-17535-pending-target.md`（方案）、
+`docs/change-17535-pending-target.md`（实施）。

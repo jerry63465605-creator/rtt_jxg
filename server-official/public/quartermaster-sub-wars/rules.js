@@ -7288,7 +7288,9 @@ function offer_us_lend_lease(game, cardId) {
 
 function resolve_us_lend_lease_select(game, arg) {
 	const dg = game.delegate
-	if (!dg || dg.done || dg.nation) return game
+	/* 【2026-11-10 · A1】已选国判据改用 lend_lease_nat（nat/nation/delegate 同源），
+	   避免挂起钩子重建 delegate 后 nation:null 让玩家能重复选国。 */
+	if (!dg || dg.done || lend_lease_nat(dg)) return game
 	const nat = arg && arg.nation
 	if (['苏联', '英国'].indexOf(nat) < 0) {
 		game.log.push('【美国】《租借法案》只能委托苏联或英国')
@@ -7304,9 +7306,12 @@ function resolve_us_lend_lease_select(game, arg) {
 
 function resolve_us_lend_lease_play(game, arg) {
 	const dg = game.delegate
-	if (!dg || dg.done || !dg.nation) return game
-	/* 被委托国：优先用请求里带的国家，回退到挂起记录的 nation */
-	const nat = (arg && arg.nation) || dg.nation
+	if (!dg || dg.done) return game
+	/* 【2026-11-10 · A1】被委托国：优先请求里带的国家，回退到挂起记录的
+	   nat / nation / delegate 三种形态（lend_lease_nat 同源）。
+	   旧代码裸读 dg.nation：挂起重建后为 null -> 重提被静默吞掉 = 委托残留。 */
+	const nat = (arg && arg.nation) || lend_lease_nat(dg)
+	if (!nat) return game
 	const card = arg && arg.card
 	if ((game.hands[nat] || []).indexOf(card) < 0) {
 		game.log.push('【' + nat + '】手牌中没有该牌')
@@ -7353,7 +7358,7 @@ function resolve_us_lend_lease_play(game, arg) {
 				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
 				 */
 				mode: 'single',
-				nation: null, done: false,
+				nation: nat, done: false, played: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: true, nat: nat
 			}
@@ -7376,7 +7381,7 @@ function resolve_us_lend_lease_play(game, arg) {
 				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
 				 */
 				mode: 'single',
-				nation: null, done: false,
+				nation: nat, done: false, played: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat
 			}
@@ -7398,7 +7403,7 @@ function resolve_us_lend_lease_play(game, arg) {
 				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
 				 */
 				mode: 'single',
-				nation: null, done: false,
+				nation: nat, done: false, played: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat
 			}
@@ -7435,7 +7440,7 @@ function resolve_us_lend_lease_play(game, arg) {
 				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
 				 */
 				mode: 'single',
-				nation: null, done: false,
+				nation: nat, done: false, played: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: false, nat: nat,
 			}
@@ -7507,7 +7512,7 @@ function resolve_us_lend_lease_play(game, arg) {
 				 *      resolve_us_lend_lease_select/play -> 漏 mode 时后续动作点不动。
 				 */
 				mode: 'single',
-				nation: null, done: false,
+				nation: nat, done: false, played: false,
 				return_nation: dg.return_nation, return_active: dg.return_active,
 				card_id: dg.card_id, step: null, resume_after_battle: true, nat: nat
 			}
@@ -27433,17 +27438,21 @@ exports.view = function (state, current) {
 				us_lend_lease: (function () {
 				const dg = (game.delegate && game.delegate.mode === 'single') ? game.delegate : null
 				if (!dg || dg.done) return null
+				/* 【2026-11-10 · A1】被委托国统一用 lend_lease_nat 取（nat/nation/delegate 同源）。
+				   挂起钩子会重建 delegate，字段形态可能不同；旧代码裸读 dg.nation，
+				   重建后为 null -> step 退回 'nation' -> 玩家弹回选国框 = 委托残留。 */
+				const llNat = lend_lease_nat(dg)
 				/* 【2026-11-10】统一手动归还：牌已结算完 -> 给被委托国「结束委托」窗口。
-				   必须放在 !dg.nation 之前：三个挂起钩子重建过 delegate（nation:null、nat 才有值）。
+				   必须放在 !llNat 之前：挂起钩子重建过 delegate。
 				   挂起期间只回 waiting_for（客户端隐藏本框），不干扰其它挂起框；
 				   能否收尾由服务端 can_finish 下发，客户端不二次判断。 */
 				if (dg.played) {
-					const nat = lend_lease_nat(dg)
+					const nat = llNat
 					if (!lend_lease_can_finish(game) || faction_of_nation(nat) !== side)
 						return { waiting_for: nat }
 					return { step: 'done', nation: nat, can_finish: true, waiting_for: null }
 				}
-				if (!dg.nation) {
+				if (!llNat) {
 				const isUK = faction_of_nation('英国') === side
 				if (!isUK) return { waiting_for: '英国' }
 				return {
@@ -27452,12 +27461,12 @@ exports.view = function (state, current) {
 					waiting_for: null,
 				}
 				}
-				const isNation = faction_of_nation(dg.nation) === side
-				if (!isNation) return { waiting_for: dg.nation }
+				const isNation = faction_of_nation(llNat) === side
+				if (!isNation) return { waiting_for: llNat }
 				return {
 				step: 'play',
-				nation: dg.nation,
-				hand: (game.hands[dg.nation] || []).map(id => {
+				nation: llNat,
+				hand: (game.hands[llNat] || []).map(id => {
 					const c = inst_card(id) || {}
 					return { id: id, name: c.name || ('卡' + id), type: c.type, img: c.img }
 				}),
@@ -29697,12 +29706,15 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	 * 追加而非替换，避免排他式提前 return 吞掉动作白名单。 */
 	if (game.delegate && game.delegate.mode === 'single') {
 		const dg = game.delegate
-		if (!dg.nation && faction_of_nation('美国') === side) {
+		/* 【2026-11-10 · A1】统一用 lend_lease_nat 取被委托国，与 do_action / view 同源。
+		   旧代码裸读 dg.nation：挂起重建后为 null -> play 动作不在册（点了没反应）。 */
+		const llNat = lend_lease_nat(dg)
+		if (!llNat && faction_of_nation('美国') === side) {
 			acts.resolve_us_lend_lease_select = 1
-		} else if (dg.nation && !dg.done && faction_of_nation(dg.nation) === side) {
+		} else if (llNat && !dg.done && faction_of_nation(llNat) === side) {
 			acts.resolve_us_lend_lease_play = 1
 		}
-		if (lend_lease_can_finish(game) && faction_of_nation(lend_lease_nat(dg)) === side) {
+		if (lend_lease_can_finish(game) && faction_of_nation(llNat) === side) {
 			acts.finish_lend_lease = 1
 		}
 	}
@@ -35789,8 +35801,12 @@ function do_action(state, current, action, arg) {
 			game.log.push('当前没有待打牌的《租借法案》')
 			return game
 		}
-		if (faction_of_nation(game.delegate.nation) !== side) {
-			game.log.push('现在轮到【' + game.delegate.nation + '】打牌，另一阵营暂不能提交')
+		/* 【2026-11-10 · A1】被委托国用 lend_lease_nat 取，与 build_actions / view 同源。
+		   旧代码裸读 game.delegate.nation：挂起重建后为 null -> 门禁恒拒
+		   「现在轮到【null】打牌，另一阵营暂不能提交」，补完目标的重提被吞。 */
+		const llPlayNat = lend_lease_nat(game.delegate)
+		if (faction_of_nation(llPlayNat) !== side) {
+			game.log.push('现在轮到【' + llPlayNat + '】打牌，另一阵营暂不能提交')
 			return game
 		}
 		resolve_us_lend_lease_play(game, arg || {})
