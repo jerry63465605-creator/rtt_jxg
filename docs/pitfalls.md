@@ -7582,3 +7582,38 @@ kill 前后都要列出命中的 pid / cmd 再动手。
 
 **因果实证**：`git stash` 对照 HEAD，探针在 HEAD 下复现
 （`debug_attrition/restore/score=0`、挂起期 7/10），修复后 10/10。
+
+---
+
+## 2026-11-10 · 让权「自动归还」把 my_nation 切走，状态卡弃牌框取错手牌
+
+**现象**：17535《租借法案》委托苏联打出《建设陆军》后立刻归还美国，
+再点苏联桌面 17846《坦克运输》，弃牌框列的却是**美国手牌**，
+玩家选了就得到「要弃置的手牌不在手里」，这次发动被废。
+
+**成因**：`play.js:8217` 的弃牌框候选取 `view.hands[view.my_nation]`，
+而 `view.my_nation` 跟随 `current_nation`（见 `rtt-handoff-authority`）。
+服务端 `costPayer=owner`（遍历 `game.table`）仍是被委托国，两端口径都没错，
+错在**归还时机**：`finish_us_lend_lease` 在牌结算完成的瞬间就 `finish_delegate`。
+
+**三条判据**：
+
+1. **让权类窗口不要"做完就自动归还"**：留一个玩家可控的收尾点
+   （17529 的「结束预算」/ 本次 17535 的「结束委托」），让被委托国能在
+   归还前先发动本国状态卡。收尾闸门（can_finish）必须三处同源：
+   `build_actions` 白名单 / `exports.action` 兜底 / `view` 下发，客户端不二次判断。
+2. **挂起期间禁止结束**：与 17529 只认 `remaining=0` 同口径。
+   硬挂起清单照抄 `do_action` 的 `hasSuspended`，但**排除** `armed_offer` /
+   `status_instant` —— 它们是"可选窗口"，正是要在结束前发动的东西，
+   算进硬挂起会让玩家永远收不了尾。
+3. **委托对象被重建过就别只认一个字段**：`set_pending_delegate` 写
+   `delegate`/`nation`，而三个推迟钩子重建对象时写 `nat`。
+   本次第一版 `can_finish` 只认 `nat`，即时结算卡恒判 false，
+   白名单与 view 全部不生效（A4/A5/A10 直接变红）。统一取
+   `nat || nation || delegate`。另：`played` 分支在 `view.us_lend_lease` 里
+   必须放在 `!dg.nation` **之前**，否则钩子重建的对象（`nation:null`）
+   会被当成"重新选国"。
+
+**因果实证**：`git stash` 对照 HEAD，旧代码下 `my_nation=美国`、
+弃牌框候选为美国手牌；修复后 `my_nation=苏联`、候选全为苏联手牌，
+`_real_test_17535_manual_return.js` 31/31。

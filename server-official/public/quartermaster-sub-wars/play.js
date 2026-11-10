@@ -2018,11 +2018,36 @@ function update_us_lend_lease() {
 	title.textContent = '《租借法案》'
 	const sub = document.createElement('span')
 	sub.className = 'modal-sub'
-	sub.textContent = dg.step === 'play'
-		? '委托【' + dg.nation + '】打出 1 张手牌并摸 1 张'
-		: '选择委托国家（苏联或英国），由其打出 1 张手牌并摸 1 张'
+	sub.textContent = dg.step === 'done'
+		? '委托【' + dg.nation + '】已打完 1 张手牌，点「结束委托」归还美国'
+		: dg.step === 'play'
+			? '委托【' + dg.nation + '】打出 1 张手牌并摸 1 张'
+			: '选择委托国家（苏联或英国），由其打出 1 张手牌并摸 1 张'
 	head.append(title, sub)
 	box.appendChild(head)
+
+	/* 【2026-11-10 · 统一手动归还】牌已结算完：先给玩家机会发动被委托国的桌面状态卡
+	   （此时 view.my_nation 仍是该国，弃牌框不会误取美国手牌），再由玩家点按钮归还。
+	   挂起期间服务端不下发 step='done'，本框自动隐藏，不干扰其它挂起框。 */
+	if (dg.step === 'done') {
+		const sec = document.createElement('div')
+		sec.className = 'modal-section'
+		const label = document.createElement('div')
+		label.className = 'modal-label'
+		label.textContent = '③ 可先发动【' + dg.nation + '】的桌面状态卡，再结束委托'
+		sec.appendChild(label)
+		const foot = document.createElement('div')
+		foot.className = 'modal-foot'
+		const btn = document.createElement('button')
+		btn.className = 'action primary'
+		btn.textContent = '结束委托（归还美国）'
+		btn.disabled = !dg.can_finish
+		btn.onclick = () => { modal.classList.add('hide'); send_action('finish_lend_lease', {}) }
+		foot.appendChild(btn)
+		sec.appendChild(foot)
+		box.appendChild(sec)
+		return
+	}
 
 	if (dg.step !== 'play') {
 		/* ① 选国：两国按钮 */

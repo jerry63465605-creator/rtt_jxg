@@ -3629,8 +3629,10 @@ function autobahn_resolve(game, nation, arg) {
 		 * 收尾被推迟到这里 —— 建设全部完成、挂起真正清空后再
 		 * 「摸 1 张 + 归还美国 + 触发★卡窗口」。见 resolve_us_lend_lease_play 同款注释。
 		 */
+		/* 【2026-11-10】统一手动归还：建设预算清空只置 played，不再自动 finish_us_lend_lease，
+		   由玩家点「结束委托」收尾（期间可先发动本国状态卡）。 */
 		const _dg = game.delegate
-		if (_dg && !_dg.done && _dg.nat) finish_us_lend_lease(game, _dg, _dg.nat)
+		if (_dg && _dg.mode === 'single' && !_dg.done && lend_lease_nat(_dg)) _dg.played = true
 	}
 	return game
 }
@@ -7277,7 +7279,10 @@ function resolve_us_merchant_build(game, arg) {
  * 苏/英才能打牌（因其能真正出牌），中/法不可选。
  * ============================================================ */
 function offer_us_lend_lease(game, cardId) {
-	game.delegate = { mode: 'single', nation: null, done: false, return_nation: null, return_active: null, card_id: cardId || null }
+	/* 【2026-11-10】played：被委托国的那 1 张牌是否已结算完。统一改为【手动归还】：
+	   只有 played=true 且无硬挂起时，玩家点「结束委托」才 finish_us_lend_lease。 */
+	game.delegate = { mode: 'single', nation: null, done: false, played: false,
+		return_nation: null, return_active: null, card_id: cardId || null }
 	return game
 }
 
@@ -7516,8 +7521,45 @@ function resolve_us_lend_lease_play(game, arg) {
 		discard_card(game, nat, card)
 		game.log.push('【' + nat + '】打出《' + c.name + '》（租借法案代理）')
 	}
-	/* —— 委托统一收尾（非战斗即时结算完成 / 其它类型）—— */
-	return finish_us_lend_lease(game, dg, nat)
+	/*
+	 * —— 委托统一收尾（非战斗即时结算完成 / 其它类型）——
+	 * 【2026-11-10 · 统一手动归还】这里【不再】立刻 finish_us_lend_lease：
+	 * 旧行为牌一结算就把 current_nation 归还美国，而 view.my_nation 跟随它，
+	 * 于是苏联桌面状态卡（17846 坦克运输）的弃牌框取 view.hands[view.my_nation]
+	 * 会列成【美国手牌】，玩家选美国牌 -> "要弃置的手牌不在手里"，发动被废。
+	 * 现在只置 played=true、操作权留在被委托国，玩家可先发动本国状态卡，
+	 * 再点「结束委托」才归还；挂起未清空由 lend_lease_can_finish 拦住。
+	 */
+	game.delegate.played = true
+	refresh(game)
+	return game
+}
+
+/*
+ * 【2026-11-10】统一手动归还的【同源闸门】。
+ * 三处共用：build_actions（动作白名单）/ exports.action（服务端兜底）/ view（can_finish 下发）。
+ * 判据：委托的那 1 张牌已结算完（played），且【没有任何硬挂起】。
+ * 清单与 do_action 入口的 hasSuspended 同口径，但【不】把 armed_offer / status_instant
+ * 这类"可选窗口"算进来 —— 它们正是玩家要在结束委托前先发动的东西（放弃也允许）。
+ * 挂起期间禁止结束，与 17529「结束预算」只认 remaining=0 同口径。
+ */
+/* 被委托国：select 后由 set_pending_delegate 写入 delegate / nation，
+   挂起钩子重建对象时写入 nat —— 三种形态统一取，避免只认 nat 漏判即时结算卡。 */
+function lend_lease_nat(dg) {
+	return dg ? (dg.nat || dg.nation || dg.delegate || null) : null
+}
+
+function lend_lease_can_finish(game) {
+	const dg = game.delegate
+	if (!dg || dg.mode !== 'single' || dg.done || !dg.played) return false
+	if (!lend_lease_nat(dg)) return false
+	if ((game.response_stack || []).length || (game.response_queue || []).length ||
+		game.pending_battle || game.pending_econ || game.pending_status_play ||
+		game.pending_uranus || game.pending_autobahn || game.pending_autobahn_suspended ||
+		game.pending_theater || game.pending_echo || game.pending_script ||
+		game.pending_trigger || game.pending_response_choice || game.pending_armed_delegate ||
+		game.pending_event_step || game.event_budget || game.us_theater_delegate) return false
+	return true
 }
 
 /* 完成租借法案委托：被委托国摸 1 张、操作权归还美国、触发美国★国家技能窗口。
@@ -27391,6 +27433,16 @@ exports.view = function (state, current) {
 				us_lend_lease: (function () {
 				const dg = (game.delegate && game.delegate.mode === 'single') ? game.delegate : null
 				if (!dg || dg.done) return null
+				/* 【2026-11-10】统一手动归还：牌已结算完 -> 给被委托国「结束委托」窗口。
+				   必须放在 !dg.nation 之前：三个挂起钩子重建过 delegate（nation:null、nat 才有值）。
+				   挂起期间只回 waiting_for（客户端隐藏本框），不干扰其它挂起框；
+				   能否收尾由服务端 can_finish 下发，客户端不二次判断。 */
+				if (dg.played) {
+					const nat = lend_lease_nat(dg)
+					if (!lend_lease_can_finish(game) || faction_of_nation(nat) !== side)
+						return { waiting_for: nat }
+					return { step: 'done', nation: nat, can_finish: true, waiting_for: null }
+				}
 				if (!dg.nation) {
 				const isUK = faction_of_nation('英国') === side
 				if (!isUK) return { waiting_for: '英国' }
@@ -28894,9 +28946,10 @@ function battle_reconcile_active(game) {
 	 * 必须等该卡的所有挂起（预算 / 分步建设）真正清空。
 	 * 预算打完后的收尾由 event_finish 补（见该函数末尾）。
 	 */
+	/* 【2026-11-10】统一手动归还：战斗挂起清空只置 played，收尾交给「结束委托」按钮 */
 	if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle &&
 		!(game.event_budget && game.event_budget.remaining > 0)) {
-		finish_us_lend_lease(game, game.delegate, game.delegate.nat)
+		game.delegate.played = true
 	}
 	/* 【2026-10-22】17729 卡佩里尼：经链打出的基本卡若进入战斗，战斗结算后续跑链 */
 	if (game.delegate && game.delegate.mode === 'order' && game.delegate.waiting_battle) {
@@ -29639,13 +29692,18 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 	if (game.us_political && faction_of_nation('英国') === side) {
 		acts.resolve_us_political_play = 1
 	}
-	/* 17535 租借法案：先美国选国（仅美国），再被委托国打牌（仅该阵营） */
+	/* 17535 租借法案：先美国选国（仅美国），再被委托国打牌（仅该阵营）。
+	 * 【2026-11-10】追加「结束委托」：牌已结算完 + 无硬挂起时才在册（挂起期间禁止结束）。
+	 * 追加而非替换，避免排他式提前 return 吞掉动作白名单。 */
 	if (game.delegate && game.delegate.mode === 'single') {
 		const dg = game.delegate
 		if (!dg.nation && faction_of_nation('美国') === side) {
 			acts.resolve_us_lend_lease_select = 1
 		} else if (dg.nation && !dg.done && faction_of_nation(dg.nation) === side) {
 			acts.resolve_us_lend_lease_play = 1
+		}
+		if (lend_lease_can_finish(game) && faction_of_nation(lend_lease_nat(dg)) === side) {
+			acts.finish_lend_lease = 1
 		}
 	}
 
@@ -32544,8 +32602,9 @@ function do_action(state, current, action, arg) {
 		 * 顺序放在 after_card_resolved 之后：finish_us_lend_lease 内部会按 return_nation（美国）
 		 * 再触发一次，英国自己那次属于代打，不为其开技能窗口。
 		 */
+		/* 【2026-11-10】统一手动归还：预算打完只置 played，收尾交给「结束委托」按钮 */
 		if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle)
-			finish_us_lend_lease(game, game.delegate, game.delegate.nat)
+			game.delegate.played = true
 		/*
 		 * 【2026-10-28 #13 修复】战斗预算卡收尾 = 卡牌生效（战斗已打完），同样派发 play_card。
 		 * 与 EVENT 分支、finish_event_card 三处对齐 —— 缺任何一处，
@@ -35735,6 +35794,26 @@ function do_action(state, current, action, arg) {
 			return game
 		}
 		resolve_us_lend_lease_play(game, arg || {})
+		return game
+	}
+	/* 【2026-11-10 · 统一手动归还】玩家点「结束委托」才真正归还美国。
+	   三重门禁：委托在册 / 阵营匹配 / lend_lease_can_finish（牌已结算完且无硬挂起）。 */
+	if (action === 'finish_lend_lease') {
+		const dg = game.delegate
+		if (!dg || dg.mode !== 'single') {
+			game.log.push('当前没有待结束的《租借法案》委托')
+			return game
+		}
+		const llNat = lend_lease_nat(dg) || dg.return_nation
+		if (faction_of_nation(llNat) !== side) {
+			game.log.push('现在由【' + llNat + '】结算《租借法案》，另一阵营暂不能提交')
+			return game
+		}
+		if (!lend_lease_can_finish(game)) {
+			game.log.push('《租借法案》尚有未结算的挂起，或那 1 张牌还没打出，暂不能结束委托')
+			return game
+		}
+		finish_us_lend_lease(game, dg, lend_lease_nat(dg))
 		return game
 	}
 
