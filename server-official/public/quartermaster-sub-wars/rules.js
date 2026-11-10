@@ -5439,7 +5439,11 @@ const STATUS_EFFECTS = {
 	},
 
 	'15243': {
-		react: { when: 'attacked', space: '西欧', attrition: 3,
+		/*
+		 * 【2026-11-10 · #6】friendly_only：卡面是「<西欧>的**友方**陆军被攻击时」，
+		 * 旧实现只有 space 过滤 → 同盟陆军在西欧被攻击时德国也会触发（玩家报障）。
+		 */
+		react: { when: 'attacked', space: '西欧', attrition: 3, friendly_only: ['army'],
 			desc: '<西欧>友方陆军被攻击时，攻击方损耗3张牌' },
 	},
 
@@ -6071,6 +6075,26 @@ const STATUS_EFFECTS = {
 				if (rc.space && space_id(rc.space) !== space) continue
 				if (rc.has_army && !has_pieces(game, { space: space, nation: rc.has_army, types: ['army'] })) continue
 				if (rc.type && rc.type !== kind) continue
+				/*
+				 * 【2026-11-10 · #6 大西洋防线 15243】`friendly_only`：只有【与卡主同阵营】
+				 * 的部队在该地区被攻击时才触发。
+				 *
+				 * 旧实现只有 space / has_army / type 三个过滤 → 西欧被攻击时，
+				 * 无论上面是轴心陆军还是同盟陆军，德国都能触发（玩家报障："应该是友方，
+				 * 当前是任意单位"）。本钩子在部队被移除【之前】调用，所以此刻还查得到受害方。
+				 */
+				if (rc.friendly_only) {
+					const _ownF = faction_of_nation(n)
+					/* 数组 = 还要限定兵种（15243 卡面是"友方**陆军**"）；true = 任意兵种 */
+					const _want = Array.isArray(rc.friendly_only) ? rc.friendly_only : null
+					const _friendlyHere = Object.keys(game.location || {}).some(p => {
+						if (Number(game.location[p]) !== Number(space)) return false
+						if (faction_of_nation(game.piece_nation[p]) !== _ownF) return false
+						if (_want && _want.indexOf(game.piece_type[p]) < 0) return false
+						return true
+					})
+					if (!_friendlyHere) continue
+				}
 				items.push({
 					cid: cid, nation: n, name: c.name || '状态卡',
 					attrition: rc.attrition || 0,
@@ -28867,7 +28891,17 @@ function battle_reconcile_active(game) {
  *
  * 语义沿用既有设计：响应 / 战斗 / 经济战待决期间，行动方冻结，状态卡不发动。
  */
-function status_actions_frozen(game) {
+function status_actions_frozen(game, card_id) {
+	/*
+	 * 【2026-11-10 · #7 雷达 17543】卡自己正处在"立刻窗口"（status_instant 已武装）时，
+	 * 即使有战斗 / 经济战 / **响应链**挂起，也必须允许它发动。
+	 *
+	 * 现象（玩家报障）：日本响应链排队期间，美国海军被移除 → 《雷达》窗口武装了，
+	 * 但这里直接返回"响应结算中…" → register_status_actions 不给 activate_status、
+	 * activate_status 入口也拒 = 点了没反应。
+	 * 与 P0 对 armed 的兜底同一口径：窗口合法性由 status_instant_covers 判定。
+	 */
+	if (card_id && status_instant_covers(game, card_id, null)) return null
 	if (game.pending_battle) return '战斗结算中，暂不能发动状态卡'
 	if (game.pending_econ) return '经济战结算中，暂不能发动状态卡'
 	if ((game.response_queue || []).length) return '响应结算中，暂不能发动状态卡'
@@ -28877,7 +28911,24 @@ function status_actions_frozen(game) {
 function register_status_actions(game, side, acts) {
 	if (!game.table) return acts
 	/* 【2026-10-26 ③】与 activate_status 服务端入口同源（见 status_actions_frozen） */
-	if (status_actions_frozen(game)) return acts
+	if (status_actions_frozen(game)) {
+		/*
+		 * 【2026-11-10 · #7 雷达】挂起期间只放行**正处在立刻窗口**的那张状态卡，
+		 * 其余状态卡照旧冻结（不放宽到"任意状态卡都能插队"）。
+		 */
+		for (const n of Object.keys(game.table || {})) {
+			if (faction_of_nation(n) !== side) continue
+			for (const cid of (game.table[n] || [])) {
+				const cfg = status_config_of(cid)
+				if (!cfg || !cfg.trigger) continue
+				if (!status_active(game, cid, n)) continue
+				if (!status_instant_covers(game, cid, n)) continue
+				acts['activate_status:' + cid] = 1
+				acts['activate_status'] = 1
+			}
+		}
+		return acts
+	}
 	/* 17732 借用德国状态卡：借用生效时只暴露本国卡 + 借来的那张德国卡 */
 	const borrowActive = game.italy_borrow && game.italy_borrow.turn === game.turn &&
 		game.italy_borrow.card_face && game.current_nation === game.italy_borrow.nation
@@ -29231,6 +29282,22 @@ function build_actions_inner(game, side, is_my_turn, pendingBattle, pendingTrigg
 		if (hasArmedOfferForSide(game, side)) {
 			acts.use_armed_offer = 1
 			acts.skip_armed_offer = 1
+		}
+		/*
+		 * 【2026-11-10 · #4 罗马尼亚铁卫】与【委托挂起】并存时同样要叠加收尾动作：
+		 * 16703（德国弃牌摸牌）期间意大利拿到国家技能窗口 → 旧实现只给
+		 * use/skip_national_skill + play_card，德国那边没有 italy_german_draw /
+		 * event_delegate_decline → 委托永远走不完（卡死）。
+		 * 与上面 armed 同口径：叠加而非替换，谁先处理都行。
+		 */
+		const _dg = game.delegate
+		if (_dg && faction_of_nation('德国') === side) {
+			if (_dg.mode === 'german_draw') {
+				acts.italy_german_draw = 1
+				acts.event_delegate_decline = 1
+			} else if (_dg.mode === 'chain') {
+				acts.event_delegate_decline = 1
+			}
 		}
 		return acts
 	}
@@ -29688,6 +29755,19 @@ function finish_acts(game, side, acts) {
 	if (typeof hasArmedOfferForSide === 'function' && hasArmedOfferForSide(game, side)) {
 		acts.use_armed_offer = 1
 		acts.skip_armed_offer = 1
+	}
+	/*
+	 * 【2026-11-10 · #4 罗马尼亚铁卫】国家技能是"可选机会窗口"（national_skill_offer），
+	 * 不在排他挂起里登记 —— 而 13 个排他分支都是提前 return，
+	 * 于是"德国弃牌摸牌（german_draw）"期间意大利拿不到 use/skip_national_skill
+	 * （玩家实测：发不了国家技能）。
+	 * 与上面 armed 同一口径：窗口存在就给发送权，合法性由 use_national_skill 自身校验。
+	 */
+	const off = game.national_skill_offer
+	if (off && off.nation && typeof faction_of_nation === 'function' &&
+		faction_of_nation(off.nation) === side) {
+		acts.use_national_skill = 1
+		acts.skip_national_skill = 1
 	}
 	return acts
 }
@@ -32642,7 +32722,8 @@ function do_action(state, current, action, arg) {
 		 *
 		 * 现在两处同一判据：白名单不发 -> 服务端也拒。
 		 */
-		const frozen = status_actions_frozen(game)
+		/* 【2026-11-10 · #7 雷达】按【这张卡】判冻结：它自己处在立刻窗口时不冻结 */
+		const frozen = status_actions_frozen(game, cardId)
 		if (frozen && !isForgoBuild) {
 			game.log.push('《' + cName + '》现在不能发动：' + frozen)
 			return game
