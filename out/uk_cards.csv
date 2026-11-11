@@ -53,3 +53,23 @@ SUPP,12501,125,0,1,皇冠上的明珠,EVENT,1,在<印度>消灭一支敌方国�
 SUPP,12502,125,0,2,告法国人民书,EVENT,1,法国建设1支陆军或发动1次陆战或建设1支海军或发动1次海战,cards_sliced/sheet125_r0_c2.png,来自sheet125
 SUPP,12503,125,0,3,通丁系统,RESPONSE,,法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战,cards_sliced/sheet125_r0_c3.png,来自sheet125
 SUPP,12504,125,0,4,抵抗万岁,RESPONSE,,法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战,cards_sliced/sheet125_r0_c4.png,来自sheet125
+PRELUDE,18300,183,0,0,军情五处,PRELUDE,,检视前奏牌堆顶3张牌，以任意顺序置于前奏牌堆顶或前奏牌堆底。[失去2分] 打出前奏牌堆顶的牌。,cards_sliced/sheet183_r0_c0.png,逐张
+PRELUDE,18301,183,0,1,不信任动议案,PRELUDE,,[紧张度+1] 摸2张前奏牌。[失去2分] 执行1个前奏行动阶段。,cards_sliced/sheet183_r0_c1.png,逐张
+PRELUDE,18302,183,0,2,斯卡帕湾打捞,PRELUDE,,[紧张度+1] 在<亚速尔>相邻地区征召1支海军。,cards_sliced/sheet183_r0_c2.png,逐张
+PRELUDE,18303,183,0,3,妇女志愿服务团,PRELUDE,,在<不列颠><北海>部署1支空军。[失去2分] 在<北海>征召1支海军。,cards_sliced/sheet183_r0_c3.png,逐张
+PRELUDE,18304,183,0,4,一代人的和平,PRELUDE,,[紧张度-1] 获得3分。,cards_sliced/sheet183_r0_c4.png,逐张
+PRELUDE,18305,183,0,5,意大利煤炭禁运,PRELUDE,,[紧张度+1][持续] 意大利发起战斗后，若为第1回合：其失去3分。[失去2分] 意大利损耗2张前奏牌。,cards_sliced/sheet183_r0_c5.png,逐张
+PRELUDE,18306,183,0,6,战争迫近,PRELUDE,,[紧张度+1] 打出1张前奏手牌。[失去2分] 打出前奏牌堆顶的牌。,cards_sliced/sheet183_r0_c6.png,逐张
+PRELUDE,18307,183,0,7,殖民帝国,PRELUDE,,英国 或 法国 在<非洲南部>征召陆军。,cards_sliced/sheet183_r0_c7.png,逐张
+PRELUDE,18308,183,0,8,法国殖民地基地,PRELUDE,,英国 或 法国 在<非洲南部>征召陆军。[失去2分][持续] <非洲南部>的英国或法国陆军总是处于补给状态。,cards_sliced/sheet183_r0_c8.png,逐张
+PRELUDE,18309,183,0,9,波兰动员,PRELUDE,,[紧张度+1] 在<东欧>征召陆军。,cards_sliced/sheet183_r0_c9.png,逐张
+PRELUDE,18310,183,1,0,唯有荣誉,PRELUDE,,[紧张度+1] 在<东欧>消灭1支敌方国家陆军。,cards_sliced/sheet183_r1_c0.png,逐张
+ARMAMENT,18311,183,1,1,军情六处,ARMAMENT,,敌方国家使用军备卡时：使其无效。,cards_sliced/sheet183_r1_c1.png,逐张
+ARMAMENT,18312,183,1,2,Z舰队,ARMAMENT,,敌方国家在<东南亚>相邻地区建设海军后：在该海军的相邻地区建设1支海军。,cards_sliced/sheet183_r1_c2.png,逐张
+ARMAMENT,18313,183,1,3,光辉号航空母舰,ARMAMENT,,出牌阶段开始时：建设1支海军。,cards_sliced/sheet183_r1_c3.png,逐张
+ARMAMENT,18314,183,1,4,我们决不投降,ARMAMENT,,计分阶段开始时：在<不列颠>消灭1支敌方国家陆军。,cards_sliced/sheet183_r1_c4.png,逐张
+ARMAMENT,18315,183,1,5,英联邦空军训练计划,ARMAMENT,,出牌阶段开始时：获得2分 或 部署1支空军。,cards_sliced/sheet183_r1_c5.png,逐张
+ARMAMENT,18316,183,1,6,英镑区,ARMAMENT,,计分阶段开始时，弃置1张[建设陆军]：在<加拿大><非洲南部><印度>之一征召1支陆军。,cards_sliced/sheet183_r1_c6.png,逐张
+ARMAMENT,18317,183,1,7,哈肯贝格堡,ARMAMENT,,<西欧>的法国陆军被攻击时：使其在本次战斗中无法被移除。,cards_sliced/sheet183_r1_c7.png,逐张
+ARMAMENT,18318,183,1,8,越南独立同盟会,ARMAMENT,,敌方国家在<东南亚>建设或征召时：消灭该陆军。,cards_sliced/sheet183_r1_c8.png,逐张
+ARMAMENT,18319,183,1,9,总参二局,ARMAMENT,,<东欧>的英国陆军被移除时：使其在本回合内无法被移除。,cards_sliced/sheet183_r1_c9.png,逐张

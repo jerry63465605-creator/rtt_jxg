@@ -53,3 +53,25 @@ CORE,17850,178,5,0,大清洗,STATUS,,无法执行[资源再分配]。结束中�
 SUPP,17900,179,0,0,八月风暴,STATUS,,<中国东北>被友方国家攻击后，弃置1张[建设陆军]：在战斗地区征召苏联陆军，以此陆军发起1次陆战。,cards_sliced/sheet179_r0_c0.png,逐张
 SUPP,17901,179,0,1,工业心脏,STATUS,,<罗斯>增加1个计分标记。一回合一次，在<罗斯>建设陆军后：在相邻地区建设1支陆军。,cards_sliced/sheet179_r0_c1.png,逐张
 SUPP,17902,179,0,2,敌后游击队,RESPONSE,1,中国发起或被发起陆战后：中国在战斗地区征召陆军。,cards_sliced/sheet179_r0_c2.png,逐张
+PRELUDE,18000,180,0,0,吞并比萨拉比亚,PRELUDE,,[紧张度+1] 在<乌克兰>征召陆军。[紧张度+2][弃置1张[建设陆军]] 在<巴尔干>征召陆军。,cards_sliced/sheet180_r0_c0.png,逐张
+PRELUDE,18001,180,0,1,吞并波罗的海国家,PRELUDE,,[紧张度+1] 在<罗斯>征召陆军。[紧张度+2][弃置1张[建设陆军]] 在<东欧>征召陆军。,cards_sliced/sheet180_r0_c1.png,逐张
+PRELUDE,18002,180,0,2,反法西斯人民阵线,PRELUDE,,[紧张度+1] 选择 损耗1张前奏牌 或 跳过。打出前奏牌堆顶的牌。获得2分。,cards_sliced/sheet180_r0_c2.png,逐张
+PRELUDE,18003,180,0,3,斯大林防线,PRELUDE,,[紧张度+1] 在<乌克兰><罗斯>之一征召陆军。[弃置1张[建设陆军]] 在<乌克兰><罗斯>之一征召陆军。,cards_sliced/sheet180_r0_c3.png,逐张
+PRELUDE,18004,180,0,4,一国建成社会主义,PRELUDE,,检视牌堆前10张牌，选择并打出1张[状态卡]。[弃置1张[建设陆军]] 选择并打出1张[响应卡]。,cards_sliced/sheet180_r0_c4.png,逐张
+PRELUDE,18005,180,0,5,苏德互不侵犯条约,PRELUDE,,[紧张度-1][持续] 若苏联未对德国发起战斗，德国对苏联发起战斗后：其失去4分。,cards_sliced/sheet180_r0_c5.png,逐张
+PRELUDE,18006,180,0,6,苏日中立条约,PRELUDE,,[紧张度-1][持续] 若苏联未对日本发起战斗，日本对苏联发起战斗后：其失去4分。[除非弃置1张手牌] 从日本前奏牌堆打出[日苏中立条约]。,cards_sliced/sheet180_r0_c6.png,逐张
+PRELUDE,18007,180,0,7,五年计划,PRELUDE,,[持续] 一回合一次：在<西伯利亚><中亚>建设后：可在相邻地区之一建设陆军。[弃置1张[建设陆军]] 在<西伯利亚>建设1支陆军。,cards_sliced/sheet180_r0_c7.png,逐张
+PRELUDE,18008,180,0,8,西班牙志愿军,PRELUDE,,[紧张度+1] 意大利损耗1张前奏牌。意大利可打出手牌中的[西班牙志愿军]。[若之前或此次未打出] 意大利损耗3张前奏牌。,cards_sliced/sheet180_r0_c8.png,逐张
+PRELUDE,18009,180,0,9,远东方面军,PRELUDE,,[持续] <海参崴>的苏联陆军移除后：可在相邻地区之一建设1支陆军。[弃置1张手牌] 在<海参崴>征召1支陆军。,cards_sliced/sheet180_r0_c9.png,逐张
+PRELUDE,18010,180,1,0,征兵令,PRELUDE,,将1张[建设陆军]加入手牌。[弃置1张手牌] 从弃牌堆将1张[建设陆军]加入手牌。,cards_sliced/sheet180_r1_c0.png,逐张
+PRELUDE,18011,180,1,1,长征,PRELUDE,,中国在<中国西部>征召陆军。<中国西部>增加1个计分标记。[弃置1张手牌] <中国西部>成为对中国的补给点。,cards_sliced/sheet180_r1_c1.png,逐张
+ARMAMENT,18012,180,1,2,自由德国全国委员会,ARMAMENT,,德国的计分阶段开始时：本回合内德国每损耗过1张牌，损耗1张牌。,cards_sliced/sheet180_r1_c2.png,逐张
+ARMAMENT,18013,180,1,3,T-34坦克,ARMAMENT,,发起陆战后，移除1支苏联陆军：在战斗地区建设1支苏联陆军。,cards_sliced/sheet180_r1_c3.png,逐张
+ARMAMENT,18014,180,1,4,大纵深作战,ARMAMENT,,苏联陆军被攻击移除后，移除1支苏联陆军：在战斗地区建设1支苏联陆军。,cards_sliced/sheet180_r1_c4.png,逐张
+ARMAMENT,18015,180,1,5,反间谍总局,ARMAMENT,,任一国家的回合开始时：选择1张德国或意大利[军备卡]或[响应卡]，将其暗牌弃置。,cards_sliced/sheet180_r1_c5.png,逐张
+ARMAMENT,18016,180,1,6,米格设计局,ARMAMENT,,空军阶段开始时：部署或调度1支空军。发起1次夺取制空权。,cards_sliced/sheet180_r1_c6.png,逐张
+ARMAMENT,18017,180,1,7,图拉兵工厂,ARMAMENT,,出牌阶段开始时：在<莫斯科>相邻地区建设1支陆军。,cards_sliced/sheet180_r1_c7.png,逐张
+ARMAMENT,18018,180,1,8,拖拉机厂,ARMAMENT,,出牌阶段开始时：在<乌克兰>相邻地区建设1支陆军。,cards_sliced/sheet180_r1_c8.png,逐张
+ARMAMENT,18019,180,1,9,乌拉尔工业区,ARMAMENT,,出牌阶段开始时：在<西伯利亚>相邻地区建设1支陆军。,cards_sliced/sheet180_r1_c9.png,逐张
+ARMAMENT,18020,180,2,0,佐尔格特工,ARMAMENT,,若苏联未对德国发起战斗，德国对苏联发起战斗后：在<莫斯科>或相邻地区征召1支陆军。,cards_sliced/sheet180_r2_c0.png,逐张
+ARMAMENT,18021,180,2,1,敌后根据地,ARMAMENT,,计分阶段开始时：中国在<中国>之一征召1支陆军。,cards_sliced/sheet180_r2_c1.png,逐张

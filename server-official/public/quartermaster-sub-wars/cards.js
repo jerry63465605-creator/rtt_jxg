@@ -2,9 +2,9 @@
  * 军需官 · 次要战场（自研变体） —— 卡牌数据
  *
  * 由 tools/gen_module_cards.js 从 out/uk_cards.csv 自动生成，请勿手改。
- * 生成时间: 2026-09-27T15:52:32.204Z
+ * 生成时间: 2026-11-11T07:01:58.849Z
  *
- * 当前含卡组: 英国 54 张，德国 87 张，日本 78 张，苏联 54 张，意大利 72 张，美国 86 张，共 431 张。
+ * 当前含卡组: 英国 74 张，德国 87 张，日本 78 张，苏联 76 张，意大利 72 张，美国 86 张，共 473 张。
  * 效果文本保留原文（text 字段），供后续逐条实现规则与 UI 显示。
  */
 
@@ -168,7 +168,7 @@ const CARDS = [
   "name": "马奇诺防线",
   "type": "EFFECT",
   "ops": 1,
-  "text": "<西欧>的法国陆军将被移除时，弃置 4 张手牌：使其在本回合内不会被移除。",
+  "text": "任意时机，弃置 4 张手牌：<西欧>的法国陆军在本回合内不会被移除。",
   "img": "sheet153_r1_c6.png",
   "nation": "英国"
  },
@@ -545,81 +545,11 @@ const CARDS = [
  {
   "id": 15349,
   "deck": "CORE",
-  "name": "萨宾行动",
-  "type": "EVENT",
-  "ops": 1,
-  "text": "对<中东>发起1次陆战。若<中东>相邻地区没有德国部队:在<中东>征召陆军。",
-  "img": "crop_15349.png",
-  "nation": "英国"
- },
- {
-  "id": 15350,
-  "deck": "CORE",
   "name": "奇袭塔兰托",
-  "type": "EFFECT",
+  "type": "ECON",
   "ops": 1,
-  "text": "计分阶段开始时,若<地中海>相邻地区有英国飞机,弃置2张手牌:在<地中海>消灭1支敌方国家海军。",
-  "img": "crop_15350.png",
-  "nation": "英国"
- },
- {
-  "id": 15351,
-  "deck": "CORE",
-  "name": "敦刻尔克大撤退",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "<西欧>的英国或法国陆军被移除时,弃置2张手牌:在<北海>征召海军,或法国在<不列颠>征召陆军。",
-  "img": "crop_15351.png",
-  "nation": "英国"
- },
- {
-  "id": 15352,
-  "deck": "CORE",
-  "name": "布莱切利园",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "敌方国家打出[增强卡]时,弃置1张手牌:使其无效。",
-  "img": "crop_15352.png",
-  "nation": "英国"
- },
- {
-  "id": 15353,
-  "deck": "CORE",
-  "name": "保持冷静·继续前进",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "敌方国家发动[状态卡]效果时,弃置1张手牌:使其在本回合中无效。",
-  "img": "crop_15353.png",
-  "nation": "英国"
- },
- {
-  "id": 15354,
-  "deck": "CORE",
-  "name": "加拿大进入动员",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "计分阶段开始时,弃置2张手牌:在<加拿大>征召陆军,在<北大西洋>征召海军。",
-  "img": "crop_15354.png",
-  "nation": "英国"
- },
- {
-  "id": 15355,
-  "deck": "CORE",
-  "name": "特种空勤团突袭机场",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "出牌阶段开始时,弃置2张手牌:消灭1支相邻英国空军的敌方国家空军。",
-  "img": "crop_15355.png",
-  "nation": "英国"
- },
- {
-  "id": 15356,
-  "deck": "CORE",
-  "name": "地中海基地",
-  "type": "STATUS",
-  "ops": null,
-  "text": "<地中海>的英国海军总是处于补给状态。跳过出牌阶段行动,弃置2张手牌:在<地中海>建设海军。",
-  "img": "crop_15356.png",
+  "text": "[轰炸行动]选择3支<地中海>的意大利海军,将其移除",
+  "img": "sheet153_r5_c4.png",
   "nation": "英国"
  },
  {
@@ -645,10 +575,10 @@ const CARDS = [
  {
   "id": 12503,
   "deck": "SUPP",
-  "name": "道丁系统",
+  "name": "通丁系统",
   "type": "RESPONSE",
   "ops": null,
-  "text": "敌方国家在<北海>建设海军后:消灭该海军。",
+  "text": "法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战",
   "img": "sheet125_r0_c3.png",
   "nation": "英国"
  },
@@ -658,8 +588,208 @@ const CARDS = [
   "name": "抵抗万岁",
   "type": "RESPONSE",
   "ops": null,
-  "text": "敌方国家在<西欧>建设陆军后:消灭该陆军。",
+  "text": "法国在<印度>发起1次海战:法国或英国在<印度>发起1次陆战",
   "img": "sheet125_r0_c4.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18300,
+  "deck": "PRELUDE",
+  "name": "军情五处",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "检视前奏牌堆顶3张牌，以任意顺序置于前奏牌堆顶或前奏牌堆底。[失去2分] 打出前奏牌堆顶的牌。",
+  "img": "sheet183_r0_c0.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18301,
+  "deck": "PRELUDE",
+  "name": "不信任动议案",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 摸2张前奏牌。[失去2分] 执行1个前奏行动阶段。",
+  "img": "sheet183_r0_c1.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18302,
+  "deck": "PRELUDE",
+  "name": "斯卡帕湾打捞",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<亚速尔>相邻地区征召1支海军。",
+  "img": "sheet183_r0_c2.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18303,
+  "deck": "PRELUDE",
+  "name": "妇女志愿服务团",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "在<不列颠><北海>部署1支空军。[失去2分] 在<北海>征召1支海军。",
+  "img": "sheet183_r0_c3.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18304,
+  "deck": "PRELUDE",
+  "name": "一代人的和平",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度-1] 获得3分。",
+  "img": "sheet183_r0_c4.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18305,
+  "deck": "PRELUDE",
+  "name": "意大利煤炭禁运",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1][持续] 意大利发起战斗后，若为第1回合：其失去3分。[失去2分] 意大利损耗2张前奏牌。",
+  "img": "sheet183_r0_c5.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18306,
+  "deck": "PRELUDE",
+  "name": "战争迫近",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 打出1张前奏手牌。[失去2分] 打出前奏牌堆顶的牌。",
+  "img": "sheet183_r0_c6.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18307,
+  "deck": "PRELUDE",
+  "name": "殖民帝国",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "英国 或 法国 在<非洲南部>征召陆军。",
+  "img": "sheet183_r0_c7.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18308,
+  "deck": "PRELUDE",
+  "name": "法国殖民地基地",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "英国 或 法国 在<非洲南部>征召陆军。[失去2分][持续] <非洲南部>的英国或法国陆军总是处于补给状态。",
+  "img": "sheet183_r0_c8.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18309,
+  "deck": "PRELUDE",
+  "name": "波兰动员",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<东欧>征召陆军。",
+  "img": "sheet183_r0_c9.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18310,
+  "deck": "PRELUDE",
+  "name": "唯有荣誉",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<东欧>消灭1支敌方国家陆军。",
+  "img": "sheet183_r1_c0.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18311,
+  "deck": "ARMAMENT",
+  "name": "军情六处",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "敌方国家使用军备卡时：使其无效。",
+  "img": "sheet183_r1_c1.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18312,
+  "deck": "ARMAMENT",
+  "name": "Z舰队",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "敌方国家在<东南亚>相邻地区建设海军后：在该海军的相邻地区建设1支海军。",
+  "img": "sheet183_r1_c2.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18313,
+  "deck": "ARMAMENT",
+  "name": "光辉号航空母舰",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "出牌阶段开始时：建设1支海军。",
+  "img": "sheet183_r1_c3.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18314,
+  "deck": "ARMAMENT",
+  "name": "我们决不投降",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "计分阶段开始时：在<不列颠>消灭1支敌方国家陆军。",
+  "img": "sheet183_r1_c4.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18315,
+  "deck": "ARMAMENT",
+  "name": "英联邦空军训练计划",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "出牌阶段开始时：获得2分 或 部署1支空军。",
+  "img": "sheet183_r1_c5.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18316,
+  "deck": "ARMAMENT",
+  "name": "英镑区",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "计分阶段开始时，弃置1张[建设陆军]：在<加拿大><非洲南部><印度>之一征召1支陆军。",
+  "img": "sheet183_r1_c6.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18317,
+  "deck": "ARMAMENT",
+  "name": "哈肯贝格堡",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "<西欧>的法国陆军被攻击时：使其在本次战斗中无法被移除。",
+  "img": "sheet183_r1_c7.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18318,
+  "deck": "ARMAMENT",
+  "name": "越南独立同盟会",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "敌方国家在<东南亚>建设或征召时：消灭该陆军。",
+  "img": "sheet183_r1_c8.png",
+  "nation": "英国"
+ },
+ {
+  "id": 18319,
+  "deck": "ARMAMENT",
+  "name": "总参二局",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "<东欧>的英国陆军被移除时：使其在本回合内无法被移除。",
+  "img": "sheet183_r1_c9.png",
   "nation": "英国"
  },
  {
@@ -1008,7 +1138,7 @@ const CARDS = [
   "name": "枪支或黄油",
   "type": "EVENT",
   "ops": 1,
-  "text": "该卡可视作任意非[空军力量]的[基本卡]打出。",
+  "text": "该卡可视作任意非[空军力量]的[战略卡]打出。",
   "img": "sheet152_r3_c4.png",
   "nation": "德国"
  },
@@ -1288,7 +1418,7 @@ const CARDS = [
   "name": "德奥合并",
   "type": "PRELUDE",
   "ops": null,
-  "text": "[紧张度+1] 打出1张前奏手牌 或 前奏牌堆顶的牌。[弃置1张手牌] 检视牌堆，选择并将1张[基本卡]置入手牌。",
+  "text": "[紧张度+1] 打出1张前奏手牌 或 前奏牌堆顶的牌。[弃置1张手牌] 检视牌堆，选择并将1张[战略卡]置入手牌。",
   "img": "sheet149_r0_c0.png",
   "nation": "德国"
  },
@@ -1648,7 +1778,7 @@ const CARDS = [
   "name": "夜间运输",
   "type": "EFFECT",
   "ops": 1,
-  "text": "日本回合开始时，弃置1张[响应卡]，选择1支日本陆军或海军：其在本回合内总是处于补给状态。",
+  "text": "任意时机，弃置1张[响应卡]，选择1支日本陆军或海军：其在本回合内总是处于补给状态。",
   "img": "sheet154_r1_c1.png",
   "nation": "日本"
  },
@@ -2010,16 +2140,6 @@ const CARDS = [
   "ops": null,
   "text": "计分阶段：若<硫磺岛>或<菲律宾>有日本陆军，获得1分。",
   "img": "sheet154_r4_c7.png",
-  "nation": "日本"
- },
- {
-  "id": 15448,
-  "deck": "CORE",
-  "name": "泰国",
-  "type": "RESPONSE",
-  "ops": 1,
-  "text": "出牌阶段开始时：在<东南亚>征召1支陆军。",
-  "img": "crop_15448.png",
   "nation": "日本"
  },
  {
@@ -2833,60 +2953,10 @@ const CARDS = [
   "nation": "苏联"
  },
  {
-  "id": 17851,
-  "deck": "CORE",
-  "name": "天王星行动",
-  "type": "EVENT",
-  "ops": 1,
-  "text": "<乌克兰>相邻地区每有1支苏联陆军,执行1次:对<乌克兰>发起1次陆战 或 在<乌克兰>建设陆军。",
-  "img": "crop_17851.png",
-  "nation": "苏联"
- },
- {
-  "id": 17852,
-  "deck": "CORE",
-  "name": "罗科索夫斯基 朱可夫 科涅夫",
-  "type": "EVENT",
-  "ops": 1,
-  "text": "打出2张[状态卡]。",
-  "img": "crop_17852.png",
-  "nation": "苏联"
- },
- {
-  "id": 17853,
-  "deck": "CORE",
-  "name": "一步也不许后退!",
-  "type": "RESPONSE",
-  "ops": 1,
-  "text": "苏联陆军被攻击时,弃置4张手牌:使其在本回合中不会被移除。",
-  "img": "crop_17853.png",
-  "nation": "苏联"
- },
- {
-  "id": 17854,
-  "deck": "CORE",
-  "name": "共青城",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "建设陆军后:建设地区增加1个计分标记。",
-  "img": "crop_17854.png",
-  "nation": "苏联"
- },
- {
-  "id": 17855,
-  "deck": "CORE",
-  "name": "间谍机构",
-  "type": "EFFECT",
-  "ops": 1,
-  "text": "任一国家摸牌阶段结束后:观看该国家的手牌,从中选择并弃置1张,该国家摸1张牌。",
-  "img": "crop_17855.png",
-  "nation": "苏联"
- },
- {
   "id": 17900,
   "deck": "SUPP",
   "name": "八月风暴",
-  "type": "EFFECT",
+  "type": "STATUS",
   "ops": null,
   "text": "<中国东北>被友方国家攻击后，弃置1张[建设陆军]：在战斗地区征召苏联陆军，以此陆军发起1次陆战。",
   "img": "sheet179_r0_c0.png",
@@ -2910,6 +2980,226 @@ const CARDS = [
   "ops": 1,
   "text": "中国发起或被发起陆战后：中国在战斗地区征召陆军。",
   "img": "sheet179_r0_c2.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18000,
+  "deck": "PRELUDE",
+  "name": "吞并比萨拉比亚",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<乌克兰>征召陆军。[紧张度+2][弃置1张[建设陆军]] 在<巴尔干>征召陆军。",
+  "img": "sheet180_r0_c0.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18001,
+  "deck": "PRELUDE",
+  "name": "吞并波罗的海国家",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<罗斯>征召陆军。[紧张度+2][弃置1张[建设陆军]] 在<东欧>征召陆军。",
+  "img": "sheet180_r0_c1.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18002,
+  "deck": "PRELUDE",
+  "name": "反法西斯人民阵线",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 选择 损耗1张前奏牌 或 跳过。打出前奏牌堆顶的牌。获得2分。",
+  "img": "sheet180_r0_c2.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18003,
+  "deck": "PRELUDE",
+  "name": "斯大林防线",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 在<乌克兰><罗斯>之一征召陆军。[弃置1张[建设陆军]] 在<乌克兰><罗斯>之一征召陆军。",
+  "img": "sheet180_r0_c3.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18004,
+  "deck": "PRELUDE",
+  "name": "一国建成社会主义",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "检视牌堆前10张牌，选择并打出1张[状态卡]。[弃置1张[建设陆军]] 选择并打出1张[响应卡]。",
+  "img": "sheet180_r0_c4.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18005,
+  "deck": "PRELUDE",
+  "name": "苏德互不侵犯条约",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度-1][持续] 若苏联未对德国发起战斗，德国对苏联发起战斗后：其失去4分。",
+  "img": "sheet180_r0_c5.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18006,
+  "deck": "PRELUDE",
+  "name": "苏日中立条约",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度-1][持续] 若苏联未对日本发起战斗，日本对苏联发起战斗后：其失去4分。[除非弃置1张手牌] 从日本前奏牌堆打出[日苏中立条约]。",
+  "img": "sheet180_r0_c6.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18007,
+  "deck": "PRELUDE",
+  "name": "五年计划",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[持续] 一回合一次：在<西伯利亚><中亚>建设后：可在相邻地区之一建设陆军。[弃置1张[建设陆军]] 在<西伯利亚>建设1支陆军。",
+  "img": "sheet180_r0_c7.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18008,
+  "deck": "PRELUDE",
+  "name": "西班牙志愿军",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[紧张度+1] 意大利损耗1张前奏牌。意大利可打出手牌中的[西班牙志愿军]。[若之前或此次未打出] 意大利损耗3张前奏牌。",
+  "img": "sheet180_r0_c8.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18009,
+  "deck": "PRELUDE",
+  "name": "远东方面军",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "[持续] <海参崴>的苏联陆军移除后：可在相邻地区之一建设1支陆军。[弃置1张手牌] 在<海参崴>征召1支陆军。",
+  "img": "sheet180_r0_c9.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18010,
+  "deck": "PRELUDE",
+  "name": "征兵令",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "将1张[建设陆军]加入手牌。[弃置1张手牌] 从弃牌堆将1张[建设陆军]加入手牌。",
+  "img": "sheet180_r1_c0.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18011,
+  "deck": "PRELUDE",
+  "name": "长征",
+  "type": "PRELUDE",
+  "ops": null,
+  "text": "中国在<中国西部>征召陆军。<中国西部>增加1个计分标记。[弃置1张手牌] <中国西部>成为对中国的补给点。",
+  "img": "sheet180_r1_c1.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18012,
+  "deck": "ARMAMENT",
+  "name": "自由德国全国委员会",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "德国的计分阶段开始时：本回合内德国每损耗过1张牌，损耗1张牌。",
+  "img": "sheet180_r1_c2.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18013,
+  "deck": "ARMAMENT",
+  "name": "T-34坦克",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "发起陆战后，移除1支苏联陆军：在战斗地区建设1支苏联陆军。",
+  "img": "sheet180_r1_c3.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18014,
+  "deck": "ARMAMENT",
+  "name": "大纵深作战",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "苏联陆军被攻击移除后，移除1支苏联陆军：在战斗地区建设1支苏联陆军。",
+  "img": "sheet180_r1_c4.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18015,
+  "deck": "ARMAMENT",
+  "name": "反间谍总局",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "任一国家的回合开始时：选择1张德国或意大利[军备卡]或[响应卡]，将其暗牌弃置。",
+  "img": "sheet180_r1_c5.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18016,
+  "deck": "ARMAMENT",
+  "name": "米格设计局",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "空军阶段开始时：部署或调度1支空军。发起1次夺取制空权。",
+  "img": "sheet180_r1_c6.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18017,
+  "deck": "ARMAMENT",
+  "name": "图拉兵工厂",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "出牌阶段开始时：在<莫斯科>相邻地区建设1支陆军。",
+  "img": "sheet180_r1_c7.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18018,
+  "deck": "ARMAMENT",
+  "name": "拖拉机厂",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "出牌阶段开始时：在<乌克兰>相邻地区建设1支陆军。",
+  "img": "sheet180_r1_c8.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18019,
+  "deck": "ARMAMENT",
+  "name": "乌拉尔工业区",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "出牌阶段开始时：在<西伯利亚>相邻地区建设1支陆军。",
+  "img": "sheet180_r1_c9.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18020,
+  "deck": "ARMAMENT",
+  "name": "佐尔格特工",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "若苏联未对德国发起战斗，德国对苏联发起战斗后：在<莫斯科>或相邻地区征召1支陆军。",
+  "img": "sheet180_r2_c0.png",
+  "nation": "苏联"
+ },
+ {
+  "id": 18021,
+  "deck": "ARMAMENT",
+  "name": "敌后根据地",
+  "type": "ARMAMENT",
+  "ops": null,
+  "text": "计分阶段开始时：中国在<中国>之一征召1支陆军。",
+  "img": "sheet180_r2_c1.png",
   "nation": "苏联"
  },
  {
@@ -3208,7 +3498,7 @@ const CARDS = [
   "name": "卡佩里尼 UIT 24 伊 503",
   "type": "EVENT",
   "ops": 1,
-  "text": "所有友方玩家依次从弃牌堆随机选择1张牌并检视，选择 打出该[基本卡][状态卡][经济战] 或 将其置于牌堆顶 或 将其弃置。",
+  "text": "所有友方玩家依次从弃牌堆随机选择1张牌并检视，选择 打出该[战略卡][状态卡][经济战] 或 将其置于牌堆顶 或 将其弃置。",
   "img": "sheet177_r2_c9.png",
   "nation": "意大利"
  },
@@ -3413,26 +3703,6 @@ const CARDS = [
   "nation": "意大利"
  },
  {
-  "id": 17750,
-  "deck": "CORE",
-  "name": "意大利殖民地民兵",
-  "type": "EVENT",
-  "ops": 1,
-  "text": "意大利增加1支陆军后备。建设1支陆军。",
-  "img": "crop_17750.png",
-  "nation": "意大利"
- },
- {
-  "id": 17751,
-  "deck": "CORE",
-  "name": "俄罗斯解放军",
-  "type": "STATUS",
-  "ops": null,
-  "text": "苏联的计分阶段:若<乌克兰>未被苏联控制,其失去1分。",
-  "img": "crop_17751.png",
-  "nation": "意大利"
- },
- {
   "id": 16700,
   "deck": "SUPP",
   "name": "一日之狮",
@@ -3448,7 +3718,7 @@ const CARDS = [
   "name": "意大利万岁",
   "type": "EFFECT",
   "ops": 1,
-  "text": "出牌阶段开始时：本回合出牌阶段行动2次，但只能打出[基本卡]。",
+  "text": "出牌阶段开始时：本回合出牌阶段行动2次，但只能打出[战略卡]。",
   "img": "sheet167_r0_c1.png",
   "nation": "意大利"
  },
@@ -4068,7 +4338,7 @@ const CARDS = [
   "name": "工业巨头",
   "type": "STATUS",
   "ops": null,
-  "text": "一回合一次，打出[基本卡]后，可损耗2张牌：将其洗入牌堆。",
+  "text": "一回合一次，打出[战略卡]后，可损耗2张牌：将其洗入牌堆。",
   "img": "sheet175_r4_c1.png",
   "nation": "美国"
  },
@@ -4323,16 +4593,6 @@ const CARDS = [
   "nation": "美国"
  },
  {
-  "id": 16899,
-  "deck": "TOKEN",
-  "name": "B-25 米切尔（英国）",
-  "type": "ECON",
-  "ops": 1,
-  "text": "[轰炸行动]选择1个大本营2地区内有{英国}海军的敌方国家：其损耗4张牌。",
-  "img": "sheet168_r0_c5.png",
-  "nation": "英国"
- },
- {
   "id": 16806,
   "deck": "SUPP",
   "name": "大规模部署",
@@ -4418,7 +4678,7 @@ const CARDS = [
   "name": "民间资源保护",
   "type": "PRELUDE",
   "ops": null,
-  "text": "[持续][大萧条]检视前奏牌堆，选择并打出1张[军备卡]。[军备卡][资源再分配]时，可弃置[大萧条]和手牌共2张：额外找出1张[基本卡]。",
+  "text": "[持续][大萧条]检视前奏牌堆，选择并打出1张[军备卡]。[军备卡][资源再分配]时，可弃置[大萧条]和手牌共2张：额外找出1张[战略卡]。",
   "img": "sheet172_r0_c7.png",
   "nation": "美国"
  },
@@ -4536,8 +4796,7 @@ for (const c of CARDS) {
 
 /* ---------- 按国家 / 类型 筛选 ---------- */
 function cards_of_nation(nation) {
-	/* 【2026-11-08】deck:'TOKEN' = 衍生卡（如 16899 B-25 英国版），只在效果里生成，不进牌堆 */
-	return CARDS.filter(c => c.nation === nation && c.deck !== 'TOKEN')
+	return CARDS.filter(c => c.nation === nation)
 }
 function cards_of_type(type, nation) {
 	return CARDS.filter(c => c.type === type && (!nation || c.nation === nation))

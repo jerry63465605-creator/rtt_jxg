@@ -1,7 +1,8 @@
 /*
  * 战斗预算(event_budget)冒烟自检 — 2026-09-30 重构
  * 覆盖：
- *   1. 《巴巴罗萨》打出即建立 event_budget(remaining=3)，不再预选 3 目标
+ *   1. 《巴巴罗萨》打出即建立 event_budget（remaining = min(3, 回合开始快照里的合法目标部队数)，
+ *      【2026-11-12 · B38】按玩家口径收缩到实际目标数，不再恒为 3），不再预选 3 目标
  *   2. 逐次 event_battle 打苏联陆地，每战原子结算（代受/抵消/闪电战窗口照常）
  *   3. 两场之间可插入：闪电战(after_land 状态卡)、其它非战斗动作
  *   4. 空军代受/抵消：pending_battle 期间 event_budget.can_finish=false 且 event_battle 被拦截
@@ -204,7 +205,7 @@ console.log('\n=== 4. 空军代受/抵消：pending_battle 期间 event_battle �
 	ok('结算后预算清空', !g.event_budget)
 }
 
-console.log('\n=== 5. 可攻击目标少于预算：打出即给满 3 次机会，打完剩余后需结束 ===')
+console.log('\n=== 5. 可攻击目标少于 3：预算收缩到实际数，打完仍需手动结束（B38 新口径）===')
 {
 	let g = rules.setup(1)
 	g.current_nation = '德国'
@@ -217,15 +218,18 @@ console.log('\n=== 5. 可攻击目标少于预算：打出即给满 3 次机会�
 	putId(g, 'sov_a', '苏联', 'army', 5)   // 只有 1 块苏联陆地
 	I.compute_supply(g)
 	g = rules.action(g, '德国', 'play_card', { card: '15226#1' })
-	ok('打出即建立预算（remaining=3，机会足额，与可攻击目标数无关）',
-		g.event_budget && g.event_budget.remaining === 3,
+	/* 【2026-11-12 · B38】玩家新口径：预算按实际目标部队数收缩（此处只有 1 支 → 1 次）。
+	 * 旧断言「remaining=3，与可攻击目标数无关」已过期，不是功能回归。 */
+	ok('★ 打出即建立预算（remaining=1，按实际目标数收缩）',
+		g.event_budget && g.event_budget.remaining === 1,
 		'remaining=' + JSON.stringify(g.event_budget && g.event_budget.remaining))
 	const vb0 = rules.view(g, 'Axis').event_budget
 	ok('目标集合只含实际存在的苏联陆地 5', vb0 && JSON.stringify(vb0.targets) === JSON.stringify([5]),
 		'targets=' + JSON.stringify(vb0 && vb0.targets))
 	ok('出牌瞬间尚未武装闪电战窗口', !armed(g, '15253#1'), 'status_instant=' + JSON.stringify(g.status_instant))
 	g = rules.action(g, '德国', 'event_battle', { target: 5 })
-	ok('打 1 场后 remaining=2（剩余机会可放弃）', g.event_budget && g.event_budget.remaining === 2,
+	ok('★ 打 1 场后 remaining=0（预算仍在，仍需手动「结束」）',
+		g.event_budget && g.event_budget.remaining === 0,
 		'remaining=' + JSON.stringify(g.event_budget && g.event_budget.remaining))
 	ok('该战武装闪电战窗口', armed(g, '15253#1'), 'status_instant=' + JSON.stringify(g.status_instant))
 	ok('苏联陆军被移除', armiesAt(g, 5, '苏联') === 0)

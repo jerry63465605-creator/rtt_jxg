@@ -131,54 +131,42 @@ console.log('\n=== D/E. 未装载 / 没有空军 ===')
 	ok('★ 没有美国空军时无加成', r2.p51 === false)
 }
 
-console.log('\n=== F/G/H. 17513 ===')
-function play13(g) {
-	R.action(g, 'Allies', 'debug_add_card', { face: '17555', nation: '美国', dest: 'hand' })
+console.log('\n=== F/G/H. 17513 —— 已改窗口专用（2026-11-11 · B35）===')
+/*
+ * 旧 F/G/H 测的是「手牌主动打出 → us_wartime 选卡弹窗 → resolve/cancel」。
+ * B35 后该路径废弃：改为「状态卡发动后的强制窗口」，完整实测见
+ * tools/_real_test_B35_17513_window.js（39 项 ALL PASS）。
+ * 这里保留的是「旧入口确已关闭」的守卫，不放宽旧断言、也不删测试项。
+ */
+{
+	/* F 旧入口关闭 */
+	const g = base()
 	R.action(g, 'Allies', 'debug_add_card', { face: '17513', nation: '美国', dest: 'hand' })
 	I.refresh(g)
-	const st = (g.hands['美国'] || []).find(x => faceOf(x) === '17555')
-	if (st) R.action(g, 'Allies', 'play_card', { card: st })
-	I.refresh(g)
-	const ts = (g.table['美国'] || []).filter(x => (byId[faceOf(x)] || {}).type === 'STATUS')
-	g.status_used = g.status_used || {}
-	if (ts[0]) g.status_used[ts[0]] = (I.freq_key ? I.freq_key(g) : '1:美国')
-	I.refresh(g)
-	return ts
-}
-{
-	/* F 正常结算 */
-	const g = base()
-	const ts = play13(g)
 	const p = (g.hands['美国'] || []).find(x => faceOf(x) === '17513')
-	R.action(g, 'Allies', 'play_card', { card: p })
-	I.refresh(g)
+	const hr = (R.view(g, 'Allies').hand_ready || {})[p]
+	ok('★★ F hand_ready 恒灰（window_only 同源）',
+		!!hr && hr.ok === false && /不能主动打出/.test(hr.reason || ''), JSON.stringify(hr))
 	const n1 = (g.log || []).length
-	R.action(g, 'Allies', 'resolve_us_wartime', { card: ts[0] })
-	I.refresh(g)
-	const lg = logSince(g, n1)
-	console.log('  F log = ' + lg.slice(0, 120))
-	ok('★★ 正常结算：清 used + 卡进弃牌',
-		!(g.status_used && g.status_used[ts[0]]) &&
-		(g.discard['美国'] || []).some(x => faceOf(x) === '17513'), lg.slice(0, 100))
+	R.action(g, 'Allies', 'play_card', { card: p })
+	ok('★★ F 主动打被拒、不建 us_wartime、卡仍在手牌',
+		!g.us_wartime && (g.hands['美国'] || []).indexOf(p) >= 0,
+		logSince(g, n1).slice(0, 140))
 
-	/* G 放弃 */
+	/* G 放弃通道改走窗口：旧 cancel_us_wartime 不再由 17513 触发 */
 	const g2 = base()
-	play13(g2)
-	const p2 = (g2.hands['美国'] || []).find(x => faceOf(x) === '17513')
-	R.action(g2, 'Allies', 'play_card', { card: p2 })
+	R.action(g2, 'Allies', 'debug_add_card', { face: '17513', nation: '美国', dest: 'hand' })
 	I.refresh(g2)
 	const deckBefore = (g2.decks['美国'] || []).length
-	const n2 = (g2.log || []).length
 	R.action(g2, 'Allies', 'cancel_us_wartime', {})
-	I.refresh(g2)
-	const lg2 = logSince(g2, n2)
-	console.log('  G log = ' + (lg2 || '(无)').slice(0, 140))
-	ok('★★ 放弃后卡退回手牌', (g2.hands['美国'] || []).some(x => faceOf(x) === '17513'), JSON.stringify((g2.hands['美国'] || []).map(faceOf).slice(-3)))
-	ok('★★ 放弃不付代价（牌库不变）', (g2.decks['美国'] || []).length === deckBefore, deckBefore + '→' + (g2.decks['美国'] || []).length)
-	ok('★ 挂起已清空', !g2.us_wartime)
-	ok('★ 放弃有日志', /放弃发动《战时生产委员会》/.test(lg2), lg2.slice(0, 100))
+	ok('★★ G 旧放弃入口不再消耗牌（牌库不变）',
+		(g2.decks['美国'] || []).length === deckBefore,
+		deckBefore + '→' + (g2.decks['美国'] || []).length)
+	ok('★ G 未误建旧挂起（us_wartime / pending_status_ask 均空）',
+		!g2.us_wartime && !g2.pending_status_ask)
+	ok('★ G 卡仍在手牌', (g2.hands['美国'] || []).some(x => faceOf(x) === '17513'))
 
-	/* H 拒绝路径 */
+	/* H 桌面没有状态卡时照样拒绝 */
 	const g3 = base()
 	R.action(g3, 'Allies', 'debug_add_card', { face: '17513', nation: '美国', dest: 'hand' })
 	I.refresh(g3)
@@ -186,7 +174,9 @@ function play13(g) {
 	const n3 = (g3.log || []).length
 	R.action(g3, 'Allies', 'play_card', { card: p3 })
 	I.refresh(g3)
-	ok('★ 桌面没有状态卡时拒绝', /无法打出《战时生产委员会》/.test(logSince(g3, n3)) && !g3.us_wartime)
+	ok('★ H 桌面没有状态卡时拒绝（window_only 优先）',
+		/不能主动打出|无法打出《战时生产委员会》|现在不能打出/.test(logSince(g3, n3)) &&
+		!g3.us_wartime, logSince(g3, n3).slice(0, 140))
 }
 
 console.log('\n=== I/J. 注册表与静态守卫 ===')

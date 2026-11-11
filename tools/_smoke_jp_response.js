@@ -359,21 +359,37 @@ console.log('\n=== 9. 第二批 B：需选择的卡返回 pending 并能用 choi
 		}
 	}
 
-	/* 四选一：8600 */
+	/*
+	 * 8600《南方作战计划》（2026-11-12 修正实现记录）
+	 * 卡面：出牌阶段开始时：对<印度尼西亚><新几内亚><东南亚><菲律宾>之一发起1次陆战。
+	 *       在战斗地区建设陆军。
+	 * 旧断言按【四选一占位】（得分/消灭中国陆军/征召/打印度）写，把错实现固化成「正常」；
+	 * 现按卡面重实现后同步改为「四地区选一 → 陆战 + 战斗地区建设陆军」。
+	 */
 	{
 		const g = rules.setup(1)
-		g.current_nation = '日本'; g.active = 'Axis'
-		let r = I.RESPONSE_EFFECT_IMPL['8600'](g, 'axis', {})
-		ok('8600 首次调用返回 pending', !!(r && r.pending), JSON.stringify(r))
-		ok('8600 kind 是 option', r && r.kind === 'option', 'kind=' + (r && r.kind))
-		ok('8600 有 4 个选项', r && (r.candidates || []).length === 4,
-			'n=' + (r && (r.candidates || []).length))
-		/* 选"获得 1 分" */
-		const before = g.score.axis || 0
-		const r2 = I.RESPONSE_EFFECT_IMPL['8600'](g, 'axis', {}, 0)
-		ok('8600 选项0 执行成功', !!r2 && r2.ok, JSON.stringify(r2))
-		ok('8600 选项0 加了 1 分', (g.score.axis || 0) === before + 1,
-			'before=' + before + ' after=' + (g.score.axis || 0))
+		g.current_nation = '日本'; g.active = 'Axis'; g.turn_phase = 'play'
+		/* <南海> 与卡面四个地区全相邻，摆一支补给中的日本海军作发起者 */
+		const sea = d.id_of('南海')
+		rules.action(g, 'Axis', 'debug_place',
+			{ piece: 'jp_navy_8600', nation: '日本', type: 'navy', space: sea })
+		I.set_supply_point(g, sea, 'axis', true)
+		I.grant_supply(g, 'jp_navy_8600', g.turn)
+		I.compute_supply(g)
+		const first = I.RESPONSE_EFFECT_IMPL['8600'](g, 'axis', {}, undefined)
+		ok('★ 8600 首调是 space 候选（不是四选一 option）',
+			!!(first && first.pending && first.kind === 'space'), JSON.stringify(first))
+		const names = ((first && first.candidates) || []).map(c => c.name)
+		ok('★★ 8600 候选 = 卡面四个地区', names.length === 4 &&
+			['印度尼西亚', '新几内亚', '东南亚', '菲律宾'].every(n => names.indexOf(n) >= 0),
+			JSON.stringify(names))
+		const sp = Number(((first && first.candidates) || [])[0].id)
+		const r2 = I.RESPONSE_EFFECT_IMPL['8600'](g, 'axis', {}, sp)
+		ok('★★ 8600 结算 = 陆战 + 在战斗地区建设陆军', !!(r2 && r2.ok) &&
+			/发起陆战/.test(r2.desc || '') && /建设陆军/.test(r2.desc || ''),
+			JSON.stringify(r2))
+		ok('★ 8600 不再出现得分/消灭中国陆军/打印度',
+			!/获得 1 分|消灭 1 支中国陆军|英属印度/.test(JSON.stringify(first) + JSON.stringify(r2)))
 	}
 
 	/* 选牌：7904 亡命之计 */

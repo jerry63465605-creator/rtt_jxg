@@ -335,6 +335,21 @@ function update_pending_status_ask_box() {
 	ask_state = { kind: 'status_ask' }
 	const costTxt = (ask.cost && ask.cost.attrition)
 		? '（代价：损耗 ' + ask.cost.attrition + ' 张牌）' : ''
+	/* 【2026-11-11 · B35】wartime 变体：按钮与文案按服务端下发的 kind/target_name/desc 分流，
+	 * 目标卡固定为刚发动的那张状态卡（玩家口径：不要二级选卡弹窗）。 */
+	if (ask.kind === 'wartime') {
+		render_ask_box(
+			'《' + ask.name + '》等待决定',
+			'刚发动《' + (ask.target_name || '状态卡') + '》。是否打出《' + ask.name + '》？\n' +
+			(ask.desc ? ask.desc + '\n' : '') + costTxt,
+			[
+				{ label: '打出', cls: 'primary', onClick: () =>
+					send_action('use_wartime_window', {}) },
+				{ label: '放弃', cls: '', onClick: () =>
+					send_action('skip_status_ask', {}) },
+			])
+		return
+	}
 	render_ask_box(
 		'《' + ask.name + '》等待决定',
 		'【' + ask.nation + '】海军在' + (ask.space_name || '该地区') + '被移除。' +
@@ -3096,6 +3111,12 @@ function check_phase_for_card(c) {
 			return {
 				ok: false,
 				reason: "《" + c.name + "》不能主动打出 —— 仅在对应事件发生后被询问是否打出",
+			}
+		/* 【2026-11-11 · B35】窗口专用卡：镜像服务端 trigger_ready(window_only) */
+		if (tr.kind === "window_only")
+			return {
+				ok: false,
+				reason: "《" + c.name + "》不能主动打出 —— 只会在发动状态卡后由窗口询问是否打出",
 			}
 		if (tr.kind === "self") {
 			if (ph !== tr.phase)

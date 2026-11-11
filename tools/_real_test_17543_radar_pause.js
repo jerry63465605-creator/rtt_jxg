@@ -235,6 +235,9 @@ console.log('\n=== D. 不发动后第二次移除仍弹；无响应链也弹 ===
 console.log('\n=== E. 发动 -> 损耗2 + 还原海军 + 飞机复原 + 本次战斗保护 ===')
 {
 	const { g, radar } = scene()
+	/* 【2026-11-11 · B35】确保手牌有 17513，稳定覆盖「雷达发动后接战时生产委员会窗口」 */
+	give(g, '17513', '美国')
+	I.refresh(g)
 	driveToAsk(g)
 	/* 构造同场"因不代受撤退"的空军：真实战斗中它会撤到【相邻陆地】，
 	 * 这里摆一块陆地（debug_place 的空军载体校验不允许把飞机放海域），
@@ -260,6 +263,15 @@ console.log('\n=== E. 发动 -> 损耗2 + 还原海军 + 飞机复原 + 本次�
 	ok('E5 注册 battleOnly 的 protect 修饰器（本次战斗免死）',
 		(g.modifiers || []).some(m => m.key === 'protect' && m.nation === '美国' &&
 			m.type === 'navy' && m.battleOnly === true), J((g.modifiers || []).slice(-2)))
+	/*
+	 * 【2026-11-11 · B35 新口径】雷达发动成功后，若美国手牌有 17513，
+	 * 会立刻接一个【强制 wartime 窗口】（玩家明确要求支持「日本回合美国发动雷达」）。
+	 * 因此 E6/E9/E10 的「挂起已清 / 让权归还 / 响应框恢复」要等这个窗口也答完；
+	 * 这里用「放弃」作答，验证答完响应链仍能继续，而不是把断言放宽。
+	 */
+	const b35ask = g.pending_status_ask && g.pending_status_ask.kind === 'wartime'
+	ok('★ E5b 雷达发动后接 B35 窗口（新口径）', !!b35ask, J(g.pending_status_ask))
+	if (b35ask) R.action(g, 'Allies', 'skip_status_ask', {})
 	ok('E6 挂起已清', !g.pending_status_ask)
 	ok('E7 已写 status_used（口径 B：发动过一次才消耗）',
 		Object.keys(g.status_used || {}).some(k => faceOf(k) === '17543'), J(g.status_used))
@@ -318,8 +330,11 @@ console.log('\n=== G. 静态守卫 ===')
 		playSrc.indexOf('update_pending_trigger_box()\n\t/*\n\t * 【2026-11-11】') <
 		playSrc.indexOf('update_pending_status_ask_box()\n}') ||
 		/update_pending_trigger_box\(\)[\s\S]{0,400}update_pending_status_ask_box\(\)/.test(playSrc))
-	ok('G6 play.html 版本串已 bump',
-		/20261111a/.test(fs.readFileSync(path.join(L.MOD, 'play.html'), 'utf8')))
+	/* 【2026-11-11】不写死具体日期串（每次 bump 都会让旧断言假红）：只校验所有 ?v= 统一且非空 */
+	const _html = fs.readFileSync(path.join(L.MOD, 'play.html'), 'utf8')
+	const _vers = (_html.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
+	ok('G6 play.html 版本串统一且非空', _vers.length >= 5 &&
+		_vers.every(v => v && v === _vers[0]), J(_vers))
 	ok('G7 逻辑里不出现卡面字面量 17543（除配置/测试/注释）',
 		!/if \([^)]*=== '17543'\)/.test(rulesSrc) &&
 		!/if \([^)]*=== '17543'\)/.test(playSrc))
