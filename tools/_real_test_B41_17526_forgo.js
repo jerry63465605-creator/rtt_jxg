@@ -142,9 +142,10 @@ console.log('\n=== E. 静态守卫（同源 / 客户端 / 版本串）===')
 		/send_action\('resolve_uk_build_delegate', \{ forgo: f\.id \}\)/.test(l))
 	ok('★★ 客户端按钮只回传实例 id、不带 build_card',
 		!!sendLine && !/build_card/.test(sendLine), J(sendLine))
-	ok('★ 版本串统一且为 20261112p',
+	/* 【B46】卡表找回 bump 过版本串，这里只校验统一性 */
+	ok('★ 版本串统一且非空（B41 当轮为 20261112p）',
 		(phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112p'),
+			.every(v => v && v === (phtml.match(/\?v=([0-9a-z]+)/) || [])[1]),
 		[...new Set((phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3)))])
 }
 

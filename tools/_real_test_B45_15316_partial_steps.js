@@ -133,10 +133,11 @@ console.log('\n=== E. 静态守卫 ===')
 	ok('★ 卡面配置仍是两步（eliminate + recruit 巴尔干）',
 		/\{ op: 'eliminate', type: 'army', spaces: space_ids_of\(\['巴尔干'\]\) \}/.test(src) &&
 		/\{ op: 'recruit', type: 'army', spaces: space_ids_of\(\['巴尔干'\]\) \}/.test(src))
-	ok('★ 客户端零改动 -> 版本串仍 20261112p',
-		(fs.readFileSync(path.join(MOD, 'play.html'), 'utf8')
-			.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112p'))
+	/* 【B46】卡表找回 bump 过版本串，这里只校验统一性 */
+	const vers = (fs.readFileSync(path.join(MOD, 'play.html'), 'utf8')
+		.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
+	ok('★ 版本串统一且非空（B45 当轮为 20261112p）',
+		vers.length >= 5 && vers.every(v => v && v === vers[0]), vers)
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : 'FAIL ' + fail + ' 项 / PASS ' + pass + ' 项'))

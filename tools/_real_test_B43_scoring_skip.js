@@ -150,9 +150,10 @@ console.log('\n=== E. 静态守卫（动态判据 / 无硬编码 / 客户端零�
 	ok('★ 既有「各判各的」注释与跳过判定未改',
 		/两者必须【各判各的】/.test(fn) &&
 		/results\.push\(\{ nation: n, skipped: true, gained: 0 \}\)/.test(fn))
-	ok('★ 客户端零改动 -> 版本串仍 20261112p',
+	/* 【B46】卡表找回 bump 过版本串，这里只校验统一性 */
+	ok('★ 版本串统一且非空（B43 当轮为 20261112p）',
 		(phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112p'),
+			.every(v => v && v === (phtml.match(/\?v=([0-9a-z]+)/) || [])[1]),
 		[...new Set((phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3)))])
 }
 

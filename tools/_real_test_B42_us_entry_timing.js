@@ -156,9 +156,10 @@ console.log('\n=== F. 静态守卫（同源 / 三时点 / 无 action 出口 / �
 	ok('★ 计数/占领口径未改（仍按 2026-10-19 玩家口径注释）',
 		/"战略点"口径（玩家 2026-10-19 口径）/.test(src) &&
 		/has_pieces\(game, \{ space: sp\.id, faction: AXIS \}\)/.test(src))
-	ok('★ 客户端零改动 -> 版本串仍 20261112p',
+	/* 【B46】卡表找回 bump 过版本串，这里只校验统一性 */
+	ok('★ 版本串统一且非空（B42 当轮为 20261112p）',
 		(phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112p'),
+			.every(v => v && v === (phtml.match(/\?v=([0-9a-z]+)/) || [])[1]),
 		[...new Set((phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3)))])
 }
 
