@@ -11,8 +11,13 @@
  *     ② build_actions：`mode==='single'` 才登记 resolve_us_lend_lease_*。
  *
  * 修复：5 处重建对象补 mode；并给 battle_reconcile_active 加
- *   「战斗预算未打完不收尾」守卫（否则多场预算卡第一场结束就提前归还），
- *   预算收尾改在 event_finish 里补。
+ *   「战斗预算未打完不收尾」守卫（否则多场预算卡第一场结束就提前归还）。
+ *
+ * 【2026-11-10 口径更新 / B47 重写】归还改为【统一手动归还】：
+ *   event_finish 清空战斗预算后只置 delegate.played=true，不再自动
+ *   finish_us_lend_lease；玩家还需点「结束委托」（action finish_lend_lease）
+ *   才摸牌 + 归还美国 + 清委托，期间可先发动被委托国的桌面状态卡。
+ *   故本脚本 S5 改为两步验收，S7 静态守卫改查三重门禁而非 event_finish 内联收尾。
  */
 const path = require('path')
 const fs = require('fs')
@@ -90,11 +95,20 @@ section('S4 发起并结算战斗后（预算尚未点「结束」）：不提�
 	ok('★ 委托仍在（未提前收尾）', !!g.delegate, g.delegate)
 }
 
-/* ---------------- S5 event_finish -> 归还美国 ---------------- */
-section('S5 点「结束」-> 摸牌 + 操作权归还美国 + 委托清空')
+/* ---------------- S5 两步归还：结束战斗 -> 结束委托 ---------------- */
+section('S5 event_finish 只置 played，点「结束委托」才摸牌 + 归还美国 + 清委托')
 {
 	const deckBefore = (g.decks['英国'] || []).length
 	rules.action(g, 'Allies', 'event_finish', {})
+	/* 【现行口径】预算清空不自动归还，委托仍在、played=true */
+	ok('★ event_finish 后仍未归还（current_nation=英国）',
+		g.current_nation === '英国', g.current_nation)
+	ok('★ 委托仍在且 played=true（可点「结束委托」）',
+		!!g.delegate && g.delegate.played === true && !g.delegate.done, g.delegate)
+	ok('★ 白名单下发 finish_lend_lease',
+		rules.view(g, 'Allies').actions.finish_lend_lease === 1,
+		rules.view(g, 'Allies').actions)
+	rules.action(g, 'Allies', 'finish_lend_lease', {})
 	ok('★ current_nation=美国（归还）', g.current_nation === '美国', g.current_nation)
 	ok('★ delegate 已清空', !g.delegate, g.delegate)
 	ok('被委托国摸了 1 张', (g.decks['英国'] || []).length === deckBefore - 1,
@@ -137,7 +151,14 @@ section('S7 源码守卫：重建点都带 mode、收尾判定与预算守卫齐
 		/game\.delegate\.mode === 'single' && game\.delegate\.resume_after_battle/.test(src))
 	ok('★ 收尾加「预算未打完不归还」守卫',
 		/!\(game\.event_budget && game\.event_budget\.remaining > 0\)/.test(src))
-	ok('event_finish 里有委托收尾', /after_card_resolved\(game, b\.nation, b\.card_id\)[\s\S]{0,900}finish_us_lend_lease\(game, game\.delegate, game\.delegate\.nat\)/.test(src))
+	/* 【2026-11-10 起】收尾不再内联在 event_finish，改由 finish_lend_lease action 承担 */
+	ok('★ 「结束委托」action 三重门禁齐全（委托在册 / 阵营 / lend_lease_can_finish）',
+		/action === 'finish_lend_lease'/.test(src) &&
+		/dg\.mode !== 'single'/.test(src) &&
+		/!lend_lease_can_finish\(game\)/.test(src) &&
+		/finish_us_lend_lease\(game, dg, lend_lease_nat\(dg\)\)/.test(src))
+	ok('★ 预算清空只置 played（不提前归还）',
+		/统一手动归还/.test(src) && /_dg\.played = true/.test(src))
 }
 
 console.log('\n' + (fails.length ? 'FAILED' : 'ALL PASS') + '  ' + pass + ' ok, ' + fails.length + ' fail')

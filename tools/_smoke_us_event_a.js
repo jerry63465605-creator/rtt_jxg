@@ -1,6 +1,11 @@
 /* 美国 EVENT 卡 A 组冒烟自检（2026-10-10）
  * 覆盖：17524/17525/16300/16301/16302/16806/17533/17527/17534/17536（17537 延后）
  * 复用事件声明式引擎 resolve_event_card，验证 10 张配置可解析、needs 不抛错、实际结算兵种 +1。
+ *
+ * 【B47 重写】16300《火炬行动》是 4 选 1 的 choice 卡（先战/先建 × 陆军/海军），
+ * 旧脚本按无 choice 的 eff.steps 取步骤（恒为空）且不传 arg.choice，
+ * 于是什么事都没执行、却仍报 "resolve ok"。现让 runCount 支持 choice 参数：
+ * 传 arg.choice 并用 eff.choice[choice] 作为步骤集，与 resolve_event_card 同源。
  */
 const path = require('path')
 const MOD = path.resolve('server-official/public/quartermaster-sub-wars')
@@ -28,18 +33,27 @@ function homeAdj(g, nation, wantSea) {
 }
 
 // 通用：构造 arg 并解析，断言 ok + 兵种 +N（build/recruit 步骤）
-function runCount(id, expArmy, expNavy) {
+// choice != null 时按【声明式二选一/四选一】卡口径：传 arg.choice、用 eff.choice[choice]。
+function runCount(id, expArmy, expNavy, choice) {
 	console.log('\n=== ' + id + ' ===')
 	const g = fresh(); ensureHomeArmy(g, '美国')
 	const eff = I.card_effect_of(id)
 	ok(id + ' 配置存在', !!eff)
 	ok(id + ' actor=美国', eff && eff.actor === '美国')
+	if (choice != null) {
+		ok(id + ' choice 分支存在', !!(eff && eff.choice && eff.choice[choice]) &&
+			Array.isArray(eff.choice[choice]), eff && eff.choiceLabels)
+	}
+	const needArg = choice != null ? { choice } : {}
 	let need
-	try { need = I.event_card_needs(g, '美国', id, {}) } catch (e) { ok(id + ' needs 抛错', false, e.message); return }
+	try { need = I.event_card_needs(g, '美国', id, needArg) } catch (e) { ok(id + ' needs 抛错', false, e.message); return }
 	ok(id + ' needs 不抛错', true)
 
 	const arg = { spaces: [] }
-	const steps = eff.steps || []
+	if (choice != null) arg.choice = choice
+	const steps = (choice != null && eff && eff.choice)
+		? (eff.choice[choice] || [])
+		: (eff.steps || [])
 	let prev = null
 	for (let i = 0; i < steps.length; i++) {
 		const st = steps[i]
@@ -115,7 +129,7 @@ function test17536() {
 
 runCount('17524', 1, 0)  // 建陆军 + 陆战
 runCount('17525', 1, 1)  // 建陆军 + 建海军
-runCount('16300', 1, 0)  // 建陆军 + 陆战(非洲北部)
+runCount('16300', 1, 0, 2)  // 4 选 1：分支2「先建设 1 支陆军，再对<非洲北部>发起陆战」
 runCount('16301', 0, 1)  // 海战 + 建海军
 runCount('16302', 0, 1)  // 建海军 + 陆战(西欧)
 runCount('16806', 1, 1)  // 征召陆军 + 征召海军
