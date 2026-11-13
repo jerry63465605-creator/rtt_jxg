@@ -5,14 +5,14 @@
 	<meta name="theme-color" content="#444">
 	<meta charset="UTF-8">
 	<title>军需官 · 次要战场</title>
-	<link rel="stylesheet" href="/fonts/fonts.css?v=20261112a">
-	<link rel="stylesheet" href="/common/client.css?v=20261112a">
+	<link rel="stylesheet" href="/fonts/fonts.css?v=20261112n">
+	<link rel="stylesheet" href="/common/client.css?v=20261112n">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261112a">
-	<script defer src="/common/client.js?v=20261112a"></script>
-	<script defer src="data.js?v=20261112a"></script>
-	<script defer src="layout.js?v=20261112a"></script>
-	<script defer src="play.js?v=20261112a"></script>
+	<link rel="stylesheet" href="play.css?v=20261112n">
+	<script defer src="/common/client.js?v=20261112n"></script>
+	<script defer src="data.js?v=20261112n"></script>
+	<script defer src="layout.js?v=20261112n"></script>
+	<script defer src="play.js?v=20261112n"></script>
 </head>
 <body>
 
@@ -473,6 +473,31 @@
 	</div>
 </div>
 
+<!--
+	【D1/P14】前奏「检视 → 选牌」弹窗：对照 15229 script_modal 的 UI 行为
+	（card-grid 真实卡图 + 点选高亮 .sel + 0/N + 确认，无取消）。
+	用独立容器，避免与正式 pending_script 状态机互相踩。
+-->
+<div id="prelude_peek_modal" class="modal hide">
+	<div class="modal-box">
+		<div class="modal-head">
+			<span id="prelude_peek_title" class="modal-title">检视牌堆</span>
+		</div>
+		<div class="modal-section">
+			<div class="modal-label">
+				<span id="prelude_peek_name" class="modal-name">候选</span>
+				<span id="prelude_peek_note" class="modal-hint">0/N</span>
+			</div>
+			<div id="prelude_peek_grid" class="card-grid"
+				style="max-height:52vh;overflow:auto"></div>
+		</div>
+		<div class="modal-foot">
+			<button id="prelude_peek_confirm" class="action primary"
+				onclick="confirm_prelude_peek()">确认选择</button>
+		</div>
+	</div>
+</div>
+
 	<!--
 		【2026-11-01】左置常驻日志栏。
 		  · 结构对齐右侧 aside：标题条 + 可滚动正文，占 body 网格第 1 列。
@@ -506,6 +531,14 @@
 
 	<!-- 卡牌区（仿 PoG 的 .panel-list：手牌在地图下方） -->
 	<div class="panel-list">
+		<!-- 【D1/P10】前奏手牌区：在正式 Hand 面板【上方】独立成块，卡片用真实卡图。
+		     非前奏局由 update_prelude_hand_zone() 隐藏，不占用版面。 -->
+		<div class="panel" id="prelude_hand_wrap" style="display:none">
+			<div class="panel-head">
+				前奏手牌区 <span id="prelude_hand_note"></span>
+			</div>
+			<div class="panel-body" id="prelude_hand_cards"></div>
+		</div>
 		<div class="panel" id="hand_wrap">
 			<div class="panel-head">
 				Hand <span id="hand_limit_note"></span>

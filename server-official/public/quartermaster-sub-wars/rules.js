@@ -20,7 +20,10 @@ const AXIS_ROLE = 'Axis'
 const ALLIES_ROLE = 'Allies'
 
 exports.roles = [AXIS_ROLE, ALLIES_ROLE]
-exports.scenarios = ['Standard']
+/* 【D1/P2】'Episode 2' 为前奏期（门前惊雷）；Standard 保持原行为不变 */
+/* 【D1/P13】'Episode 2 德国单国' = 逐国验收用的测试场景：只有德国有前奏牌，
+ * 其余国家牌库/手牌为空（由 P11 轮转跳过）。创建页直接渲染本数组，无需改模板。 */
+exports.scenarios = ['Standard', 'Episode 2', 'Episode 2 德国单国']
 
 /* ============================================================
  * 一、连通性引擎
@@ -1474,6 +1477,1355 @@ function init_nation_deck(game, nation) {
 	game.decks[nation] = game.decks[nation].map(inst)
 	game.card_inst = game.card_inst || {}
 	game.card_inst[nation] = seq
+}
+
+/* ============================================================
+ * 【D1 / P2 · 2026-11-12】前奏统一实现层
+ *
+ * 分层：prelude_compiler.js（编译层）产出四套同构独立表 → 本层只负责
+ * 牌堆/手牌/全局紧张度/段窗口/阶段骨架，执行动作时复用既有原子。
+ * 与卡牌效果调用分开：既有 EVENT_EFFECTS / ECHO_EFFECTS / STATUS_EFFECTS /
+ * RESPONSE_EFFECT_IMPL 一字不改，派发只在这里查 PRELUDE_* 表。
+ *
+ * 规则口径（docs/easy-rule.md A 节 + 玩家裁定）：
+ *  · 前奏回合只有「行动阶段 + 卡牌阶段」两段，均不可跳过；
+ *  · 卡牌阶段按顺序：弃置所有前奏手牌 → 摸 2 张前奏牌；
+ *  · 不做分数/补给计算，但建造与战斗仍参考补给；
+ *  · 紧张度【全局单值】非负、初值 0；结束条件只有两个。
+ *  · 术语（rtt-turn-system）：「当前前奏回合结束」= 一个国家回合
+ *    （current_nation）；「一轮结束后」= 6 国走完一圈（game.turn）。
+ * ============================================================ */
+const PRELUDE_SCENARIO = 'Episode 2'
+const PRELUDE_TENSION_MAX = 10
+const PRELUDE_PHASE = { ACTION: 'prelude_action', CARDS: 'prelude_cards' }
+/* 【D1/P13】逐国验收配置：场景名 + 单国名。国家名只在这里出现，逻辑不硬编码。
+ * 换国家测时改这一行即可（或测试直调 options.prelude_solo_nation）。 */
+const PRELUDE_SCENARIO_SOLO_DE = 'Episode 2 德国单国'
+const PRELUDE_SOLO_NATION_DE = '德国'
+
+/* DIY 产物是上传链生成的可选数据文件；不存在时前奏只用官方 125 张 */
+let PRELUDE_SPECS = null
+try { PRELUDE_SPECS = require('./prelude_specs.js') } catch (e) { PRELUDE_SPECS = null }
+
+function prelude_on(game) {
+	/* game.opening 期间仍走正常开局（各国抽 10 弃 3 留 7），不能提前切前奏白名单 */
+	return !!(game && game.prelude && game.prelude.enabled &&
+		!game.prelude.ended && !game.opening)
+}
+function prelude_face(id) { return String(inst_card_id(id)) }
+
+/* 官方卡取 cards.js；DIY 卡取 PRELUDE_SPECS 的审计数组（只新增，不覆盖） */
+function prelude_card_obj(game, id) {
+	const face = prelude_face(id)
+	const specs = PRELUDE_SPECS && (PRELUDE_SPECS.PRELUDE_SPECS || [])
+	const diy = specs.find(x => String(x.id) === face)
+	return diy || CARD_BY_ID[face] || null
+}
+
+/* 派发器【一处分支】：按卡面 id 查四套同构独立表 */
+function prelude_effect_of(game, id) {
+	if (!PRELUDE_SPECS) return null
+	const face = prelude_face(id)
+	const tables = ['PRELUDE_EVENT_EFFECTS', 'PRELUDE_RESPONSE_EFFECTS',
+		'PRELUDE_ECON_EFFECTS', 'PRELUDE_STATUS_EFFECTS']
+	for (const t of tables) {
+		const cfg = PRELUDE_SPECS[t] && PRELUDE_SPECS[t][face]
+		if (cfg) return cfg
+	}
+	return null
+}
+
+/* 前奏牌堆：官方 125 张按国建堆（不改 init_nation_deck 的排除判据）+ 可选 DIY 卡 */
+function init_prelude_decks(game) {
+	const p = game.prelude
+	/* 【D1/P13】单国验收：只给指定国家建前奏牌堆，其余国家牌库/手牌/弃牌全空。
+	 * P11 轮转会跳过「牌库+手牌皆空」的国家，故每轮仍回到该国，不会卡在空国回合。 */
+	const solo = game.options && game.options.prelude_solo_nation
+	for (const n of ORDER_OF_NATIONS) {
+		if (p.decks[n]) continue                    /* 幂等：on_turn_start 会反复调 */
+		if (solo && n !== solo) {
+			p.decks[n] = []
+			p.hands[n] = []
+			p.discard[n] = []
+			continue
+		}
+		const ids = []
+		for (const c of CARDS) {
+			if (c.nation !== n) continue
+			if (c.deck !== 'PRELUDE' && c.deck !== 'ARMAMENT') continue
+			ids.push(c.id)
+		}
+		let seq = 0
+		const inst = x => String(x) + '#' + (++seq)
+		p.decks[n] = shuffle_deterministic(ids.map(inst),
+			(game.seed || 1) + nation_hash(n) + 7919)
+		p.hands[n] = []
+		p.discard[n] = []
+	}
+	if (PRELUDE_SPECS) {
+		for (const s of (PRELUDE_SPECS.PRELUDE_SPECS || [])) {
+			/* 【D1/P13】单国验收时不给其它国家注入 DIY 卡 */
+			if (solo && s.nation !== solo) continue
+			if (!p.decks[s.nation]) continue
+			const inst = String(s.id) + '#diy'
+			if (p.decks[s.nation].indexOf(inst) < 0) p.decks[s.nation].push(inst)
+		}
+	}
+}
+
+function prelude_draw(game, nation, n) {
+	const p = game.prelude
+	const d = p.decks[nation] || (p.decks[nation] = [])
+	const h = p.hands[nation] || (p.hands[nation] = [])
+	let got = 0
+	while (got < n && d.length) { h.push(d.shift()); got++ }
+	return got
+}
+function prelude_discard_all(game, nation) {
+	const p = game.prelude
+	const h = p.hands[nation] || []
+	const dis = p.discard[nation] || (p.discard[nation] = [])
+	const n = h.length
+	while (h.length) dis.push(h.shift())
+	return n
+}
+function prelude_deck_discard(game, nation, n) {
+	const p = game.prelude
+	const d = p.decks[nation] || []
+	const dis = p.discard[nation] || (p.discard[nation] = [])
+	let got = 0
+	while (got < n && d.length) { dis.push(d.shift()); got++ }
+	return got
+}
+function prelude_top(game, nation) {
+	return (game.prelude.decks[nation] || [])[0] || null
+}
+
+/* 【D1/P11】弃指定的 1 张前奏手牌 + 弃牌堆顶 1 张；弃完留在 ACTION 再行动一次 */
+function prelude_discard_one(game, nation, cardId) {
+	const p = game.prelude
+	const h = p.hands[nation] || []
+	const i = h.indexOf(cardId)
+	if (i >= 0) {
+		h.splice(i, 1)
+		;(p.discard[nation] || (p.discard[nation] = [])).push(cardId)
+	}
+	prelude_deck_discard(game, nation, 1)
+	game.log.push('【前奏】弃置 1 张前奏手牌和牌堆顶 1 张牌（可再执行 1 次行动阶段）')
+	return true
+}
+
+/* 结束条件【只有两个】（玩家裁定） */
+function check_prelude_end(game, at_round_end) {
+	if (!prelude_on(game)) return false
+	const p = game.prelude
+	let reason = null
+	if (at_round_end) {
+		const empty = ORDER_OF_NATIONS.every(n =>
+			!(p.hands[n] || []).length && !(p.decks[n] || []).length)
+		if (empty) reason = '一轮结束后所有玩家的手牌与前奏牌堆皆空'
+	}
+	if (!reason && p.tension >= PRELUDE_TENSION_MAX)
+		reason = '紧张度达到 ' + PRELUDE_TENSION_MAX + '，当前前奏回合结束'
+	if (!reason) return false
+	p.ended = true
+	p.end_reason = reason
+	p.pending = null
+	game.log.push('【前奏结束】' + reason)
+	/* 前奏是「正式游戏开始前的阶段」：结束后正式局从第 1 轮干净开始，
+	 * 盘面/正式牌堆保留（规则书 :104、:109）。 */
+	game.turn = 1
+	game.nations_done = 0
+	game.turn_phase = PH.RESOURCE
+	game.current_nation = ORDER_OF_NATIONS[0]
+	game.active = faction_role_of_nation(ORDER_OF_NATIONS[0])
+	game.turn_owner = ORDER_OF_NATIONS[0]
+	game.log.push('=== 前奏结束，正式进入第一回合 ===')
+	run_phase_entry(game, game.turn_phase, game.current_nation)
+	return true
+}
+
+/* 编译层是纯函数（只依赖 data.js/cards.js），可在服务端现场编译官方 125 张 */
+let PRELUDE_COMPILER = null
+try { PRELUDE_COMPILER = require('./prelude_compiler.js') } catch (e) { PRELUDE_COMPILER = null }
+
+/* 官方卡现场编译 -> 与 DIY 表同构的 config（segments/mandatory/optional/...） */
+function prelude_compile_official(game, id) {
+	const c = CARD_BY_ID[prelude_face(id)]
+	if (!c || !PRELUDE_COMPILER) return null
+	if (c.deck !== 'PRELUDE' && c.deck !== 'ARMAMENT' &&
+		c.type !== 'PRELUDE' && c.type !== 'ARMAMENT') return null
+	return PRELUDE_COMPILER.compile({
+		id: Number(prelude_face(id)) || 0, nation: c.nation,
+		deck: c.deck, type: c.type, name: c.name, text: c.text,
+	}, { strict: false }).config
+}
+
+function prelude_config_of(game, id) {
+	const diy = prelude_effect_of(game, id)
+	return diy || prelude_compile_official(game, id)
+}
+
+/* ============================================================
+ * 【D1/P5】军备卡 = 响应卡：暗置留场 + 响应栈派发
+ *
+ * 零分流：触发完全交给既有 fire_trigger + request_responses 的事件派发。
+ * 前奏期没有计分/出牌阶段，声明这些 on 的卡自然不触发、留到正式局；
+ * 前奏期有建设/战斗，build/battle/piece_removed 事件照常派发。
+ * 这里只做三件事：暗置、编译层 on → 引擎 on 的映射、effect 适配。
+ * ============================================================ */
+
+/* 编译层 trigger.on → 引擎 request_responses 的 on（配置驱动） */
+const PRELUDE_ON_MAP = {
+	play_start: 'play_start', scoring_start: 'scoring', scoring: 'scoring',
+	play_card: 'play_card', build: 'build', build_or_recruit: 'build',
+	after_build_navy: 'build', after_build_army: 'build',
+	battle: 'battle', after_battle: 'battle', after_land: 'battle',
+	after_sea: 'battle', after_sea_only: 'battle',
+	piece_removed: 'piece_removed', attacked: 'status_attacked',
+	status_attacked: 'status_attacked', enemy_action: 'play_card',
+	play_start_nation: 'play_start',
+}
+function prelude_trigger_on_of(cfg) {
+	const trig = cfg.trigger || (cfg.triggers && cfg.triggers[0]) ||
+		(cfg.segments && cfg.segments[0] && cfg.segments[0].triggers &&
+			cfg.segments[0].triggers[0])
+	const raw = trig && (trig.on || trig.window)
+	return PRELUDE_ON_MAP[raw] || null
+}
+
+/* fire_trigger 的【一处查表分支】：正式 RESPONSE_EFFECTS 查不到、
+ * 且桌面条目带 prelude:true 时，查前奏同构表（官方军备卡现场编译）。 */
+function prelude_response_trigger_of(game, cardId) {
+	const cfg = prelude_config_of(game, cardId)
+	if (!cfg) return null
+	const on = prelude_trigger_on_of(cfg)
+	if (!on) return null
+	const c = prelude_card_obj(game, cardId)
+	return { name: c ? c.name : String(prelude_face(cardId)),
+		trigger: { on: on, filter: null }, prelude: true }
+}
+
+/* 前奏军备卡暗置：字段与 facedown_response 完全一致（L19720），
+ * 但不复用该原子 —— 它从正式 hands/discard 取牌，前奏卡在 p.hands。 */
+function prelude_facedown(game, nation, cardId) {
+	game.table_responses = game.table_responses || []
+	game.table_responses.push({
+		card_id: cardId,
+		owner_side: faction_of_nation(nation),
+		nation: nation,
+		id: cardId,
+		prelude: true,
+	})
+}
+
+/* resolve_response_choice / trigger_response 的 effect 适配：
+ * 声明式 segments → 响应栈要的函数 (game, side, ctx, choice, extra)。
+ * 首调（choice undefined）遇需选目标的 op 返回 pending 候选；续调按 choice 执行。 */
+function prelude_response_impl(game, face) {
+	const cfg = prelude_config_of(game, face)
+	if (!cfg || !Array.isArray(cfg.segments) || !cfg.segments.length) return null
+	const c = prelude_card_obj(game, face)
+	const name = c ? c.name : String(face)
+	return function (g, side, ctx, choice, extra) {
+		const nation = (ctx && ctx.nation) || first_nation_of_side(side)
+		/* 【D1/P8】58 张军备卡实测全单段；多段卡明确记日志，不静默吞后续段 */
+		if (cfg.segments.length > 1)
+			g.log.push('【前奏】《' + name + '》为多段军备卡，后续段非窗口 op' +
+				'一并执行（含战斗的多步 defer 续打待接入）')
+		const seg = cfg.segments[0]
+		const ops = seg.steps || []
+		const winIdx = ops.findIndex(o => prelude_op_window_kind(o))
+		if (choice === undefined && winIdx >= 0) {
+			const kind = prelude_op_window_kind(ops[winIdx])
+			const cands = prelude_op_candidates(g, nation, ops[winIdx], kind)
+			if (cands.length) return { pending: true, kind: kind,
+				candidates: cands, prompt: '《' + name + '》选择目标',
+				extra: { prelude_step: winIdx } }
+		}
+		const useIdx = (extra && extra.prelude_step != null) ? extra.prelude_step : winIdx
+		for (let i = 0; i < ops.length; i++) {
+			const o = ops[i]
+			const kind = prelude_op_window_kind(o)
+			if (i === useIdx && kind && choice !== undefined) {
+				const cands = prelude_op_candidates(g, nation, o, kind)
+				prelude_apply_op_choice(g, { nation: nation, owner: nation,
+					kind: kind, candidates: cands, op: o, seg: seg,
+					pendingOps: [] }, choice)
+			} else if (!kind) {
+				prelude_run_op(g, nation, o, seg)
+			}
+		}
+		/*
+		 * 【D1/P8】其余段：非窗口 op 一并执行（不再只跑 segments[0]）；
+		 * 窗口 op 仍需玩家选目标，按 rtt-response-stack 铁律必须用 defer 续打，
+		 * 这里只记日志、绝不自动替玩家选。
+		 */
+		for (let si = 1; si < cfg.segments.length; si++) {
+			const s2 = cfg.segments[si]
+			for (const o of (s2.steps || [])) {
+				if (prelude_op_window_kind(o)) {
+					g.log.push('【前奏】《' + name + '》段 ' + si + ' 的 op「' +
+						o.op + '」需分步窗口，defer 续打待接入')
+					continue
+				}
+				prelude_run_op(g, nation, o, s2)
+			}
+		}
+		return { ok: true, desc: '《' + name + '》效果已结算' }
+	}
+}
+
+/*
+ * 【D1/P3】未接线 op 登记表 —— 后续逐卡补 op 只改这张表 + 下面 switch，
+ * 不要在各处散落「尚未接线」日志。登记理由必须写明缺什么（参数 / 窗口 / 原子），
+ * 便于 P4 按缺口类型批量推进。
+ *
+ * 铁律（rtt-atomic-operations）：凡需玩家选发起单位/目标/牌的 op，
+ * 服务端【不得替玩家选】，一律等分步窗口，不能拿 find_battle_target 之类自动打。
+ */
+const PRELUDE_OP_DEFERRED = {
+	lose_score: '对方失去分数（需指定目标国与计分原子）',
+	peek_and_play: '检视并选择打出（需分步选牌窗口）',
+	peek_reorder: '检视并排序前奏牌堆顶（需分步排序窗口）',
+	shuffle_into_deck: '将 N 张同名卡洗入正式牌堆（需卡名引用上下文）',
+	deploy_air: '部署空军（候选/预检按 can_deploy_air，与增强卡同源；卡面地区限定待编译层补）',
+	add_reserve: '增加后备（需后备区原子）',
+	battle: '发起战斗（需玩家选发起单位/目标，服务端不得替选）',
+	eliminate: '消灭部队（需玩家选目标；消灭敌机须用 seize_air）',
+	choice_attrition_or_skip: '损耗或跳过（需二选一窗口）',
+	execute_action_phase: '额外执行前奏行动阶段（需阶段骨架嵌套）',
+}
+
+/*
+ * 【D1/P4】需要玩家选目标/牌的 op → 统一分步窗口 kind。
+ * 服务端只出候选，绝不替玩家选（rtt-atomic-operations 铁律）；
+ * 挂起字段 p.op_window 随存档落盘、双门禁放行、答完必有出口（rtt-pending）。
+ */
+const PRELUDE_OP_WINDOW = {
+	battle: 'piece',
+	eliminate: 'piece',
+	deploy_air: 'space',
+	peek_reorder: 'choice',
+	peek_and_play: 'card',
+	choice_attrition_or_skip: 'choice',
+	/* 【D1/P5】从正式手牌选 1 张响应卡暗置（18404/18412/18416） */
+	play_response: 'card',
+	/* 【D1/P11】弃 1 手牌 + 弃 1 牌堆顶：玩家手动选要弃的前奏手牌 */
+	discard_prelude_hand: 'card',
+	/* 【D1/P16】段效果「打出 1 张前奏手牌」：多张时由玩家选一张，
+	 * 不再 h.shift() 默认打第一张（14903 C 段等同类卡）。 */
+	play_prelude: 'card',
+}
+
+/*
+ * 【D1/P6】窗口 kind 唯一判定点：静态表 + 按 op.source 的特例。
+ * 「检视弃牌堆」是选一张牌（card），其余检视是「置于顶/底」二选一（choice）。
+ * 所有调用点一律走这里，避免 5 处映射漂移。
+ */
+function prelude_op_window_kind(op) {
+	if (!op) return null
+	/* 【D1/P14】检视+选牌组合里的 peek_reorder 只提供来源/范围，不开顶/底窗口 */
+	if (op.op === 'peek_reorder' && op.silent) return null
+	if (op.op === 'peek_reorder' && op.source === 'discard') return 'card'
+	/*
+	 * 【D1/P20】「建设/征召 1 支海军」等卡面【没写地区】时，与常规建设海军一致：
+	 * 开 space 窗口由玩家点地图选地，而不是 prelude_run_op 记「缺少有效地区，跳过」。
+	 * 卡面已有明确地区/上下文/多选一的（space / context / spaces）仍直接执行，不改。
+	 */
+	if ((op.op === 'build' || op.op === 'recruit') &&
+		op.space == null && !op.context && !op.spaces) return 'space'
+	return PRELUDE_OP_WINDOW[op.op] || null
+}
+
+/* 检视 op 的牌堆来源 → 真实数组（正式牌堆 / 正式弃牌堆 / 前奏牌堆） */
+function prelude_peek_array(game, nation, source) {
+	if (source === 'discard') return game.discard[nation] || []
+	if (source === 'formal') return game.decks[nation] || []
+	return game.prelude.decks[nation] || []
+}
+function prelude_peek_set(game, nation, source, arr) {
+	if (source === 'discard') game.discard[nation] = arr
+	else if (source === 'formal') game.decks[nation] = arr
+	else game.prelude.decks[nation] = arr
+}
+
+/*
+ * 【D1/P8】卡面中文类型名 → cards.js 的 type 枚举（配置驱动，不散落硬编码）。
+ * 映射不到的类型（如「战略卡」全库无对应 type）返回空数组，表示【不过滤】，
+ * 避免把合法候选误筛光。is_card_type 不吃实例 id，调用方先 inst_card_id 归一。
+ */
+const PRELUDE_FILTER_TYPE = {
+	'状态卡': ['STATUS'],
+	'响应卡': ['RESPONSE'],
+	'事件卡': ['EVENT'],
+	'军备卡': ['ARMAMENT'],
+	'建设陆军': ['BASIC'],
+	'战略卡': [],
+}
+function prelude_filter_ok(id, filter) {
+	const types = PRELUDE_FILTER_TYPE[filter]
+	if (!types || !types.length) return true
+	const face = String(inst_card_id(id))
+	return types.some(t => is_card_type(face, t))
+}
+
+/*
+ * 【D1/P18】卡面别名 -> 正式卡 id。
+ * 14905《四年计划》卡面写「[枪支与黄油]」，但正式卡 15234 名为《枪支或黄油》
+ * （「或」非「与」），按名字查不到会记「缺少卡名引用，跳过」、一张都洗不进去。
+ * 卡 id 只在配置表出现，逻辑不硬编码。
+ */
+const PRELUDE_CARD_ALIAS = { '枪支与黄油': 15234 }
+
+/*
+ * 【D1/P20】前奏 space 窗口的唯一「兵种 / 判据 / 执行原子」入口。
+ * 候选（prelude_op_candidates）与执行（prelude_apply_op_choice）都走这里，
+ * 避免「候选按海军算、执行却建成陆军」这类不同源事故。
+ * 建设/征召/部署空军各自复用正式局的权威原子，不另写遍历。
+ */
+function prelude_space_type(op) {
+	return op.op === 'deploy_air' ? 'air'
+		: (op.type === '海军' ? 'navy' : 'army')
+}
+function prelude_space_check(game, nation, sp, op) {
+	const type = prelude_space_type(op)
+	if (op.op === 'deploy_air') return can_deploy_air(game, nation, sp)
+	if (op.op === 'recruit') return can_recruit_at(game, nation, sp, type)
+	return can_build_at(game, nation, sp, type)
+}
+function prelude_space_fn(op) {
+	/* 部署空军也走 build_piece（与增强卡同源）；征召走 recruit_piece */
+	return op.op === 'recruit' ? recruit_piece : build_piece
+}
+
+/*
+ * 【D1/P14】检视范围：卡面没写「前 N 张」时 peek_scope / n 皆为 null → 整堆；
+ * 明写「检视牌堆前 10 张」时按该数量。统一在这里算，避免 4 处各写一套。
+ */
+function prelude_peek_count(game, nation, op, src, useN) {
+	/* 编译层传播了 peek_scope 的「打出/选择」op 用该值（null = 整堆）；
+	 * peek_reorder 自身（useN=true）才用 op.n（卡面「检视牌堆前 N 张」）。
+	 * op.n 在打出类 op 里是「打出几张」，绝不能当检视范围。 */
+	const n = op.peek_scope !== undefined ? op.peek_scope
+		: (useN ? op.n : undefined)
+	if (n === null || n === undefined) return src.length
+	return Math.max(1, Math.min(src.length, n))
+}
+
+/* 【D1/P14】候选带卡图信息（对照 15229 的 card_info），供检视 modal 渲染真实卡图 */
+function prelude_cand_info(game, id) {
+	const c = prelude_card_obj(game, id)
+	return { id: id, name: c ? c.name : String(id),
+		img: c ? c.img : '', type: c ? c.type : 'PRELUDE',
+		text: c ? c.text : '' }
+}
+
+/* 【D1/P14/P16】哪些 op 是「检视/选牌」（走 P14 卡图 modal、不可放弃、空候选跳过整段） */
+function prelude_inspect_op(op) {
+	return op.op === 'peek_and_play' || op.op === 'play_response' ||
+		op.op === 'play_prelude' ||
+		(op.op === 'peek_reorder' && op.source === 'discard')
+}
+
+function prelude_pub_name(game, id) {
+	const c = prelude_card_obj(game, id)
+	return c ? c.name : String(id)
+}
+
+/* 候选一律由现成原子 / 权威状态计算，不自己重写遍历规则 */
+function prelude_op_candidates(game, nation, op, kind) {
+	const p = game.prelude
+	const out = []
+	if (kind === 'piece') {
+		const foe = faction_of_nation(nation)
+		for (const id of Object.keys(game.location || {})) {
+			const sp = Number(game.location[id])
+			if (sp == null || !data.spaces[sp]) continue
+			if (faction_of_nation(game.piece_nation[id]) === foe) continue
+			if (op.op === 'battle' && !battle_initiators(game, nation, sp).length) continue
+			if (op.op === 'eliminate') {
+				if (game.piece_type[id] === 'air' && op.type !== '空军') continue
+				if (op.nation && game.piece_nation[id] !== op.nation) continue
+			}
+			out.push({ id: id, name: data.name_of(sp) + ' · ' +
+				(game.piece_nation[id] || '') + (game.piece_type[id] || '') })
+		}
+	} else if (kind === 'space') {
+		/*
+		 * 【D1/P19】部署空军照增强卡同源口径（15408 山本五十六 / 17514 飞虎队 /
+		 * 15208 齐柏林伯爵号）：必须用 can_deploy_air（air_host_check 同格补给
+		 * 载体 + unit_slot_free），不能用 can_build_at —— 后者只看「相邻」补给
+		 * 陆军，对靠海军搭载的海域空军一律误判非法。候选也不再截断到 16 个，
+		 * 与增强卡遍历全图一致（候选与执行同源，避免「看得见点不中」）。
+		 */
+		for (let sp = 1; sp < data.spaces.length; sp++) {
+			if (!data.spaces[sp]) continue
+			/* 【D1/P20】候选与执行共用 prelude_space_check，兵种/原子不漂移 */
+			const chk = prelude_space_check(game, nation, sp, op)
+			if (chk && chk.ok) out.push({ id: sp, name: data.name_of(sp) })
+		}
+	} else if (kind === 'card') {
+		if (op.op === 'play_response') {
+			/* 【D1/P14】正式牌堆（18412）或正式手牌（18404）整堆候选取响应卡 */
+			const src = op.source === 'formal'
+				? (game.decks[nation] || []) : (game.hands[nation] || [])
+			const list = src.slice(0, prelude_peek_count(game, nation, op, src))
+			for (const id of list) {
+				const face = String(inst_card_id(id))
+				if (!is_card_type(face, 'RESPONSE')) continue
+				out.push(prelude_cand_info(game, id))
+			}
+		} else if (op.op === 'play_prelude') {
+			/* 【D1/P16】候选 = 该国前奏手牌（真实卡图），供 P14 modal 点选打出 */
+			for (const id of (p.hands[nation] || []))
+				out.push(prelude_cand_info(game, id))
+		} else if (op.op === 'peek_reorder') {
+			/* 【D1/P6/P14】按 source 取；整堆或卡面明写「前 N 张」 */
+			const src = prelude_peek_array(game, nation, op.source)
+			for (const id of src.slice(0,
+				prelude_peek_count(game, nation, op, src, true)))
+				out.push(prelude_cand_info(game, id))
+		} else {
+			/* 【D1/P7/P8/P14】继承来源+范围、按卡面类型筛选、候选带卡图 */
+			const src = op.source
+				? prelude_peek_array(game, nation, op.source)
+				: (p.decks[nation] || [])
+			for (const id of src.slice(0,
+				prelude_peek_count(game, nation, op, src))) {
+				if (op.filter && !prelude_filter_ok(id, op.filter)) continue
+				out.push(prelude_cand_info(game, id))
+			}
+		}
+	} else if (kind === 'choice') {
+		if (op.op === 'peek_reorder') {
+			out.push({ id: 'top', name: '按原序置于牌堆顶' })
+			out.push({ id: 'bottom', name: '按原序移到牌堆底' })
+			/* 【D1/P7】卡面「以任意顺序置于前奏牌堆顶或底」：进二级 order 窗口 */
+			out.push({ id: 'custom', name: '自定义顺序（逐张点击）' })
+		} else {
+			out.push({ id: 'attrition', name: '损耗 ' + (op.n || 1) + ' 张前奏牌' })
+			out.push({ id: 'skip', name: '跳过' })
+		}
+	}
+	return out
+}
+
+/* 顺序执行一段的 ops；遇到需窗口的 op 就落挂起并返回 false（后续 ops 排队） */
+function prelude_run_steps(game, nation, ops, seg) {
+	const p = game.prelude
+	const list = ops || []
+	for (let i = 0; i < list.length; i++) {
+		const op = list[i]
+		/* 【D1/P14】检视+选牌组合里的 peek_reorder 只提供来源/范围，
+		 * 既不执行也不开窗（否则多出无卡面依据的「置于顶/底」窗口）。 */
+		if (op.silent) continue
+		/* 【D1/P16】段效果「打出 1 张前奏手牌」只剩 0/1 张时直接执行，
+		 * 不多弹一次选牌窗口（0 张由 prelude_run_op 安全空转）。 */
+		if (op.op === 'play_prelude' && (p.hands[nation] || []).length <= 1) {
+			prelude_run_op(game, nation, op, seg)
+			continue
+		}
+		const kind = prelude_op_window_kind(op)
+		if (kind) {
+			const cands = prelude_op_candidates(game, nation, op, kind)
+			if (!cands.length) {
+				const insp = prelude_inspect_op(op)
+				/* 【D1/P14】玩家口径：检视整堆仍无符合条件 → 跳过该段、留日志 */
+				game.log.push(insp
+					? '【前奏】整堆无符合条件的牌，跳过该段（不建窗口）：' + op.op
+					: '【前奏】op「' + op.op + '」无合法候选，跳过')
+				if (insp) return true
+				continue
+			}
+			const insp = prelude_inspect_op(op)
+			p.op_window = {
+				nation: nation, owner: nation, kind: kind,
+				candidates: cands, op: op, seg: seg || null,
+				pendingOps: list.slice(i + 1),
+				/* 【D1/P14】检视窗口走卡图 modal、不可放弃（15229 口径） */
+				inspect: insp, cancellable: !insp, need: op.n || 1,
+				desc: insp
+					? (op.op === 'play_prelude'
+						? '选择 1 张前奏手牌打出'
+						: op.pick_mode === 'status_play_or_hand'
+							? '检视 ' + (op.peek_scope || 10) +
+								' 张：选状态卡打出，选其它牌加入手牌'
+							: '检视' + (op.source === 'formal' ? '正式牌堆'
+								: op.source === 'discard' ? '弃牌堆' : '前奏牌堆') +
+								'，选择 ' + (op.n || 1) + ' 张' +
+								(op.filter ? '[' + op.filter + ']' : ''))
+					: kind === 'space'
+						/* 【D1/P20】文案由服务端拼（客户端不自己拼），与常规建设海军一致 */
+						? '点地图上高亮的地区，' +
+							(op.op === 'deploy_air' ? '部署' :
+								op.op === 'recruit' ? '征召' : '建设') +
+							' 1 支' + (prelude_space_type(op) === 'air' ? '空军' :
+								prelude_space_type(op) === 'navy' ? '海军' : '陆军')
+						: (PRELUDE_OP_DEFERRED[op.op] || op.op),
+			}
+			game.log.push('【前奏】等待【' + nation + '】选择：' + op.op +
+				'（' + cands.length + ' 个候选' + (insp ? '，整堆' : '') + '）')
+			return false
+		}
+		prelude_run_op(game, nation, op, seg)
+	}
+	return true
+}
+
+/* 玩家选定后执行该 op；所有分支复用现成原子 */
+function prelude_apply_op_choice(game, w, pick) {
+	const p = game.prelude
+	const op = w.op, owner = w.owner
+	/* 【D1/P7】order 窗口的答复是数组，走专用校验，不做单项候选匹配 */
+	if (w.kind !== 'order' &&
+		!w.candidates.some(c => String(c.id) === String(pick))) {
+		game.log.push('【前奏】所选不在候选内，跳过')
+		return
+	}
+	if (w.kind === 'piece') {
+		const sp = Number(game.location[pick])
+		if (op.op === 'battle') {
+			const kind = op.kind === '海战' ? 'sea' : 'land'
+			do_battle(game, owner, sp, pick, kind, {})
+			game.log.push('【前奏】对 ' + data.name_of(sp) + ' 发起' +
+				(kind === 'sea' ? '海战' : '陆战'))
+		} else {
+			if (game.piece_type[pick] === 'air') seize_air(game, owner, sp, pick, {})
+			else eliminate_piece(game, owner, sp, pick)
+			game.log.push('【前奏】处理 ' + data.name_of(sp) + ' 的部队')
+		}
+	} else if (w.kind === 'space') {
+		const isAir = op.op === 'deploy_air'
+		const type = prelude_space_type(op)
+		const sp = Number(pick)
+		/* 【D1/P19/P20】执行前同源预检（与候选同一个 prelude_space_check），
+		 * 防止绕过候选提交非法格；失败给原因，不静默跳过。 */
+		const chk = prelude_space_check(game, owner, sp, op)
+		const verb = isAir ? '部署' : (op.op === 'recruit' ? '征召' : '建设')
+		if (!chk.ok) {
+			/* 空军失败原因保留「部署空军」字样（P19 起的既有文案，实机可读性更好） */
+			game.log.push('【前奏】无法在 ' + data.name_of(sp) + ' ' +
+				(isAir ? '部署空军' : verb) + '：' + chk.reason)
+			return
+		}
+		const fn = prelude_space_fn(op)
+		let ok = 0
+		for (let i = 0; i < (op.n || 1); i++) {
+			const r = fn(game, owner, type, sp)
+			if (r && r.ok) ok++
+		}
+		/* 与正式局/增强卡一致：改棋子后 refresh 重算补给、连通等衍生状态 */
+		if (ok) refresh(game)
+		const zhType = type === 'air' ? '空军' : (type === 'navy' ? '海军' : '陆军')
+		game.log.push('【前奏】在 ' + data.name_of(sp) + ' ' + verb +
+			' ' + ok + ' 支' + zhType)
+	} else if (w.kind === 'card') {
+		/* 【D1/P11】弃 1+1 的选牌答复：弃指定手牌 + 弃牌堆顶 */
+		if (op.op === 'discard_prelude_hand') {
+			prelude_discard_one(game, owner, pick)
+			return
+		}
+		/* 【D1/P16】选中的前奏手牌：从手牌移除后走既有结算链（不再默认第一张） */
+		if (op.op === 'play_prelude') {
+			const h = p.hands[owner] || []
+			const hi = h.indexOf(pick)
+			if (hi < 0) return
+			h.splice(hi, 1)
+			prelude_resolve_card(game, owner, pick)
+			game.log.push('【前奏】打出选中的 1 张前奏手牌')
+			return
+		}
+		if (op.op === 'play_response') {
+			/* 【D1/P7】候选来自正式牌堆顶时，先取到手牌再复用既有暗置原子 */
+			if (op.source === 'formal') {
+				const deck = game.decks[owner] || []
+				const di = deck.indexOf(pick)
+				if (di >= 0) {
+					deck.splice(di, 1)
+					;(game.hands[owner] || (game.hands[owner] = [])).push(pick)
+				}
+			}
+			/* 复用响应卡暗置原子：正式手牌 → 桌面 table_responses（不进弃牌堆） */
+			const r = facedown_response(game, owner, pick, 'hand')
+			/* ★ 牌名保密：暗置语境日志不插值卡名（_smoke_facedown_privacy 静态兜底） */
+			game.log.push('【前奏】暗置 1 张响应卡于桌面（牌面保密）' +
+				(r && r.ok ? '，等待对应时点触发' : '（失败：' + (r && r.reason) + '）'))
+			return
+		}
+		if (op.op === 'peek_reorder') {
+			/* 【D1/P6】检视弃牌堆 = 选一张牌取回手牌（14918） */
+			const src = prelude_peek_array(game, owner, op.source)
+			const i = src.indexOf(pick)
+			if (i < 0) return
+			src.splice(i, 1)
+			;(game.hands[owner] || (game.hands[owner] = [])).push(pick)
+			game.log.push('【前奏】从弃牌堆取回 1 张牌加入手牌')
+			return
+		}
+		/* 【D1/P7】按继承的 source 从对应牌堆取牌 */
+		const src = op.source
+			? prelude_peek_array(game, owner, op.source)
+			: (p.decks[owner] || [])
+		const i = src.indexOf(pick)
+		if (i < 0) return
+		src.splice(i, 1)
+		if (op.op === 'peek_and_play') {
+			if (op.source === 'formal' || op.source === 'discard') {
+				/*
+				 * 【D1/P8】「选择并打出」= 按类型留场，不触发正式牌效果
+				 * （规则书 :129「前奏中正式牌无法触发」）。
+				 * 不走 play_status_card_impl：它会调 apply_status_ongoing +
+				 * request_responses + 出牌配额，等于在前奏期触发正式牌。
+				 */
+				const face = String(inst_card_id(pick))
+				/* 【D1/P18】14907「选状态卡打出 / 选其它牌加入手牌」二选一：
+				 * 状态卡→桌面留场，其余（含响应卡）→正式手牌，不再额外取牌。 */
+				if (op.pick_mode === 'status_play_or_hand') {
+					if (is_card_type(face, 'STATUS')) {
+						;(game.table[owner] || (game.table[owner] = [])).push(pick)
+						game.log.push('【前奏】打出 1 张状态卡于桌面留场（不触发正式效果）')
+					} else {
+						;(game.hands[owner] || (game.hands[owner] = [])).push(pick)
+						game.log.push('【前奏】将选中的 1 张牌加入手牌')
+					}
+				} else if (is_card_type(face, 'STATUS')) {
+					;(game.table[owner] || (game.table[owner] = [])).push(pick)
+					game.log.push('【前奏】打出 1 张状态卡于桌面留场（不触发正式效果）')
+				} else if (is_card_type(face, 'RESPONSE')) {
+					;(game.hands[owner] || (game.hands[owner] = [])).push(pick)
+					facedown_response(game, owner, pick, 'hand')
+					game.log.push('【前奏】暗置 1 张响应卡于桌面（牌面保密）')
+				} else {
+					;(game.hands[owner] || (game.hands[owner] = [])).push(pick)
+					game.log.push('【前奏】取 1 张正式牌加入手牌（不自动打出正式卡）')
+				}
+			} else prelude_resolve_card(game, owner, pick)
+		}
+	} else if (w.kind === 'choice') {
+		if (op.op === 'peek_reorder') {
+			/* 【D1/P7】custom → 二级 order 窗口：候选是牌堆顶 N 张，玩家逐张点顺序 */
+			if (pick === 'custom') {
+				const deck = prelude_peek_array(game, owner, op.source)
+				/* 排序窗口范围按卡面「前 N 张」/默认 3；整堆口径只作用于检视选牌 */
+				const n = Math.max(1, Math.min(10, op.n || 3))
+				const head = deck.slice(0, n)
+				if (!head.length) { game.log.push('【前奏】牌堆顶为空，无牌可排序'); return }
+				p.op_window = {
+					nation: owner, owner: owner, kind: 'order',
+					candidates: head.map(id => ({ id: id, name: prelude_pub_name(game, id) })),
+					op: op, seg: w.seg, pendingOps: w.pendingOps || [],
+					desc: '按点击顺序重排牌堆顶 ' + head.length + ' 张（可只选部分）',
+				}
+				game.log.push('【前奏】等待自定义排序（' + head.length + ' 张）')
+				return
+			}
+			/* 【D1/P6】按 source 操作对应牌堆；排序范围按卡面「前 N 张」/默认 3 */
+			const deck = prelude_peek_array(game, owner, op.source)
+			const n = Math.max(1, Math.min(10, op.n || 3))
+			const head = deck.slice(0, n)
+			if (pick === 'bottom') {
+				prelude_peek_set(game, owner, op.source, deck.slice(n).concat(head))
+				game.log.push('【前奏】牌堆顶 ' + head.length + ' 张移到牌堆底')
+			} else game.log.push('【前奏】牌堆顶 ' + head.length + ' 张保持原序')
+		} else if (pick === 'attrition') {
+			game.log.push('【前奏】损耗 ' + prelude_deck_discard(game, owner, op.n || 1) + ' 张前奏牌')
+		} else game.log.push('【前奏】选择跳过损耗')
+	} else if (w.kind === 'order') {
+		/* 【D1/P7】校验：数组、元素都在候选内、无重复；允许只排一部分（其余保持原序） */
+		const order = Array.isArray(pick) ? pick.map(String) : []
+		const ids = w.candidates.map(c => String(c.id))
+		if (order.some(x => ids.indexOf(x) < 0) ||
+			new Set(order).size !== order.length) {
+			game.log.push('【前奏】自定义顺序含非法或重复项，忽略')
+			return
+		}
+		const src = prelude_peek_array(game, owner, op.source)
+		const head = src.slice(0, ids.length)
+		const byId = x => head.find(id => String(id) === x)
+		const picked = order.map(byId).filter(Boolean)
+		const leftover = head.filter(x => order.indexOf(String(x)) < 0)
+		prelude_peek_set(game, owner, op.source,
+			picked.concat(leftover, src.slice(head.length)))
+		game.log.push('【前奏】按自定义顺序重排牌堆顶 ' + picked.length + ' 张')
+	}
+}
+
+/* 答复 op 窗口：答完继续排队 ops；全跑完再按段窗口决定是否推进 */
+function prelude_answer_op_window(game, pick, skip) {
+	const p = game.prelude
+	const w = p.op_window
+	if (!w) return false
+	if (!skip && pick != null) prelude_apply_op_choice(game, w, pick)
+	else game.log.push('【前奏】放弃 op「' + w.op.op + '」')
+	/* 【D1/P7】choice 选 custom 时会建二级 order 窗口，不能把它清掉 */
+	if (p.op_window && p.op_window !== w) return true
+	const rest = w.pendingOps || []
+	/* 【D1/P6】A 段开窗口时排队的后续必执行段，等本窗口答完再跑 */
+	const afterSegs = w.afterSegs || []
+	p.op_window = null
+	if (!prelude_run_steps(game, w.owner, rest, w.seg)) return true
+	for (const seg of afterSegs) prelude_run_segment(game, w.owner, seg)
+	if (p.op_window) return true        /* 后续段自己又开了窗口 */
+	if (p.phase === PRELUDE_PHASE.ACTION && !p.pending) {
+		/* 【D1/P11】牌库+手牌皆空 → 跳过该国前奏阶段 */
+		const empty = !(p.hands[w.owner] || []).length &&
+			!(p.decks[w.owner] || []).length
+		if (empty) {
+			game.log.push('【前奏】' + w.owner + ' 牌库与手牌皆空，跳过该国前奏阶段')
+			p.phase = PRELUDE_PHASE.CARDS
+			prelude_advance(game)
+		} else if (w.keep_action) {
+			/* 弃 1+1 后：留在 ACTION 再执行 1 次行动阶段 */
+			game.log.push('【前奏】可再执行 1 次行动阶段')
+		} else prelude_advance(game)
+	}
+	return true
+}
+
+/* 段内 op -> 既有原子；未接线的 op 明确登记并记日志，不静默吞掉 */
+function prelude_run_op(game, nation, op, seg) {
+	const p = game.prelude
+	switch (op.op) {
+		case 'gain_score': {
+			const f = faction_of_nation(op.nation || nation)
+			if (f === AXIS) add_axis_score(game, op.n || 0)
+			else if (f === ALLIES) add_allied_score(game, op.n || 0)
+			return true
+		}
+		case 'recruit':
+		case 'build': {
+			const sp = op.space != null ? space_id_of(op.space) : null
+			if (sp == null) { game.log.push('【前奏】' + op.op + ' 缺少有效地区，跳过'); return false }
+			const fn = op.op === 'recruit' ? recruit_piece : build_piece
+			const r = fn(game, nation, op.type === '海军' ? 'navy' : 'army', sp)
+			return !!(r && r.ok)
+		}
+		/* 【P3】计分标记：复用 add_marker（owner/faction 不指定 = 地点级通用） */
+		case 'add_marker': {
+			const sp = op.space != null ? space_id_of(op.space) : null
+			if (sp == null) { game.log.push('【前奏】add_marker 缺少有效地区，跳过'); return false }
+			add_marker(game, sp, op.n || 1, null, null)
+			game.log.push('【前奏】' + (op.space || '') + ' 增加 ' + (op.n || 1) + ' 个计分标记')
+			return true
+		}
+		/* 【P3】持续光环：复用 set_supply_point + refresh/compute_supply */
+		case 'always_supplied':
+		case 'supply_point': {
+			const sp = op.space != null ? space_id_of(op.space) : null
+			if (sp == null) { game.log.push('【前奏】' + op.op + ' 缺少有效地区，跳过'); return false }
+			const fa = faction_of_nation(op.nation || nation)
+			set_supply_point(game, sp, fa, true)
+			refresh(game)
+			compute_supply(game)
+			game.log.push('【前奏】' + (op.space || '') + ' 设为 ' + fa + ' 补给点')
+			return true
+		}
+		/* 【P3】结束中立：复用 end_neutral（含其桌面状态卡/延迟触发语义） */
+		case 'end_neutrality': {
+			const target = op.nation || nation
+			end_neutral(game, target, '前奏卡效果', {})
+			/* end_neutral 无统一返回值，以 game.neutral 状态为准 */
+			const done = !!(game.neutral && game.neutral[target] === false)
+			game.log.push('【前奏】' + target + (done ? ' 结束中立' : ' 本就未中立/无中立规则'))
+			return done
+		}
+		/* 【P3】从弃牌堆取回前奏牌进手牌。【P7】继承同段检视来源后按 source 取牌 */
+		case 'join_hand': {
+			const nTake = op.n || 1
+			let got = 0
+			if (op.source === 'formal' || op.source === 'discard') {
+				const src = prelude_peek_array(game, nation, op.source)
+				const hand = game.hands[nation] || (game.hands[nation] = [])
+				while (got < nTake && src.length) { hand.push(src.shift()); got++ }
+				game.log.push('【前奏】从正式牌堆取 ' + got + ' 张牌加入手牌')
+			} else {
+				const dis = p.discard[nation] || []
+				const h = p.hands[nation] || (p.hands[nation] = [])
+				for (let i = 0; i < nTake && dis.length; i++) { h.push(dis.pop()); got++ }
+				game.log.push('【前奏】从弃牌堆取回 ' + got + ' 张前奏牌加入手牌')
+			}
+			return got > 0
+		}
+		/* 【D1/P4】无需玩家选目标的 op：直接复用现成原子 / 状态记账 */
+		case 'lose_score': {
+			const foe = faction_of_nation(nation) === AXIS ? ALLIES : AXIS
+			if (foe === AXIS) add_axis_score(game, -(op.n || 1))
+			else add_allied_score(game, -(op.n || 1))
+			game.log.push('【前奏】对方失去 ' + (op.n || 1) + ' 分')
+			return true
+		}
+		case 'add_reserve': {
+			const rtype = op.type || '陆军'
+			/*
+			 * 【D1/P8】与正式局棋子上限对齐：复用既有原子 add_army_bonus
+			 * （含 ARMY_BONUS_MAX 按国封顶），由 unit_cap_ok 读 army_bonus_of 生效。
+			 * p.reserves 仍保留前奏期累加记账，另下发同源的 reserves_bonus。
+			 */
+			if (!rtype || /陆军|army/i.test(rtype)) add_army_bonus(game, nation)
+			p.reserves[nation] = (p.reserves[nation] || 0) + (op.n || 1)
+			p.reserves_bonus = p.reserves_bonus || {}
+			p.reserves_bonus[nation] = army_bonus_of(game, nation)
+			game.log.push('【前奏】' + nation + ' 增加 ' + (op.n || 1) +
+				' 支后备（' + rtype + '），正式局陆军上限 +' +
+				p.reserves_bonus[nation])
+			return true
+		}
+		case 'shuffle_into_deck': {
+			/* 卡名来自本段 refs（跨卡组引用），由编译层登记 */
+			const refs = (seg && seg.refs) || []
+			let face = null
+			for (const r of refs) {
+				/* 【D1/P18】卡面别名优先，再按卡名查（14905 -> 15234） */
+				const aliasId = PRELUDE_CARD_ALIAS[r]
+				const hit = aliasId != null
+					? CARD_BY_ID[aliasId]
+					: CARDS.find(c2 => c2.name === r)
+				if (hit) { face = hit.id; break }
+			}
+			if (face == null) {
+				game.log.push('【前奏】shuffle_into_deck 缺少卡名引用，跳过')
+				return false
+			}
+			const deck = game.decks[nation] || (game.decks[nation] = [])
+			for (let i = 0; i < (op.n || 1); i++)
+				deck.push(String(face) + '#pd' + (game.turn || 1) + '_' + i)
+			game.decks[nation] = shuffle_deterministic(deck,
+				(game.seed || 1) + nation_hash(nation) + 313)
+			const realName = (CARD_BY_ID[face] || {}).name || refs[0]
+			game.log.push('【前奏】将 ' + (op.n || 1) + ' 张《' + realName +
+				'》洗入 ' + nation + ' 正式牌堆')
+			return true
+		}
+		case 'execute_action_phase': {
+			p.extra_action = (p.extra_action || 0) + (op.n || 1)
+			game.log.push('【前奏】额外执行 ' + (op.n || 1) + ' 个前奏行动阶段')
+			return true
+		}
+		case 'draw_cards':
+			return prelude_draw(game, nation, op.n || 0) > 0
+		case 'discard':
+			return prelude_discard_all(game, nation) > 0
+		case 'play_prelude_top': {
+			if ((p.__depth || 0) >= 4) { game.log.push('【前奏】连续打出牌堆顶已达上限，停止'); return false }
+			const top = prelude_top(game, nation)
+			if (!top) return false
+			p.__depth = (p.__depth || 0) + 1
+			p.decks[nation].shift()
+			prelude_resolve_card(game, nation, top)
+			p.__depth--
+			return true
+		}
+		case 'play_prelude': {
+			const h = p.hands[nation] || []
+			for (let i = 0; i < (op.n || 1) && h.length; i++)
+				prelude_resolve_card(game, nation, h.shift())
+			return true
+		}
+		case 'attrition_prelude': {
+			const target = op.target === 'all_enemies' ? null : (op.target || nation)
+			if (!target) {
+				for (const n of ORDER_OF_NATIONS)
+					if (faction_of_nation(n) !== faction_of_nation(nation))
+						prelude_deck_discard(game, n, op.n || 1)
+			} else prelude_deck_discard(game, target, op.n || 1)
+			return true
+		}
+		case 'attrition_deck':
+			return prelude_deck_discard(game, op.nation || nation, op.n || 1) > 0
+		default: {
+			const why = PRELUDE_OP_DEFERRED[op.op] || '未登记的 op'
+			game.log.push('【前奏】op「' + op.op + '」暂不执行：' + why)
+			p.unhandled_ops = p.unhandled_ops || {}
+			p.unhandled_ops[op.op] = (p.unhandled_ops[op.op] || 0) + 1
+			return false
+		}
+	}
+}
+
+/* 段级结算：cost 与 steps 只作用于本段；tension 是全局单值 */
+function prelude_run_segment(game, nation, seg) {
+	if (!seg) return
+	const p = game.prelude
+	const cost = seg.cost || {}
+	if (cost.tension) {
+		p.tension = Math.max(0, (p.tension || 0) + cost.tension)
+		game.log.push('【前奏】紧张度 ' + (cost.tension > 0 ? '+' : '') + cost.tension +
+			' → ' + p.tension)
+	}
+	if (cost.score) {
+		const f = faction_of_nation(nation)
+		if (f === AXIS) add_axis_score(game, -cost.score)
+		else if (f === ALLIES) add_allied_score(game, -cost.score)
+	}
+	for (const d of (cost.discard || [])) {
+		const h = p.hands[nation] || []
+		const dis = p.discard[nation] || (p.discard[nation] = [])
+		for (let i = 0; i < (d.n || 0) && h.length; i++) dis.push(h.shift())
+	}
+	/* 【D1/P4】改为分步执行器：需玩家选目标的 op 会落 p.op_window 并排队后续 ops */
+	prelude_run_steps(game, nation, seg.steps || [], seg)
+	/* 6601 范式：带 [持续] 的段落 persistent 列表，按 once_per_turn 记账 */
+	if (seg.effectMode === 'ongoing')
+		p.persistent.push({ nation: nation, seg: seg.index, tags: seg.tags || [],
+			turn: game.turn, current_nation: game.current_nation,
+			/* 【D1/P4】持续段本体：供每回合 once_per_turn 重跑（P5 再接响应栈派发） */
+			segObj: seg })
+}
+
+/* 打出一张前奏牌：mandatory 立即执行；B/C 段开窗等待答复 */
+function prelude_resolve_card(game, nation, cardId) {
+	const p = game.prelude
+	const cfg = prelude_config_of(game, cardId)
+	const c = prelude_card_obj(game, cardId)
+	/* 【D1/P5】军备卡与响应卡一致：打出即【暗置留场待触发】，不执行效果、不进弃牌堆。
+	 * 触发完全交给既有 fire_trigger + request_responses 的事件派发（零分流）。
+	 * ★ 牌名保密：暗置语境的日志不得插值卡名（_smoke_facedown_privacy 静态兜底）。 */
+	if (c && (c.deck === 'ARMAMENT' || c.type === 'ARMAMENT')) {
+		prelude_facedown(game, nation, cardId)
+		game.log.push('【' + nation + '】打出 1 张前奏牌并暗置 1 张军备卡于桌面' +
+			'（牌面保密），等待对应时点触发')
+		return
+	}
+	game.log.push('【' + nation + '】打出前奏牌《' + (c ? c.name : prelude_face(cardId)) + '》')
+	if (!cfg || !Array.isArray(cfg.segments) || !cfg.segments.length) {
+		game.log.push('【前奏】该卡尚无编译配置，仅结算打出')
+	} else {
+		const first = cfg.segments[0]
+		prelude_run_segment(game, nation, first)
+		const waiting = cfg.segments.slice(1)
+		/*
+		 * 【D1/P6】后续段 kind==='mandatory' 是【必执行】，不该弹「是否支付代价」窗口
+		 * （实测 9 张：14905 / 18404 / 18008 / 11305 / 11307 / 17204~17207）。
+		 * 只有 optional / opponentOptOut 才留在 p.pending 等答复。
+		 * 若 A 段已开分步窗口，则把后续必执行段排队到 afterSegs，等窗口答完再跑。
+		 */
+		const needAnswer = []
+		for (const seg of waiting) {
+			if (seg.kind !== 'mandatory') { needAnswer.push(seg); continue }
+			if (p.op_window)
+				p.op_window.afterSegs = (p.op_window.afterSegs || []).concat(seg)
+			else prelude_run_segment(game, nation, seg)
+		}
+		if (needAnswer.length) {
+			/* C 段（对手反制）由卡面指定的对手答复；效果仍归打出方 owner */
+			const w = needAnswer[0]
+			const answerNation = (w.kind === 'opponentOptOut' && w.opponent &&
+				w.opponent !== 'any_enemy') ? w.opponent : nation
+			p.pending = { answerNation: answerNation, owner: nation,
+				card: cardId, name: c ? c.name : '', segments: needAnswer, index: 1 }
+			/*
+			 * 【D1/P16】对手反制代价 = 弃 N 张【正式手牌】（玩家 14903 口径）：
+			 * 候选随存档落盘，view 层只下发给答复方阵营。答复时由
+			 * prelude_answer_segment 校验并逐张 discard_card，弃完才归还 owner。
+			 */
+			const odNeed = w.kind === 'opponentOptOut' && w.opponentCost &&
+				Number(w.opponentCost.discard)
+			if (odNeed > 0) {
+				p.pending.opponentDiscard = {
+					nation: answerNation, need: odNeed,
+					candidates: (game.hands[answerNation] || [])
+						.map(id => prelude_cand_info(game, id)),
+				}
+				game.log.push('【前奏】等待【' + answerNation + '】选 ' + odNeed +
+					' 张正式手牌弃置（或选择不阻止）')
+			} else game.log.push('【前奏】等待【' + answerNation +
+				'】决定是否支付后续段代价')
+		}
+	}
+	;(p.discard[nation] || (p.discard[nation] = [])).push(cardId)
+}
+
+/*
+ * 【D1/P17】旧存档兼容：P16 之前建立的段窗口 p.pending 里没有 opponentDiscard
+ * （实测 game=21：`opponentCost.discard=2` 仍在、但 `hasOpponentDiscard=false`），
+ * 重启不会给旧存档补字段，于是 view 下发 null、客户端通用弃牌 UI 不出现。
+ * 这里按首段惰性补建（幂等；只在缺失时建一次，不写日志避免 view 重复污染）。
+ */
+function prelude_ensure_opponent_discard(game) {
+	const p = game.prelude
+	const pend = p && p.pending
+	if (!pend) return null
+	if (pend.opponentDiscard) return pend.opponentDiscard
+	const seg = (pend.segments || [])[0]
+	const need = seg && seg.kind === 'opponentOptOut' &&
+		seg.opponentCost && Number(seg.opponentCost.discard)
+	if (!(need > 0) || !pend.answerNation) return null
+	pend.opponentDiscard = {
+		nation: pend.answerNation, need: need,
+		candidates: (game.hands[pend.answerNation] || [])
+			.map(id => prelude_cand_info(game, id)),
+	}
+	return pend.opponentDiscard
+}
+
+/* 段窗口答复：B 段我方支付才执行；C 段对手不支付才执行（方向相反） */
+function prelude_answer_segment(game, pay, arg) {
+	const p = game.prelude
+	/* 【D1/P17】旧存档在答复时也补建一次，保证校验/弃牌路径同样可用 */
+	prelude_ensure_opponent_discard(game)
+	const pend = p.pending
+	if (!pend || !pend.segments.length) return false
+	/* 【D1/P6】防御：pending 里若残留 mandatory 段，直接执行、不询问 */
+	while (pend.segments.length && pend.segments[0].kind === 'mandatory') {
+		prelude_run_segment(game, pend.owner, pend.segments.shift())
+		pend.index = (pend.index || 1) + 1
+	}
+	if (!pend.segments.length) {
+		p.pending = null
+		if (p.phase === PRELUDE_PHASE.ACTION && !p.op_window) prelude_advance(game)
+		return true
+	}
+	/*
+	 * 【D1/P16】支付代价 = 真的弃掉候选里的 N 张【正式手牌】。
+	 * 校验：数量恰好、按实例 id 去重、都在该国正式手牌里；
+	 * 不合法则保留窗口（绝不「点一下就算付了」），弃完才往下结算归还。
+	 */
+	if (pay && pend.opponentDiscard) {
+		const od = pend.opponentDiscard
+		const cards = (arg && arg.cards) || []
+		const hand = game.hands[od.nation] || []
+		if (cards.length !== od.need ||
+			new Set(cards.map(String)).size !== cards.length ||
+			!cards.every(id => hand.indexOf(id) >= 0)) {
+			game.log.push('【前奏】所选弃牌不合法（需 ' + od.need +
+				' 张不同的正式手牌），窗口保留')
+			return true
+		}
+		for (const id of cards) discard_card(game, od.nation, id)
+		pend.opponentDiscard = null
+		game.log.push('【前奏】【' + od.nation + '】弃置 ' + cards.length +
+			' 张正式手牌作为代价')
+	}
+	const seg = pend.segments[0]
+	const execute = seg.kind === 'opponentOptOut' ? !pay : pay
+	if (execute) prelude_run_segment(game, pend.owner, seg)
+	else game.log.push('【前奏】后续段未执行' +
+		(seg.kind === 'opponentOptOut' ? '（对手已支付代价阻止）' : '（未支付代价）'))
+	pend.segments = pend.segments.slice(1)
+	pend.index = (pend.index || 1) + 1
+	if (!pend.segments.length) {
+		p.pending = null
+		/* 【D1/P16】显式归还：答复方操作结束，控制权回到打出方 */
+		game.log.push('【前奏】段窗口结算完成，操作权归还【' + pend.owner + '】')
+		/* 【D1/P4】若还有 op 分步窗口未答，先等它；否则进入卡牌阶段 */
+		if (p.phase === PRELUDE_PHASE.ACTION && !p.op_window) prelude_advance(game)
+	}
+	return true
+}
+
+/* 前奏两段：行动阶段只写日志（玩家三选一）；卡牌阶段自动「弃光手牌 → 摸 2 张」 */
+function prelude_run_phase(game) {
+	const p = game.prelude
+	const n = game.current_nation
+	if (p.phase === PRELUDE_PHASE.ACTION) {
+		game.log.push('—— 前奏 · 第 ' + game.turn + ' 轮 · ' + n + ' · 行动阶段 ——')
+		/*
+		 * 【D1/P4】军备卡持续段：按「国家 + 段 + 轮」记账，每回合最多重跑一次
+		 * （沿用 STATUS 的 once_per_turn 口径）。只重跑【不需要分步窗口】的 op，
+		 * 避免持续段反弹出多个挂起窗口；响应栈派发留 P5。
+		 */
+		p.persistent_used = p.persistent_used || {}
+		for (const rec of (p.persistent || [])) {
+			if (rec.nation !== n) continue
+			const key = rec.nation + ':' + rec.seg + ':' + game.turn
+			if (p.persistent_used[key]) continue
+			p.persistent_used[key] = true
+			const ops = ((rec.segObj && rec.segObj.steps) || [])
+				.filter(o => !prelude_op_window_kind(o))
+			for (const o of ops) prelude_run_op(game, rec.nation, o, rec.segObj)
+			game.log.push('【前奏】持续段生效（' + rec.nation + ' 段' + rec.seg +
+				'，一次性 op ' + ops.length + ' 项）')
+		}
+		return
+	}
+	const dropped = prelude_discard_all(game, n)
+	const drew = prelude_draw(game, n, 2)
+	game.log.push('—— 前奏 · ' + n + ' · 卡牌阶段 —— 弃置前奏手牌 ' +
+		dropped + ' 张，摸 ' + drew + ' 张前奏牌')
+}
+
+/* 前奏阶段推进：ACTION → CARDS → 下一个国家；两段都不可跳过 */
+function prelude_advance(game) {
+	const p = game.prelude
+	const prev = game.current_nation
+	/* 【D1/P5】响应栈未决（含跨阵营让权）时冻结阶段推进，
+	 * 等 response_reconcile_active 归还操作权后由下一次动作驱动。 */
+	if (top_response_frame(game)) {
+		game.log.push('【前奏】等待桌面响应卡结算，暂不推进阶段')
+		return { nation_changed: false, phase: p.phase,
+			turn_changed: false, nation: prev }
+	}
+	/* 【D1/P15】回退提议待确认：冻结阶段推进，避免内部续跑改
+	 * active / current_nation，踩到 do_propose_rollback 交给对方的操作权。 */
+	if (game.rollback_proposal) {
+		game.log.push('【前奏】回退提议待确认，暂不推进阶段')
+		return { nation_changed: false, phase: p.phase,
+			turn_changed: false, nation: prev }
+	}
+	if (p.phase === PRELUDE_PHASE.ACTION) {
+		/* 【D1/P4】额外行动阶段：消耗一次机会，留在 ACTION 再跑一次（不进卡牌阶段） */
+		if (p.extra_action > 0) {
+			p.extra_action--
+			prelude_run_phase(game)
+			game.log.push('【前奏】执行额外的行动阶段（剩余 ' + p.extra_action + ' 次）')
+			return { nation_changed: false, phase: p.phase,
+				turn_changed: false, nation: prev }
+		}
+		/* 【D1/P11】乙口径：卡牌阶段不再自动执行，等玩家点「继续」 */
+		p.phase = PRELUDE_PHASE.CARDS
+		game.log.push('—— 前奏 · ' + game.current_nation +
+			' · 卡牌阶段（点击「继续」执行：弃光手牌 → 摸 2 张）——')
+		return { nation_changed: false, phase: p.phase, turn_changed: false, nation: prev }
+	}
+	p.phase = PRELUDE_PHASE.ACTION
+	/* 条件①：紧张度达到 10，当前前奏回合结束时 */
+	if (check_prelude_end(game, false))
+		return { nation_changed: false, phase: p.phase, turn_changed: false, nation: prev }
+	let turn_changed = false
+	/* 【D1/P11】轮转时循环跳过「牌库+手牌皆空」的国家（最多 6 国，防死循环） */
+	let guard = 0
+	while (guard++ < ORDER_OF_NATIONS.length) {
+		game.nations_done = (game.nations_done || 0) + 1
+		const ni = ORDER_OF_NATIONS.indexOf(game.current_nation)
+		game.current_nation = ORDER_OF_NATIONS[(ni + 1) % ORDER_OF_NATIONS.length]
+		game.active = faction_role_of_nation(game.current_nation)
+		game.turn_owner = game.current_nation
+		if (game.nations_done >= ORDER_OF_NATIONS.length) {
+			game.nations_done = 0
+			game.turn = (game.turn || 1) + 1
+			p.rounds = (p.rounds || 0) + 1
+			turn_changed = true
+			/* 条件②：一轮结束后所有玩家手牌与牌堆皆空 */
+			check_prelude_end(game, true)
+			on_turn_start(game)
+		}
+		if (!prelude_on(game)) break
+		if (!(p.hands[game.current_nation] || []).length &&
+			!(p.decks[game.current_nation] || []).length) {
+			game.log.push('【前奏】' + game.current_nation +
+				' 牌库与手牌皆空，跳过该国前奏阶段')
+			continue
+		}
+		break
+	}
+	if (prelude_on(game)) prelude_run_phase(game)
+	return { nation_changed: true, phase: p.phase,
+		turn_changed: turn_changed, nation: game.current_nation }
+}
+
+/* 前奏动作入口（双门禁之二）：与 build_actions 下发的前奏动作一一对应 */
+function prelude_do_action(game, current, side, action, arg) {
+	const p = game.prelude
+	arg = arg || {}
+	const n = game.current_nation
+	/* 【D1/P4】op 分步窗口优先于段窗口（两者可能同卡并存） */
+	if (p.op_window) {
+		const w = p.op_window
+		if (faction_role_of_nation(w.nation) !== current) {
+			game.log.push('【前奏】只有【' + w.nation + '】可以选择')
+			return game
+		}
+		if (action === 'prelude_op_pick') {
+			/* 【D1/P7】order 窗口的答复是顺序数组，其余窗口是单个 id */
+			const ans = w.kind === 'order'
+				? (arg.order != null ? arg.order : [])
+				: (arg.pick != null ? arg.pick : arg.id)
+			prelude_answer_op_window(game, ans, false)
+		} else if (action === 'prelude_op_skip') {
+			/* 【D1/P14】双门禁之二：检视窗口不可放弃，服务端也拒绝 */
+			if (w.cancellable === false)
+				game.log.push('【前奏】检视窗口不可放弃，请选择一张牌')
+			else prelude_answer_op_window(game, null, true)
+		} else game.log.push('【前奏】op 窗口未决：请先选择或放弃')
+		return game
+	}
+	if (p.pending) {
+		if (faction_role_of_nation(p.pending.answerNation) !== current) {
+			game.log.push('【前奏】只有【' + p.pending.answerNation + '】可以答复段窗口')
+			return game
+		}
+		if (action === 'prelude_pay' || action === 'prelude_skip')
+			prelude_answer_segment(game, action === 'prelude_pay', arg)
+		else game.log.push('【前奏】段窗口未决：请先选择支付或放弃')
+		return game
+	}
+	if (faction_role_of_nation(n) !== current) {
+		game.log.push('【前奏】当前不是你的前奏回合')
+		return game
+	}
+	if (action === 'prelude_next') {
+		/* 【D1/P11】乙口径：点「继续」才执行卡牌阶段（弃光手牌 → 摸 2 张），
+		 * 然后推进到下一个国家。 */
+		if (p.phase === PRELUDE_PHASE.CARDS) prelude_run_phase(game)
+		prelude_advance(game)
+		return game
+	}
+	if (p.phase !== PRELUDE_PHASE.ACTION) {
+		game.log.push('【前奏】当前是卡牌阶段，请点「继续」推进')
+		return game
+	}
+	if (action === 'prelude_play_hand') {
+		const h = p.hands[n] || (p.hands[n] = [])
+		const id = arg.card || h[0]
+		const i = h.indexOf(id)
+		if (i < 0) { game.log.push('【前奏】手牌中没有该牌'); return game }
+		h.splice(i, 1)
+		/* 【D1/P12】玩家纠正口径：打出牌后【不摸牌】（撤销 P11 的补牌逻辑）。
+		 * 卡牌阶段的「弃光手牌 → 摸 2 张」仍保留（规则书 :121-123）；
+		 * 打出【牌堆顶】后 shift 露出新顶也保留 —— 那不是摸牌。 */
+		prelude_resolve_card(game, n, id)
+	} else if (action === 'prelude_play_top') {
+		const top = prelude_top(game, n)
+		if (!top) { game.log.push('【前奏】前奏牌堆已空'); return game }
+		p.decks[n].shift()
+		prelude_resolve_card(game, n, top)
+	} else if (action === 'prelude_discard_1_1') {
+		const h = p.hands[n] || []
+		const d = p.decks[n] || []
+		/* 【D1/P11】牌库或前奏手牌为空时不可选择此项（与 build_actions 同源） */
+		if (!h.length || !d.length) {
+			game.log.push('【前奏】牌库或前奏手牌为空，不能选择「弃 1 手牌 + 弃 1 牌堆顶」')
+			return game
+		}
+		/* 手牌 >1 时用分步窗口让玩家点卡选牌；只有 1 张时直接弃 */
+		if (h.length > 1 && !arg.card) {
+			p.op_window = {
+				nation: n, owner: n, kind: 'card',
+				candidates: h.map(id => {
+					const c = prelude_card_obj(game, id)
+					return { id: id, name: c ? c.name : String(id) }
+				}),
+				op: { op: 'discard_prelude_hand', n: 1 }, seg: null,
+				pendingOps: [], keep_action: true,
+				desc: '选择要弃置的 1 张前奏手牌（同时弃牌堆顶 1 张）',
+			}
+			game.log.push('【前奏】等待选择要弃置的前奏手牌')
+			return game
+		}
+		const pick = arg.card || h[0]
+		if (h.indexOf(pick) < 0) {
+			game.log.push('【前奏】所选牌不在前奏手牌中')
+			return game
+		}
+		prelude_discard_one(game, n, pick)
+		/* 规则书 :120 —— 弃完再执行 1 次行动阶段（留在 ACTION，不推进）；
+		 * 牌库+手牌皆空则跳过该国前奏阶段。 */
+		if (!(p.hands[n] || []).length && !(p.decks[n] || []).length) {
+			game.log.push('【前奏】' + n + ' 牌库与手牌皆空，跳过该国前奏阶段')
+			p.phase = PRELUDE_PHASE.CARDS
+			prelude_advance(game)
+		} else game.log.push('【前奏】可再执行 1 次行动阶段')
+		return game
+	} else {
+		game.log.push('【前奏】未知动作 ' + action)
+		return game
+	}
+	/* 打出一张牌即完成行动阶段；段窗口 / op 分步窗口未决时都不推进，
+	 * 答完由对应的 answer 自动推进。【D1/P6】补 !p.op_window：P6 起后续
+	 * mandatory 段不再建 p.pending，只靠 op_window 判断会漏判而提前进卡牌阶段。 */
+	if (!p.pending && !p.op_window) prelude_advance(game)
+	return game
 }
 
 /* 去掉实例后缀，取回牌面 id */
@@ -10967,7 +12319,11 @@ function fire_trigger(game, on, ctx) {
 	const responses = game.table_responses || []
 	for (const r of responses) {
 		const faceId = inst_card_id(r.card_id)
-		const eff = RESPONSE_EFFECTS[faceId]
+		/* 【D1/P5】派发器一处查表分支：正式响应卡查 RESPONSE_EFFECTS；
+		 * 前奏军备卡（暗置时带 prelude:true）查前奏同构表 / 现场编译。
+		 * 这不是「按阶段分流」—— 所有 on 一律走下面的同一套事件匹配。 */
+		const eff = RESPONSE_EFFECTS[faceId] ||
+			(r.prelude ? prelude_response_trigger_of(game, r.card_id) : null)
 		if (!eff || !eff.trigger) continue
 		/* 【2026-10-17】trigger.on 支持数组（如 ['build','recruit']）：建设或征召卡同时监听 */
 		const _on = eff.trigger.on
@@ -24626,6 +25982,8 @@ function phase_resource(game, nation) {
 }
 
 function phase_supply(game, nation) {
+	/* 【D1/P2】前奏期不做分数与补给结算（规则书 :127）；建造/战斗仍参考补给 */
+	if (prelude_on(game)) return
 	/*
 	 * 【2026-09-25 bug 修复】代表团机制同样适用于补给阶段。
 	 *
@@ -25777,7 +27135,18 @@ function score_of_bloc(game, space, nation, bloc, occupants) {
  *   · 英国阶段连带算法国、美国阶段连带算中国
  */
 function phase_scoring(game, nation, opts) {
+	/* 【D1/P2】前奏期不执行分数结算（规则书 :127） */
+	if (prelude_on(game)) return
 	opts = opts || {}
+	/*
+	 * 【D1/P5】计分阶段时点派发：正式 RESPONSE_EFFECTS 无 'scoring' 监听者（实测 0 张），
+	 * 故对正式局零影响；只有前奏期暗置留场的阶段型军备卡会命中。
+	 * 前奏期已被上面的 prelude_on 早退 —— 阶段型卡「留到正式局才触发」是
+	 * 阶段本身不存在的自然结果，不写任何分流代码。
+	 * __afterIntercept 续跑路径不再重复派发。
+	 */
+	if (!opts.__afterIntercept)
+		request_responses(game, 'scoring', { nation: nation }, false)
 	/*
 	 * 【2026-11-05 · 15353】计分阶段入口：先对「本阶段将自动生效的德国状态卡」逐张询问。
 	 *
@@ -26419,10 +27788,18 @@ function do_opening_discard(game, current, arg) {
 	 * 放在 turn_start 武装之前，保证补进来的牌在本回合任何窗口都已在手。
 	 */
 	grant_ger_boosters(game)
-	/* turn_start 武装卡窗口在正式首回合开始时触发（原 on_turn_start 的职责） */
-	offer_armed_effects(game, 'turn_start', {})
-	run_phase_entry(game, game.turn_phase, game.current_nation)
-	game.log.push('=== 初始阶段结束，正式进入第一回合 ===')
+	/* 【D1/P2】前奏期：不派发正式 turn_start 武装卡（规则书 :129 正式牌无法触发），
+	 * 直接进入「行动阶段」两段骨架；turn_phase 保持 PH.RESOURCE 不污染 7 阶段机。 */
+	if (prelude_on(game)) {
+		game.prelude.phase = PRELUDE_PHASE.ACTION
+		prelude_run_phase(game)
+		game.log.push('=== 初始阶段结束，进入前奏期（Episode 2）===')
+	} else {
+		/* turn_start 武装卡窗口在正式首回合开始时触发（原 on_turn_start 的职责） */
+		offer_armed_effects(game, 'turn_start', {})
+		run_phase_entry(game, game.turn_phase, game.current_nation)
+		game.log.push('=== 初始阶段结束，正式进入第一回合 ===')
+	}
 	return game
 }
 
@@ -26457,6 +27834,8 @@ function maybe_advance_after_skip_play(game) {
  * 6 国都跑完则回合 +1。
  */
 function advance_phase(game) {
+	/* 【D1/P2】前奏期完全绕开 7 阶段状态机，改走两段骨架 */
+	if (prelude_on(game)) return prelude_advance(game)
 	const i = phase_index(game.turn_phase)
 	const nation = game.current_nation
 
@@ -26901,6 +28280,27 @@ function create_empty_game_state(seed, scenario) {
 		 * 注意：RTT 的 state.phase 是它自己的字段，这里用 turn_phase 区分
 		 */
 		turn_phase: PH.RESOURCE,
+		/*
+		 * 【D1/P2】前奏统一实现层状态（随存档 JSON 落盘，不靠惰性兜底）。
+		 * enabled 由 setup 按 scenario/options 决定；其余字段只在 enabled 时使用。
+		 * tension 是【全局单值】非负（玩家裁定）；ended 后不再走前奏阶段骨架。
+		 */
+		prelude: {
+			enabled: false,
+			decks: {}, hands: {}, discard: {},
+			tension: 0,
+			persistent: [],
+			phase: 'action',
+			rounds: 0,
+			ended: false,
+			deck_top_visible: true,
+			pending: null,
+			/* 【D1/P4】统一分步窗口（候选由服务端算好，随存档落盘） */
+			op_window: null,
+			reserves: {},
+			extra_action: 0,
+			used_victims: {},
+		},
 		/* 行动顺序国家（回合内部轮转，非 RTT role） */
 		current_nation: ORDER_OF_NATIONS[0],
 		/* 本回合已轮过的国家数：0..6，到 6 表示本国回合结束 */
@@ -27146,6 +28546,27 @@ exports.setup = function (seed, scenario, options) {
 	game.options = {
 		ger_boost_ardennes: !!(options && options.ger_boost_ardennes),
 		ger_boost_strategy: !!(options && options.ger_boost_strategy),
+		/* 【D1/P2】双入口：创建对局页选 scenario='Episode 2' 或测试直调 options.prelude。
+		 * 【D1/P13】单国验收场景同样启用前奏。 */
+		prelude: scenario === PRELUDE_SCENARIO ||
+			scenario === PRELUDE_SCENARIO_SOLO_DE || !!(options && options.prelude),
+		/* 【D1/P13】单国验收：只给一国建前奏牌堆；测试可直调 options.prelude_solo_nation
+		 * 换国家，传 null / 不传 = 恢复正常 6 国。 */
+		prelude_solo_nation: scenario === PRELUDE_SCENARIO_SOLO_DE
+			? PRELUDE_SOLO_NATION_DE
+			: ((options && options.prelude_solo_nation) || null),
+	}
+	if (game.options.prelude) {
+		game.prelude.enabled = true
+		init_prelude_decks(game)
+		/* 规则书 :111 —— 正常开局流程之后，各国摸 2 张前奏牌 */
+		for (const n of ORDER_OF_NATIONS) prelude_draw(game, n, 2)
+		const soloN = game.options.prelude_solo_nation
+		game.log.push('【前奏】Episode 2 开局：' +
+			(soloN ? '单国验收（仅' + soloN + '）' : '各国') +
+			'摸 2 张前奏牌，紧张度 0')
+		if (soloN) game.log.push('【前奏】单国验收：仅【' + soloN +
+			'】有前奏牌，其余国家牌库/手牌为空（轮转自动跳过）')
 	}
 
 	/* 开局：无部队，海峡全部按默认归属 */
@@ -29091,6 +30512,85 @@ exports.view = function (state, current) {
 			faction_of_nation(game.pending_ask.nation) === faction_of_nation(my_nation))
 			? game.pending_ask : null,
 
+		/*
+		 * 【D1/P2】前奏视图：牌堆顶「始终对自己可见」（规则书 :128），但
+		 * 沿用 rules.js:18991 的三个暗区保密口径 —— 敌方只给张数，绝不给卡面。
+		 * 判定由服务端算好，客户端只照抄，不二次拼（rtt-avoid-hardcode）。
+		 */
+		prelude: (() => {
+			if (!game.prelude || !game.prelude.enabled) return null
+			const p = game.prelude
+			/* 【D1/P17】旧存档兼容：view 时惰性补建对手弃牌候选（幂等） */
+			prelude_ensure_opponent_discard(game)
+			const hands = {}, deckCounts = {}, tops = {}
+			for (const n of ORDER_OF_NATIONS) {
+				const isOwn = faction_role_of_nation(n) === current
+				deckCounts[n] = (p.decks[n] || []).length
+				hands[n] = isOwn
+					? (p.hands[n] || []).map(id => {
+						const c = prelude_card_obj(game, id)
+						/* 【D1/P10】补 type：客户端 build_card_elt 用 c.type 生成卡图元素样式 */
+						return { id: id, name: c ? c.name : '',
+							text: c ? c.text : '', img: c ? c.img : '',
+							type: c ? c.type : 'PRELUDE' }
+						})
+						: (p.hands[n] || []).length
+						const top = prelude_top(game, n)
+						const tc = top ? prelude_card_obj(game, top) : null
+						/* 【D1/P10】牌堆顶也要下发 img/type，客户端才能铺真实卡图（牌面仍只对己方） */
+						tops[n] = (isOwn && top)
+						? { id: top, name: tc ? tc.name : '', text: tc ? tc.text : '',
+						img: tc ? tc.img : '', type: tc ? tc.type : 'PRELUDE' }
+						: null
+			}
+			return {
+				enabled: true, ended: p.ended, phase: p.phase,
+				tension: p.tension, tension_max: PRELUDE_TENSION_MAX,
+				rounds: p.rounds, end_reason: p.end_reason || null,
+				deck_top_visible: p.deck_top_visible,
+				deck_counts: deckCounts, hands: hands, deck_top: tops,
+				/* 【D1/P3】军备卡持续段明细（不含卡面信息，可给双方） + 未接线 op 诊断 */
+				persistent_count: (p.persistent || []).length,
+				persistent: (p.persistent || []).map(x => ({
+					nation: x.nation, seg: x.seg, tags: x.tags || [],
+					turn: x.turn, current_nation: x.current_nation,
+				})),
+				unhandled_ops: p.unhandled_ops || {},
+				/* 【D1/P4】候选只下发给答复方；对手只见「等待谁」 */
+				op_window: p.op_window
+					? (faction_role_of_nation(p.op_window.nation) === current
+						? { nation: p.op_window.nation, owner: p.op_window.owner,
+							kind: p.op_window.kind, op: p.op_window.op.op,
+							desc: p.op_window.desc, candidates: p.op_window.candidates,
+							remaining: (p.op_window.pendingOps || []).length,
+							/* 【D1/P14】检视 modal 所需：是否检视 / 能否放弃 / 需选几张 */
+							inspect: !!p.op_window.inspect,
+							cancellable: p.op_window.cancellable !== false,
+							need: p.op_window.need || 1 }
+						: { waiting: p.op_window.nation })
+					: null,
+				reserves: p.reserves || {},
+				/* 【D1/P8】与正式局 unit_cap_ok 同源的后备加成 */
+				reserves_bonus: p.reserves_bonus || {},
+				extra_action: p.extra_action || 0,
+				/* 【D1/P21】触发代价候选只下发给义务方阵营（牌面保密，不给对手弹无用框） */
+			trigger_cost: (p.trigger_cost &&
+				faction_role_of_nation(p.trigger_cost.nation) === current)
+				? p.trigger_cost : null,
+			pending: p.pending ? {
+					answerNation: p.pending.answerNation,
+					owner: p.pending.owner,
+					name: p.pending.name,
+					kind: (p.pending.segments[0] || {}).kind || null,
+					desc: (p.pending.segments[0] || {}).semantics || '',
+					/* 【D1/P16】弃牌候选只给答复方阵营；对手只见 null（牌面保密） */
+					opponentDiscard: (p.pending.opponentDiscard &&
+						faction_role_of_nation(p.pending.answerNation) === current)
+						? p.pending.opponentDiscard : null,
+				} : null,
+			}
+		})(),
+
 		/* ---- 手牌 ---- */
 		my_nation: my_nation,
 		/* 【2026-10-31 调试】手牌视角 override（按阵营），供调试面板回显当前选择 */
@@ -30421,6 +31921,78 @@ function view_intercept_target(ctx, fallbackWindow) {
 
 function build_actions(game, side, is_my_turn, pendingBattle, pendingTrigger) {
 	/*
+	 * 【D1/P2】前奏期：单一判据收口，只给当前行动国所属阵营下发前奏动作。
+	 * 与 17543 排他挂起同款做法（放在外层、先于 inner 的所有分支），
+	 * 避免「客户端看得见、do_action 守卫却拒」的假绿。
+	 */
+	/* 【D1/P5】响应栈未决时让出白名单给正式响应分支（trigger/pass/resolve），
+	 * 否则客户端看得见前奏按钮、点了却被拒（白名单死锁）。 */
+	/*
+	 * 【D1/P21】前奏军备卡触发代价挂起：总闸，压过响应栈/前奏其它分支。
+	 * 只放行义务方的 prelude_trigger_discard，避免用 trigger/pass_response
+	 * 跳过代价（照 17555 挂起期间排他返回的做法）。
+	 */
+	if (game.prelude && game.prelude.enabled && game.prelude.trigger_cost) {
+		const tc = game.prelude.trigger_cost
+		const ra = { log: 1 }
+		if (faction_of_nation(tc.nation) === side) ra.prelude_trigger_discard = 1
+		game.block_reason = '前奏：军备卡触发前须【' + tc.nation +
+			'】弃置 1 张正式手牌'
+		return ra
+	}
+	if (prelude_on(game) && !top_response_frame(game)) {
+		const p = game.prelude
+		/*
+		 * 【D1/P15】回退提议挂起期间：只放行 cancel / accept / reject，
+		 * 不下发任何 prelude_* 动作。判据与正式局回退段（L31890）完全同源：
+		 * by_side 是阵营常量。否则客户端看得见按钮、点了却被 do_action 拒，
+		 * 或提议被前奏动作冲掉（实测 prelude_next 曾绕过门禁生效）。
+		 */
+		if (game.rollback_proposal) {
+			const rb = { log: 1 }
+			if (game.rollback_proposal.by_side === side) rb.cancel_rollback = 1
+			else { rb.accept_rollback = 1; rb.reject_rollback = 1 }
+			return rb
+		}
+		const acts = { log: 1 }
+		/* side 是阵营常量（'axis'/'allies'），不是 RTT role 名（'Axis'/'Allies'） */
+		const ownerSide = faction_of_nation(game.current_nation)
+		/* 【D1/P4】op 分步窗口优先于段窗口（双门禁之一） */
+		if (p.op_window) {
+			if (faction_of_nation(p.op_window.nation) === side) {
+				acts.prelude_op_pick = 1
+				/* 【D1/P14】检视窗口不可放弃（15229 口径：摊开看过不能取消） */
+				if (p.op_window.cancellable !== false) acts.prelude_op_skip = 1
+			}
+			game.block_reason = '前奏：等待【' + p.op_window.nation +
+				'】选择 ' + p.op_window.op.op
+		} else if (p.pending) {
+			if (faction_of_nation(p.pending.answerNation) === side) {
+				acts.prelude_pay = 1
+				acts.prelude_skip = 1
+			}
+			game.block_reason = '前奏：等待【' + p.pending.answerNation +
+				'】决定是否支付《' + p.pending.name + '》后续段代价'
+		} else if (p.phase === PRELUDE_PHASE.ACTION && ownerSide === side) {
+			acts.prelude_play_hand = 1
+			acts.prelude_play_top = 1
+			/* 【D1/P11】牌库或前奏手牌为空时不可选择「弃 1+1」 */
+			const pn = game.current_nation
+			if ((p.hands[pn] || []).length && (p.decks[pn] || []).length)
+				acts.prelude_discard_1_1 = 1
+		} else if (p.phase === PRELUDE_PHASE.CARDS && ownerSide === side) {
+			acts.prelude_next = 1
+		}
+		/* 【D1/P15】无提议时：轮到本方且有回退点 → 放行 propose_rollback。
+		 * is_my_turn / rollback_points_of 与正式局回退段（L31893）同源，
+		 * 保证「白名单给了、do_propose_rollback 也收得下」。 */
+		if (!game.game_over && is_my_turn && rollback_points_of(game).length)
+			acts.propose_rollback = 1
+		if (!game.game_over && !game.rollback_proposal && !game.__internal_depth)
+			for (const k of DEBUG_ACTION_KEYS) acts[k] = 1
+		return acts
+	}
+	/*
 	 * 【2026-11-11 · 玩家口径】"立刻窗口"排他挂起（当前仅 17543《雷达》）。
 	 *
 	 * 【为什么放在外层、且在 build_actions_inner 之前】
@@ -30755,6 +32327,61 @@ function internal_action(game, role, action, arg) {
 function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+	/*
+	 * 【D1/P21】前奏军备卡触发代价：弃 1 张正式手牌后重放 trigger_response。
+	 * 必须放在【前奏动作分发守卫之前】——响应栈未决时守卫会冻结一切
+	 * prelude_* 动作，放在后面会「弹框能选、点了被拒」的死锁。
+	 * 范式照 17555：前置代价 + discard_card + 一次性跳过标记 + internal_action 重放。
+	 */
+	if (action === 'prelude_trigger_discard') {
+		const p = game.prelude
+		const tc = p && p.trigger_cost
+		if (!tc) { game.log.push('【前奏】当前没有待支付的触发代价'); return game }
+		if (faction_of_nation(tc.nation) !== side) {
+			game.log.push('【前奏】只有【' + tc.nation + '】可支付触发代价')
+			return game
+		}
+		const cards = (arg && arg.cards) || []
+		const hand = game.hands[tc.nation] || []
+		if (cards.length !== tc.need ||
+			new Set(cards.map(String)).size !== cards.length ||
+			!cards.every(id => hand.indexOf(id) >= 0)) {
+			game.log.push('【前奏】所选弃牌不合法（需 ' + tc.need +
+				' 张不同的正式手牌），窗口保留')
+			return game
+		}
+		for (const id of cards) discard_card(game, tc.nation, id)
+		/* 弃的是手牌 -> 不写卡名（与 17555 同口径） */
+		game.log.push('【前奏】已弃置 ' + cards.length +
+			' 张正式手牌，军备卡触发继续')
+		const resume = tc.resume
+		p.trigger_cost = null
+		refresh(game)
+		if (resume) {
+			game.__skip_prelude_trigger_cost = true
+			try {
+				return internal_action(game, resume.role || current,
+					resume.action, resume.arg) || game
+			} finally { delete game.__skip_prelude_trigger_cost }
+		}
+		return game
+	}
+	/*
+	 * 【D1/P2】前奏动作在所有正式期守卫之前分发（双门禁之二）。
+	 * 放在这里而不是各守卫里逐个豁免，避免「白名单给了、入口却拒」的假绿。
+	 */
+	/* 【D1/P15】提议挂起时【不要】在这里提前 return：让动作继续走到下面的
+	 * rollback_proposal 统一门禁被拒，否则前奏动作会绕过「除四动作外一律不接」，
+	 * 实测能把 prelude_action 推到 prelude_cards、把回退提议冲掉。 */
+	if (prelude_on(game) && !game.rollback_proposal &&
+		String(action).indexOf('prelude_') === 0) {
+		/* 【D1/P5】响应栈未决：让权期间冻结前奏动作，避免两套 active 写者互踩 */
+		if (top_response_frame(game)) {
+			game.log.push('【前奏】等待桌面响应卡结算，暂不处理前奏动作')
+			return game
+		}
+		return prelude_do_action(game, current, side, action, arg)
+	}
 	/*
 	 * 【2026-11-07 · B28】调试动作 = 开发期检视，属"带外操作"。
 	 * 它在下面多处"错过即失效"逻辑里都要豁免（armed 窗口 / 拦截队列 /
@@ -31508,6 +33135,8 @@ function do_action(state, current, action, arg) {
 		 * （与 build_actions 预算分支的放行一一对应）。
 		 */
 		resolve_japan_delegate: 1, us_depression_discard: 1, resolve_us_political_play: 1,
+		/* 【D1/P21】必须回答的前奏触发代价挂起，不能被预算冻结挡住 */
+		prelude_trigger_discard: 1,
 		log: 1,
 	}
 	if (game.event_budget && !BUDGET_ALLOWED[action] &&
@@ -32081,7 +33710,9 @@ function do_action(state, current, action, arg) {
 			game.log.push('所选目标不在《' + pc.name + '》的合法候选内')
 			return game
 		}
-		const impl = RESPONSE_EFFECT_IMPL[pc.card_face]
+		/* 【D1/P5】正式卡走既有表；前奏军备卡由适配工厂生成同签名 effect */
+		const impl = RESPONSE_EFFECT_IMPL[pc.card_face] ||
+			prelude_response_impl(game, pc.card_face)
 		let intercepted = false
 		if (impl) {
 			try {
@@ -32494,7 +34125,37 @@ function do_action(state, current, action, arg) {
 				continue
 			}
 			const c = { card_id: f.card_id, card_face: f.card_face, name: f.name, owner_side: f.owner_side }
-			const impl = RESPONSE_EFFECT_IMPL[c.card_face]
+			/* 【D1/P5】首调（无 choice）：前奏军备卡由适配工厂提供同签名 effect */
+			const impl = RESPONSE_EFFECT_IMPL[c.card_face] ||
+				prelude_response_impl(game, c.card_face)
+			/*
+			 * 【D1/P21】前奏军备卡触发前先付代价（照 17555 前置代价范式）。
+			 * 判据：正式响应表没有该 face、但 prelude_response_impl 认得 -> 前奏军备卡。
+			 * 有正式手牌 -> 挂 trigger_cost 等玩家选 1 张弃掉，弃完由
+			 * prelude_trigger_discard 重放本次 trigger_response；
+			 * 无正式手牌 -> 直接 attrition_cards 损耗 1，继续正常触发。
+			 * __skip_prelude_trigger_cost 是一次性标记，防重放时二次挂起。
+			 */
+			const _isPreludeArm = !RESPONSE_EFFECT_IMPL[c.card_face] && !!impl &&
+				game.prelude && game.prelude.enabled
+			if (action === 'trigger_response' && _isPreludeArm &&
+				!game.__skip_prelude_trigger_cost && !game.prelude.trigger_cost) {
+				const nat = (f.ctx && f.ctx.nation) ||
+					first_nation_of_side(c.owner_side)
+				const hand = game.hands[nat] || []
+				if (hand.length) {
+					game.prelude.trigger_cost = {
+						nation: nat, need: 1,
+						candidates: hand.map(id => prelude_cand_info(game, id)),
+						resume: { role: current, action: 'trigger_response', arg: {} },
+					}
+					game.log.push('【前奏】军备卡触发：须先弃置 1 张正式手牌（弃完自动触发）')
+					return game
+				}
+				const lost = attrition_cards(game, nat, 1)
+				game.log.push('【前奏】军备卡触发：无正式手牌，改为损耗 ' +
+					lost.length + ' 张牌（正式牌堆顶）')
+			}
 			if (impl) {
 				try {
 					game._resp_settling = true
@@ -35339,16 +37000,15 @@ function do_action(state, current, action, arg) {
 		 */
 		if (c && !game.__skip_depression &&
 			(c.type === 'EVENT' || c.type === 'STATUS') &&
-			nation === '美国' && table_has(game, '美国', 17555) &&
+			nation === '美国' && table_has(game, '美国', 17555)) {
+			const _pre = check_phase_for_card(game, nation, c, arg)
 			/*
 			 * 至少还要有 1 张【可弃】的牌：手牌里这张就是要打的那张，
 			 * 长度 > 1 才意味着弃完它之后还能把牌打出去。
 			 * 旧实现（事后补做）只判 > 0，代价前置后必须收紧，
 			 * 否则「手上只剩这一张」会变成「弃了它，卡就再也打不出来」。
 			 */
-			(game.hands['美国'] || []).length > 1) {
-			const _pre = check_phase_for_card(game, nation, c, arg)
-			if (_pre.ok) {
+			if (_pre.ok && (game.hands['美国'] || []).length > 1) {
 				game.us_depression_discard = {
 					nation: '美国', pending: true,
 					/* 弃完后按原参数重放这张卡 */
@@ -35358,6 +37018,17 @@ function do_action(state, current, action, arg) {
 					'（弃完自动结算该卡）')
 				refresh(game)
 				return game
+			}
+			/*
+			 * 【D1/P21 · 玩家口径】手牌不足时不再【跳过代价】，改为损耗 1 张。
+			 * 按 rtt-discard 铁律：损耗 = attrition_cards 磨正式牌堆顶（不洗回、无选择），
+			 * 与「弃牌」绝不混用。预检 _pre.ok 才损耗，避免白磨一张牌。
+			 */
+			if (_pre.ok) {
+				const lost = attrition_cards(game, '美国', 1)
+				game.log.push('【大萧条的余波】美国无可弃手牌，改为损耗 ' +
+					lost.length + ' 张牌（正式牌堆顶）')
+				refresh(game)
 			}
 		}
 
