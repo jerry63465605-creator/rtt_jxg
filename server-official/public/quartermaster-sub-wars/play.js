@@ -2192,8 +2192,17 @@ function update_uk_build_box() {
 	const step = (dg.idx || 0) + 1
 	const total = dg.total || 2
 	highlight_targets({ spaces: cands.map(c => ({ id: c.id, reason: '英国建设' + zh + '候选' })) })
+	/* 【本体 #2】army 步给「用 15341/15342 替换建设陆军」入口。
+	 * 候选由服务端 view.uk_build_delegate.forgo_cards 下发，客户端只回传实例 id；
+	 * 不传 build_card -> 走「不扣手牌、只替换结果」的既有预留口径。 */
+	const forgoBtns = (cur === 'army' ? (dg.forgo_cards || []) : []).map(f => ({
+		label: '用《' + f.name + '》替换建设陆军',
+		onClick: () => send_action('resolve_uk_build_delegate', { forgo: f.id }),
+	}))
 	render_ask_box('民主兵工厂：英国建设' + zh + '（第 ' + step + '/' + total + ' 步）',
-		'点击地图上高亮的地区，英国建设1支' + zh + '。已选顺序：' + orderText + '。', [])
+		'点击地图上高亮的地区，英国建设1支' + zh + '。已选顺序：' + orderText + '。' +
+		(forgoBtns.length ? ' 或用下方状态卡替换：该步视为已建造，继续下一步。' : ''),
+		forgoBtns)
 }
 
 /* 【2026-10-10】17529 摩尔曼斯克运输船队：让权苏联执行建设（多步，交互式点地图）。 */
@@ -7974,13 +7983,14 @@ function render_script_modal(ps) {
 		for (const c of (st.candidates || [])) {
 			const picked = script_sel.indexOf(c.id) >= 0
 			let d
-			if (st.step_kind === 'answer') {
-				/* 暗牌弃置：候选是桌面暗置响应，只显示卡背（身份不可见） */
+			if (st.step_kind === 'answer' && !st.face_up) {
+				/* 17530 等：选择方不是卡主人，保持卡背（身份不可见） */
 				d = build_response_card_elt(null, false)
 				d.title = '暗置的响应（背面向上，身份不明）'
 				d.style.cursor = 'pointer'
 				d.addEventListener('click', () => on_script_pick_card(c.id))
 			} else {
+				/* 14503：英国看自己暗置的响应 -> 服务端已按阵营保密，画真实卡图 */
 				d = card_elt(c, () => on_script_pick_card(c.id))
 			}
 			d.classList.toggle('sel', picked)

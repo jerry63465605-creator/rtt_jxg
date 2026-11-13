@@ -3037,8 +3037,14 @@ function attrition_cards(game, nation, n) {
 		if (!game.decks[nation].length) break
 		const id = game.decks[nation].shift()
 		game.discard[nation].push(id)
-		/* 【2026-10-06】17847 消耗战：苏联[建设陆军]进入弃牌堆后计分 */
-		try { su_attrition_score(game, nation, id) } catch (e) {}
+		/*
+		 * 【本体 #5 / B44】损耗（attrition）不是「打出/弃置」：
+		 * 17847《消耗战》卡面「苏联[建设陆军]进入弃牌堆后 +1 分」，
+		 * 玩家裁定只有【真实打出/弃置】才计分，被动损耗磨出的牌不加分。
+		 * 计分入口只保留 discard_card / push_discard_direct /
+		 * play_build_army_from（17841 近卫军从弃牌堆真实打出）。
+		 * 调试卡 debug_attrition 复用本原子，自动跟随该口径。
+		 */
 		lost.push(id)
 		for (const L of logTargets) L.cards.push(id)
 	}
@@ -6762,8 +6768,9 @@ const STATUS_EFFECTS = {
 		desc: '女性义务兵役',
 	},
 
-	/* ---- 17847 消耗战：存在即生效。苏联[建设陆军]进入弃牌堆后，苏联阵营 +1 分（一回合一次）。
-	 *      效果在 discard_card / attrition_cards 末尾的 su_attrition_score() 实现。 ---- */
+	/* ---- 17847 消耗战：存在即生效。苏联[建设陆军]【打出/弃置】进弃牌堆后，苏联阵营 +1 分（一回合一次）。
+	 *      效果在 discard_card / push_discard_direct / play_build_army_from 的 su_attrition_score() 实现；
+	 *      损耗 attrition_cards 不计分（本体 #5）。 ---- */
 	'17847': {
 		desc: '消耗战',
 	},
@@ -8040,6 +8047,23 @@ function finish_uk_build_delegate(game) {
 	after_card_resolved(game, dg ? dg.return_nation : '美国', '17526')
 }
 
+/*
+ * 【本体 #2 / 17526】委托建造「某一步完成」后的统一推进：
+ * idx++ -> 全部完成则收尾归还美国 -> 否则提示下一步可建性 -> refresh。
+ * 正常建设、显式放弃、15341/15342「替换建设陆军」三条路径共用，
+ * 避免各写一遍顺序机导致 idx/收尾口径漂移。
+ */
+function uk_build_step_done(game) {
+	const dg = game.uk_build_delegate
+	if (!dg) return
+	dg.idx++
+	if (dg.idx >= dg.order.length) { finish_uk_build_delegate(game); return }
+	const nxt = dg.order[dg.idx]
+	if (!uk_build_places(game, dg.nation, nxt).length)
+		game.log.push('【民主兵工厂】当前无处建设' + piece_type_zh(nxt) + '（可点「放弃该兵种」）')
+	refresh(game)
+}
+
 function offer_su_build_delegate(game, fromNation) {
 	if (game.su_build_delegate) return false
 	/*
@@ -8226,9 +8250,60 @@ function resolve_uk_build_delegate(game, arg) {
 		}
 		dg.skipped.push(cur)
 		game.log.push('【民主兵工厂】英国放弃建设' + zh + '（当前全图无处可建）')
-		dg.idx++
-		if (dg.idx >= dg.order.length) { finish_uk_build_delegate(game); return }
-		refresh(game)
+		uk_build_step_done(game)
+		return
+	}
+
+	/*
+	 * 【本体 #2 / 17526】用 15341《澳大利亚劳管局》/ 15342《印度宣布参战》
+	 * 替换「建设 1 支陆军」这一步。
+	 *
+	 * 玩家口径：替换 = 放弃这次打出《建设陆军》（英国本就没打出这张卡，
+	 * 与 activate_status 的「无 build_card -> 不扣手牌、不占名额」预留口径一致），
+	 * 但该 army 步【视为已建造】，按已选顺序继续 navy 步。
+	 *
+	 * 效果复用 run_status_effect 原子与 STATUS_CFG 的既有配置（维持发动口径），
+	 * 不重写征召遍历、不改 status_window_ready。
+	 */
+	if (arg && arg.forgo) {
+		if (cur !== 'army') {
+			game.log.push('【民主兵工厂】替换建设只适用于陆军步')
+			return
+		}
+		const cid = String(arg.forgo)
+		const tab = game.table[dg.nation] || []
+		const inst = tab.find(x => String(x) === cid) ||
+			tab.find(x => String(x).split('#')[0] === cid)
+		if (!inst || !status_active(game, inst, dg.nation)) {
+			game.log.push('【民主兵工厂】所选替换状态卡不在英国桌面或未生效')
+			return
+		}
+		const cfg = status_config_of(inst)
+		const tr = cfg && cfg.trigger
+		if (!tr || !(tr.cost && tr.cost.forgo_build_army)) {
+			game.log.push('【民主兵工厂】所选卡不是「放弃建设陆军」状态卡')
+			return
+		}
+		const usedKey = String(inst)
+		if (tr.once_per_turn && game.status_used &&
+			game.status_used[usedKey] === freq_key(game)) {
+			game.log.push('【民主兵工厂】该替换状态卡本回合已发动')
+			return
+		}
+		const r = run_status_effect(game, dg.nation, inst, tr, {}, null)
+		if (!r || !r.ok) {
+			game.log.push('【民主兵工厂】替换效果未成立：' + ((r && r.reason) || '未知'))
+			return
+		}
+		if (tr.once_per_turn) {
+			game.status_used = game.status_used || {}
+			game.status_used[usedKey] = freq_key(game)
+		}
+		const cObj = inst_card(inst)
+		game.log.push('【民主兵工厂】英国用《' + ((cObj && cObj.name) || cid) +
+			'》替换建设陆军：该步视为已建造，按原顺序继续（' +
+			(r.desc || '已征召') + '）')
+		uk_build_step_done(game)
 		return
 	}
 
@@ -8248,14 +8323,7 @@ function resolve_uk_build_delegate(game, arg) {
 	if (!r.ok) { game.log.push('【民主兵工厂】执行失败：' + r.reason); return }
 	game.log.push('【民主兵工厂】英国在' + data.name_of(tgt) + '建设1支' + zh +
 		'（顺序 ' + (dg.idx + 1) + '/' + dg.order.length + '）')
-	dg.idx++
-	if (dg.idx >= dg.order.length) { finish_uk_build_delegate(game); return }
-	/* 下一步若无地可建：不删除，只提示"可放弃"，由玩家点放弃按钮 */
-	const nxt = dg.order[dg.idx]
-	if (!uk_build_places(game, dg.nation, nxt).length) {
-		game.log.push('【民主兵工厂】当前无处建设' + piece_type_zh(nxt) + '（可点「放弃该兵种」）')
-	}
-	refresh(game)
+	uk_build_step_done(game)
 }
 
 function resolve_su_build_delegate(game, arg) {
@@ -9171,9 +9239,13 @@ function table_has(game, nation, card_id) {
 	return t.some(c => String(inst_card_id(c)) === String(card_id))
 }
 
-/* 【2026-10-06】17847 消耗战：苏联[建设陆军]进入弃牌堆后，苏联阵营 +1 分（一回合一次）。
- * 由 discard_card / attrition_cards 在牌进入弃牌堆时调用。
- * nation 为被弃牌的持有国（苏联）；card_id 为进入弃牌堆的牌实例。 */
+/* 【2026-10-06 / 本体 #5】17847 消耗战：苏联[建设陆军]被【打出或弃置】
+ * 进入弃牌堆后，苏联阵营 +1 分（一回合一次）。
+ * 调用点：discard_card（弃牌）、push_discard_direct（独立流程卡打出后入堆）、
+ * play_build_army_from（17841 近卫军从弃牌堆真实打出）。
+ * 【损耗 attrition_cards 不调用】——按 rtt-discard 术语铁律，损耗是磨牌库顶，
+ * 不是「打出/弃置」，玩家裁定不计分。
+ * nation 为牌的持有国（苏联）；card_id 为进入弃牌堆的牌实例。 */
 function su_attrition_score(game, nation, card_id) {
 	if (nation !== '苏联') return
 	const c = inst_card(card_id)
@@ -22477,6 +22549,21 @@ function resolve_event_card(game, nation, card_id, arg, startStep, extra, opt) {
 			if (one != null) spaces = [one]
 		}
 		if (!spaces.length) spaces = cands.slice(0, need)
+		/*
+		 * 【本体 #9】卡面已写死地区（st.spaces，如 15316《巴尔干》）时，
+		 * 即使该步【当前不合法】（候选为空：还有敌方部队 / 已有本国部队 / 达上限），
+		 * 也要把卡面地区交给权威原子执行，由它给出【真实失败原因】并计入
+		 * stepFails（部分效果未执行），而不是 space=undefined 报「地区不存在」。
+		 *
+		 * 更重要的是口径：后续步不合法绝不能让整卡打不出 —— 首步已执行
+		 * 就算打出成功，收尾的「没有任何可执行的效果」只看 descs 是否为空。
+		 * 实测场景：巴尔干同时有意/德两支敌方陆军，15316 消灭其中一支后
+		 * 征召步仍不合法，卡依然要能打出并完成第一步。
+		 */
+		if (!spaces.length && st.spaces && st.spaces.length) {
+			const fixed = space_id(st.spaces[0])
+			if (fixed != null) spaces = [Number(fixed)]
+		}
 		/* 本次循环主要用第一个；多选在下方的 for 里展开 */
 		const space = spaces[0]
 
@@ -26495,6 +26582,29 @@ function axis_supply_points_held(game) {
  *
  * 返回是否触发了参战。
  */
+/*
+ * 【本体 #3 / 17526】美国「轴心占领 ≥3 补给点」参战判定（幂等）。
+ *
+ * 规则书 docs/easy-rule.md:173 是【状态条件】，原文没有「回合开始时」字样
+ * （只有苏联那条写了「在苏联的回合开始时」）；旧实现把 3 点判定塞在
+ * check_neutral_end_on_turn 里，于是必须等到【美国回合开始】才参战。
+ *
+ * 玩家确认的时点：① 轴心三国（德/日/意）摸牌阶段开始时【主判定】
+ *   ② 日本回合开始时的轮转边界【兜底】③ 美国回合开始【幂等兜底】；
+ *   不加 exports.action 统一出口，避免挂起窗口中途改中立状态打断流程。
+ *
+ * 计数/占领口径沿用 axis_supply_points_held（玩家确认零改动：补给点或带
+ * 国家计分标记、排除轴心自身大本营、任意轴心部队占位）。
+ * 桌面状态卡效果按既有 defer 设计延到美国回合开始结算（{defer:true}）。
+ */
+function check_us_join_by_axis_hold(game) {
+	if (!has_neutral_rule('美国') || !is_neutral(game, '美国')) return false
+	const c = axis_supply_points_held(game)
+	if (c.count < 3) return false
+	return end_neutral(game, '美国',
+		'轴心占领 ' + c.count + ' 个补给点', { defer: true })
+}
+
 function maybe_end_neutral_by_attack(game, victim_nation, attacker_nation) {
 	if (!has_neutral_rule(victim_nation)) return false
 	if (!is_neutral(game, victim_nation)) return false
@@ -26511,11 +26621,15 @@ function maybe_end_neutral_by_attack(game, victim_nation, attacker_nation) {
  *
  * 苏联：回合开始时相邻德/意陆海军 >= 3 -> 参战
  * 美国：进入第 10 回合 -> 参战（另外两条由事件触发）
+ * 【本体 #3】日本回合开始 / 美国回合开始：各做一次「轴心占 3 点」幂等兜底
  *
  * 返回触发参战的国家数组（可能为空）。
  */
 function check_neutral_end_on_turn(game, nation) {
 	const fired = []
+
+	/* 【本体 #3】日本回合开始（德国回合结束后）的轮转边界检测一次 */
+	if (nation === '日本' && check_us_join_by_axis_hold(game)) fired.push('美国')
 
 	if (nation === '苏联' && is_neutral(game, '苏联')) {
 		const cnt = german_italian_adjacent_to_soviet(game)
@@ -26530,11 +26644,10 @@ function check_neutral_end_on_turn(game, nation) {
 			end_neutral(game, '美国', '进入第 10 回合')
 			fired.push('美国')
 		}
-		const c = axis_supply_points_held(game)
-		if (c.count >= 3) {
-			end_neutral(game, '美国', '轴心占领 ' + c.count + ' 个补给点')
-			fired.push('美国')
-		}
+		/* 【本体 #3】美国回合开始仅作【幂等兜底】：正常已在轴心摸牌阶段
+		 * 或日本回合开始触发；这里只堵「意大利摸牌 → 美国回合」之间的漏检。
+		 * 与另两处共用同一函数，避免两份实现/重复触发。 */
+		if (check_us_join_by_axis_hold(game)) fired.push('美国')
 	}
 
 	return fired
@@ -27274,6 +27387,19 @@ function phase_scoring(game, nation, opts) {
 	}
 
 	/*
+	 * 【本体 #4 / B43】大本营被占 -> 跳过计分 = 【加分 + 扣分 + 状态卡自动
+	 * 结算全免】（玩家口径）。判据只按【代表国自己】是否 skipped，不按 bloc
+	 * 任一国家：法国大本营被占是流亡政府的既定状态，若按任一 skipped，
+	 * 英国的印度扣分会被永久免掉，破坏 2026-09-26「英法各判各的」修复。
+	 * 大本营位置全程由上面的 effective_home_base(game, n) 动态判定，
+	 * 不写死任何国家的大本营名或地区 id（迁都等改判同样自动生效）。
+	 */
+	const selfSkipped = results.some(r => r.nation === nation && r.skipped)
+	if (selfSkipped && !(opts && opts.silent))
+		game.log.push('【' + nation + '】大本营被占，跳过计分：' +
+			'加分、扣分与状态卡自动结算一并免除')
+
+	/*
 	 * 【2026-09-26】15340 国家资源动员法（C 类：自动结算）。
 	 *
 	 * 玩家 B4①：计分阶段自动加分，无需点击。
@@ -27291,6 +27417,9 @@ function phase_scoring(game, nation, opts) {
 	 * 现有 4 张 auto 卡已补 trigger_nation：15340→'英国'，15241/15244/6601→'德国'。
 	 */
 	for (const n2 of Object.keys(game.table || {})) {
+		/* 【本体 #4】代表国已跳过计分 -> 整段 auto（含 8601 的 -1、
+		 * 15340 等正向自动加分）都不结算，不当场扣也不当场加 */
+		if (selfSkipped) break
 		for (const cid of (game.table[n2] || [])) {
 			if (!status_active(game, cid, n2)) continue
 			/* 【2026-11-05 · 15353】本回合已被《保持冷静》压制 -> 本阶段不生效 */
@@ -27383,7 +27512,9 @@ function phase_scoring(game, nation, opts) {
 	 *   ③ 苏联参战后不再扣（soviet_india_penalty 内部已判）。
 	 */
 	let indiaPenalty = 0
-	if (nation === '英国') {
+	/* 【本体 #4】英国自己大本营被占 -> 印度扣分【彻底取消】，
+	 * 不顺延到法国 / 其他同盟国计分阶段（仍只在英国阶段结算）。 */
+	if (nation === '英国' && !selfSkipped) {
 		const pen = soviet_india_penalty(game)
 		if (pen.penalty > 0) {
 			indiaPenalty = pen.penalty
@@ -27615,6 +27746,13 @@ function run_phase_entry(game, phase, nation) {
 				' · ' + (ph ? ph.zh : phase) + ' ——')
 		}
 	} catch (e) {}
+	/*
+	 * 【本体 #3】轴心三国（德/日/意）【摸牌阶段开始时】检测美国 3 点参战。
+	 * 放在 switch 之前 = 阶段开始（phase_draw 补牌之前）；幂等，
+	 * 重复进入同一阶段不会重复触发。同盟国摸牌阶段不在此检测。
+	 */
+	if (phase === PH.DRAW && faction_of_nation(nation) === AXIS)
+		check_us_join_by_axis_hold(game)
 	switch (phase) {
 		case 'resource': phase_resource(game, nation); break
 		case 'play': phase_play(game, nation); break
@@ -29102,6 +29240,23 @@ exports.view = function (state, current) {
 					cands.push({ id: i, type: cur, name: data.name_of(i) })
 				}
 			}
+			/*
+			 * 【本体 #2】委托期可用的「放弃建设陆军」替换卡。
+			 * 判据与 view.table_status.forgo_build / register_status_actions 同源：
+			 * 卡归属国 === 当前行动国（委托期已切到英国）+ 状态卡生效 + forgo_build_army。
+			 * 候选只给义务方阵营，客户端不自己拼判定。
+			 */
+			const forgoCands = []
+			if (isNation && cur === 'army' && dg.nation === game.current_nation) {
+				for (const cid of (game.table[dg.nation] || [])) {
+					const cfg = status_config_of(cid)
+					const tr = cfg && cfg.trigger
+					if (!tr || !(tr.cost && tr.cost.forgo_build_army)) continue
+					if (!status_active(game, cid, dg.nation)) continue
+					const co = inst_card(cid)
+					forgoCands.push({ id: cid, name: (co && co.name) || String(cid) })
+				}
+			}
 			return {
 				nation: dg.nation,
 				stage: dg.stage,                     /* 'order' | 'build' */
@@ -29113,6 +29268,8 @@ exports.view = function (state, current) {
 				skipped: dg.skipped.slice(),
 				/* 当前兵种确实无处可建时，客户端给「放弃该兵种」按钮（不再静默删除） */
 				can_skip: !!(isNation && cur && cands.length === 0),
+				/* 【本体 #2】15341/15342 等「替换建设陆军」入口（仅 army 步、仅义务方） */
+				forgo_cards: forgoCands,
 				/* 候选地区只在轮到被让权方时下发（点地图） */
 				candidates: cands,
 				waiting_for: isNation ? null : dg.nation,
@@ -32746,7 +32903,8 @@ function do_action(state, current, action, arg) {
 	 * 【2026-11-07 · B28】调试卡牌面板：对【当前国家】损耗 N 张牌。
 	 *
 	 * 语义与真实损耗完全一致（复用 attrition_cards）：
-	 *   牌库顶 → 弃牌堆，带 17847《消耗战》计分、15251 记录等副作用；
+	 *   牌库顶 → 弃牌堆，带 15251 记录等副作用；【不含 17847 计分】
+	 *   （损耗不计分，本体 #5 与真实损耗同口径）；
 	 *   法国/中国按 NATION_DELEGATE 落到控制国牌库。
 	 * arg: { n }
 	 */
@@ -39289,11 +39447,17 @@ exports.query = function (state, current, query, params) {
 			cands = (game.hands[ps.actor] || []).map(card_info)
 		else if (stepKind === 'answer')
 			/*
-			 * 暗牌弃置（uk/jp_facedown_discard）：候选是桌面【暗置】响应，
-			 * 选择方只能看到卡背、看不到身份。这里只下发实例 id，
-			 * 由客户端渲染成卡背（见 play.js render_script_modal）。
+			 * 【2026-11-14 · 本体 #1 / 14503】暗牌弃置按【选择方是不是卡主人】分流：
+			 * · uk_facedown_discard（14503 提尔比茨号）：英国弃【自己】暗置的响应，
+			 *   英国作为卡主人应看得见是哪张；德国拿不到本 query（上面的阵营守卫
+			 *   已 return null），所以「暗牌」保密只需针对德国。
+			 * · jp_facedown_discard（17530 代号 Magic）：美国弃【日本】暗置的响应，
+			 *   选择方不是卡主人，必须继续只给实例 id、客户端画卡背。
+			 * 判据由服务端下发（face_up），客户端不自己猜 kind。
 			 */
-			cands = candsRaw.map(id => ({ id }))
+			cands = ps.kind === 'uk_facedown_discard'
+				? candsRaw.map(card_info)
+				: candsRaw.map(id => ({ id }))
 		else
 			cands = candsRaw.map(card_info)
 		return {
@@ -39316,6 +39480,8 @@ exports.query = function (state, current, query, params) {
 			 * 客户端只读这个标志决定是否显示取消按钮，不自己猜 kind/stage。
 			 */
 			cancellable: script_cancellable(ps),
+			/* 【本体 #1】英国看自己的暗置响应 -> 真实卡面；其余暗牌仍卡背 */
+			face_up: stepKind === 'answer' && ps.kind === 'uk_facedown_discard',
 			candidates: cands,
 		}
 	}

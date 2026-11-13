@@ -194,9 +194,10 @@ console.log('\n=== D. 静态守卫（客户端第 6 用户 / 白名单 / 版本�
 		/function render_prelude_trigger_cost_box\(\)/.test(pjs) &&
 		/send_action\("prelude_trigger_discard", \{ cards: s\.picked\.slice\(\) \}\)/.test(pjs) &&
 		/军备卡触发代价不可取消/.test(pjs))
-	ok('★ 版本串统一且为 20261112n',
+	/* 【B40】后续本体修复又 bump 过版本串，这里只校验统一性 */
+	ok('★ 版本串统一且非空（P21 当轮为 20261112n）',
 		(phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112n'),
+			.every(v => v && v === (phtml.match(/\?v=([0-9a-z]+)/) || [])[1]),
 		[...new Set((phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3)))])
 }
 
