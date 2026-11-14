@@ -32768,7 +32768,18 @@ function do_action(state, current, action, arg) {
 		 * 这里补上该 delegate（后续若发现 us_china_build / us_merchant 等同类
 		 * delegate 也需要，按同一口径加入即可）。
 		 */
-		!!game.us_theater_delegate
+		!!game.us_theater_delegate ||
+		/*
+		 * 【本体 #10 / B48】★国家技能窗口（national_skill_offer）也是「同一时点」的
+		 * 未决窗口，此前漏列 -> 实测链路：
+		 *   苏联陆战德军 -> 德军被移除 -> 17842《喀秋莎》after_land 武装进 status_instant
+		 *   -> 意大利暗置 17734《罗马尼亚增援》（★响应）触发并结算 -> 意大利技能窗打开
+		 *   -> 玩家点「发动技能 / 跳过技能」-> 入口判 hasSuspended=false -> status_instant 清空
+		 *   -> 喀秋莎 ready true 变 false（置灰 / 点了没反应）。
+		 * 与上方 event_budget / pending_event_step / us_theater_delegate 同款补漏：
+		 * 技能窗存在期间不清，窗口关闭后由玩家真正的独立动作（出牌/弃牌/推进阶段）才清。
+		 */
+		!!game.national_skill_offer
 	const isStatusInternal = action === 'activate_status' || String(action).startsWith('debug_')
 	if (!hasSuspended && !isStatusInternal) {
 		game.status_instant = []

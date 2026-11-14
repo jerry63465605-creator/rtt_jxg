@@ -144,9 +144,10 @@ console.log('\n=== E. 静态守卫 / 预览页同源 / 版本串 ===')
 	ok('★★ 卡牌预览页实时 fetch cards.js（同源，恢复后自动显示正确版本）',
 		/fetch\(name, \{ cache: 'no-store' \}\)/.test(prev) &&
 		/\['data\.js', 'cards\.js', 'rules\.js'\]/.test(prev))
-	ok('★ 资源版本串已 bump 到 20261112q（避免浏览器缓存旧卡表）',
+	/* 打包会继续 bump（现为 20261114a），这里只校验统一且非空 */
+	ok('★ 资源版本串统一且非空（B46 当轮为 20261112q，打包后为 20261114a）',
 		(phtml.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261112q'))
+			.every(v => v && v === (phtml.match(/\?v=([0-9a-z]+)/) || [])[1]))
 	ok('★ 父提交确实是 26f48ba~1 且含 16899（找回依据存在）',
 		(() => {
 			try {
