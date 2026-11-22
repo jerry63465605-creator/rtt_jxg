@@ -16824,20 +16824,24 @@ function find_battle_target(game, nation, kind, opts) {
 }
 
 /*
- * 【B53】指定战斗地区可用的【发起单位】候选（通用版，参照 us_launch_battle_froms）。
- * 供 armed 多步选目标第 2 步用（15212 G7e：选完海域再选发起海军）。
+ * 【B53 / B55】指定战斗地区可用的【发起单位】候选。
+ * 供 armed 多步选目标第 2 步用（15212 G7e：选完海域再选发起单位）。
+ *
+ * 【B55 通用修复】直接复用权威原子 `battle_initiators` —— 它允许【陆军或海军】
+ * 发起任何战斗（只排除空军）。旧实现自己按 kind 收窄成单一兵种
+ * （sea -> navy / land -> army），与权威校验不同源：
+ *   · 实测 德国陆军在〈西欧〉、英国海军在〈北海〉：
+ *     `can_initiate_battle_at` = ok、`battle_initiators` 列出 de_army、
+ *     `do_battle(..., {from:'de_army'})` 真能打掉英国海军，
+ *     但旧 `battle_froms(...,'sea')` 返回 [] -> 玩家选完海域后第 2 步卡死
+ *     （报「该海域没有相邻的补给德国海军」，玩家报障「应该允许陆军对海军发起海战」）。
+ *   · 同一收窄也存在于 us_launch_battle_spaces / us_launch_battle_froms（16801/16802），
+ *     已一并改为与 battle_initiators 同口径。
+ *
+ * kind 参数保留仅为调用方兼容，不再参与兵种过滤。
  */
 function battle_froms(game, nation, space, kind) {
-	const sup = compute_supply(game).in_supply
-	const needType = kind === 'sea' ? 'navy' : 'army'
-	const myF = faction_of_nation(nation)
-	const out = []
-	for (const p in game.location) {
-		if (game.piece_nation[p] !== nation || game.piece_type[p] !== needType) continue
-		if (!sup[p]) continue
-		if (get_connections(game, game.location[p], myF).indexOf(Number(space)) >= 0) out.push(p)
-	}
-	return out
+	return battle_initiators(game, nation, space).map(x => x.id)
 }
 
 /* 【2026-10-22 已并入】原 has_piece(game, nation, type)
@@ -20248,11 +20252,14 @@ function su_air_adjacent_build_spaces(game, base) {
 function us_launch_battle_spaces(game, kind) {
 	const me = '美国'
 	const sup = compute_supply(game).in_supply
-	const needType = kind === 'sea' ? 'navy' : 'army'
+	/* 【B55】与 battle_initiators 同源：陆军或海军都可发起（空军排除）。
+	 * 旧实现 `needType = kind==='sea'?'navy':'army'` 收窄成单一兵种，
+	 * 导致「美国陆军沿岸对敌方海军发起海战」第 1 步地区候选就为空。 */
 	const myF = faction_of_nation(me)
 	const out = []
 	for (const p in game.location) {
-		if (game.piece_nation[p] !== me || game.piece_type[p] !== needType) continue
+		if (game.piece_nation[p] !== me) continue
+		if (game.piece_type[p] !== 'army' && game.piece_type[p] !== 'navy') continue
 		if (!sup[p]) continue
 		for (const nb of get_connections(game, game.location[p], myF)) {
 			if (!data.spaces[nb]) continue
@@ -20267,17 +20274,8 @@ function us_launch_battle_spaces(game, kind) {
 /* 16801/16802：在指定战斗地区旁、可作为"发起单位"的补给美军棋子（多步原子第 2 步候选） */
 function us_launch_battle_froms(game, space, kind) {
 	const me = '美国'
-	const sup = compute_supply(game).in_supply
-	const needType = kind === 'sea' ? 'navy' : 'army'
-	const myF = faction_of_nation(me)
-	const out = []
-	for (const p in game.location) {
-		if (game.piece_nation[p] !== me || game.piece_type[p] !== needType) continue
-		if (!sup[p]) continue
-		if (get_connections(game, game.location[p], myF).indexOf(Number(space)) >= 0)
-			out.push(p)
-	}
-	return out
+	/* 【B55】同 battle_initiators：陆/海军均可发起（空军排除），不再按 kind 收窄 */
+	return battle_initiators(game, me, space).map(x => x.id)
 }
 
 /* 16801/16802：是否存在"能真正发起战斗"的补给中美军部队（纯函数预检，同 15212 G7e） */
@@ -40030,6 +40028,10 @@ if (typeof module !== 'undefined') {
 		find_battle_target,
 	battle_targets,
 	battle_froms,
+	battle_initiators,
+	us_launch_battle_spaces,
+	us_launch_battle_froms,
+	us_can_launch_battle,
 	status_on_attacked,
 		event_battle_targets,
 		offer_armed_effects,
