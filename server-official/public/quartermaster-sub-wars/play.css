@@ -1536,6 +1536,33 @@ body.allies .score-side.allies {
 
 .modal.hide { display: none; }
 
+/*
+ * 【本体 #6 / B54】17535《租借法案》委托「已打完手牌、待结束委托」阶段（step='done'）。
+ *
+ * 该阶段的卡面意图是「**先发动被委托国的桌面状态卡，再结束委托**」（见 play.js
+ * update_us_lend_lease 的 ③ 提示），但 .modal 是 `position:fixed; inset:0; #0008` 的
+ * 全屏遮罩 —— 桌面状态卡虽然显示「可发动」，点击却被遮罩吃掉（玩家报障
+ * 「客户端弹窗会导致无法点，从而无法发动状态」）。
+ *
+ * 同款问题在 pending_echo_modal 的选地区阶段已由 B31 解决（需要点地图时直接 hide）。
+ * 这里不能 hide（「结束委托」按钮必须可见），故改为：
+ *   · 遮罩透明 + pointer-events:none -> 地图 / 桌面状态卡 / 手牌全部可点；
+ *   · 只有 .modal-box 自己恢复可点（结束委托按钮），并挪到右上角避免挡住地图中央。
+ */
+#lend_lease_modal.pass-through {
+	background-color: transparent;
+	pointer-events: none;
+	align-items: flex-start;
+	justify-content: flex-end;
+	padding: 78px 16px 0 0;
+}
+
+#lend_lease_modal.pass-through .modal-box {
+	pointer-events: auto;
+	max-width: min(88vw, 340px);
+	box-shadow: 0 8px 28px #000b;
+}
+
 /* 17805 红色管弦乐队三连弹框（询问 / 选卡 / 德国二选一等待）—— 白底黑字 */
 #su_red_pick_modal .modal-box,
 #red_orchestra_ask_modal .modal-box,

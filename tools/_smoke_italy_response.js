@@ -70,8 +70,16 @@ console.log('\n=== 17730 贝尔萨列里神射手团 ===')
 clearPieces(); facedown('17730')
 {
 	const p = putPiece('意大利', 'army', balkan)
-	const ctx = { piece: p, piece_nation: '意大利', piece_type: 'army', space: balkan, was_supplied: true, reason: 'eliminate' }
-	ok('正例：巴尔干意大利陆军触发', I.fire_trigger(g, 'piece_removed', ctx).some(f => f.card_face === '17730'))
+	/* 【B49】卡面是「被【攻击】时」-> 只认战斗移除（reason='piece_removed'） */
+	const ctx = { piece: p, piece_nation: '意大利', piece_type: 'army', space: balkan, was_supplied: true, reason: 'piece_removed' }
+	ok('正例：巴尔干意大利陆军【被战斗移除】触发', I.fire_trigger(g, 'piece_removed', ctx).some(f => f.card_face === '17730'))
+	/* 【B49】玩家 2026-11-22 口径：卡效果/经济战/补给移除一律不触发 */
+	ok('负例：卡效果消灭（reason=eliminate）不触发',
+		I.fire_trigger(g, 'piece_removed', Object.assign({}, ctx, { reason: 'eliminate' })).length === 0)
+	ok('负例：经济战移除（reason=econ）不触发',
+		I.fire_trigger(g, 'piece_removed', Object.assign({}, ctx, { reason: 'econ' })).length === 0)
+	ok('负例：补给移除（reason=supply）不触发',
+		I.fire_trigger(g, 'piece_removed', Object.assign({}, ctx, { reason: 'supply' })).length === 0)
 	const p2 = putPiece('意大利', 'army', latam) // 非巴尔干/相邻
 	const ctx2 = { piece: p2, piece_nation: '意大利', piece_type: 'army', space: latam, was_supplied: true }
 	ok('负例：拉丁美洲不触发', I.fire_trigger(g, 'piece_removed', ctx2).length === 0)

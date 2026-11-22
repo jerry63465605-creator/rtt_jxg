@@ -7017,7 +7017,14 @@ const STATUS_EFFECTS = {
 	},
 
 	'15250': {
-		react: { when: 'attacked', has_army: '德国', attrition: 2,
+		/*
+		 * 【本体 #7 / B52】卡面「**德国陆军**被攻击时」——主语是"德国陆军"这一枚，
+		 * 不是"该地区有德国陆军"。旧实现用 has_army:'德国' 近似，导致：
+		 *   · 同格同时有德国陆军与意大利陆军时，英国打【意大利陆军】也触发（玩家报障）；
+		 *   · 空打（无部队被攻击）也触发。
+		 * 改用 victim_nation/victim_type 精确判定，删掉 has_army。
+		 */
+		react: { when: 'attacked', victim_nation: '德国', victim_type: 'army', attrition: 2,
 			desc: '德国陆军被攻击时，攻击方损耗2张牌' },
 	},
 
@@ -7065,25 +7072,37 @@ const STATUS_EFFECTS = {
 			 * 这样 #14 那类「代价已付但效果失败」也不会再绕过统一预检。
 			 */
 			cost: { skip_play: true, attrition: 2 },
+			/*
+			 * 【本体 #3 / B50】卡面只写「建设1支陆军」，【无】"相邻"字样
+			 * -> 按既有 build_scope 口径取【全图】合法建设地。
+			 * 与 17843《量与质兼得》/ 17550《先进造船厂》/ 17552《战时生产》同范式
+			 * （判据见 status_build_scope_of 注释：「无相邻字样 -> all」）。
+			 *
+			 * 旧实现自己收集「大本营 + 相邻」再 `cands[0]` 直接建 —— 玩家报障
+			 * 「征兵自动执行」：多块合法地区时不给选，直接替他挑了第一块。
+			 * 现改为 17547/17550 的两段式：先返回 need:'space' 让客户端弹选位，
+			 * 玩家选完再带 arg.space 重入执行（候选与校验同源，杜绝「高亮了点不动」）。
+			 */
+			build_scope: 'all',
 			desc: '跳过出牌阶段，损耗2张牌：建设1支陆军',
 			run(game, ctx) {
-				const home = effective_home_base(game, '德国')
-				const cands = []
+				const nat = (ctx && ctx.nation) || '德国'
+				const space = (ctx && ctx.arg && ctx.arg.space != null) ? Number(ctx.arg.space) : null
 				/*
-				 * 【2026-10-28 待办 #14】旧实现只看大本营【相邻】地区，漏了大本营自身。
-				 * 当相邻全不可建（有敌军 / 已满格）而大本营本身可建时，cands 为空 ->
-				 * 玩家已扣 2 张牌，却只得到「无德控陆地可建设」。
+				 * 无 space = 客户端还没让玩家选地。给提示（不清窗口），由客户端
+				 * STATUS_UI['15255'] = { sbuild:'army' } 走「地图高亮选地」两步：
+				 *   点卡 -> query status_build_spaces（play_start 卡 base=null -> 全图候选）
+				 *   -> 玩家点地 -> activate_status{card, space} 重入这里。
+				 * 与 17843/17901 完全同款，不再由服务端 cands[0] 替玩家挑。
 				 */
-				if (home != null && can_build_at(game, '德国', home, 'army').ok) cands.push(home)
-				if (home != null) get_connections(game, home, 'axis').map(Number).forEach(nb => {
-					const ss = data.spaces[nb]
-					if (ss && ss.terrain !== 'sea' && can_build_at(game, '德国', nb, 'army').ok) cands.push(nb)
-				})
-				const tgt = cands[0]
-				if (tgt == null) return { ok: true, desc: '无德控陆地可建设（已损耗 2 张）' }
-				const r = build_piece(game, '德国', 'army', tgt)
+				if (space == null) return { ok: false, reason: '请选择建设地区' }
+				/* scope='all'：卡面无"相邻"字样（与 status_build_spaces 对 play_start 的判定同源） */
+				if (!status_build_ok(game, nat, 'army', null, space, 'all'))
+					return { ok: false, reason: data.name_of(space) + ' 不可建设' }
+				const r = build_piece(game, nat, 'army', space)
 				refresh(game)
-				return { ok: true, desc: '损耗 2 张，在' + data.name_of(tgt) + '建设陆军' + (r.ok ? '' : '（' + r.reason + '）') }
+				if (!r.ok) return { ok: false, reason: '建设失败：' + r.reason }
+				return { ok: true, desc: nat + ' 在' + data.name_of(space) + ' 建设陆军' }
 			} },
 	},
 
@@ -7501,7 +7520,17 @@ const STATUS_EFFECTS = {
 		return game
 	}
 
-	function status_on_attacked(game, space, attacker, kind) {
+	/*
+	 * 【本体 #7 / B52】新增第 5 参 `victim`（本次战斗实际被攻击的棋子 id，空打为 0）。
+	 *
+	 * 卡面「**德国陆军**被攻击时」（15250 陆地巡航者）要求判【被攻击的那一枚】，
+	 * 旧签名只有 space / attacker / kind，于是只能用 `has_army:'德国'` 近似成
+	 * 「该地区【有】德国陆军」——
+	 *   · 同格同时有德国陆军与意大利陆军、英国打意大利陆军 -> 误触发（玩家报障）；
+	 *   · 空打（没有部队被攻击）-> 也误触发。
+	 * 实测（英国牌库是否 -2）：A 打意军 true（应 false）、B 打德军 true、D 空打 true（应 false）。
+	 */
+	function status_on_attacked(game, space, attacker, kind, victim) {
 		/*
 		 * 【2026-11-05 · 15353】改为「收集 -> 逐张询问 -> 再结算」。
 		 * 旧实现先 attrition_passive 再 request_responses('status_attacked')，
@@ -7520,6 +7549,17 @@ const STATUS_EFFECTS = {
 				if (rc.space && space_id(rc.space) !== space) continue
 				if (rc.has_army && !has_pieces(game, { space: space, nation: rc.has_army, types: ['army'] })) continue
 				if (rc.type && rc.type !== kind) continue
+				/*
+				 * 【本体 #7 / B52】`victim_nation` / `victim_type`：精确到【被攻击的那一枚】。
+				 *
+				 * `has_army` 只能表达「该地区【有】某国陆军」，无法区分同格多国部队、
+				 * 也无法排除空打（victim=0）。卡面主语是「**德国陆军**被攻击」的必须用本判据。
+				 */
+				if (rc.victim_nation) {
+					if (victim == null || Number(victim) === 0) continue          /* 空打：没有部队被攻击 */
+					if (game.piece_nation[victim] !== rc.victim_nation) continue
+					if (rc.victim_type && game.piece_type[victim] !== rc.victim_type) continue
+				}
 				/*
 				 * 【2026-11-10 · #6 大西洋防线 15243】`friendly_only`：只有【与卡主同阵营】
 				 * 的部队在该地区被攻击时才触发。
@@ -14760,13 +14800,41 @@ const ECHO_EFFECTS = {
 				/* 最小原子：能否发起一次海战（有可攻击敌军的海域 + 相邻补给德军海军） */
 				return !!find_battle_target(game, '德国', 'sea', { enemyOnly: true })
 			},
-			run(game, ctx) {
-				if (ctx.tag !== '潜艇行动') return { ok: true, skip: true, desc: '非潜艇行动，不发动' }
-				/* 与 ready 共用同一个原子，保证"弹得出框"=="点了真能打" */
-				const tgt = find_battle_target(game, '德国', 'sea', { enemyOnly: true })
-				if (!tgt) return { ok: true, skip: true, desc: '无可发起的海战目标，未发动' }
-				const r = do_battle(game, '德国', tgt.space, 0, 'sea', { from: tgt.initiator })
-				if (r.ok) { refresh(game); return { ok: true, desc: '对' + data.name_of(tgt.sea) + '发起海战' } }
+			/*
+			 * 【本体 #8 / B53】改为两段式，仿 16801《哈尔西海军上将》（同为 armed「发起1次海战」）：
+			 *   ① 选海域（`need:'space'`，候选 = battle_targets 全部合法目标）
+			 *   ② 选发起海军（`need:'piece'`，候选 = battle_froms 相邻补给德国海军）
+			 *      再 `do_battle(..., { from })`。
+			 *
+			 * 旧实现直接取 `find_battle_target` 的【第一个】目标开战，玩家既不能选海域
+			 * 也不能选发起单位（玩家报障「G7e 没有自选」）。
+			 * 同时修掉旧日志里的 `data.name_of(tgt.sea)`（tgt 只有 space，sea 恒 undefined）。
+			 */
+			run(game, ctx, arg) {
+				if (!ctx || ctx.tag !== '潜艇行动') return { ok: true, skip: true, desc: '非潜艇行动，不发动' }
+				arg = arg || {}
+				/* ① 海域 */
+				const space = arg.space != null ? Number(space_id(arg.space)) : null
+				if (space == null) {
+					const cands = battle_targets(game, '德国', 'sea', { enemyOnly: true }).map(t => t.space)
+					if (!cands.length) return { ok: true, skip: true, desc: '无可发起的海战目标，未发动' }
+					return {
+						need: 'space', candidates: cands, pick: 1, pickMin: 1,
+						desc: 'G7e：选择发起海战的地区',
+					}
+				}
+				/* ② 发起海军（need:'piece' 回传字段是 piece；同时兼容 from） */
+				const _from = (arg.from != null) ? arg.from : (arg.piece != null ? arg.piece : null)
+				if (_from == null) {
+					const froms = battle_froms(game, '德国', space, 'sea')
+					if (!froms.length) return { ok: false, reason: '该海域没有相邻的补给德国海军' }
+					return {
+						need: 'piece', candidates: froms, pick: 1, pickMin: 1,
+						desc: 'G7e：选择发起海战的海军',
+					}
+				}
+				const r = do_battle(game, '德国', space, 0, 'sea', { from: String(_from) })
+				if (r.ok) { refresh(game); return { ok: true, desc: '对' + data.name_of(space) + '发起海战' } }
 				return { ok: true, skip: true, desc: '海战未发动：' + (r.reason || '') }
 			},
 		},
@@ -16708,12 +16776,12 @@ function can_initiate_battle_at(game, nation, space, kind) {
  * 找一个"能真正发起 kind 战斗"的目标（纯函数，无副作用）。
  *   opts.near      : 限定目标必须在 near 格位的相邻（15210「<亚速尔>相邻」）
  *   opts.enemyOnly : 只考虑有【可攻击敌军】的格位（空军不算，与 basic_targets 同口径）
- * 返回 { ok, space, initiator } 或 null。
+ * 返回【全部】合法目标数组，每项 { ok, space, initiator }（可能为空）。
  *
  * ready(决定要不要弹 ask 框) 与 run(真正执行) **共用此函数**，
  * 保证"弹得出框"必然"点了真能打"。
  */
-function find_battle_target(game, nation, kind, opts) {
+function battle_targets(game, nation, kind, opts) {
 	opts = opts || {}
 	const myFaction = faction_of_nation(nation)
 	const wantTerrain = (kind === 'sea') ? 'sea' : 'land'
@@ -16727,6 +16795,14 @@ function find_battle_target(game, nation, kind, opts) {
 			if (data.spaces[i] && data.spaces[i].terrain === wantTerrain) pool.push(i)
 		}
 	}
+	/*
+	 * 【本体 #8 / B53】抽出【全部】合法战斗目标（原本这里遇到第一个就 return）。
+	 *
+	 * 为什么要复数版：15212《G7e 鱼雷》的 armed.run 直接拿 `find_battle_target` 的
+	 * 第一个结果开战，玩家既不能选海域也不能选发起单位（玩家报障「G7e 没有自选」）。
+	 * 多步选目标需要完整候选列表；`find_battle_target` 仍返回第一个，现有调用方零改动。
+	 */
+	const out = []
 	for (const sp of pool) {
 		if (opts.enemyOnly) {
 			const enemies = pieces_on(game, sp).filter(p => {
@@ -16736,9 +16812,32 @@ function find_battle_target(game, nation, kind, opts) {
 			if (!enemies.length) continue
 		}
 		const r = can_initiate_battle_at(game, nation, sp, kind)
-		if (r.ok) return r
+		if (r.ok) out.push(r)
 	}
-	return null
+	return out
+}
+
+/* 兼容壳：只取第一个（旧行为），供现有调用方使用 */
+function find_battle_target(game, nation, kind, opts) {
+	const list = battle_targets(game, nation, kind, opts)
+	return list.length ? list[0] : null
+}
+
+/*
+ * 【B53】指定战斗地区可用的【发起单位】候选（通用版，参照 us_launch_battle_froms）。
+ * 供 armed 多步选目标第 2 步用（15212 G7e：选完海域再选发起海军）。
+ */
+function battle_froms(game, nation, space, kind) {
+	const sup = compute_supply(game).in_supply
+	const needType = kind === 'sea' ? 'navy' : 'army'
+	const myF = faction_of_nation(nation)
+	const out = []
+	for (const p in game.location) {
+		if (game.piece_nation[p] !== nation || game.piece_type[p] !== needType) continue
+		if (!sup[p]) continue
+		if (get_connections(game, game.location[p], myF).indexOf(Number(space)) >= 0) out.push(p)
+	}
+	return out
 }
 
 /* 【2026-10-22 已并入】原 has_piece(game, nation, type)
@@ -18933,7 +19032,23 @@ const RESPONSE_EFFECTS = {
 		name: '贝尔萨列里神射手团',
 		trigger: {
 			on: 'piece_removed',
+			/*
+			 * 【本体 #5 / B49】卡面是「意大利陆军【被攻击】时：使其在本次战斗中不会被移除」
+			 * —— 只认【战斗移除】。
+			 *
+			 * `piece_removed` 的 ctx 早就带 `reason` 区分来源：
+			 *   'piece_removed' = 战斗（do_battle 各出口）
+			 *   'econ'          = 经济战移除（econ_remove_piece）
+			 *   'eliminate'     = 卡效果消灭（eliminate_piece）
+			 *   'supply'        = 补给不足移除
+			 * 旧 filter 没有这一条 → 卡效果/经济战/补给移除也会弹出神射手（玩家报障：
+			 * 「意大利被卡效果移除时不应该触发，bug 是此时也触发了」）。
+			 *
+			 * 用白名单而不是「排除 econ/eliminate」：未来新增移除来源默认【不触发】，
+			 * 宁可漏给个别卡补 reason，也不让 17730 在非战斗场景乱弹。
+			 */
 			filter: (g, ct, owner_side) =>
+				ct.reason === 'piece_removed' &&
 				ct.piece_nation === '意大利' && ct.piece_type === 'army' &&
 				space_is_or_adjacent_to(g, ct.space, '巴尔干', owner_side),
 		},
@@ -21751,8 +21866,25 @@ function step_pick_min(st) {
  */
 function event_cands_filter(game, actor, st, list) {
 	let out = list.slice()
-	if (st.op === 'recruit' || st.op === 'build')
-		out = out.filter(sp => (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, sp, st.type).ok)
+	if (st.op === 'recruit' || st.op === 'build') {
+		/*
+		 * 【本体 #4 / B51】空军必须走 can_deploy_air，不能用 can_build_at / can_recruit_at。
+		 *
+		 * 空军的载体是【同格】陆/海军（air_host_check 已含"载体须处于补给"）+ 每格 1 支槽位；
+		 * 而 can_build_at / can_recruit_at 查的是「本国大本营 或【邻接】补给同国部队」——
+		 * 对靠海军搭载的海域空军一律误判非法（见 can_deploy_air 上方那段注释）。
+		 *
+		 * 旧实现无 air 特判 -> 17509《王牌飞行员帕皮·博因顿》(spacesFn) 实测：
+		 * 美国海军在中太平洋时，唯一合法落点【中太平洋】被排除，反而把
+		 * "恰好邻接补给部队"的东太平洋选进来 -> 候选错、部署到无载体格。
+		 *
+		 * 同类在 step_space_candidates 的 around 分支 / 全图兜底分支早已特判，
+		 * 只有 spaces / spacesFn 这两条（都走本函数）漏了。
+		 */
+		out = (st.type === 'air')
+			? out.filter(sp => can_deploy_air(game, actor, sp).ok)
+			: out.filter(sp => (st.op === 'recruit' ? can_recruit_at : can_build_at)(game, actor, sp, st.type).ok)
+	}
 	if (st.onlyNation) {
 		const wantType = st.type || 'army'
 		out = out.filter(sp => pieces_on(game, sp).some(p =>
@@ -23724,7 +23856,8 @@ function do_battle_inner(game, nation, space, target_piece, kind, opt) {
 	 * 因此重放路径跳过；首次进入（opt.resume 为假）照常触发。
 	 */
 	if (!opt || !opt.resume) {
-		try { status_on_attacked(game, space, nation, kind) }
+		/* 【B52】传 target_piece：让 react 卡能精确判断"被攻击的是哪一枚"（空打为 0） */
+		try { status_on_attacked(game, space, nation, kind, target_piece) }
 		catch (e) { game.log.push('status_on_attacked 错误：' + e.message) }
 	}
 	/*
@@ -39895,6 +40028,9 @@ if (typeof module !== 'undefined') {
 		rollback_attrition,
 		can_initiate_battle_at,
 		find_battle_target,
+	battle_targets,
+	battle_froms,
+	status_on_attacked,
 		event_battle_targets,
 		offer_armed_effects,
 		has_card_in_hand,

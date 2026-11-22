@@ -108,10 +108,21 @@ section('S3 15255《征兵》大本营相邻全不可建时，仍可在大本营
 	}
 	I.refresh(g)
 	const deckBefore = deckSize(g, '德国')
-	const r = rules.action(g, 'Axis', 'activate_status', { card: '15255#1' })
+	/*
+	 * 【B50 新口径】15255 改为「玩家选地」两步（与 17547/17550/17843/17901 同范式）：
+	 *   ① 客户端先 query status_build_spaces 拿候选（play_start 卡 base=null -> 全图）；
+	 *   ② 玩家点地后带 space 提交 activate_status，服务端 run 才真正建设。
+	 * 旧断言假设「不带 space 就直接建在大本营」，已随 #3 修复作废。
+	 */
+	const qy = rules.query(g, 'Axis', 'status_build_spaces',
+		{ card: '15255#1', nation: '德国', type: 'army' })
+	ok('★ 候选含大本营自身（相邻全不可建时仍能选大本营）',
+		(qy.spaces || []).indexOf(home) >= 0,
+		{ home: d.name_of(home), spaces: (qy.spaces || []).map(x => d.name_of(x)) })
+	const r = rules.action(g, 'Axis', 'activate_status', { card: '15255#1', space: home })
 	const gained = Object.keys(r.location).filter(p => r.location[p] === home && r.piece_nation[p] === '德国').length
 	ok('扣了 2 张损耗', deckSize(r, '德国') === deckBefore - 2, { before: deckBefore, after: deckSize(r, '德国') })
-	ok('★ 在大本营建出陆军（旧实现会「无德控陆地可建设」）', gained >= 1,
+	ok('★ 在大本营建出陆军（选地后立即建设）', gained >= 1,
 		{ home: d.name_of(home), pieces: gained, log: (r.log || []).slice(-2) })
 }
 
@@ -133,8 +144,9 @@ section('S4 源码守卫')
 	ok('预检位于付代价之前（在状态卡 cost.discard 之前）',
 		_actIdx > 0 && _fromIdx > _actIdx && _costIdx2 > _actIdx && _fromIdx < _costIdx2,
 		'act=' + _actIdx + ' from=' + _fromIdx + ' cost=' + _costIdx2)
-	ok('15255 候选含大本营自身',
-		/can_build_at\(game, '德国', home, 'army'\)\.ok\) cands\.push\(home\)/.test(src))
+	/* 【B50】候选不再手写收集，改由 status_build_candidates 按 build_scope:'all' 现算 */
+	ok('15255 走 build_scope:all（候选由 status_build_candidates 现算，含大本营自身）',
+		/'15255': \{[\s\S]{0,2500}build_scope: 'all'/.test(src))
 }
 
 console.log('\n' + (fails.length ? 'FAILED' : 'ALL PASS') + '  ' + pass + ' ok, ' + fails.length + ' fail')

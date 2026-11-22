@@ -2567,11 +2567,21 @@ function update_us_lend_lease() {
 	 * （表现为"报错卡一下、刷新才正常、手牌不刷新像没打出"）。 */
 	if (!dg || !dg.step) {
 		modal.classList.add('hide')
+		modal.classList.remove('pass-through')
 		const b = modal.querySelector('.modal-box')
 		if (b) b.innerHTML = ''
 		return
 	}
 	modal.classList.remove('hide')
+	/*
+	 * 【本体 #6 / B54】step='done'（被委托国已打完手牌、等玩家结束委托）：
+	 * 本阶段的设计意图是「先发动被委托国的桌面状态卡，再结束委托」（见下方 ③ 提示），
+	 * 但 .modal 是全屏遮罩，桌面状态卡显示「可发动」却点不动。
+	 * 加 pass-through：遮罩透明且不拦点击、弹框挪右上角，只让「结束委托」按钮可点。
+	 * 其它阶段（选国 / 打牌）仍是正常遮罩，行为不变。
+	 */
+	if (dg.step === 'done') modal.classList.add('pass-through')
+	else modal.classList.remove('pass-through')
 	const box = modal.querySelector('.modal-box')
 	box.innerHTML = ''
 
@@ -8470,6 +8480,12 @@ const STATUS_UI = {
 	/* 2026-10-10 建设预算状态卡：多地区须玩家手动点选相邻空格（不自动兜底）。
 	 * 服务端 run 读 arg.space 经 status_build_valid 校验后建设/征召。 */
 	'17552': { sbuild: 'army' },
+	/* 【本体 #3 · B50】15255《征兵》：跳过出牌阶段 + 损耗2张 -> 建设1支陆军。
+	 * 卡面无"相邻"字样 -> 服务端 build_scope:'all'、候选由 status_build_spaces
+	 * 按 play_start(base=null) 现算全图合法地；这里登记 sbuild 才会进入「地图高亮选地」两步。
+	 * 漏登记的后果（打前）：点击直接发 activate_status{card}、服务端
+	 * cands[0] 替玩家挑第一块地 -> 玩家报障「征兵自动执行」。 */
+	'15255': { sbuild: 'army' },
 	/* 17843 量与质兼得：弃1张[建设陆军]后建设1支陆军（弃牌+建设组合，先收弃牌再选地） */
 	'17843': { discard: 1, filter: { type: 'BASIC', name: '建设陆军' }, sbuild: 'army' },
 	'17547': { sbuild: 'army' },

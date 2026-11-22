@@ -154,10 +154,11 @@ console.log('\n=== F. 静态守卫 ===')
 		const iOffer = src.indexOf('!!game.national_skill_offer', iSus)
 		return iSus > 0 && iOffer > iSus && iClear > iOffer
 	})())
-	ok('★ 客户端零改动 -> 版本串仍 20261114a',
-		(fs.readFileSync(path.join(MOD, 'play.html'), 'utf8')
-			.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))
-			.every(v => v === '20261114a'))
+	/* B50 起客户端有改动（15255 sbuild 登记）-> 版本串会继续 bump，这里只校验统一非空 */
+	ok('★ 版本串统一且非空（B48 当轮 20261114a，B50 起 20261122a）',
+		(vers => vers.length >= 5 && vers.every(v => v && v === vers[0]))(
+			(fs.readFileSync(path.join(MOD, 'play.html'), 'utf8')
+				.match(/\?v=([0-9a-z]+)/g) || []).map(s => s.slice(3))))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : 'FAIL ' + fail + ' 项 / PASS ' + pass + ' 项'))
