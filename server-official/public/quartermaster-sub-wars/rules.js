@@ -32639,6 +32639,1927 @@ function action_log(game, side, current, arg) {
 	return game
 }
 
+/* 搬自 do_action 的 `if (action === 'activate_status')` 分支（逐字） */
+function action_activate_status(game, side, current, arg) {
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		const cardId = arg && arg.card
+		if (!cardId) {
+			game.log.push('请指定要触发的状态卡')
+			return game
+		}
+		/* 该卡必须在本方【代表国】的桌面上 */
+		const owner = (() => {
+			for (const n in (game.table || {}))
+				if ((game.table[n] || []).indexOf(cardId) >= 0) return n
+			return null
+		})()
+		if (owner == null) {
+			game.log.push('桌面上没有这张状态卡')
+			return game
+		}
+		/* 17732 借用：借来的德国状态卡本回合可被意大利激活（绕过"须本国"校验） */
+		const borrowed = !!(game.italy_borrow && game.italy_borrow.turn === game.turn &&
+			game.italy_borrow.card_face === cardId &&
+			game.current_nation === game.italy_borrow.nation)
+		const cfg = status_config_of(cardId)
+		if (!cfg || !cfg.trigger) {
+			game.log.push('该状态卡没有可触发的效果')
+			return game
+		}
+		const tr = cfg.trigger
+		if (!borrowed && !CROSS_NATION_STATUS_WINDOWS[tr.window] &&
+			!status_instant_covers(game, cardId, owner) &&
+			delegate_of_nation(owner) !== delegate_of_nation(game.current_nation)) {
+			game.log.push('不能触发非本方的状态卡')
+			return game
+		}
+		const cName = (inst_card(cardId) || {}).name || '状态卡'
+
+		/* 15353 保持冷静·继续前进：本回合已被拦截压制 -> 状态卡效果不发生（卡留桌面、不付代价） */
+		if ((game.status_suppressed_this_turn || {})[cardId] === freq_key(game)) {
+			/*
+			 * 【2026-10-26 玩家口径】被压制 = 本次发动已被抵消，标为「已发动」。
+			 * 主标记在 15353 的 run 里；这里补一刀，覆盖：
+			 *   · 旧存档 / 旧代码只写了 suppressed 而没写 status_used 的局面；
+			 *   · 任何直接写 suppressed 的旁路。
+			 * 让「界面显示已发动」与「再点被拒」两处口径始终一致。
+			 */
+			game.status_used = game.status_used || {}
+			game.status_used[cardId] = freq_key(game)
+			game.log.push('《' + cName + '》本回合已被《保持冷静·继续前进》压制，无法发动')
+			return game
+		}
+
+		/* 15343 压制：敌方在场时本卡无效 */
+		if (!status_active(game, cardId, owner)) {
+			game.log.push('《' + cName + '》被敌方《霍巴特滑稽坦克》压制，无法发动')
+			return game
+		}
+		/* 一回合一次 */
+		if (tr.once_per_turn && (game.status_used || {})[cardId] === freq_key(game)) {
+			game.log.push('《' + cName + '》本回合已经发动过')
+			return game
+		}
+
+		/*
+		 * 【2026-09-28】【替换建设】专用通道。
+		 *
+		 * 客户端在"打出《建设陆军》后、正在选地块"时点本卡，会带 from_status:true。
+		 * 这类窗口（build_army）是**事件驱动**的：服务端无法感知"正在选地块"
+		 * 这个客户端 UI 状态，所以 status_window_ready 默认返回 false
+		 * （保证其余时间 UI 不显示可点）。这里凭 from_status 放行，并：
+		 *   · **不检查阶段** —— 玩家明确说"不受阶段影响"，
+		 *     别人回合触发的英国建设，英国照样能替换。
+		 *   · **不额外占出牌名额** —— 名额由那张被替换的建设卡自己占。
+		 *
+		 * 安全性：客户端只能对【本方桌面】的卡发此动作（上面已校验 owner），
+		 * 且服务端仍校验 status_active / once_per_turn / 卡在桌面。
+		 */
+		const isForgoBuild = !!(arg && arg.from_status) && !!(tr.cost && tr.cost.forgo_build_army)
+		/*
+		 * 【2026-10-26 ③·同源】与 register_status_actions 共用同一道闸门。
+		 *
+		 * 之前只有白名单侧（register_status_actions）在"战斗/经济战/响应待决"时
+		 * 整体不发 activate_status，服务端入口却只看 status_window_ready ——
+		 * 于是出现 "view.table_status[].ready = true（客户端显示可触发、点得动）、
+		 * 但 actions 白名单里没有 activate_status" 的错配，玩家点了照样结算。
+		 * 17554 线上 bug 能成立正是靠这条缝（客户端不判 ready 直接发动作）。
+		 *
+		 * 现在两处同一判据：白名单不发 -> 服务端也拒。
+		 */
+		/* 【2026-11-10 · #7 雷达】按【这张卡】判冻结：它自己处在立刻窗口时不冻结 */
+		const frozen = status_actions_frozen(game, cardId)
+		if (frozen && !isForgoBuild) {
+			game.log.push('《' + cName + '》现在不能发动：' + frozen)
+			return game
+		}
+		const ready = status_window_ready(game, owner, cardId, tr)
+		if (!ready.ok && !isForgoBuild) {
+			game.log.push('《' + cName + '》现在不能发动：' + ready.reason)
+			return game
+		}
+		/*
+		 * 【2026-11-04 · S2-b】付代价【之前】的参数预检。
+		 *
+		 * 损耗（attrition）代价一旦付出就无法精确回滚（见 activate_status 失败分支：
+		 * 只退回 discard，attrition 明确不退）。所以"注定会失败"的参数必须在这里拦下，
+		 * 而不是等 run 返回 ok:false —— 否则玩家点了发动就是白亏牌。
+		 */
+		{
+			/*
+		 * 【2026-11-05 · B12】预检也要按【付款方】看手牌：
+		 * 借用德国状态卡时 costPayer = 意大利，弃牌代价必须从意大利手牌里选；
+		 * 传 owner（德国）会误判「要弃置的手牌不在手里」，借用直接失效。
+		 */
+		const pre = precheck_status_args(game,
+			borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner,
+			tr, arg || {}, cardId)
+			if (!pre.ok && !isForgoBuild) {
+				game.log.push('《' + cName + '》现在不能发动：' + pre.reason)
+				return game
+			}
+		}
+		/*
+		 * ---------------- 付代价（【2026-10-31 S1】已前移到拦截窗口之前） ----------------
+		 *
+		 * 玩家口径：代价属于"发动"的一部分，被 15353 拦截时【代价不退】、只取消效果。
+		 * 所以顺序是：参数预检 ->【付代价】-> 派发 enemy_status_effect ->（被拦则到此为止）-> 执行效果。
+		 * 例外：cost.skip_play（跳过出牌阶段）仍留在窗口之后 —— 被拦时不照付，待玩家裁定。
+		 *
+		 * 【2026-10-31】_costPaidNow：放弃拦截后我们会【续跑】activate_status（见 skip_armed_offer），
+		 * 续跑时不能二次扣代价 —— 代价照付，但只付一次。
+		 */
+		 const _costPaidNow = game.__status_cost_resume === cardId
+		if (_costPaidNow) delete game.__status_cost_resume   /* 一次性令牌：只免重扣这一次 */
+		 /*
+		 * 【2026-10-18 修复】15341/15342 仅当【英国执行建设陆军】时（game.current_nation==='英国'，
+		 * 含美国 17526《民主兵工厂》让权英国建设期间，offer_uk_build_delegate 已翻 current_nation='英国'）
+		 * 才可替换发动。非英国玩家、或英国玩家的非建设陆军行为一律拒发。
+		 * 这是权威兜底：即便客户端越权发送 from_status，此处也按 current_nation 拦截，
+		 * 与 view.forgo_build / register_status_actions 三处同源（通用教训 3）。
+		 */
+		if (isForgoBuild && (inst_card_id(cardId) === '15341' || inst_card_id(cardId) === '15342') && game.current_nation !== '英国') {
+			game.log.push('《' + cName + '》只能在英国建设陆军时由英国替换发动')
+			return game
+		}
+
+
+		/* ---------------- 付代价 ---------------- */
+		/*
+		 * 代价支付方 costPayer：默认桌面归属 owner；
+		 * 借用卡（17732 借来的德国状态卡）由借用方意大利承担——
+		 * 因为实际发动方是意大利，而该卡仍挂在德国桌面（owner 为德国），故用 costPayer 重定向到 game.italy_borrow.nation。
+		 * cost 取该卡 tr.cost 正常计算，不做免代价处理（卡面本就未写"免费"）。
+		 */
+		const costPayer = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
+		const cost = tr.cost || {}
+		/*
+		 * 【2026-11-05 · B12】损耗代价的前置预检。
+		 *
+		 * 原来 can_attrite 校验在 skip_play 之后：15255《征兵》这种「跳过出牌阶段 + 损耗 2」的卡，
+		 * 牌库不足时会**先把出牌阶段跳过**、再报"牌库不足，无法发动" —— 代价白付、效果零。
+		 * 借用（17732）时更明显：意大利付不起损耗，却已经把德国的出牌阶段……不对，是自己的阶段跳掉了。
+		 *
+		 * 玩家口径：付不起就「拒绝发动」= 一张都不扣、阶段也不动。故把校验提到所有代价之前。
+		 */
+		if (cost.attrition && !_costPaidNow && !can_attrite(game, costPayer, cost.attrition)) {
+			game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
+				' 张牌，但牌库不足，无法发动（未支付代价）')
+			return game
+		}
+		/*
+		 * 【2026-10-23】效果【参数】预检 —— 必须在付代价之前。
+		 *
+		 * 起因：17846《坦克运输》要求"以此陆军发起陆战"，即发起单位必须是刚建成的那支。
+		 * 但客户端 battle_initiators 是通用口径（相邻的本国补给陆/海军），玩家点了另一支
+		 * 也能提交；服务端直到 run 里才校验 → 代价（弃 1 张牌）已扣、效果失败。
+		 * game 24 实测："建设期间坦克运输失效"，手牌白亏 1 张。
+		 *
+		 * 由卡配置提供 precheck(game, nation, arg, ctxSpace)，返回 {ok, reason}。
+		 * 没有 precheck 的卡行为完全不变。
+		 */
+		if (typeof tr.precheck === 'function') {
+			const _pcSpace = ((game.status_instant || []).find(x => x.card_id === cardId) || {}).space
+			const _pc = tr.precheck(game, costPayer, arg || {}, _pcSpace)
+			if (!_pc || _pc.ok === false) {
+				game.log.push('《' + cName + '》' + ((_pc && _pc.reason) || '参数不合法') +
+					'（未支付代价）')
+				return game
+			}
+		}
+		/*
+		 * 【2026-10-28 修 · 待办 #14】effect.kind==='battle' 的【参数预检】。
+		 *
+		 * 症状（玩家原话）：「损耗了牌却没触发」——17746《耀武》扣掉 2 张牌 + 跳过出牌阶段后，
+		 * 效果什么都没发生。
+		 *
+		 * 根因链：
+		 *   ① 代价（attrition / skip_play）在本段【之前】就已扣掉；
+		 *   ② run_status_effect 的 battle 分支要求 `arg.from`（发起单位），否则
+		 *      `{ ok:false, reason:'请选择发起单位' }` —— 但客户端对 17746 这类
+		 *      「卡面没写地区」的 battle 效果不弹选择框，`from` 恒为 null；
+		 *   ③ 失败处理（29464）只回滚 `cost.discard`，**attrition 不回滚**
+		 *      （损耗已进牌库底，注释里明说"无法精确还原"）。
+		 *   => 牌白扣、出牌阶段白跳，效果零。
+		 *
+		 * 修法：把"battle 效果必须带发起单位"提前到【付代价之前】拒绝。
+		 * 对所有 effect.kind==='battle' 的状态卡通用（15338 / 15339 / 15346 / 15247 / 17746 …），
+		 * 与上面 tr.precheck 同位置、同口径（未支付代价）。
+		 */
+		if (tr.effect && tr.effect.kind === 'battle' && ((arg || {}).from == null)) {
+			game.log.push('《' + cName + '》请先选择发起战斗的单位与地区（未支付代价）')
+			return game
+		}
+		/*
+		 * 【2026-10-23 修复】"跳过出牌阶段"原本在这里就置位，早于 cost.discard /
+		 * cost.attrition 的校验。玩家不带 discard 点发动时：skip_play_done 被永久置位、
+		 * 代价一分没付、效果也没结算，且 status_window_ready 会以"本回合已跳过出牌阶段"
+		 * 拒绝重试 —— 白丢整个出牌阶段。现移到所有代价校验通过之后（见下方"执行效果"前）。
+		 */
+		/*
+		 * 【2026-10-28 修】17732《德国军事顾问》借用德国状态卡时是「免费激活」：
+		 * `borrowed` 已用于窗口放行与 costPayer 重定向，但【代价校验全部没跳过】——
+		 * 于是借用 15242 时仍要求弃 1 张手牌，玩家不传 discard 就卡在
+		 * 「请先选择要弃置的 1 张手牌」，效果一个都不结算
+		 * （症状：玩家报「借用《贵在行动》没有生效」）。
+		 * 下面 discard / attrition / skip_play 三处代价统一按 borrowed 免除。
+		 */
+		if (cost.discard && !_costPaidNow) {
+			const picked = (arg && arg.discard) || []
+			/*
+			 * 【2026-11-05 · B12】代价必须来自【付款方】手牌。
+			 * 借用德国状态卡时 costPayer = 意大利：玩家点了德国的牌、或点了不在手里的牌，
+			 * discard_card 会静默失败（牌没扣、效果照跑 = 白嫖），这里提前拒绝。
+			 */
+			for (const _dc of ((arg && arg.discard) || []).slice(0, cost.discard)) {
+				if ((game.hands[costPayer] || []).indexOf(_dc) < 0) {
+					game.log.push('《' + cName + '》的代价须从【' + costPayer + '】手牌中选择（未支付代价）')
+					return game
+				}
+			}
+			if (picked.length < cost.discard) {
+				game.log.push('请先选择要弃置的 ' + cost.discard + ' 张手牌')
+				return game
+			}
+			/* 代价须为指定卡（15242 等：必须弃置【发起陆战】） */
+			if (cost.discard_is) {
+				for (const cid of picked.slice(0, cost.discard)) {
+					const c = inst_card(cid)
+					if (!card_matches_filter(c, cost.discard_is)) {
+						/* 【2026-10-20】discard_is.name 可能是数组（"或"关系），文案须展开为"A或B" */
+						const nm = cost.discard_is.name
+						const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '')
+						/*
+						 * 【2026-10-23 修复】这里原调用 status_name(cardId)，但该函数
+						 * 【从未定义】—— 15242 人民冲锋队弃错牌时会抛 ReferenceError。
+						 * 直接复用上文已算好的 cName（同一状态卡名）。
+						 */
+						game.log.push('《' + cName + '》的代价必须是指定的牌（' + nmTxt + '）')
+						return game
+					}
+				}
+			}
+			for (const cid of picked.slice(0, cost.discard))
+				discard_card(game, costPayer, cid)
+			game.log.push('【' + costPayer + '】弃置 ' + cost.discard + ' 张手牌')
+		}
+		if (cost.forgo_build_army && !_costPaidNow) {
+			/*
+			 * S4：放弃本次建设陆军 —— 由 build_army 窗口保证语义。
+			 *
+			 * 【2026-09-28】被放弃的那张《建设陆军》卡【必须真正打出】
+			 * （进弃牌堆），而不是悄悄退回手牌。
+			 *
+			 * 原因：玩家这次出牌行动打的就是《建设陆军》——
+			 * 状态卡只是把【结果】从"建设"换成"征召"，
+			 * 那张建设卡作为本次出牌是【已经打出去了】的。
+			 * 若退回手牌，等于白嫖：既征召了陆军，建设卡还能再用一次。
+			 *
+			 * 客户端在提交时把建设卡实例 id 放在 arg.build_card。
+			 */
+			const bc = (arg && arg.build_card) || null
+			if (bc) {
+				discard_card(game, owner, bc)
+				/*
+				 * 出牌名额由【这张建设卡】占掉（状态卡本身不额外占）。
+				 * mark_play_done 内部只在 turn_phase === PH.PLAY 时才置位，
+				 * 所以在别人回合/非出牌阶段触发时不会误伤（本卡"不受阶段影响"）。
+				 */
+				mark_play_done(game, owner)
+				game.log.push('【' + owner + '】放弃建设陆军（《建设陆军》已打出进弃牌堆）')
+			} else {
+				/*
+				 * 【2026-09-29】没有 build_card 时【禁止】从手牌里猜一张打出。
+				 *
+				 * 原因：无法区分两种来源——
+				 *   ① 玩家打出《建设陆军》后替换，但客户端漏传 build_card
+				 *   ② 【卡牌效果】让他国建设，例如美国 17526《民主兵工厂》
+				 *      「英国按任意顺序执行：建设1支海军 及 建设1支陆军」
+				 *      —— 此时英国【根本没打出】《建设陆军》卡，
+				 *         若兜底去手牌里找一张打掉，就是凭空扣牌（规则错误）。
+				 *
+				 * 权衡：
+				 *   兜底命中 ① -> 正确；命中 ② -> 【误扣玩家一张牌】。
+				 *   漏掉 ①    -> 建设卡退回手牌（白嫖，玩家得利、易发现、可修客户端）。
+				 *   "误扣"远比"白嫖"严重且难发现，所以【禁止猜】。
+				 *
+				 * 结论：build_card 是【唯一权威来源】。没有它 = 没有建设卡被打出，
+				 *       只替换建设的结果、不扣任何手牌、不占名额。
+				 *
+				 * （若将来要实现"效果触发的建设也允许替换"，同样走这里：
+				 *   不扣卡，仅把 build 的结果换成 recruit。）
+				 */
+				game.log.push('【' + owner + '】放弃建设陆军' +
+					'【说明】未指定被放弃的建设卡，故不扣除任何手牌')
+			}
+		}
+		if (cost.lose_score && !_costPaidNow) {
+			const f = faction_of_nation(costPayer)
+			if (f) {
+				game.score[f] = (game.score[f] || 0) - cost.lose_score
+				game.log.push('【' + costPayer + '】失去 ' + cost.lose_score + ' 分')
+			}
+		}
+		/*
+		 * 【2026-10-23】"跳过出牌阶段"放在这里：所有代价（discard / attrition）
+		 * 的校验都已通过。放在效果之前，是为了让"跳过"在本阶段结束的自动推进
+		 * （maybe_advance_after_skip_play）里生效。
+		 *
+		 * 【2026-10-26 玩家口径·不再自动推进】自动推进已取消（见下方"推进"处），
+		 * 于是"跳过出牌阶段"必须靠【占掉出牌名额】来兑现：
+		 *   · skip_play_done —— 仍置，供 status_window_ready 拒绝再次发动（既有语义）；
+		 *   · mark_play_done / mark_play_acted —— 补上：否则玩家仍停在出牌阶段且
+		 *     play_done 未置 -> 还能继续打出别的牌，代价形同虚设。
+		 * 即"跳过"= 出牌阶段已被这张卡用掉，但【不】替玩家推进阶段。
+		 */
+		if (cost.skip_play && !_costPaidNow) {   /* 【2026-10-30】被拦也照付 */
+			/* 【2026-10-28】统一走 apply_skip_play（与自动派发 / 17841 等同一实现） */
+			apply_skip_play(game, costPayer)
+			game.log.push('【' + costPayer + '】跳过本回合出牌阶段（不再出牌，可点「下一阶段」继续）')
+		}
+
+		/*
+		 * 【2026-09-29 主动损耗】牌库不足时【无法发动】。
+		 *
+		 * 与 cost.discard（手牌不足则拒绝）同款口径：
+		 * 代价付不出来就【不能发动】，而不是"少损耗几张凑合"。
+		 * 注意这里【不】走 attrition_passive 的"差额扣分"——
+		 * 那条规则只适用于【被别国损耗】，自己主动付代价不适用。
+		 */
+		if (cost.attrition && !_costPaidNow) {
+			if (!can_attrite(game, costPayer, cost.attrition)) {
+				game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
+					' 张牌，但牌库不足，无法发动')
+				return game
+			}
+			attrition_cards(game, costPayer, cost.attrition)
+			game.log.push('【' + costPayer + '】损耗 ' + cost.attrition + ' 张牌')
+		}
+
+		/* 15353：本回合已跳过拦截 -> 不再弹窗，敌方照常执行；否则派发拦截窗口让英国响应 */
+		const _15353skip = (game.status_intercept_skipped || {})[cardId] === freq_key(game)
+		if (!_15353skip) {
+			offer_armed_effects(game, 'enemy_status_effect', { nation: owner, card: cardId, arg: arg || {}, window: 'enemy_status_effect' })
+			if ((game.armed_offers || []).some(w => w.when === 'enemy_status_effect' && w.ctx && w.ctx.card === cardId))
+				return game
+		}
+
+		/* ---------------- 执行效果 ---------------- */
+		/*
+		 * 【2026-09-30】"X 后立刻"卡（after_land / after_build_army）在武装瞬间
+		 * 把事件地区存进了 game.status_instant，这里把对应 entry 的地区传进
+		 * run，确保手动发动时用到的是"发起陆战 / 建设陆军"那一刻的地区，
+		 * 而不是已被清空的 game.last_built。
+		 */
+		const instEntry = (game.status_instant || []).find(x => x.card_id === cardId)
+		/*
+		 * 【2026-09-30 互相触发修复】发动前先快照当前已武装的窗口集合。
+		 * 本卡效果内部可能又发起了战斗/建设（15245/15247/15248 的嵌套动作），
+		 * 那次嵌套动作会武装【新的】after_land/after_build_army 窗口——
+		 * 这些新窗口应保留给玩家作为下一个动作（互相触发：15247→15245、
+		 * 15253→15247…），只清掉"发动前就已存在"的窗口（即本卡自己的那一个）。
+		 */
+		const beforeKeys = new Set((game.status_instant || []).map(e => e.card_id + ':' + e.window))
+		// 借用生效（italy_borrow）时，效果归属国改为借用方（意大利），
+		// 而非桌面归属 owner（德国）；代价/弃牌已由上方 costPayer 处理，不动。
+		const effNation = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
+		/*
+		 * 【2026-11-04 · S1】in-flight 标记：run 期间本卡不能被重新武装。
+		 *
+		 * 17848《一步也不许后退》的 run 会再发起一次陆战；那次战斗结束又触发
+		 * arm_status_instant('after_land')，而"本回合已发动"要等 run 返回后才记账
+		 * （见下方 status_used 写入）——于是同一张卡在运行途中被重新点亮，可连续发动。
+		 * 这里只在 run 期间挂标记，跑完立刻清：
+		 *   · 不影响多步卡第二次点击续跑（那时标记已清）；
+		 *   · 不影响 15245→15253 这类【别的卡】在嵌套战斗里被武装。
+		 */
+		game.status_inflight = String(cardId)
+		let r
+		try {
+			r = run_status_effect(game, effNation, cardId, tr, arg || {}, instEntry && instEntry.space)
+		} finally {
+			delete game.status_inflight
+		}
+		/*
+		 * 【2026-10-15】效果发起了战斗（15247 贵在行动 / 15245 等）-> 挂起高速公路。
+		 * 否则 pending_autobahn 守卫会拦掉后续所有战斗结算动作，玩家卡死。
+		 * 挂起时 autobahn 上下文完整存盘，战斗结束后由 maybe_resume_autobahn 恢复。
+		 *
+		 * 【2026-10-16 修复】原条件仅看 game.pending_battle（空军代受/kv2/guard 挂起）。
+		 * 但 15247 对"只有陆军、无空军"的目标发起战斗会【同步完成】——
+		 * do_battle 不挂起 pending_battle，而是直接在末尾 request_responses('battle')
+		 * 把响应卡（如 15336 法兰西爱国者·英国持有）入队并 handoff 给持有方。
+		 * 此时 pending_autobahn 仍为真，全局拦截器（20564）会把 trigger_response /
+		 * pass_response 一并拦下，表现为"挂起给英国后点击发动/不发动无反应"。
+		 * 故挂起条件扩展为：战斗引入了【任何】嵌套挂起（pending_battle /
+		 * response_queue / pending_econ）就挂起高速公路，待其全部清空后自动恢复。
+		 */
+		if (game.pending_battle || (game.response_queue || []).length || game.pending_econ)
+			suspend_autobahn(game)
+		/*
+		 * 【2026-10-15】多步选位：trigger.run 需要玩家在地图上选地区（17547 人工港 /
+		 * 17550 先进造船厂）。与 armed 的 r.need 同款：不付代价、不清窗口，
+		 * 把待收集信息写进 game.pending_status，经 view.pending_status 下发给客户端
+		 * 高亮候选；玩家点图后回传 activate_status{space}，run 拿到 space 真正建设。
+		 */
+		if (r.pending) {
+			/* 多步状态卡（17546 铆钉女工）第 1 步：返回 pending 表示待续，
+			 * 不算失败、不记"未能执行"；pending_echo 已由 trigger.run 写入 */
+			game.log.push('《' + cName + '》' + (r.desc || '请继续'))
+			return game
+		}
+		if (!r.ok) {
+			/*
+			 * 【2026-10-23】效果没成立 -> 退回【弃牌类】代价。
+			 *
+			 * 旧口径是"代价已付的不回滚（玩家确认过才点的）"，但实测玩家往往是被
+			 * 客户端通用候选引导选了非法单位（17846 只能以刚建成的那支陆军发起），
+			 * 白亏一张牌不可接受。牌退回手牌 + 窗口保留，玩家可改选后重试。
+			 *
+			 * 只回滚 discard：损耗已进牌库底部、失分/放弃建设卡已改变盘面，
+			 * 无法精确还原（各自在日志里已写明）。
+			 */
+			const _pk = (arg && arg.discard) || []
+			if (cost.discard && _pk.length) {
+				let back = 0
+				for (const cid of _pk.slice(0, cost.discard)) {
+					const pile = game.discard[costPayer] || []
+					const di = pile.indexOf(cid)
+					if (di < 0) continue
+					pile.splice(di, 1)
+					put_back_to_hand(game, costPayer, cid)
+					back++
+				}
+				if (back) game.log.push('【' + costPayer + '】已退回 ' + back + ' 张代价手牌（效果未成立）')
+			}
+			game.log.push('《' + cName + '》效果未能执行：' + r.reason)
+			return game
+		}
+		/*
+		 * 发动成功：消耗本卡自身的"立刻"窗口，但【保留嵌套动作武装的新窗口】。
+		 * 下一次其它动作仍会在 exports.action 顶部清空，所以保留的新窗口
+		 * 也只对本回合的下一个动作有效（与"X 后立刻"口径一致）。
+		 */
+		/* 本卡效果内嵌套发起战斗/建设，会重新武装同阵营窗口（如 15245 发起陆战 → 再武装 15253《闪电战》）。
+		 * 这些被重新武装的窗口（e.rearmed）应保留给玩家作为下一步动作；
+		 * 但【正在触发的这张卡本身】应当被消耗（从窗口移除），即使它在嵌套战斗里也被再次武装。 */
+		game.status_instant = (game.status_instant || []).filter(e =>
+			(e.rearmed || !beforeKeys.has(e.card_id + ':' + e.window)) && e.card_id !== cardId)
+		game.pending_status = null
+
+		/* 一回合一次记账（A3① 卡保留）。
+		 * 【2026-10-17】17513 战时生产委员会改为【定向重置】：把某张"本回合已发动"的
+		 * 美国状态卡删掉 status_used 记账，使其可再发动1次（见 resolve_us_wartime），
+		 * 故这里统一只写 status_used，不再有 status_extra 特例。 */
+		if (tr.once_per_turn) {
+			/*
+			 * 【2026-11-04 · S1】记账键归一成【桌面实例 id】—— 与 arm_status_instant /
+			 * view.table_status[].used_this_turn 的读侧完全一致。
+			 * 客户端偶尔会回传面 id（如 "17848"），若直接当键写，读侧按 "17848#75" 找不到，
+			 * `once_per_turn` 就永远判空 = 每回合都能再发动（与 rtt-card-id-face 记的是同一类坑）。
+			 */
+			const _tab = game.table[owner] || []
+			const _usedKey = _tab.find(x => String(x) === String(cardId)) ||
+				_tab.find(x => String(x).split('#')[0] === String(cardId)) || cardId
+			game.status_used = game.status_used || {}
+			game.status_used[String(_usedKey)] = freq_key(game)
+		}
+		/*
+		 * 【2026-10-11】repeat:'per_unit' + count_by：每成功发动 1 次记 1 笔，
+		 * 上限 = 计数地区内指定国指定兵种数（status_unit_count）。
+		 * 键含 freq_key，跨回合自动失效。视觉/可发动判定见 status_window_ready。
+		 */
+		if (tr.repeat === 'per_unit' && tr.count_by)
+			status_repeat_bump(game, cardId)
+		/*
+		 * 【2026-09-28】"放弃建设陆军" = 用状态卡【替代】本次出牌行动，
+		 * 因此必须【占掉出牌名额】。
+		 *
+		 * 否则会出现两个问题：
+		 *   ① 本回合可反复点击该卡（每次白嫖 1 支征召陆军）——
+		 *      build_army 窗口里的 play_done 检查也会失效（因为始终 false）；
+		 *   ② 玩家相当于凭空多了一次行动（既征召、又还能正常出牌）。
+		 */
+		/*
+		 * 注意【不】在这里 mark_play_done：
+		 * 15341/15342 是【替换】已经打出的《建设陆军》卡的结果，
+		 * 出牌名额由那张建设卡自己占掉，状态卡本身不再额外占用
+		 * （玩家 2026-09-28 口径："不影响出牌"）。
+		 */
+		game.log.push('【' + owner + '】发动《' + cName + '》—— ' + r.desc)
+		request_responses(game, 'play_card', {
+			nation: owner, card: cardId, card_obj: inst_card(cardId),
+			from_status: true,
+		}, false)
+		/*
+		 * 【2026-10-22】德国状态卡【效果发动成功】-> 上报 15328《破译恩尼格码》。
+		 * 用户口径：手动 activate_status / attacked / econ_used / econ_target 算，auto 不算。
+		 * 放在效果结算之后（"发动效果后：弃置该卡"），skip 不算真正发动。
+		 */
+		const _cCard = inst_card(cardId)
+		if (_cCard && _cCard.nation === '德国' && !r.skip)
+			notify_german_status_used(game, [cardId])
+
+		/*
+		 * 【2026-10-26 玩家口径·取消自动推进】（取代 2026-09-28 的"立刻自动进入下一阶段"）
+		 *
+		 * 旧行为：发动 cost.skip_play 的卡后【立刻】advance_phase 到空军阶段。
+		 * 三个副作用：
+		 *   ① 挂起被甩到错误阶段 —— 17554 征召触发 17553 让权日本、同时 17555 要求弃牌，
+		 *      两个挂起都还没结算，阶段就已经被推到空军阶段；
+		 *   ② 随后给的【额外打出权】phase='play' 一离开出牌阶段立刻失效
+		 *      （"看得见用不了"）；
+		 *   ③ 原实现只在"有响应挂起"时才延后，委托 / 弃牌类挂起根本不在检查范围内。
+		 *
+		 * 新行为：不替玩家推进阶段。出牌名额已在上面占掉（mark_play_done / mark_play_acted），
+		 * "跳过"的代价照样兑现（打不出别的牌、play_start 卡也关闭），
+		 * 阶段由玩家自己点「下一阶段」—— 挂起因此能在【出牌阶段内】正常结算。
+		 *
+		 * 只对 cost.skip_play 生效：15348 这类代价是"失去 1 分"的卡
+		 * 不结束出牌阶段，玩家还能继续出牌。
+		 */
+		if (cost.skip_play && game.turn_phase === PH.PLAY) {
+			/*
+			 * pending_advance_phase 不再由这里设置 —— 取消自动推进后无需延后标记。
+			 * （maybe_advance_after_skip_play 保留但不被本分支触发。）
+			 */
+			game.log.push('《' + cName + '》发动完毕 —— 本回合出牌阶段已用完')
+		}
+		/*
+		 * 【2026-11-11】"立刻窗口"排他询问的收尾放在【分支最末尾】：
+		 * 上面的 play_card 响应派发 / 上报都已完成，此时清挂起 + 成对归还让权，
+		 * 才会让被暂停的响应链按原栈顶继续（不能提前清，否则新压的 play_card
+		 * 帧会插到链首，改变既有响应顺序）。
+		 * 只认同一个 card_id：别的状态卡发动不会误清别人的挂起。
+		 * 位置在 status_used 记账之后：口径 B 只在成功发动时消耗本回合机会。
+		 */
+		if (game.pending_status_ask &&
+			String(game.pending_status_ask.card_id) === String(cardId))
+			close_immediate_status_ask(game)
+		/*
+		 * 【2026-11-11 · B35】状态卡发动成功后，立刻给「窗口专用增强卡」开强制询问。
+		 * 放在分支最末尾：雷达自身的挂起已在上面收尾，且 play_card 响应派发已完成；
+		 * 若响应链非空，本挂起会按雷达同款机制暂停它，答完由 close 续跑。
+		 */
+		open_wartime_status_window(game, owner, cardId, cName, instEntry)
+		return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'resolve_battle')` 分支（逐字） */
+function action_resolve_battle(game, side, current, arg) {
+	/*
+	 * 【2026-09-30 重构】战斗预算(event_budget)模型下，单场战斗内部触发空军代受/
+	 * 抵消由 resolve_battle 解出后即算结算完毕；预算状态(game.event_budget)始终
+	 * 保留，剩余机会(remaining)已在 event_battle 中扣减，无需"续打序列"层。
+	 * 因此不再需要 event_battle_resume 这类序列续打函数。
+	 */
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		const pb = game.pending_battle
+		if (!pb) {
+			game.log.push('当前没有等待结算的战斗')
+			return game
+		}
+		const stage = pb.stage || 'defend'
+
+		/*
+		 * ---------- 阶段零：防守方决定是否打出保护卡（2026-10-06）----------
+		 *
+		 * 日本 15410《武士道》：日本陆军被攻击时，弃 1 张响应牌
+		 * -> 该部队在【本次战斗中】无法被移除。
+		 *
+		 * 为什么必须挂起（而不是"可选窗口"）：保护要在 victim 被移除
+		 * 【之前】生效，而 do_battle 不挂起就会一路同步结算到底。
+		 *
+		 * 流程：
+		 *   ① 玩家选《武士道》+ 指定要弃的响应牌（arg.drop）
+		 *      —— 服务端【不】替玩家挑：drop 不够就拒绝，挂起保留可重选
+		 *   ② 付代价 + 注册 protect 修饰器 + 卡进弃牌堆
+		 *   ③ 重放 do_battle（guard_done=true）完成这一战
+		 *   ④ 玩家选"不使用" -> 直接重放，原部队照常被移除
+		 *
+		 * 候选（guard_cards）由服务端算好下发，客户端不再二次判。
+		 */
+		/*
+		 * ---------- 阶段零 KV2：攻击方二选一（2026-10-07）----------
+		 *
+		 * 苏联响应卡 17837《KV-2 重型坦克》："苏联陆军被攻击时：攻击国家选择
+		 *   ① 弃置 4 张手牌      -> 战斗照常结算（该陆军被移除）
+		 *   ② 使该陆军在本次战斗中不会被移除 -> 注册 protect，重放后保住
+		 *
+		 * 表态方是【攻击方】（与 guard 的防守方相反），由 pending_wait_nation
+		 * 的 'kv2' 分支保证让权方向。arg.kv2 = 'discard' | 'protect'。
+		 */
+		/*
+		 * ---------- 阶段零 KV2_ASK：持有方决定是否发动（2026-10-07）----------
+		 *
+		 * 苏联响应卡 17837《KV-2 重型坦克》。玩家口径：
+		 *   先由【苏联（持有方）】决定是否发动；发动后权力才交给攻击方。
+		 *
+		 * arg.kv2_trigger = truthy -> 发动：就地改 stage='kv2' 并重新挂起，
+		 *                            由 set_pending_battle 把 active 让给攻击方。
+		 * arg.kv2_trigger = falsy  -> 不发动：卡【留于桌面】（不消耗），
+		 *                            重放战斗（kv2_done=true）照常结算。
+		 */
+		if (stage === 'kv2_ask') {
+			const ownerNation = pb.kv2_owner_nation || pb.defender_nation
+			if (faction_of_nation(ownerNation) !== side) {
+				game.log.push('只有【' + ownerNation + '】可以决定是否发动这张暗置响应牌')
+				return game
+			}
+			const want = !!(arg && arg.kv2_trigger)
+			if (!want) {
+				game.log.push('【' + ownerNation + '】不发动这张暗置响应牌（留于桌面）')
+				game.pending_battle = null
+				/* B34：本窗口本场已问过，重放时全量带出，避免 KV-2 ↔ 一步也不许后退 交替重挂 */
+				mark_battle_asked(game, pb, 'kv2')
+				const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
+					battle_replay_opt(game, pb, { resume: true }))
+				if (!r.ok) {
+					set_pending_battle(game, pb)
+					game.log.push(r.reason || '战斗无法结算')
+					return game
+				}
+				battle_reconcile_active(game)
+				game.log.push(battle_desc(r, pb.space, '战斗'))
+				return game
+			}
+			/* 发动：切到 kv2，让权给攻击方 */
+			pb.stage = 'kv2'
+			set_pending_battle(game, pb)
+			game.log.push('【' + ownerNation + '】发动《KV-2 重型坦克》—— 由【' +
+				pb.attacker + '】选择：弃置 4 张手牌，或使该陆军在本次战斗中不被移除')
+			return game
+		}
+
+		if (stage === 'kv2') {
+			if (faction_of_nation(pb.attacker) !== side) {
+				game.log.push('只有【' + pb.attacker + '】可以对《KV-2 重型坦克》做出选择')
+				return game
+			}
+			const pick = (arg && arg.kv2) ? String(arg.kv2) : null
+			if (pick !== 'discard' && pick !== 'protect') {
+				game.log.push('请选择：弃置 4 张手牌（discard）或 该陆军本次战斗不被移除（protect）')
+				return game
+			}
+			/*
+			 * 【2026-10-23 修复】弃置 4 张手牌必须【玩家自选】（arg.drop）。
+			 *
+			 * 原实现直接 `discard_card(game, attacker, hand[0])` 循环 4 次，
+			 * 等于服务端替玩家挑了"手牌最前面的 4 张"——与《一步也不许后退!》(17853)
+			 * 和 guard 保护卡代价的口径不一致（那两处都要求 drop）。
+			 *
+			 * 校验必须放在【消耗响应卡之前】：否则 drop 不足时返回，
+			 * 卡已被 splice 出桌面 + 进弃牌堆，玩家既没弃成牌也失去了响应卡。
+			 */
+			let kv2Drop = []
+			let kv2Need = 0
+			if (pick === 'discard') {
+				const hand = game.hands[pb.attacker] || []
+				kv2Need = Math.min(4, hand.length)
+				kv2Drop = ((arg && arg.drop) || []).map(String)
+					.filter(id => hand.indexOf(id) >= 0)
+				if (kv2Drop.length < kv2Need) {
+					game.log.push('《KV-2 重型坦克》需弃置 ' + kv2Need +
+						' 张手牌（当前指定 ' + kv2Drop.length + ' 张）')
+					return game      /* 不消耗卡、不推进战斗 */
+				}
+			}
+			/* 消耗这张暗置的响应卡（无论选哪个分支，卡都算用掉） */
+			const list = game.table_responses || []
+			const idx = list.findIndex(t => t.card_id === pb.kv2_card)
+			if (idx >= 0) {
+				const used = list.splice(idx, 1)[0]
+				const ownNation = '苏联'
+				game.discard[ownNation] = game.discard[ownNation] || []
+				if (!game.discard[ownNation].includes(used.card_id))
+					game.discard[ownNation].push(used.card_id)
+			}
+			/*
+			 * 【2026-10-25 修复·保护范围】卡面是「该陆军在【本次战斗中】不会被移除」，
+			 * 旧实现与 17853《一步也不许后退!》（本回合）共用同一写法：
+			 *     { nation, type:'army', spaces:[pb.space], untilTurn: game.turn }
+			 * 于是保护会持续到【整回合】，连本回合稍后的断补移除（resolve_supply 的
+			 * is_protected）都被挡下，且同地区所有苏联陆军一并受保护。
+			 * 修法：
+			 *   ① 加 piece 维度 —— 只保护被攻击的这一支（has_modifier 已支持）；
+			 *   ② 本次战斗（do_battle 重放）结束后立即撤销该修饰器 —— 精确表达"本次战斗中"。
+			 */
+			let kv2Prot = null
+			if (pick === 'protect') {
+				kv2Prot = register_modifier(game, {
+					key: 'protect', nation: pb.victim_nation, type: 'army',
+					piece: pb.victim,
+					spaces: [pb.space], untilTurn: game.turn, card: '17837',
+				})
+				game.log.push('【' + pb.attacker + '】选择：该《' + pb.victim_nation +
+					'》陆军在本次战斗中不会被移除')
+			} else {
+				for (const id of kv2Drop.slice(0, kv2Need)) discard_card(game, pb.attacker, id)
+				game.log.push('【' + pb.attacker + '】选择：弃置 ' + kv2Need + ' 张手牌')
+			}
+			game.pending_battle = null
+			/* B34：发动也记账；guard_done 保持原语义（保护成立即不再问其余保护窗口） */
+			mark_battle_asked(game, pb, 'kv2')
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
+				battle_replay_opt(game, pb, { guard_done: true, resume: true }))
+			/* 本次战斗结束即撤销（放在 r.ok 判定之前：重挂起时也要撤，玩家重选会重新注册） */
+			if (kv2Prot)
+				game.modifiers = (game.modifiers || []).filter(m => m !== kv2Prot)
+			if (!r.ok) {
+				set_pending_battle(game, pb)
+				game.log.push(r.reason || '战斗无法结算')
+				return game
+			}
+			battle_reconcile_active(game)
+			game.log.push(battle_desc(r, pb.space, '战斗'))
+			return game
+			}
+
+			/*
+			* ---------- 阶段零 SU_STEP_BACK：苏联持有方决定是否发动（2026-10-18，苏联 17853）----------
+			*
+			* 卡面："苏联陆军被攻击时，弃置 4 张手牌：使其在本回合中不会被移除。"
+			* 表态方是【苏联（持有方）】，由 pending_wait_nation 的 'su_step_back' 分支保证让权方向。
+			* arg.step_back = true  -> 发动：苏联弃置 4 张手牌（选牌弃牌，服务端再校验），
+			*                          消耗暗置响应卡，注册 protect 修饰器；
+			*                          重放战斗（su_step_back_done + guard_done）后该陆军不被移除。
+			* arg.step_back = falsy -> 不发动：卡留于桌面（不消耗），重放战斗（su_step_back_done）照常结算。
+			*/
+			if (stage === 'su_step_back') {
+			const ownerNation = pb.su_owner_nation || pb.defender_nation
+			if (faction_of_nation(ownerNation) !== side) {
+				game.log.push('只有【' + ownerNation + '】可以决定是否发动这张暗置响应牌')
+				return game
+			}
+			const want = !!(arg && arg.step_back)
+			if (!want) {
+				game.log.push('【' + ownerNation + '】不发动这张暗置响应牌（留于桌面）')
+				game.pending_battle = null
+				/* B34：全量带出本场已问窗口，拒绝后不再回头重问 KV-2 */
+				mark_battle_asked(game, pb, 'su_step_back')
+				const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
+					battle_replay_opt(game, pb, { resume: true }))
+				if (!r.ok) {
+					set_pending_battle(game, pb)
+					game.log.push(r.reason || '战斗无法结算')
+					return game
+				}
+				battle_reconcile_active(game)
+				game.log.push(battle_desc(r, pb.space, '战斗'))
+				return game
+			}
+			/* 发动：弃置 4 张手牌（选牌弃牌，服务端再校验；不允许替玩家挑） */
+			const need = 4
+			const hand = (game.hands[ownerNation] || [])
+			const drop = ((arg && arg.drop) || []).map(String)
+				.filter(id => hand.indexOf(id) >= 0)
+			if (drop.length < need) {
+				game.log.push('《一步也不许后退!》需弃置 ' + need + ' 张手牌（当前指定 ' + drop.length + ' 张）')
+				return game
+			}
+			for (const id of drop.slice(0, need)) discard_card(game, ownerNation, id)
+			game.log.push('【' + ownerNation + '】弃置 ' + need + ' 张手牌作为代价')
+			/* 消耗这张暗置的响应卡（无论是否发动，到这里都算用掉） */
+			const list = game.table_responses || []
+			const idx = list.findIndex(t => t.card_id === pb.su_card)
+			if (idx >= 0) {
+				const used = list.splice(idx, 1)[0]
+				game.discard[ownerNation] = game.discard[ownerNation] || []
+				if (!game.discard[ownerNation].includes(used.card_id))
+					game.discard[ownerNation].push(used.card_id)
+			}
+			/* 注册 protect 修饰器：本回合该苏联陆军不被移除 */
+			register_modifier(game, {
+				key: 'protect', nation: pb.victim_nation, type: 'army',
+				spaces: [pb.space], untilTurn: game.turn, card: '17853',
+			})
+			game.log.push('【' + ownerNation + '】发动《一步也不许后退!》—— 该《' +
+				pb.victim_nation + '》陆军本回合不会被移除')
+			game.pending_battle = null
+			/* B34：发动也记账；guard_done 保持原语义 */
+			mark_battle_asked(game, pb, 'su_step_back')
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
+				battle_replay_opt(game, pb, { guard_done: true, resume: true }))
+			if (!r.ok) {
+				set_pending_battle(game, pb)
+				game.log.push(r.reason || '战斗无法结算')
+				return game
+			}
+			battle_reconcile_active(game)
+			game.log.push(battle_desc(r, pb.space, '战斗'))
+			return game
+			}
+
+			if (stage === 'guard') {
+			if (faction_of_nation(pb.defender_nation) !== side) {
+				game.log.push('只有【' + pb.defender_nation + '】可以决定是否打出保护卡')
+				return game
+			}
+			const want = (arg && arg.guard != null) ? arg.guard : null
+			if (want != null) {
+				const entry = (pb.guard_cards || []).find(x => x.card_id === want)
+				if (!entry) {
+					game.log.push('这张卡当前不在可打出的保护卡内')
+					return game
+				}
+				const owner = entry.nation
+				if ((game.hands[owner] || []).indexOf(want) < 0) {
+					game.log.push('【' + owner + '】手中没有这张牌')
+					return game
+				}
+				/* 代价：玩家指定；未指定/不够就拒绝（服务端永不替玩家挑） */
+				const need = entry.cost || 0
+				const filter = entry.cost_filter || null
+				const typeName = filter === 'response' ? '响应牌' : '手牌'
+				const pool = (game.hands[owner] || []).filter(id =>
+					id !== want && (!filter || filter_matches_card(id, filter)))
+				const drop = ((arg && arg.drop) || [])
+					.map(String)
+					.filter(id => pool.indexOf(id) >= 0 && id !== want)
+				if (drop.length < need) {
+					game.log.push('《' + entry.name + '》需弃置 ' + need + ' 张' +
+						typeName + '（当前指定 ' + drop.length + ' 张）')
+					return game
+				}
+				for (const id of drop.slice(0, need)) discard_card(game, owner, id)
+				if (need) game.log.push('【' + owner + '】弃置 ' + need + ' 张' + typeName)
+
+				const eff = ECHO_EFFECTS[String(inst_card_id(want))]
+				const r = (eff && eff.armed && eff.armed.run)
+					? eff.armed.run(game, {
+						nation: owner, card_id: want,
+						space: pb.space, kind: pb.kind,
+						piece: pb.victim, attacker: pb.attacker,
+					})
+					: null
+				if (!r || r.skip) {
+					/*
+					 * 条件没满足：不消耗卡、不重放战斗。
+					 * 挂起【保留】，玩家可以改用另一张或选不使用。
+					 */
+					game.log.push('《' + entry.name + '》本次未满足发动条件：' +
+						((r && r.desc) || ''))
+					return game
+				}
+				const hi = (game.hands[owner] || []).indexOf(want)
+				if (hi >= 0) game.hands[owner].splice(hi, 1)
+				game.discard[owner] = game.discard[owner] || []
+				if (!game.discard[owner].includes(want)) game.discard[owner].push(want)
+				game.log.push('【' + owner + '】打出《' + entry.name + '》—— ' + (r.desc || ''))
+			} else {
+				game.log.push('【' + pb.defender_nation + '】不使用保护卡')
+			}
+			/* 重放这一战：protect 已生效时 is_protected() 会挡下移除 */
+			game.pending_battle = null
+			/* B34：guard 已表态，记账后全量带出本场已问窗口 */
+			mark_battle_asked(game, pb, 'guard')
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
+				battle_replay_opt(game, pb, {
+					/* resume：跳掉"被攻击"类钩子，避免重放被当成又打了一场 */
+					resume: true,
+				}))
+			if (!r.ok) {
+				/* 参数不合法：把挂起放回去，让防守方重选 */
+				set_pending_battle(game, pb)
+				game.log.push(r.reason || '战斗无法结算')
+				return game
+			}
+			battle_reconcile_active(game)
+			game.log.push(battle_desc(r, pb.space, '战斗'))
+			return game
+		}
+
+		/* ---------- 阶段二：发起方决定是否抵消 ---------- */
+		if (stage === 'counter') {
+			if (faction_of_nation(pb.attacker) !== side) {
+				game.log.push('只有【' + pb.attacker + '】可以决定是否用空军抵消')
+				return game
+			}
+			const wants = arg && arg.counter_air != null
+			/*
+			 * 【2026-11-06 · B10 部分回退（玩家裁定）】
+			 *
+			 * 上一版在这里"不立刻打死 victim"、改挂 `after_air_loss` 再决定是否让新补的空军
+			 * 再次代受。那等于把「victim 的移除时机」挪进了核心战斗时序，实测还导致
+			 * `game.active` 卡在防守方（挂起/归还错误）—— 空军代死属底层机制，不在此处冒险。
+			 *
+			 * 现在恢复原流程：抵消成立 -> do_battle 里两架空军各走
+			 * `remove_air_with_piece_removed`（保留"空军被移除"的窗口派发）+ victim 立即移除，
+			 * 结束后由 `battle_reconcile_active` 正常归还操作权。
+			 * 17811《雅科夫列夫设计局》仍能在"空军已被移除"之后开窗补机（战后生效，不再代死本场）。
+			 */
+			/* B34：counter 重放也必须带出本场已问窗口，否则桌上暗置响应卡会被再问一次 */
+			mark_battle_asked(game, pb, 'guard')
+			const opt = battle_replay_opt(game, pb, {
+				/* 重放防守方已选定的代受空军 */
+				defend_air: pb.defend_air,
+				counter_air: wants ? arg.counter_air : undefined,
+				declined_counter: !wants,
+			/* 【2026-11-06 · 17811 特例】同上 */
+			_air_used: (pb.air_used || []),
+			_bureau_depth: (pb.bureau_depth || 0),
+			})
+			game.pending_battle = null
+			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', opt)
+			if (!r.ok) {
+				/* 参数不合法：把挂起放回去，让发起方重选（并重新让权） */
+				set_pending_battle(game, pb)
+				game.log.push('【' + pb.attacker + '】' + r.reason)
+				return game
+			}
+			/* 这一战已结算 -> 操作权交还原行动方 */
+			battle_reconcile_active(game)
+			game.log.push('【' + pb.attacker + '】' +
+				(r.countered_by_air ? '用空军抵消了这次代受' : '不抵消（代受成立）') +
+				' —— ' + battle_desc(r, pb.space, '战斗'))
+				/*
+				* 战斗预算(event_budget)模型下，单场战斗结算完即结束：
+				* 发起方若仍有剩余机会(remaining>0)可继续点 event_battle，
+				* 预算状态(game.event_budget)始终保留，无需"续打序列"层。
+				*/
+				return game
+				}
+
+		/* ---------- 阶段一：防守方决定是否代受 ---------- */
+		if (faction_of_nation(pb.defender_nation) !== side) {
+			game.log.push('只有【' + pb.defender_nation + '】可以决定是否用空军代受')
+			return game
+		}
+
+		const victim = pb.victim
+		const kind = pb.kind || 'land'
+		/* B34：defend 阶段说明本场保护窗口已表态，记账后重放全量带出 */
+		mark_battle_asked(game, pb, 'guard')
+		const opt = battle_replay_opt(game, pb, {
+		/* use_air 有值 -> 代受；否则视为不代受 */
+		defend_air: (arg && arg.use_air != null) ? arg.use_air : undefined,
+			air_retreat: (arg && arg.retreat != null) ? arg.retreat : undefined,
+			/*
+			 * 【2026-11-05 修复·15410 武士道】必须带 guard_done。
+			 *
+			 * 走到 defend 阶段说明 guard（保护卡）已经表态过（选了"不使用"或已打出）。
+			 * 但重放 do_battle 时旧代码没带 guard_done，于是 do_battle 又走一遍
+			 * `if (!opt.guard_done && !opt.kv2_done)` 的 guard 分支 ——
+			 * 15410 还在手里、条件依旧满足 → 又挂 guard → 玩家在
+			 * 「guard ↔ defend」之间无限循环，被攻击的陆军永远死不了（实测）。
+			 */
+			guard_done: true,
+			/* 【2026-11-06 · 17811 特例】把本场已用空军与 bureau 深度传回 do_battle */
+			_air_used: (pb.air_used || []),
+			_bureau_depth: (pb.bureau_depth || 0),
+			})
+			/*
+			* 明确"不代受"：把 defend_air 显式设为 null，
+		 * 让 do_battle 知道防守方已表态（不再挂起）。
+		 */
+		if (!(arg && arg.use_air != null))
+			opt.defend_air = null
+		if (opt.defend_air === null && !(arg && arg.declined))
+			opt.declined_defend_air = true
+
+		game.pending_battle = null
+		const r = do_battle(game, pb.attacker || game.current_nation,
+			pb.space, victim, kind, opt)
+		if (!r.ok) {
+			/* 参数不合法：把挂起状态放回去，让防守方重选（并重新让权） */
+			set_pending_battle(game, pb)
+			game.log.push('【' + pb.defender_nation + '】' + r.reason)
+			return game
+		}
+		/*
+		 * 防守方选择代受、且发起方有可抵消的空军时，
+		 * do_battle 会再次挂起（stage='counter'）等发起方表态。
+		 * 此时这一战还没结束，日志要说清楚"现在轮到谁"。
+		 */
+		if (r.pending) {
+			game.log.push('【' + pb.defender_nation + '】用空军代受 —— ' +
+				'现等待【' + pb.attacker + '】决定是否用相邻的空军抵消')
+			return game
+		}
+		game.log.push('【' + pb.defender_nation + '】' +
+			(r.defended_by_air ? '用空军代受' : '不代受（照常移除）') +
+			' —— ' + battle_desc(r, pb.space, '战斗'))
+		/*
+		 * 战斗预算(event_budget)模型下，单场战斗结算完即结束：
+		 * 预算状态(game.event_budget)始终保留，无需"续打序列"层。
+		 */
+		/*
+		 * 【2026-10-20 修复】代受/不代受这一【日常出口】此前从未调用
+		 * battle_reconcile_active，导致两个后果：
+		 *   ① 操作权不归还 —— battle_return_active 悬空，game.active 停在防守方；
+		 *   ② promote_deferred_response 无人触达 —— 延期续打帧（15425《海军空降部队》
+		 *      的"是否再发起 1 次陆战"）永久留在 deferred，
+		 *      表现即"即使没有增强卡，第二步也不弹出"。
+		 * 与 guard / kv2 / su_step_back 各分支口径统一：本场战斗结算完即 reconcile
+		 * （内部会先归还操作权，再按守卫提升延期帧）。
+		 */
+		battle_reconcile_active(game)
+		return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'use_armed_offer')` 分支（逐字） */
+function action_use_armed_offer(game, side, current, arg) {
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		const cardId = arg && arg.card
+		const off = (game.armed_offers || []).find(w => (w.cards || []).some(x => x.card_id === cardId))
+		if (!off || !cardId) {
+			game.log.push('当前没有可打出的增强卡')
+			return game
+		}
+		const entry = (off.cards || []).find(x => x.card_id === cardId)
+		if (!entry) {
+			game.log.push('这张卡当前不在可打出窗口内')
+			return game
+		}
+		const owner = entry.nation
+		if (faction_of_nation(owner) !== side) {
+			game.log.push('不能打出对方的牌')
+			return game
+		}
+		/* 必须仍在手牌（防止窗口残留后重复打出） */
+		if ((game.hands[owner] || []).indexOf(cardId) < 0) {
+			game.log.push('【' + owner + '】手中没有这张牌')
+			removeArmedWindow(game, off)
+			return game
+		}
+		const eff = ECHO_EFFECTS[String(inst_card_id(cardId))]
+		const ar = eff && eff.armed
+		const nm = (inst_card(cardId) || { name: '?' }).name
+		if (!ar) {
+			game.log.push('《' + nm + '》配置异常')
+			return game
+		}
+		/*
+		 * 【2026-10-07 修复】多步交互支持。
+		 * 旧逻辑只调一次 ar.run 且【不把玩家选择传进去】，run 返回 need:'piece'/'space'
+		 * 直接被忽略 —— 凡是"选棋子/选地区"的 armed 卡（17806/17808/17809/17811）实战中
+		 * 效果都不会结算（窗口能弹、代价会扣，但移除/建设不落地）。
+		 *
+		 * 新逻辑：把客户端逐步传来的选择（piece/space/choice）与已收集部分合并成 gathered，
+		 * 作为第 3 参传给 ar.run；若 run 返回 need，则把待收集信息写进
+		 * armed_offer.pending 下发，【不付代价、不移除卡、不清除窗口】，等待下一步输入；
+		 * 客户端把选择随下一次 use_armed_offer 回传，handler 重新跑 run（gathered 已暂存）。
+		 */
+		const _sel = {}
+		if (arg && arg.piece != null) _sel.piece = arg.piece
+		if (arg && arg.space != null) _sel.space = arg.space
+		if (arg && arg.status != null) _sel.status = arg.status
+		if (arg && arg.choice != null) _sel.choice = arg.choice
+		/*
+		 * 【2026-10-17 修复】弃牌代价（cost.discard）在多步交互里会丢失：
+		 * 玩家在第一步弹框选的 drop 随 use_armed_offer 传入 arg.drop，但 run 返回 need 时
+		 * handler 直接 return、弃牌块还没执行，且 _sel 不含 drop → 选择不进 off.arg；
+		 * 到最终结算时 arg.drop 已无（仅剩 {card, space/piece}），弃牌被忽略，
+		 * 无响应卡时更会直接 return（既不弃牌也不开战）。这里把 drop 一并持久化，
+		 * 弃牌块改读 gathered.drop（见下方）。
+		 */
+		if (arg && arg.drop) _sel.drop = arg.drop
+		if (arg && arg.pick != null) _sel.pick = arg.pick
+		const gathered = Object.assign({}, off.arg || {}, _sel)
+		off.arg = gathered
+		/*
+		 * 【2026-10-23 玩家口径】弃牌代价必须【玩家指定】，且必须在 run 之前拦。
+		 *
+		 * 本函数既有结构是"先 run 后付代价"（好处：条件不满足时不白亏牌）。
+		 * 但代价不再自动兜底后，若仍等到 run 之后才校验，玩家不选牌点发动会
+		 * 【先吃到卡牌效果】（如 15405 当场建出海军），再被代价校验拒绝 ——
+		 * 效果白嫖、卡还没消耗。故把"张数够不够"前置到 run 之前。
+		 */
+		const _discNeed0 = (ar.cost && ar.cost.discard) || 0
+		if (_discNeed0 > 0) {
+			let _picked = (gathered.drop || []).filter(id =>
+				(game.hands[owner] || []).indexOf(id) >= 0 && id !== cardId)
+			/*
+			 * 【2026-11-08】代价的【类型限定】必须在服务端校验。
+			 * 15411 夜间运输是「弃置 1 张[响应卡]」：此前只校验张数，
+			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意牌替代。
+			 */
+			if (ar.cost.filter === 'response')
+				_picked = _picked.filter(id => {
+					const _c = inst_card(id)
+					return !!(_c && String(_c.type).toUpperCase() === 'RESPONSE')
+				})
+			/*
+			 * 【2026-11-11】补 'build'（[建设陆军]）类型限定。
+			 * 17900《八月风暴》代价是"弃 1 张[建设陆军]"：此前只校验张数，
+			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意手牌替代
+			 * （判定不同源）。与 2026-11-08 给 'response' 补的类型校验同口径。
+			 */
+			if (ar.cost.filter === 'build')
+				_picked = _picked.filter(id => {
+					const _c = inst_card(id)
+					return !!(_c && String(_c.type).toUpperCase() === 'BASIC' && _c.name === '建设陆军')
+				})
+			if (_picked.length < _discNeed0) {
+				game.log.push('《' + nm + '》需先选择弃置 ' + _discNeed0 +
+					(ar.cost.filter === 'response' ? ' 张[响应卡]'
+						: (ar.cost.filter === 'build' ? ' 张[建设陆军]' : ' 张手牌')) +
+					'作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
+				return game
+			}
+		}
+		/*
+		 * 【2026-10-29 二级拦截】"打出增强卡"这个动作本身也可能被敌方反制
+		 * （英国 15352 拦意大利 16701 时，15352 是增强卡 -> 意大利 16700 可再拦）。
+		 * 必须放在 ar.run 之前：效果一旦执行就拦不住了。
+		 */
+		/*
+		 * 【2026-10-31】开窗前的【代价可行性预检】：
+		 * 代价付不起就不要开窗问敌方 —— 否则对方白表一次态、随后 run 才报"付不起"。
+		 * （discard 张数已由上面的 _discNeed0 预检覆盖，这里补 attrition。）
+		 */
+		{
+			const _attrNeed = (ar.cost && ar.cost.attrition) || 0
+			if (_attrNeed && !can_attrite(game, owner, _attrNeed)) {
+				game.log.push('《' + nm + '》需损耗 ' + _attrNeed + ' 张牌，但牌库不足（未发动）')
+				off.cards = off.cards.filter(x => x.card_id !== cardId)
+				if (!off.cards.length) removeArmedWindow(game, off)
+				else sync_armed_offer(game)
+				refresh(game)
+				return game
+			}
+		}
+		if (suspend_armed_use_for_intercept(game, off, cardId, owner, gathered, nm)) {
+			refresh(game)
+			return game
+		}
+		/* 先执行；条件不满足就保留手牌、不付代价 */
+		const r = ar.run(game, Object.assign({ nation: owner, card_id: cardId }, off.ctx || {}), gathered)
+		if (!r || r.skip) {
+			game.log.push('《' + nm + '》本次未满足发动条件：' + ((r && r.desc) || ''))
+			/* 单卡不满足：从本窗口移除该卡，其余候选仍可打（支持连打多张） */
+			off.cards = off.cards.filter(x => x.card_id !== cardId)
+			if (!off.cards.length) removeArmedWindow(game, off)
+			else sync_armed_offer(game)
+			refresh(game)
+			return game
+		}
+		/*
+		 * 多步交互：需要玩家进一步选择。不付代价、不移除卡、不清窗口，
+		 * 等客户端回传选择后重跑（gathered 已落盘到 game.armed_offer.arg）。
+		 * 候选为空是防御性兜底，避免死锁。
+		 */
+		if (r.need) {
+			if (!r.candidates || !r.candidates.length) {
+				game.log.push('《' + nm + '》没有合法选择，发动结束')
+				removeArmedWindow(game, off)
+				refresh(game)
+				return game
+			}
+			off.pending = {
+				need: r.need,
+				revealNation: r.revealNation || null,
+				candidates: r.candidates || [],
+				pick: r.pick || 1,
+				pickMin: r.pickMin || 1,
+				choiceOptions: r.choiceOptions || null,
+				/*
+				 * 【2026-10-17】need:'piece' 时可附带 spaceCandidates（空白合法地块），
+				 * 供客户端把"敌方单位"与"可空打的空白地块"同时高亮（15406）。
+				 */
+				spaceCandidates: r.spaceCandidates || null,
+			}
+			game.log.push('【' + owner + '】《' + nm + '》—— 请' +
+				(r.need === 'piece' ? '选择一支部队' :
+					r.need === 'space' ? '选择一个地区' : '做出选择'))
+			refresh(game)
+			return game
+		}
+		/*
+		 * 【2026-10-31】run 明确失败（ok:false，如"所选单位不在候选内"）：
+		 * 此前没有任何分支处理 —— 会掉进下面的"付代价 + 卡进弃牌堆"，
+		 * 日志只剩一句 `打出《X》——`（desc 为空），玩家看到的是"点了、代价没了、什么也没发生"。
+		 * 现在：不付代价、不消耗卡，写清原因并从本窗口摘掉该卡（与 skip 分支同款），
+		 * 避免反复提交同一个非法参数。
+		 */
+		if (r && r.ok === false) {
+			game.log.push('【' + owner + '】《' + nm + '》未发动：' + (r.reason || '条件不满足'))
+			off.cards = off.cards.filter(x => x.card_id !== cardId)
+			if (!off.cards.length) removeArmedWindow(game, off)
+			else sync_armed_offer(game)
+			refresh(game)
+			return game
+		}
+		/*
+		 * 【2026-10-07】15205《JU-87》型：run 建立的是【战斗预算】而不是立即结算。
+		 *
+		 * 此时【不能】走下面的"付代价 + 卡进弃牌堆"—— 战斗还没打，
+		 * 损耗 1 张牌是【发动】的代价；且卡若现在离手，预算面板的
+		 * card_id 就指向一张已弃的牌了。
+		 *
+		 * 处理：卡留在手牌、代价延后（记在 budget.cost），
+		 * 由 event_finish 决定付不付（至少发动 1 场才付，见该处）。
+		 */
+		if (r.budget) {
+			game.log.push('【' + owner + '】《' + nm + '》—— ' + (r.desc || ''))
+			removeArmedWindow(game, off)
+			refresh(game)
+			return game
+		}
+		/* 成功后才付代价 + 消耗 */
+		const need = (ar.cost && ar.cost.attrition) || 0
+		if (need) {
+			if (!can_attrite(game, owner, need)) {
+				game.log.push('《' + nm + '》需损耗 ' + need + ' 张牌，但牌库不足')
+				removeArmedWindow(game, off)
+				return game
+			}
+			attrition_cards(game, owner, need)
+			game.log.push('【' + owner + '】损耗 ' + need + ' 张牌')
+		}
+		/*
+		 * 【2026-10-06】弃置代价（日本增强卡：「弃置 1 张【响应卡】」）。
+		 *
+		 * 原先只处理 attrition（损耗），日本卡的 discard 代价会被【跳过】
+		 * —— 表现为"技能/装载卡白嫖，没付代价"。
+		 *
+		 * cost.discard 可带 filter（限定牌类型）；玩家用 arg.drop 指定要弃的牌，
+		 * 未指定时自动取第一张符合类型的（服务端兜底，客户端应让玩家选）。
+		 */
+		const discNeed = (ar.cost && ar.cost.discard) || 0
+		if (discNeed) {
+			const costFilter = (ar.cost && ar.cost.filter) || null
+			const wantType = costFilter
+				? (costFilter === 'response' ? 'RESPONSE'
+					: costFilter === 'build' ? 'BASIC'   /* 【2026-10-07 修复】'build' 对应 BASIC 基础卡（[建设陆军]），不是字面 'BUILD'（无此类型） */
+					: String(costFilter).toUpperCase())
+				: null
+			const typeName = costFilter === 'response' ? '响应牌' : (wantType || '手牌')
+			const handNow = game.hands[owner] || []
+			const matchType = (id) => {
+				if (!wantType) return true
+				/* 【2026-10-07 修复】'build' 代价 = 弃置 1 张【建设陆军】（BASIC 且 name=建设陆军），
+				   不是任意 BASIC 卡（否则会误弃《空军力量》等其它基础卡，与卡面代价不符）。
+				   与 national_skill 的 'build' 口径（rules.js:~1621）保持一致。 */
+				if (costFilter === 'build') {
+					const c = inst_card(String(inst_card_id(id)))
+					return !!c && c.type === 'BASIC' && c.name === '建设陆军'
+				}
+				return is_card_type(String(inst_card_id(id)), wantType)
+			}
+			const pool = handNow.filter(id => id !== cardId && matchType(id))
+			/*
+			 * 【2026-10-23 玩家口径】不再"替玩家挑牌"。
+			 *
+			 * 原实现 gathered.drop 为空时退回 `pool.slice(0, discNeed)` ——
+			 * 等于玩家不选就自动弃手牌最前面 N 张（与 17837 KV-2 同一类问题）。
+			 * 改为与 17837 相同口径：只认玩家指定的 drop（含多步交互里
+			 * 持久化进 off.arg 的 gathered.drop），不足则拒绝并【保留窗口】让玩家重选。
+			 *
+			 * 客户端已有自选 UI：pending_echo_discard.armed -> use_armed_offer{card, drop}。
+			 */
+			const want = (gathered.drop || []).filter(id =>
+				handNow.indexOf(id) >= 0 && id !== cardId && matchType(id))
+			if (want.length < discNeed) {
+				game.log.push('《' + nm + '》需弃置 ' + discNeed + ' 张' + typeName +
+					'（已指定 ' + want.length + ' 张，可用 ' + pool.length +
+					' 张），请在选牌框中选择后再发动')
+				return game
+			}
+			for (const id of want.slice(0, discNeed)) discard_card(game, owner, id)
+			game.log.push('【' + owner + '】弃置 ' + discNeed + ' 张' + typeName)
+		}
+		/* 从手牌移除 -> 进弃牌堆 */
+		const hi = (game.hands[owner] || []).indexOf(cardId)
+		if (hi >= 0) game.hands[owner].splice(hi, 1)
+		game.discard[owner] = game.discard[owner] || []
+		if (!game.discard[owner].includes(cardId)) game.discard[owner].push(cardId)
+		game.log.push('【' + owner + '】打出《' + nm + '》—— ' + (r.desc || ''))
+		/* 【2026-10-18】拦截捕获：enemy_echo_played / enemy_status_effect 是专用拦截窗口，
+		 * off.ctx.card = 被拦截的敌方卡（实例 id），off.ctx.nation = 被拦截方国家。 */
+		if ((off.when === 'enemy_echo_played' || off.when === 'enemy_status_effect') &&
+			off.ctx && off.ctx.card) {
+			record_intercept(game, cardId, off.ctx.card, {
+				by_nation: owner,
+				victim_nation: off.ctx.nation,
+			})
+		}
+		/*
+		 * 【2026-10-29 二级拦截】本次拦掉的是"某张增强卡的打出" ->
+		 * 那张卡按被反制处理（代价照付、效果不发生、放行它原本压住的那张牌）。
+		 */
+		if (off.when === 'enemy_echo_played' && game.pending_armed_use &&
+			off.ctx && game.pending_armed_use.card === off.ctx.card)
+			void_pending_armed_use(game, nm)
+		refresh_armed_window(game, off)
+		/*
+		 * 【2026-10-29 P0-a】拦截成功：被拦的那张已出队（进弃牌堆、效果不发生），
+		 * 接着询问队列里的下一张，避免"先打的那张成孤儿"。
+		 */
+		if (off.when === 'enemy_echo_played' && off.ctx && off.ctx.card) {
+			/*
+			 * 【2026-10-31 S1】拦的是"代价照付"型卡（15214 战术革新）：
+			 * 它的代价（弃置桌面状态卡）已经付掉，这里只取消【效果】
+			 * —— 清掉它停在 Step 2 的 pending_echo，免费打出不再发生。
+			 */
+			if (game.pending_echo && game.pending_echo.card === off.ctx.card) {
+				const nm2 = (inst_card(String(inst_card_id(off.ctx.card))) || {}).name || off.ctx.card
+				game.log.push('《' + nm2 + '》效果被拦截：' +
+					(off.ctx.nation || '') + '已付代价不退，剩余效果不发生')
+				game.pending_echo = null
+			}
+			echo_queue_drop(game, off.ctx.card)
+			resume_echo_queue(game)
+		}
+		refresh(game)
+		return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'resolve_response_choice')` 分支（逐字） */
+function action_resolve_response_choice(game, side, current, arg) {
+	/*
+	 * 【2026-10-04】响应卡效果需要玩家选择目标时，提交选择。
+	 * arg = { choice } —— space 类传地区 id；piece 类传棋子 id；
+	 *                     card 类传牌 id；option 类传选项下标。
+	 *
+	 * 与 trigger_response 配套：effect 返回 pending 后挂起，
+	 * 玩家选完走这里，用【同一个 effect】+ choice 再调一次完成结算，
+	 * 然后才消耗该响应卡、弹出队列。
+	 */
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		/* 【栈重构·第二期】从栈顶帧读取续打（纯栈：pending_response_choice 已删除） */
+		const pc = top_response_frame(game)
+		if (!pc) {
+			game.log.push('当前没有等待选择的响应卡')
+			return game
+		}
+		if (pc.owner_side !== side) {
+			game.log.push('只有该响应卡的持有方可以选择')
+			return game
+		}
+		const choice = arg && arg.choice
+		if (choice == null) {
+			game.log.push('请选择一个目标')
+			return game
+		}
+		/* 校验选择确实在候选里（防伪造） */
+		const candIds = (pc.candidates || []).map(x =>
+			(x && x.id != null) ? x.id : x)
+		if (candIds.indexOf(choice) < 0 && candIds.indexOf(Number(choice)) < 0) {
+			game.log.push('所选目标不在《' + pc.name + '》的合法候选内')
+			return game
+		}
+		/* 【D1/P5】正式卡走既有表；前奏军备卡由适配工厂生成同签名 effect */
+		const impl = RESPONSE_EFFECT_IMPL[pc.card_face] ||
+			prelude_response_impl(game, pc.card_face)
+		let intercepted = false
+		if (impl) {
+			try {
+				/* 第 5 个参数把挂起时记住的 extra（如新征召的海军 id）传回 effect */
+				game._resp_settling = true
+				const r = impl(game, pc.owner_side, pc.ctx, choice, pc.extra)
+				game._resp_settling = false
+				game.log.push('【响应】《' + pc.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
+				if (r && r.cancel) intercepted = true
+				/* 【2026-10-18】拦截捕获：15328 破译恩尼格码弃置的德国状态卡 = 被拦截目标 */
+				if (pc.card_face === '15328' && choice) {
+					record_intercept(game, pc.card_id, choice, {
+						victim_nation: '德国',
+						by_nation: response_holder_nation(game, pc.card_id),
+					})
+				}
+				/*
+				 * 【2026-10-14】多步响应：效果再次返回 pending（如 15430 奇袭
+				 * 海战选完后再选陆战）时，重新挂起、暂不消耗卡。
+				 * 现有单步响应在 resolve 时返回 {ok}（非 pending），不受影响；
+				 * 只有再次返回 pending 的卡才会走到这里，故安全。
+				 */
+				if (r && r.pending) {
+					/* 【栈重构·第二期】续打：移除当前 effect 帧、压入新帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
+					remove_response_frame(game, pc)
+					push_response_frame(game, {
+						card_id: pc.card_id,
+						card_face: pc.card_face,
+						name: pc.name,
+						owner_side: pc.owner_side,
+						kind: r.kind || 'space',
+						candidates: r.candidates || [],
+						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
+						ctx: pc.ctx || {},
+						extra: r.extra || null,
+						/* 【2026-10-26】续打帧：本卡已发动过，只等选目标，必须标记 pending，
+						 * 否则 trigger_response 会把它当"待发动"从头再跑一遍 effect。 */
+						pending: true,
+					})
+					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
+						(top_response_frame(game) || {}).prompt)
+					/* 【2026-10-20】帧已换新，同步派生队列视图（与 defer 分支同口径） */
+					sync_response_queue_view(game)
+					return game
+				}
+				/*
+				 * 【2026-10-15】defer：本步已完成，但本卡还有后续步骤（如 15430 奇袭
+				 * 的驱逐舰运输子步/海战触发了别的响应），需等那些响应结算完再回来继续。
+				 * 与 pending 的区别：pending 立刻挂起会插队；defer 把续打步骤存进
+				 * game.deferred_response_choice，让此刻触发的响应（game.active 已翻给对方）
+				 * 先结算，队列清空后由 promote_deferred_response 自动恢复 pending。
+				 * defer 时不消耗本卡、不推进队列（本卡仍在结算中）。
+				 */
+				if (r && r.defer) {
+					/*
+					 * 【栈重构·第二期】defer：移除当前 effect 帧，续打存 game.deferred_response_stack
+					 * （纯栈：不再写 deferred_response_choice 旧全局）。栈清空后由
+					 * promote_deferred_response 压回成为活动帧（按引用移除，保留嵌套响应帧）。
+					 */
+					/* 先记下本帧原位置：搬"外层残留帧"时用它区分「之下」与「之上（嵌套）」 */
+					const _pcIdx = (game.response_stack || []).indexOf(pc)
+					 remove_response_frame(game, pc)
+					const df = {
+						card_id: pc.card_id,
+						card_face: pc.card_face,
+						name: pc.name,
+						owner_side: pc.owner_side,
+						kind: r.kind || 'space',
+						candidates: r.candidates || [],
+						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
+						ctx: pc.ctx || {},
+						extra: r.extra || null,
+						/* 【2026-10-26】续打帧同 pending 分支：已发动过，只等选目标 */
+						pending: true,
+						/* 【2026-10-20】带上组信息，便于恢复后仍能被组相关逻辑识别 */
+						group_id: pc.group_id,
+						group_idx: pc.group_idx,
+					}
+					defer_response_frame(game, df)
+					/*
+					 * 【2026-10-20 修复·同组多张响应卡交错生效】
+					 * 本卡把自己的续打排进延期栈后，活动栈里还剩同组的兄弟帧 ——
+					 * 若不处理，它们立刻成为栈顶、pending_trigger 马上给出"是否发动"，
+					 * 玩家会在本卡没走完时先把它们做掉（15425+15424 实测：
+					 * 陆战1 -> 建设1 -> 建设2 -> 陆战2）。
+					 * 这里把兄弟帧一并排到延期栈【排在本卡续打帧之后】，
+					 * FIFO 提升自然保证"本卡先走完 -> 才轮到下一张"。
+					 * 注意必须放在 defer_response_frame(game, df) 之后，保证顺序是 [本卡续打, 兄弟…]。
+					 */
+					defer_other_pending_frames(game, pc, _pcIdx)
+					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
+					/*
+					 * 【2026-10-20 修复·一类问题】栈帧已移除，必须同步派生队列视图：
+					 * 否则 game.response_queue 残留已离栈的触发项——①持有方 view.pending_trigger
+					 * 由过期队首渲染出幽灵"是否发动"框（点发动/不发动均因栈空空转，15425 实测）；
+					 * ②全局动作闸门见非空队列把对方 resolve_battle（空军代死应答）一并拦下，
+					 * 双方同时卡死。 */
+					sync_response_queue_view(game)
+					/*
+					 * 【2026-10-20】defer 后若此刻【没有任何待结算的嵌套响应/挂起战斗】
+					 * （如第一次陆战是空打、且无可触发响应卡、无空军代死），
+					 * 不会再有 resolve/trigger/pass 触达 response_reconcile_active /
+					 * battle_reconcile_active 来恢复延期帧，导致"是否再战"永不出现。
+					 * 故此处补一次【守卫式】提升：仅当无挂起战斗且响应栈已空时才提升，
+					 * 与 battle_reconcile_active / response_reconcile_active 的守卫一致，
+					 * 避免与仍在栈上的 on:'battle' 嵌套帧或待决空军代死交错。
+					 */
+					if (!game.pending_battle && !top_response_frame(game))
+						promote_deferred_response(game)
+					return game
+				}
+			} catch (e) {
+				game._resp_settling = false
+				console.warn('[resolve_response_choice] effect error', pc.card_face, e)
+				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
+			}
+		}
+		/* 【栈重构·第二期】正常结算完成：移除当前 effect 帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
+		remove_response_frame(game, pc)
+		consume_response(game, pc.card_id, pc.owner_side)
+		/* 【2026-10-22】响应卡结算并入弃牌堆后，问 15333《配给》是否洗回 */
+		notify_response_resolved(game, pc.card_id)
+		/*
+		 * 【2026-10-21 修复·一类问题】★响应卡的 star_resolved 钩子此前【只接了一半】：
+		 *   · trigger_response 有，但它只在 effect「一次调用就返回 ok」时才走到
+		 *     （pending / defer 分支在它之前就 return 了）；
+		 *   · 而凡是【需要玩家选目标】的响应卡都在【本函数】结算 —— 这里却从未调用
+		 *     after_card_resolved。
+		 * 于是：带★的响应卡只要需要选牌，就永远触发不了国家技能
+		 *   （意大利 17732《德国军事顾问》即此；17734 因不选牌所以能触发，差异正在于此）。
+		 *
+		 * 位置的两个讲究：
+		 *   ① 必须在【完成路径】（pending / defer 两分支之后）——多步卡的中间步会再次返回
+		 *      pending，若放在上面日志处就会【每一步触发一次】；放这里严格"只在真正结算完时
+		 *      触发一次"，与 trigger_response 同口径。
+		 *   ② 必须在 response_reconcile_active 【之前】——这样 maybe_offer_national_skill
+		 *      内部 sync_national_skill_handoff 压的 'national_skill' 让权，能赶在 'response'
+		 *      让权归还之前进栈，操作权才会留给窗口持有国（敌人回合场景的关键）。
+		 */
+		if (!intercepted) {
+			const _nc = inst_card(pc.card_face)
+			if (_nc) after_card_resolved(game, _nc.nation, pc.card_face)
+		}
+		/*
+		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
+		 * 而不是直接删掉整张队列项。原因：本次海战被嵌套触发的新响应项可能同时含
+		 * 多张卡（如 奇袭15430 的海战会一并匹配到 驱逐舰运输15426），整项删除会把
+		 * 同项的其它卡（15426）一并抹掉、使其永远无法触发。
+		 * 仅当某项剔除后候选为空才删除该项；skip 等标记原样保留，
+		 * 故原队列项中"被玩家跳过"的卡不会因剔除另一张卡而被重新弹出。
+		 */
+		game.response_queue = (game.response_queue || []).map(x => {
+			if ((x.candidates || []).some(c => c.card_id === pc.card_id)) {
+				const kept = (x.candidates || []).filter(c => c.card_id !== pc.card_id)
+				return kept.length ? Object.assign({}, x, { candidates: kept }) : null
+			}
+			return x
+		}).filter(Boolean)
+		/* 队列里还有别的响应卡等待决定 -> 收尾并让 UI 继续询问 */
+		response_reconcile_active(game)
+		if (intercepted) {
+			/* 拦截类：被拦截的牌进弃牌堆（与 trigger_response 的拦截分支同口径） */
+			const dn = pc.ctx && pc.ctx.nation
+			const ic = pc.ctx && pc.ctx.card
+			if (dn && ic) {
+				const hi = (game.hands[dn] || []).indexOf(ic)
+				if (hi >= 0) game.hands[dn].splice(hi, 1)
+				game.discard[dn] = game.discard[dn] || []
+				if (!game.discard[dn].includes(ic)) game.discard[dn].push(ic)
+				mark_play_done(game, dn)
+			}
+		}
+		return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'skip_armed_offer')` 分支（逐字） */
+function action_skip_armed_offer(game, side, current, arg) {
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+			const win = (game.armed_offers || []).find(w => faction_of_nation(w.nation) === side)
+			/* 【2026-10-31 S1】放弃拦截敌方【状态卡】后要续跑的那次发动（须在下面的分支之前声明） */
+			let resumeStatus = null
+			if (win) {
+				/* 15353：跳过对敌方状态卡的拦截 -> 记"本回合放行"，敌方重发时不再弹窗 */
+				if (win.when === 'enemy_status_effect' && win.ctx && win.ctx.card) {
+					game.status_intercept_skipped = game.status_intercept_skipped || {}
+					game.status_intercept_skipped[win.ctx.card] = freq_key(game)
+					/*
+					 * 【2026-10-31 S1】放弃拦截 -> 续跑那次发动。
+					 * 旧实现只记放行标记 + 关窗，状态卡效果【永远不执行】；
+					 * S1 之后代价已付，不续跑就成了"付了代价没效果"。
+					 * 原 arg（space/from/discard…）由派发时存进 ctx.arg 带回来；
+					 * 放行标记保证续跑时不再弹窗，__status_cost_paid 保证不再重复扣代价。
+					 */
+					resumeStatus = {
+						card: win.ctx.card,
+						nation: win.ctx.nation,
+						arg: win.ctx.arg || {},
+					}
+				}
+				/*
+				 * 【2026-10-21 修复】15352 / 16700：跳过对敌方[增强卡]的拦截后，
+				 * 必须把【被挂起的那次出牌】续跑完。
+				 *
+				 * 旧实现只 `removeArmedWindow` 后 return，于是：
+				 *   · 敌方那张增强卡既不入弃牌堆、也不结算效果（卡留在手牌里）；
+				 *   · play_card 收尾的 request_responses('play_card') 不会触发
+				 *     —— 对方响应卡因此永远不生效（用户实测反馈）；
+				 *   · 玩家再点那张牌会再次弹同一个窗，形成"问了->放弃->什么都没发生"的死循环。
+				 *
+				 * 做法：先记下被拦截的卡并登记"本回合放行"（echo_intercept_skipped），
+				 * 再移除窗口（sync_armed_handoff 随把 active 归还原阵营）、
+				 * 重跑同一次 play_card。放行标记让 ECHO 分支跳过再次询问、直接执行。
+				 *
+				 * 多拦截方（如英国 15352 + 意大利 16700 同时有窗）时，续跑会再次派发
+				 * 剩余窗口，全部放弃后才真正结算 —— 语义正确。
+				 */
+				let resumeEcho = null
+				if (win.when === 'enemy_echo_played' && win.ctx && win.ctx.card && win.ctx.nation)
+					resumeEcho = { card: win.ctx.card, nation: win.ctx.nation }
+				/*
+				 * 【2026-10-31 S1】"代价照付"型卡【不用重放 play_card】——
+				 * 它的 play_card 已经跑完（代价已付、pending_echo 停在效果那一步），
+				 * 放弃拦截后玩家直接用 resolve_effect 继续即可；若在这里重放，
+				 * 会因 pending_echo 仍存在而退回"请选择…"的旧步骤，出现重复提示。
+				 */
+				if (resumeEcho && ECHO_COST_FIRST.has(String(inst_card_id(resumeEcho.card)))) {
+					/*
+					 * 同时解除"效果冻结"（wait_intercept），玩家随后用 resolve_effect 继续。
+					 * 代价此前已付，不再回退；本国家回合也记一次放行，避免再次弹窗。
+					 */
+					game.echo_intercept_skipped = game.echo_intercept_skipped || {}
+					game.echo_intercept_skipped[resumeEcho.card] = freq_key(game)
+					echo_queue_drop(game, resumeEcho.card)
+					if (game.pending_echo && game.pending_echo.card === resumeEcho.card &&
+						game.pending_echo.wait_intercept) {
+						delete game.pending_echo.wait_intercept
+						game.pending_echo.title = '《战术革新》：选择要免费打出的状态卡'
+						game.log.push('《战术革新》未被拦截（代价已付），请继续选择要免费打出的状态卡')
+					}
+					resumeEcho = null
+				}
+				/*
+				 * 【2026-10-29 二级拦截】若这次放弃的是"对某张增强卡【打出】的反制"，
+				 * 被挂起的是 use_armed_offer（不是 play_card）——不能走 play_card 重放，
+				 * 要放回原窗口续跑那次 use。
+				 */
+				const _pu = game.pending_armed_use
+				const _isCounterOfUse = !!(_pu && win.ctx && win.ctx.card === _pu.card)
+				if (_isCounterOfUse) resumeEcho = null
+				game.log.push('【' + win.nation + '】放弃打出增强卡')
+				/*
+				 * 【2026-10-21 修复·回归】记"本国家回合放行【这一张】"——
+				 * 与 15353 的 status_intercept_skipped 完全同款（按被拦截卡的实例 id 记）。
+				 *
+				 * 为什么必须记：被挂起的那次出牌续跑后，玩家提交参数时
+				 * （如 15215《卓越规划》点【确认排列】回传 placement）
+				 * 若不再放行，enemy_echo_played 窗口会【再次弹出】并提前 return：
+				 *   · game.peek 不变、弹框不关 → 玩家看到"确认排列点击无效"；
+				 *   · 且对方可以无限次拒绝，这张卡永远打不完。
+				 * 按实例 id 记，故同一回合打【别的】增强卡仍会正常询问。
+				 */
+				if (resumeEcho) {
+					game.echo_intercept_skipped = game.echo_intercept_skipped || {}
+					game.echo_intercept_skipped[resumeEcho.card] = freq_key(game)
+					/*
+					 * 【2026-10-29 P0-a】必须在续跑【之前】出队：
+					 * 否则续跑的那次 play_card 会看到队列非空、以为"前面还有别的卡在等"，
+					 * 把自己又排回队尾 -> 这张卡永远结算不了。
+					 */
+					echo_queue_drop(game, resumeEcho.card)
+				}
+				removeArmedWindow(game, win)
+				if (resumeEcho) {
+					/*
+					 * 防御：若窗口期间该牌已被移走（弃置/损耗等），就不续跑 ——
+					 * 否则 play_card 会拿 current_nation 当主体，可能误判成"别国出牌"。
+					 */
+					if ((game.hands[resumeEcho.nation] || []).indexOf(resumeEcho.card) < 0) {
+						game.log.push('【' + resumeEcho.nation + '】《' +
+							((inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card) +
+							'》已不在手牌，无需续跑')
+					} else {
+						const nm = (inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card
+						game.log.push('【' + resumeEcho.nation + '】《' + nm + '》未被拦截，照常结算')
+						internal_action(game, faction_role_of_nation(resumeEcho.nation), 'play_card',
+							{ card: resumeEcho.card })
+					}
+				}
+				/* 【2026-10-31 S1】放弃拦截敌方状态卡 -> 续跑那次 activate_status */
+				if (resumeStatus) {
+					const onm = (inst_card(String(inst_card_id(resumeStatus.card))) || {}).name ||
+						resumeStatus.card
+					game.log.push('《' + onm + '》未被拦截（代价已付），效果照常执行')
+					/* 置一次性令牌：这次续跑不再重复扣代价 */
+					game.__status_cost_resume = resumeStatus.card
+					try {
+						internal_action(game, faction_role_of_nation(resumeStatus.nation), 'activate_status',
+							Object.assign({ card: resumeStatus.card }, resumeStatus.arg))
+					} catch (e) {
+						game.log.push('续跑《' + onm + '》出错：' + e.message)
+					} finally {
+						delete game.__status_cost_resume
+					}
+				}
+				/* 【2026-10-29 二级拦截】反制方放弃 -> 放回原窗口，续跑那次 use */
+				if (_isCounterOfUse) resume_pending_armed_use(game)
+				/* 【2026-10-29 P0-a】应答完队首：继续询问队列里的下一张（或直接放行全部） */
+				resume_echo_queue(game)
+			}
+			return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'event_battle')` 分支（逐字） */
+function action_event_battle(game, side, current, arg) {
+	/* 【2026-09-30 重构·战斗预算】逐次发起战斗（每战都是一次完全原子的 do_battle），
+	 * 代受/抵消/响应/闪电战窗口/15245 二连打全部照常，期间可插入状态/免死/飞机代受。 */
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		const b = game.event_budget
+		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
+		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可发起战斗预算'); return game }
+		if (b.remaining <= 0) { game.log.push('战斗机会已用尽，请点「结束《' + ((inst_card(b.card_id) || {}).name) + '》」结算'); return game }
+		/* 单场战斗的代受/抵消尚未结算时，禁止续战，否则会打断 counter 对话框 */
+		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再发起下一场'); return game }
+		const target = arg && arg.target
+		if (target == null) { game.log.push('请选择一个含' + (b.against || '敌') + '的' + (b.kind === 'sea' ? '海域' : '陆地') + '作为目标'); return game }
+		/*
+		 * 【多国部队同处一格】发起方应指定要攻击哪一支（arg.victim）；
+		 * 不指定时退回 do_battle 的默认口径（enemies[0]，即自动取第一个）。
+		 * 与发起陆战/发起海战（arg.piece）同源，保证"选哪国打"一致。
+		 */
+		let wantVictim = (arg && arg.victim != null) ? arg.victim
+			: (arg && arg.piece != null) ? arg.piece : null
+		/*
+		 * 【2026-11-12 · B38】「至多三支不同的目标部队」：
+		 *  ① 目标必须是回合开始快照里的部队（快照外中途新出现的不许打）；
+		 *  ② 同一支部队本张卡只打一次 —— 即使被保护/代受未移除也不重复；
+		 *  ③ 客户端未指定 victim 时按「未打过的快照部队」自动取第一支并写回，
+		 *     避免 do_battle 的 enemies[0] 打到别的实例。
+		 */
+		if (b.unitTargets) {
+			const used = b.usedVictims || (b.usedVictims = [])
+			if (wantVictim == null) {
+				const first = pieces_on(game, Number(target)).find(p =>
+					game.piece_type[p] !== 'air' &&
+					budget_unit_unused(b, p, game, Number(target)))
+				wantVictim = first || null
+			}
+			const bName = ((inst_card(b.card_id) || {}).name) || b.card_id
+			if (wantVictim == null ||
+				!b.unitTargets.some(x => String(x) === String(wantVictim))) {
+				game.log.push('《' + bName + '》只能攻击本回合开始时已确定的目标部队')
+				return game
+			}
+			if (used.some(x => String(x) === String(wantVictim))) {
+				game.log.push('《' + bName + '》该目标部队已打过，不能重复发起战斗')
+				return game
+			}
+		}
+		/* 战斗已发起（含 pending 代受）即记账，与 remaining 扣减同步 */
+		const recordVictim = () => {
+			if (b.unitTargets && wantVictim != null) {
+				const used = b.usedVictims || (b.usedVictims = [])
+				const key = String(wantVictim)
+				if (used.indexOf(key) < 0) used.push(key)
+			}
+		}
+		const cands = event_battle_targets(game, b)
+		if (cands.indexOf(Number(target)) < 0) {
+			game.log.push('「' + data.name_of(Number(target)) + '」不是合法目标（需含' + (b.against || '敌') + '部队且可发起）')
+			return game
+		}
+		/*
+		 * 【2026-10-07 修复 · useNewPiece】若预算标记了"必须用新单位发起"，
+		 * 发起单位强制为那支新单位，忽略玩家传来的 arg.from（防止指定任意法军）。
+		 * 新单位不存在(极端情况)时退回默认 b.from，避免卡死。
+		 */
+		if (b.useNewPiece) {
+			if (b.newPiece != null) {
+				const okHere = battle_initiators(game, b.as, Number(target))
+					.some(x => x.id === b.newPiece)
+				if (!okHere) {
+					game.log.push('「' + data.name_of(game.location[b.newPiece]) +
+						'」无法对「' + data.name_of(Number(target)) + '」发起战斗（须相邻且处于补给状态）')
+					return game
+				}
+				/* 强制作发起者为新单位（即便客户端传了别的 arg.from 也覆盖） */
+				const r0 = do_battle(game, b.as, Number(target), wantVictim, b.kind, { from: b.newPiece })
+				if (!r0.ok) { game.log.push(r0.reason); return game }
+				b.battleOk = (b.battleOk || 0) + 1
+				b.descs.push(battle_desc(r0, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
+				b.remaining -= 1
+				recordVictim()
+				if (r0.pending) {
+					game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
+					return game
+				}
+				game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
+				return game
+			}
+			/* newPiece 为 null 的兜底：走下面的通用逻辑 */
+		}
+		/*
+		 * 【2026-10-01 修复 · 一类问题】发起单位应由玩家选择。
+		 * view 下发了每个候选目标的可发起单位(event_budget.initiators)，
+		 * 玩家点击后把选中的单位放在 arg.from 里回传；服务端校验它确实
+		 * 属于该目标格的合法发起者，防止任意指定。
+		 */
+		let from = b.from
+		const wantFrom = arg && arg.from
+		if (wantFrom != null) {
+			const okInits = battle_initiators(game, b.as, Number(target))
+			if (!okInits.some(x => x.id === wantFrom)) {
+				game.log.push('「' + data.name_of(game.location[wantFrom]) +
+					'」不能作为该场战斗的发起单位（须相邻且处于补给状态）')
+				return game
+			}
+			from = wantFrom
+		}
+		const r = do_battle(game, b.as, Number(target), wantVictim, b.kind, { from: from })
+		if (!r.ok) { game.log.push(r.reason); return game }
+		b.battleOk = (b.battleOk || 0) + 1
+		b.descs.push(battle_desc(r, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
+		b.remaining -= 1
+		recordVictim()
+		if (r.pending) {
+			/* 空军代受挂起：pending_battle 已设置，预算保留(remaining 已扣减)，等 resolve_battle 解出后预算仍在 */
+			game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
+			return game
+		}
+		game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
+		return game
+	}
+}
+
+/* 搬自 do_action 的 `if (action === 'event_finish')` 分支（逐字） */
+function action_event_finish(game, side, current, arg) {
+	/* 【2026-09-30 重构·战斗预算】结算预算：放弃剩余机会 + 触发德国国家技能。
+	 * 必然晚于最后一场战斗的 after_land(闪电战)窗口（玩家先点完闪电战再点结束）。 */
+	/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */
+	{
+		const b = game.event_budget
+		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
+		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可结算战斗预算'); return game }
+		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再结算预算'); return game }
+		const nm = ((inst_card(b.card_id) || {}).name) || b.card_id
+		game.log.push('《' + nm + '》战斗预算结束（' + b.battleOk + ' 场已结算，剩余 ' + b.remaining + ' 次机会放弃）')
+		if (b.descs.length) game.log.push('—— ' + b.descs.join('；'))
+		game.event_budget = null
+
+		/* 【2026-10-18】17851 天王星行动：source:'uranus' 预算结算——
+		 * 每次机会 = 1 次陆战 或 1 次建设，由 uranus_choice 驱动。
+		 * 战斗结束（battleOk>0）后：剩余次数 -1；>0 重弹菜单，==0 收尾；
+		 * 玩家直接点「结束」（battleOk=0）则放弃剩余、直接收尾。
+		 * 跳过下方 armed 分支与统一弃卡，由 finish_uranus 统一处理。 */
+		if (b.source === 'uranus') {
+			const __a = b.nation
+			const __c = b.card_id
+			const __sp = b.space
+			const __rem = (b.uranus_remaining || 1) - (b.battleOk > 0 ? 1 : 0)
+			if (b.battleOk > 0 && __rem > 0) {
+				game.pending_uranus = {
+					remaining: __rem, total: __rem,
+					actor: __a, card_id: __c, space: __sp,
+				}
+				game.log.push('天王星行动：剩 ' + __rem + ' 次机会')
+				return game
+			}
+			finish_uranus(game, { actor: __a, card_id: __c })
+			return game
+		}
+
+		/*
+		 * 【2026-10-07】armed 型预算（15205《JU-87》）：卡【仍留在手牌】，
+		 * 代价是"发动"的代价 —— 至少真打了 1 场才付；一场都没发动 = 等同放弃，
+		 * 卡留手牌、不付代价（与 use_armed_offer 的 skip 口径一致）。
+		 */
+		if (b.source === 'armed' && !(b.battleOk > 0)) {
+			game.log.push('《' + nm + '》未发动任何战斗 —— 卡留在手牌，不付代价')
+			return game
+		}
+		if (b.cost && b.cost.attrition) {
+			if (!can_attrite(game, b.nation, b.cost.attrition)) {
+				game.log.push('《' + nm + '》需损耗 ' + b.cost.attrition + ' 张牌，但牌库不足')
+			} else {
+				attrition_cards(game, b.nation, b.cost.attrition)
+				game.log.push('【' + b.nation + '】损耗 ' + b.cost.attrition + ' 张牌')
+			}
+		}
+		/* 【2026-10-11】battle 预算之后还有后续 step（如 build/recruit）：
+		 * 预算结算后从第 resumeStep 步续跑，复用 resolve_event_card 同款逻辑。
+		 * resumeStep=0 表示 battle 已是最后一步（如 15226），不续跑。 */
+		if (b.resumeStep && b.resumeStep > 0) {
+			const _eff = card_effect_of(b.card_id)
+			const _steps = _eff
+				? (_eff.choice ? (_eff.choice[b.choice] || []) : (_eff.steps || []))
+				: []
+			if (b.resumeStep < _steps.length) {
+				/* 【2026-11-10 · #9】把打出时玩家已选的 spaces/picks 一并带回续跑，
+				 * 不再只传 choice（否则后续 build/recruit 步由服务端自动挑第一个候选）。 */
+				const res = resolve_event_card(game, b.nation, b.card_id,
+					Object.assign({}, b.accum || {}, { choice: b.choice }), b.resumeStep)
+				if (res && res.ok && res.desc)
+					game.log.push('《' + nm + '》后续步骤：' + res.desc)
+				else if (res && res.reason)
+					game.log.push('《' + nm + '》后续步骤未执行（' + res.reason + '）')
+			}
+		}
+		/* 【2026-09-30 德国增强】预算卡（含英国战斗事件卡）结算后入弃牌堆 */
+		/*
+		 * 【2026-10-22 修复·多步事件卡吞卡】多步 EVENT 在 play_card 的 stepPause/
+		 * armedPause 分支已把卡移出手牌；而 discard_card 要求牌仍在手牌（indexOf<0 直接
+		 * return），于是 17828 百团大战这类"征召+战斗预算"的卡打完后【凭空消失】、
+		 * 既不进弃牌堆也不触发弃牌堆相关效果。
+		 * 在手牌 -> discard_card（保留手牌类计分）；已离手 -> push_discard_direct。
+		 */
+		if ((game.hands[b.nation] || []).indexOf(b.card_id) >= 0)
+			discard_card(game, b.nation, b.card_id)
+		else
+			push_discard_direct(game, b.nation, b.card_id)
+		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
+		after_card_resolved(game, b.nation, b.card_id)
+		/*
+		 * 【2026-10-28 #15】租借法案委托的「预算型」收尾点。
+		 *
+		 * 被委托国打出的是战斗预算卡时，battle_reconcile_active 因"预算未打完"不归还
+		 * （见该函数的守卫）；必须等玩家点「结束」走到这里才真正收尾：
+		 * 摸 1 张 + 操作权归还美国 + 触发美国★国家技能。
+		 * 顺序放在 after_card_resolved 之后：finish_us_lend_lease 内部会按 return_nation（美国）
+		 * 再触发一次，英国自己那次属于代打，不为其开技能窗口。
+		 */
+		/* 【2026-11-10】统一手动归还：预算打完只置 played，收尾交给「结束委托」按钮 */
+		if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle)
+			game.delegate.played = true
+		/*
+		 * 【2026-10-28 #13 修复】战斗预算卡收尾 = 卡牌生效（战斗已打完），同样派发 play_card。
+		 * 与 EVENT 分支、finish_event_card 三处对齐 —— 缺任何一处，
+		 * 15333《配给》对相应类型的英国事件卡就不触发。
+		 */
+		try {
+			request_responses(game, 'play_card', {
+				nation: b.nation, card: b.card_id, card_obj: inst_card(b.card_id),
+			}, false)
+		} catch (e) { game.log.push('play_card(budget) 错误：' + e.message) }
+		return game
+	}
+}
+
 /* 搬自 do_action 的 `if (action === 'air_support')` 分支（逐字） */
 function action_air_support(game, side, current, arg) {
 	/*
@@ -35771,215 +37692,7 @@ function do_action(state, current, action, arg) {
 
 	if (action === 'clear_peek') return action_clear_peek(game, side, current, arg)
 
-	/*
-	 * 【2026-10-04】响应卡效果需要玩家选择目标时，提交选择。
-	 * arg = { choice } —— space 类传地区 id；piece 类传棋子 id；
-	 *                     card 类传牌 id；option 类传选项下标。
-	 *
-	 * 与 trigger_response 配套：effect 返回 pending 后挂起，
-	 * 玩家选完走这里，用【同一个 effect】+ choice 再调一次完成结算，
-	 * 然后才消耗该响应卡、弹出队列。
-	 */
-	if (action === 'resolve_response_choice') {
-		/* 【栈重构·第二期】从栈顶帧读取续打（纯栈：pending_response_choice 已删除） */
-		const pc = top_response_frame(game)
-		if (!pc) {
-			game.log.push('当前没有等待选择的响应卡')
-			return game
-		}
-		if (pc.owner_side !== side) {
-			game.log.push('只有该响应卡的持有方可以选择')
-			return game
-		}
-		const choice = arg && arg.choice
-		if (choice == null) {
-			game.log.push('请选择一个目标')
-			return game
-		}
-		/* 校验选择确实在候选里（防伪造） */
-		const candIds = (pc.candidates || []).map(x =>
-			(x && x.id != null) ? x.id : x)
-		if (candIds.indexOf(choice) < 0 && candIds.indexOf(Number(choice)) < 0) {
-			game.log.push('所选目标不在《' + pc.name + '》的合法候选内')
-			return game
-		}
-		/* 【D1/P5】正式卡走既有表；前奏军备卡由适配工厂生成同签名 effect */
-		const impl = RESPONSE_EFFECT_IMPL[pc.card_face] ||
-			prelude_response_impl(game, pc.card_face)
-		let intercepted = false
-		if (impl) {
-			try {
-				/* 第 5 个参数把挂起时记住的 extra（如新征召的海军 id）传回 effect */
-				game._resp_settling = true
-				const r = impl(game, pc.owner_side, pc.ctx, choice, pc.extra)
-				game._resp_settling = false
-				game.log.push('【响应】《' + pc.name + '》触发：' + (r && r.desc ? r.desc : '已结算'))
-				if (r && r.cancel) intercepted = true
-				/* 【2026-10-18】拦截捕获：15328 破译恩尼格码弃置的德国状态卡 = 被拦截目标 */
-				if (pc.card_face === '15328' && choice) {
-					record_intercept(game, pc.card_id, choice, {
-						victim_nation: '德国',
-						by_nation: response_holder_nation(game, pc.card_id),
-					})
-				}
-				/*
-				 * 【2026-10-14】多步响应：效果再次返回 pending（如 15430 奇袭
-				 * 海战选完后再选陆战）时，重新挂起、暂不消耗卡。
-				 * 现有单步响应在 resolve 时返回 {ok}（非 pending），不受影响；
-				 * 只有再次返回 pending 的卡才会走到这里，故安全。
-				 */
-				if (r && r.pending) {
-					/* 【栈重构·第二期】续打：移除当前 effect 帧、压入新帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
-					remove_response_frame(game, pc)
-					push_response_frame(game, {
-						card_id: pc.card_id,
-						card_face: pc.card_face,
-						name: pc.name,
-						owner_side: pc.owner_side,
-						kind: r.kind || 'space',
-						candidates: r.candidates || [],
-						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
-						ctx: pc.ctx || {},
-						extra: r.extra || null,
-						/* 【2026-10-26】续打帧：本卡已发动过，只等选目标，必须标记 pending，
-						 * 否则 trigger_response 会把它当"待发动"从头再跑一遍 effect。 */
-						pending: true,
-					})
-					game.log.push('【响应】《' + pc.name + '》需要继续选择：' +
-						(top_response_frame(game) || {}).prompt)
-					/* 【2026-10-20】帧已换新，同步派生队列视图（与 defer 分支同口径） */
-					sync_response_queue_view(game)
-					return game
-				}
-				/*
-				 * 【2026-10-15】defer：本步已完成，但本卡还有后续步骤（如 15430 奇袭
-				 * 的驱逐舰运输子步/海战触发了别的响应），需等那些响应结算完再回来继续。
-				 * 与 pending 的区别：pending 立刻挂起会插队；defer 把续打步骤存进
-				 * game.deferred_response_choice，让此刻触发的响应（game.active 已翻给对方）
-				 * 先结算，队列清空后由 promote_deferred_response 自动恢复 pending。
-				 * defer 时不消耗本卡、不推进队列（本卡仍在结算中）。
-				 */
-				if (r && r.defer) {
-					/*
-					 * 【栈重构·第二期】defer：移除当前 effect 帧，续打存 game.deferred_response_stack
-					 * （纯栈：不再写 deferred_response_choice 旧全局）。栈清空后由
-					 * promote_deferred_response 压回成为活动帧（按引用移除，保留嵌套响应帧）。
-					 */
-					/* 先记下本帧原位置：搬"外层残留帧"时用它区分「之下」与「之上（嵌套）」 */
-					const _pcIdx = (game.response_stack || []).indexOf(pc)
-					 remove_response_frame(game, pc)
-					const df = {
-						card_id: pc.card_id,
-						card_face: pc.card_face,
-						name: pc.name,
-						owner_side: pc.owner_side,
-						kind: r.kind || 'space',
-						candidates: r.candidates || [],
-						prompt: r.prompt || ('请选择《' + pc.name + '》的目标'),
-						ctx: pc.ctx || {},
-						extra: r.extra || null,
-						/* 【2026-10-26】续打帧同 pending 分支：已发动过，只等选目标 */
-						pending: true,
-						/* 【2026-10-20】带上组信息，便于恢复后仍能被组相关逻辑识别 */
-						group_id: pc.group_id,
-						group_idx: pc.group_idx,
-					}
-					defer_response_frame(game, df)
-					/*
-					 * 【2026-10-20 修复·同组多张响应卡交错生效】
-					 * 本卡把自己的续打排进延期栈后，活动栈里还剩同组的兄弟帧 ——
-					 * 若不处理，它们立刻成为栈顶、pending_trigger 马上给出"是否发动"，
-					 * 玩家会在本卡没走完时先把它们做掉（15425+15424 实测：
-					 * 陆战1 -> 建设1 -> 建设2 -> 陆战2）。
-					 * 这里把兄弟帧一并排到延期栈【排在本卡续打帧之后】，
-					 * FIFO 提升自然保证"本卡先走完 -> 才轮到下一张"。
-					 * 注意必须放在 defer_response_frame(game, df) 之后，保证顺序是 [本卡续打, 兄弟…]。
-					 */
-					defer_other_pending_frames(game, pc, _pcIdx)
-					game.log.push('【响应】《' + pc.name + '》稍后继续：' + df.prompt)
-					/*
-					 * 【2026-10-20 修复·一类问题】栈帧已移除，必须同步派生队列视图：
-					 * 否则 game.response_queue 残留已离栈的触发项——①持有方 view.pending_trigger
-					 * 由过期队首渲染出幽灵"是否发动"框（点发动/不发动均因栈空空转，15425 实测）；
-					 * ②全局动作闸门见非空队列把对方 resolve_battle（空军代死应答）一并拦下，
-					 * 双方同时卡死。 */
-					sync_response_queue_view(game)
-					/*
-					 * 【2026-10-20】defer 后若此刻【没有任何待结算的嵌套响应/挂起战斗】
-					 * （如第一次陆战是空打、且无可触发响应卡、无空军代死），
-					 * 不会再有 resolve/trigger/pass 触达 response_reconcile_active /
-					 * battle_reconcile_active 来恢复延期帧，导致"是否再战"永不出现。
-					 * 故此处补一次【守卫式】提升：仅当无挂起战斗且响应栈已空时才提升，
-					 * 与 battle_reconcile_active / response_reconcile_active 的守卫一致，
-					 * 避免与仍在栈上的 on:'battle' 嵌套帧或待决空军代死交错。
-					 */
-					if (!game.pending_battle && !top_response_frame(game))
-						promote_deferred_response(game)
-					return game
-				}
-			} catch (e) {
-				game._resp_settling = false
-				console.warn('[resolve_response_choice] effect error', pc.card_face, e)
-				game.log.push('【响应】《' + pc.name + '》结算出错：' + e.message)
-			}
-		}
-		/* 【栈重构·第二期】正常结算完成：移除当前 effect 帧（按引用移除，保留 effect 内战斗触发的嵌套响应帧） */
-		remove_response_frame(game, pc)
-		consume_response(game, pc.card_id, pc.owner_side)
-		/* 【2026-10-22】响应卡结算并入弃牌堆后，问 15333《配给》是否洗回 */
-		notify_response_resolved(game, pc.card_id)
-		/*
-		 * 【2026-10-21 修复·一类问题】★响应卡的 star_resolved 钩子此前【只接了一半】：
-		 *   · trigger_response 有，但它只在 effect「一次调用就返回 ok」时才走到
-		 *     （pending / defer 分支在它之前就 return 了）；
-		 *   · 而凡是【需要玩家选目标】的响应卡都在【本函数】结算 —— 这里却从未调用
-		 *     after_card_resolved。
-		 * 于是：带★的响应卡只要需要选牌，就永远触发不了国家技能
-		 *   （意大利 17732《德国军事顾问》即此；17734 因不选牌所以能触发，差异正在于此）。
-		 *
-		 * 位置的两个讲究：
-		 *   ① 必须在【完成路径】（pending / defer 两分支之后）——多步卡的中间步会再次返回
-		 *      pending，若放在上面日志处就会【每一步触发一次】；放这里严格"只在真正结算完时
-		 *      触发一次"，与 trigger_response 同口径。
-		 *   ② 必须在 response_reconcile_active 【之前】——这样 maybe_offer_national_skill
-		 *      内部 sync_national_skill_handoff 压的 'national_skill' 让权，能赶在 'response'
-		 *      让权归还之前进栈，操作权才会留给窗口持有国（敌人回合场景的关键）。
-		 */
-		if (!intercepted) {
-			const _nc = inst_card(pc.card_face)
-			if (_nc) after_card_resolved(game, _nc.nation, pc.card_face)
-		}
-		/*
-		 * 【2026-10-14 修复】结算一张响应卡后，只把【该卡】从各队列项的候选里剔除，
-		 * 而不是直接删掉整张队列项。原因：本次海战被嵌套触发的新响应项可能同时含
-		 * 多张卡（如 奇袭15430 的海战会一并匹配到 驱逐舰运输15426），整项删除会把
-		 * 同项的其它卡（15426）一并抹掉、使其永远无法触发。
-		 * 仅当某项剔除后候选为空才删除该项；skip 等标记原样保留，
-		 * 故原队列项中"被玩家跳过"的卡不会因剔除另一张卡而被重新弹出。
-		 */
-		game.response_queue = (game.response_queue || []).map(x => {
-			if ((x.candidates || []).some(c => c.card_id === pc.card_id)) {
-				const kept = (x.candidates || []).filter(c => c.card_id !== pc.card_id)
-				return kept.length ? Object.assign({}, x, { candidates: kept }) : null
-			}
-			return x
-		}).filter(Boolean)
-		/* 队列里还有别的响应卡等待决定 -> 收尾并让 UI 继续询问 */
-		response_reconcile_active(game)
-		if (intercepted) {
-			/* 拦截类：被拦截的牌进弃牌堆（与 trigger_response 的拦截分支同口径） */
-			const dn = pc.ctx && pc.ctx.nation
-			const ic = pc.ctx && pc.ctx.card
-			if (dn && ic) {
-				const hi = (game.hands[dn] || []).indexOf(ic)
-				if (hi >= 0) game.hands[dn].splice(hi, 1)
-				game.discard[dn] = game.discard[dn] || []
-				if (!game.discard[dn].includes(ic)) game.discard[dn].push(ic)
-				mark_play_done(game, dn)
-			}
-		}
-		return game
-	}
+	if (action === 'resolve_response_choice') return action_resolve_response_choice(game, side, current, arg)
 
 	/*
 	 * 【2026-10-14】多卡响应：玩家一次性排序/跳过（一次选择），确认后再依次结算。
@@ -36405,688 +38118,16 @@ function do_action(state, current, action, arg) {
 		return maybe_advance_after_skip_play(game)
 	}
 
-	/*
-	 * 【2026-09-30 重构】战斗预算(event_budget)模型下，单场战斗内部触发空军代受/
-	 * 抵消由 resolve_battle 解出后即算结算完毕；预算状态(game.event_budget)始终
-	 * 保留，剩余机会(remaining)已在 event_battle 中扣减，无需"续打序列"层。
-	 * 因此不再需要 event_battle_resume 这类序列续打函数。
-	 */
-	if (action === 'resolve_battle') {
-		const pb = game.pending_battle
-		if (!pb) {
-			game.log.push('当前没有等待结算的战斗')
-			return game
-		}
-		const stage = pb.stage || 'defend'
-
-		/*
-		 * ---------- 阶段零：防守方决定是否打出保护卡（2026-10-06）----------
-		 *
-		 * 日本 15410《武士道》：日本陆军被攻击时，弃 1 张响应牌
-		 * -> 该部队在【本次战斗中】无法被移除。
-		 *
-		 * 为什么必须挂起（而不是"可选窗口"）：保护要在 victim 被移除
-		 * 【之前】生效，而 do_battle 不挂起就会一路同步结算到底。
-		 *
-		 * 流程：
-		 *   ① 玩家选《武士道》+ 指定要弃的响应牌（arg.drop）
-		 *      —— 服务端【不】替玩家挑：drop 不够就拒绝，挂起保留可重选
-		 *   ② 付代价 + 注册 protect 修饰器 + 卡进弃牌堆
-		 *   ③ 重放 do_battle（guard_done=true）完成这一战
-		 *   ④ 玩家选"不使用" -> 直接重放，原部队照常被移除
-		 *
-		 * 候选（guard_cards）由服务端算好下发，客户端不再二次判。
-		 */
-		/*
-		 * ---------- 阶段零 KV2：攻击方二选一（2026-10-07）----------
-		 *
-		 * 苏联响应卡 17837《KV-2 重型坦克》："苏联陆军被攻击时：攻击国家选择
-		 *   ① 弃置 4 张手牌      -> 战斗照常结算（该陆军被移除）
-		 *   ② 使该陆军在本次战斗中不会被移除 -> 注册 protect，重放后保住
-		 *
-		 * 表态方是【攻击方】（与 guard 的防守方相反），由 pending_wait_nation
-		 * 的 'kv2' 分支保证让权方向。arg.kv2 = 'discard' | 'protect'。
-		 */
-		/*
-		 * ---------- 阶段零 KV2_ASK：持有方决定是否发动（2026-10-07）----------
-		 *
-		 * 苏联响应卡 17837《KV-2 重型坦克》。玩家口径：
-		 *   先由【苏联（持有方）】决定是否发动；发动后权力才交给攻击方。
-		 *
-		 * arg.kv2_trigger = truthy -> 发动：就地改 stage='kv2' 并重新挂起，
-		 *                            由 set_pending_battle 把 active 让给攻击方。
-		 * arg.kv2_trigger = falsy  -> 不发动：卡【留于桌面】（不消耗），
-		 *                            重放战斗（kv2_done=true）照常结算。
-		 */
-		if (stage === 'kv2_ask') {
-			const ownerNation = pb.kv2_owner_nation || pb.defender_nation
-			if (faction_of_nation(ownerNation) !== side) {
-				game.log.push('只有【' + ownerNation + '】可以决定是否发动这张暗置响应牌')
-				return game
-			}
-			const want = !!(arg && arg.kv2_trigger)
-			if (!want) {
-				game.log.push('【' + ownerNation + '】不发动这张暗置响应牌（留于桌面）')
-				game.pending_battle = null
-				/* B34：本窗口本场已问过，重放时全量带出，避免 KV-2 ↔ 一步也不许后退 交替重挂 */
-				mark_battle_asked(game, pb, 'kv2')
-				const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
-					battle_replay_opt(game, pb, { resume: true }))
-				if (!r.ok) {
-					set_pending_battle(game, pb)
-					game.log.push(r.reason || '战斗无法结算')
-					return game
-				}
-				battle_reconcile_active(game)
-				game.log.push(battle_desc(r, pb.space, '战斗'))
-				return game
-			}
-			/* 发动：切到 kv2，让权给攻击方 */
-			pb.stage = 'kv2'
-			set_pending_battle(game, pb)
-			game.log.push('【' + ownerNation + '】发动《KV-2 重型坦克》—— 由【' +
-				pb.attacker + '】选择：弃置 4 张手牌，或使该陆军在本次战斗中不被移除')
-			return game
-		}
-
-		if (stage === 'kv2') {
-			if (faction_of_nation(pb.attacker) !== side) {
-				game.log.push('只有【' + pb.attacker + '】可以对《KV-2 重型坦克》做出选择')
-				return game
-			}
-			const pick = (arg && arg.kv2) ? String(arg.kv2) : null
-			if (pick !== 'discard' && pick !== 'protect') {
-				game.log.push('请选择：弃置 4 张手牌（discard）或 该陆军本次战斗不被移除（protect）')
-				return game
-			}
-			/*
-			 * 【2026-10-23 修复】弃置 4 张手牌必须【玩家自选】（arg.drop）。
-			 *
-			 * 原实现直接 `discard_card(game, attacker, hand[0])` 循环 4 次，
-			 * 等于服务端替玩家挑了"手牌最前面的 4 张"——与《一步也不许后退!》(17853)
-			 * 和 guard 保护卡代价的口径不一致（那两处都要求 drop）。
-			 *
-			 * 校验必须放在【消耗响应卡之前】：否则 drop 不足时返回，
-			 * 卡已被 splice 出桌面 + 进弃牌堆，玩家既没弃成牌也失去了响应卡。
-			 */
-			let kv2Drop = []
-			let kv2Need = 0
-			if (pick === 'discard') {
-				const hand = game.hands[pb.attacker] || []
-				kv2Need = Math.min(4, hand.length)
-				kv2Drop = ((arg && arg.drop) || []).map(String)
-					.filter(id => hand.indexOf(id) >= 0)
-				if (kv2Drop.length < kv2Need) {
-					game.log.push('《KV-2 重型坦克》需弃置 ' + kv2Need +
-						' 张手牌（当前指定 ' + kv2Drop.length + ' 张）')
-					return game      /* 不消耗卡、不推进战斗 */
-				}
-			}
-			/* 消耗这张暗置的响应卡（无论选哪个分支，卡都算用掉） */
-			const list = game.table_responses || []
-			const idx = list.findIndex(t => t.card_id === pb.kv2_card)
-			if (idx >= 0) {
-				const used = list.splice(idx, 1)[0]
-				const ownNation = '苏联'
-				game.discard[ownNation] = game.discard[ownNation] || []
-				if (!game.discard[ownNation].includes(used.card_id))
-					game.discard[ownNation].push(used.card_id)
-			}
-			/*
-			 * 【2026-10-25 修复·保护范围】卡面是「该陆军在【本次战斗中】不会被移除」，
-			 * 旧实现与 17853《一步也不许后退!》（本回合）共用同一写法：
-			 *     { nation, type:'army', spaces:[pb.space], untilTurn: game.turn }
-			 * 于是保护会持续到【整回合】，连本回合稍后的断补移除（resolve_supply 的
-			 * is_protected）都被挡下，且同地区所有苏联陆军一并受保护。
-			 * 修法：
-			 *   ① 加 piece 维度 —— 只保护被攻击的这一支（has_modifier 已支持）；
-			 *   ② 本次战斗（do_battle 重放）结束后立即撤销该修饰器 —— 精确表达"本次战斗中"。
-			 */
-			let kv2Prot = null
-			if (pick === 'protect') {
-				kv2Prot = register_modifier(game, {
-					key: 'protect', nation: pb.victim_nation, type: 'army',
-					piece: pb.victim,
-					spaces: [pb.space], untilTurn: game.turn, card: '17837',
-				})
-				game.log.push('【' + pb.attacker + '】选择：该《' + pb.victim_nation +
-					'》陆军在本次战斗中不会被移除')
-			} else {
-				for (const id of kv2Drop.slice(0, kv2Need)) discard_card(game, pb.attacker, id)
-				game.log.push('【' + pb.attacker + '】选择：弃置 ' + kv2Need + ' 张手牌')
-			}
-			game.pending_battle = null
-			/* B34：发动也记账；guard_done 保持原语义（保护成立即不再问其余保护窗口） */
-			mark_battle_asked(game, pb, 'kv2')
-			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
-				battle_replay_opt(game, pb, { guard_done: true, resume: true }))
-			/* 本次战斗结束即撤销（放在 r.ok 判定之前：重挂起时也要撤，玩家重选会重新注册） */
-			if (kv2Prot)
-				game.modifiers = (game.modifiers || []).filter(m => m !== kv2Prot)
-			if (!r.ok) {
-				set_pending_battle(game, pb)
-				game.log.push(r.reason || '战斗无法结算')
-				return game
-			}
-			battle_reconcile_active(game)
-			game.log.push(battle_desc(r, pb.space, '战斗'))
-			return game
-			}
-
-			/*
-			* ---------- 阶段零 SU_STEP_BACK：苏联持有方决定是否发动（2026-10-18，苏联 17853）----------
-			*
-			* 卡面："苏联陆军被攻击时，弃置 4 张手牌：使其在本回合中不会被移除。"
-			* 表态方是【苏联（持有方）】，由 pending_wait_nation 的 'su_step_back' 分支保证让权方向。
-			* arg.step_back = true  -> 发动：苏联弃置 4 张手牌（选牌弃牌，服务端再校验），
-			*                          消耗暗置响应卡，注册 protect 修饰器；
-			*                          重放战斗（su_step_back_done + guard_done）后该陆军不被移除。
-			* arg.step_back = falsy -> 不发动：卡留于桌面（不消耗），重放战斗（su_step_back_done）照常结算。
-			*/
-			if (stage === 'su_step_back') {
-			const ownerNation = pb.su_owner_nation || pb.defender_nation
-			if (faction_of_nation(ownerNation) !== side) {
-				game.log.push('只有【' + ownerNation + '】可以决定是否发动这张暗置响应牌')
-				return game
-			}
-			const want = !!(arg && arg.step_back)
-			if (!want) {
-				game.log.push('【' + ownerNation + '】不发动这张暗置响应牌（留于桌面）')
-				game.pending_battle = null
-				/* B34：全量带出本场已问窗口，拒绝后不再回头重问 KV-2 */
-				mark_battle_asked(game, pb, 'su_step_back')
-				const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
-					battle_replay_opt(game, pb, { resume: true }))
-				if (!r.ok) {
-					set_pending_battle(game, pb)
-					game.log.push(r.reason || '战斗无法结算')
-					return game
-				}
-				battle_reconcile_active(game)
-				game.log.push(battle_desc(r, pb.space, '战斗'))
-				return game
-			}
-			/* 发动：弃置 4 张手牌（选牌弃牌，服务端再校验；不允许替玩家挑） */
-			const need = 4
-			const hand = (game.hands[ownerNation] || [])
-			const drop = ((arg && arg.drop) || []).map(String)
-				.filter(id => hand.indexOf(id) >= 0)
-			if (drop.length < need) {
-				game.log.push('《一步也不许后退!》需弃置 ' + need + ' 张手牌（当前指定 ' + drop.length + ' 张）')
-				return game
-			}
-			for (const id of drop.slice(0, need)) discard_card(game, ownerNation, id)
-			game.log.push('【' + ownerNation + '】弃置 ' + need + ' 张手牌作为代价')
-			/* 消耗这张暗置的响应卡（无论是否发动，到这里都算用掉） */
-			const list = game.table_responses || []
-			const idx = list.findIndex(t => t.card_id === pb.su_card)
-			if (idx >= 0) {
-				const used = list.splice(idx, 1)[0]
-				game.discard[ownerNation] = game.discard[ownerNation] || []
-				if (!game.discard[ownerNation].includes(used.card_id))
-					game.discard[ownerNation].push(used.card_id)
-			}
-			/* 注册 protect 修饰器：本回合该苏联陆军不被移除 */
-			register_modifier(game, {
-				key: 'protect', nation: pb.victim_nation, type: 'army',
-				spaces: [pb.space], untilTurn: game.turn, card: '17853',
-			})
-			game.log.push('【' + ownerNation + '】发动《一步也不许后退!》—— 该《' +
-				pb.victim_nation + '》陆军本回合不会被移除')
-			game.pending_battle = null
-			/* B34：发动也记账；guard_done 保持原语义 */
-			mark_battle_asked(game, pb, 'su_step_back')
-			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
-				battle_replay_opt(game, pb, { guard_done: true, resume: true }))
-			if (!r.ok) {
-				set_pending_battle(game, pb)
-				game.log.push(r.reason || '战斗无法结算')
-				return game
-			}
-			battle_reconcile_active(game)
-			game.log.push(battle_desc(r, pb.space, '战斗'))
-			return game
-			}
-
-			if (stage === 'guard') {
-			if (faction_of_nation(pb.defender_nation) !== side) {
-				game.log.push('只有【' + pb.defender_nation + '】可以决定是否打出保护卡')
-				return game
-			}
-			const want = (arg && arg.guard != null) ? arg.guard : null
-			if (want != null) {
-				const entry = (pb.guard_cards || []).find(x => x.card_id === want)
-				if (!entry) {
-					game.log.push('这张卡当前不在可打出的保护卡内')
-					return game
-				}
-				const owner = entry.nation
-				if ((game.hands[owner] || []).indexOf(want) < 0) {
-					game.log.push('【' + owner + '】手中没有这张牌')
-					return game
-				}
-				/* 代价：玩家指定；未指定/不够就拒绝（服务端永不替玩家挑） */
-				const need = entry.cost || 0
-				const filter = entry.cost_filter || null
-				const typeName = filter === 'response' ? '响应牌' : '手牌'
-				const pool = (game.hands[owner] || []).filter(id =>
-					id !== want && (!filter || filter_matches_card(id, filter)))
-				const drop = ((arg && arg.drop) || [])
-					.map(String)
-					.filter(id => pool.indexOf(id) >= 0 && id !== want)
-				if (drop.length < need) {
-					game.log.push('《' + entry.name + '》需弃置 ' + need + ' 张' +
-						typeName + '（当前指定 ' + drop.length + ' 张）')
-					return game
-				}
-				for (const id of drop.slice(0, need)) discard_card(game, owner, id)
-				if (need) game.log.push('【' + owner + '】弃置 ' + need + ' 张' + typeName)
-
-				const eff = ECHO_EFFECTS[String(inst_card_id(want))]
-				const r = (eff && eff.armed && eff.armed.run)
-					? eff.armed.run(game, {
-						nation: owner, card_id: want,
-						space: pb.space, kind: pb.kind,
-						piece: pb.victim, attacker: pb.attacker,
-					})
-					: null
-				if (!r || r.skip) {
-					/*
-					 * 条件没满足：不消耗卡、不重放战斗。
-					 * 挂起【保留】，玩家可以改用另一张或选不使用。
-					 */
-					game.log.push('《' + entry.name + '》本次未满足发动条件：' +
-						((r && r.desc) || ''))
-					return game
-				}
-				const hi = (game.hands[owner] || []).indexOf(want)
-				if (hi >= 0) game.hands[owner].splice(hi, 1)
-				game.discard[owner] = game.discard[owner] || []
-				if (!game.discard[owner].includes(want)) game.discard[owner].push(want)
-				game.log.push('【' + owner + '】打出《' + entry.name + '》—— ' + (r.desc || ''))
-			} else {
-				game.log.push('【' + pb.defender_nation + '】不使用保护卡')
-			}
-			/* 重放这一战：protect 已生效时 is_protected() 会挡下移除 */
-			game.pending_battle = null
-			/* B34：guard 已表态，记账后全量带出本场已问窗口 */
-			mark_battle_asked(game, pb, 'guard')
-			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land',
-				battle_replay_opt(game, pb, {
-					/* resume：跳掉"被攻击"类钩子，避免重放被当成又打了一场 */
-					resume: true,
-				}))
-			if (!r.ok) {
-				/* 参数不合法：把挂起放回去，让防守方重选 */
-				set_pending_battle(game, pb)
-				game.log.push(r.reason || '战斗无法结算')
-				return game
-			}
-			battle_reconcile_active(game)
-			game.log.push(battle_desc(r, pb.space, '战斗'))
-			return game
-		}
-
-		/* ---------- 阶段二：发起方决定是否抵消 ---------- */
-		if (stage === 'counter') {
-			if (faction_of_nation(pb.attacker) !== side) {
-				game.log.push('只有【' + pb.attacker + '】可以决定是否用空军抵消')
-				return game
-			}
-			const wants = arg && arg.counter_air != null
-			/*
-			 * 【2026-11-06 · B10 部分回退（玩家裁定）】
-			 *
-			 * 上一版在这里"不立刻打死 victim"、改挂 `after_air_loss` 再决定是否让新补的空军
-			 * 再次代受。那等于把「victim 的移除时机」挪进了核心战斗时序，实测还导致
-			 * `game.active` 卡在防守方（挂起/归还错误）—— 空军代死属底层机制，不在此处冒险。
-			 *
-			 * 现在恢复原流程：抵消成立 -> do_battle 里两架空军各走
-			 * `remove_air_with_piece_removed`（保留"空军被移除"的窗口派发）+ victim 立即移除，
-			 * 结束后由 `battle_reconcile_active` 正常归还操作权。
-			 * 17811《雅科夫列夫设计局》仍能在"空军已被移除"之后开窗补机（战后生效，不再代死本场）。
-			 */
-			/* B34：counter 重放也必须带出本场已问窗口，否则桌上暗置响应卡会被再问一次 */
-			mark_battle_asked(game, pb, 'guard')
-			const opt = battle_replay_opt(game, pb, {
-				/* 重放防守方已选定的代受空军 */
-				defend_air: pb.defend_air,
-				counter_air: wants ? arg.counter_air : undefined,
-				declined_counter: !wants,
-			/* 【2026-11-06 · 17811 特例】同上 */
-			_air_used: (pb.air_used || []),
-			_bureau_depth: (pb.bureau_depth || 0),
-			})
-			game.pending_battle = null
-			const r = do_battle(game, pb.attacker, pb.space, pb.victim, pb.kind || 'land', opt)
-			if (!r.ok) {
-				/* 参数不合法：把挂起放回去，让发起方重选（并重新让权） */
-				set_pending_battle(game, pb)
-				game.log.push('【' + pb.attacker + '】' + r.reason)
-				return game
-			}
-			/* 这一战已结算 -> 操作权交还原行动方 */
-			battle_reconcile_active(game)
-			game.log.push('【' + pb.attacker + '】' +
-				(r.countered_by_air ? '用空军抵消了这次代受' : '不抵消（代受成立）') +
-				' —— ' + battle_desc(r, pb.space, '战斗'))
-				/*
-				* 战斗预算(event_budget)模型下，单场战斗结算完即结束：
-				* 发起方若仍有剩余机会(remaining>0)可继续点 event_battle，
-				* 预算状态(game.event_budget)始终保留，无需"续打序列"层。
-				*/
-				return game
-				}
-
-		/* ---------- 阶段一：防守方决定是否代受 ---------- */
-		if (faction_of_nation(pb.defender_nation) !== side) {
-			game.log.push('只有【' + pb.defender_nation + '】可以决定是否用空军代受')
-			return game
-		}
-
-		const victim = pb.victim
-		const kind = pb.kind || 'land'
-		/* B34：defend 阶段说明本场保护窗口已表态，记账后重放全量带出 */
-		mark_battle_asked(game, pb, 'guard')
-		const opt = battle_replay_opt(game, pb, {
-		/* use_air 有值 -> 代受；否则视为不代受 */
-		defend_air: (arg && arg.use_air != null) ? arg.use_air : undefined,
-			air_retreat: (arg && arg.retreat != null) ? arg.retreat : undefined,
-			/*
-			 * 【2026-11-05 修复·15410 武士道】必须带 guard_done。
-			 *
-			 * 走到 defend 阶段说明 guard（保护卡）已经表态过（选了"不使用"或已打出）。
-			 * 但重放 do_battle 时旧代码没带 guard_done，于是 do_battle 又走一遍
-			 * `if (!opt.guard_done && !opt.kv2_done)` 的 guard 分支 ——
-			 * 15410 还在手里、条件依旧满足 → 又挂 guard → 玩家在
-			 * 「guard ↔ defend」之间无限循环，被攻击的陆军永远死不了（实测）。
-			 */
-			guard_done: true,
-			/* 【2026-11-06 · 17811 特例】把本场已用空军与 bureau 深度传回 do_battle */
-			_air_used: (pb.air_used || []),
-			_bureau_depth: (pb.bureau_depth || 0),
-			})
-			/*
-			* 明确"不代受"：把 defend_air 显式设为 null，
-		 * 让 do_battle 知道防守方已表态（不再挂起）。
-		 */
-		if (!(arg && arg.use_air != null))
-			opt.defend_air = null
-		if (opt.defend_air === null && !(arg && arg.declined))
-			opt.declined_defend_air = true
-
-		game.pending_battle = null
-		const r = do_battle(game, pb.attacker || game.current_nation,
-			pb.space, victim, kind, opt)
-		if (!r.ok) {
-			/* 参数不合法：把挂起状态放回去，让防守方重选（并重新让权） */
-			set_pending_battle(game, pb)
-			game.log.push('【' + pb.defender_nation + '】' + r.reason)
-			return game
-		}
-		/*
-		 * 防守方选择代受、且发起方有可抵消的空军时，
-		 * do_battle 会再次挂起（stage='counter'）等发起方表态。
-		 * 此时这一战还没结束，日志要说清楚"现在轮到谁"。
-		 */
-		if (r.pending) {
-			game.log.push('【' + pb.defender_nation + '】用空军代受 —— ' +
-				'现等待【' + pb.attacker + '】决定是否用相邻的空军抵消')
-			return game
-		}
-		game.log.push('【' + pb.defender_nation + '】' +
-			(r.defended_by_air ? '用空军代受' : '不代受（照常移除）') +
-			' —— ' + battle_desc(r, pb.space, '战斗'))
-		/*
-		 * 战斗预算(event_budget)模型下，单场战斗结算完即结束：
-		 * 预算状态(game.event_budget)始终保留，无需"续打序列"层。
-		 */
-		/*
-		 * 【2026-10-20 修复】代受/不代受这一【日常出口】此前从未调用
-		 * battle_reconcile_active，导致两个后果：
-		 *   ① 操作权不归还 —— battle_return_active 悬空，game.active 停在防守方；
-		 *   ② promote_deferred_response 无人触达 —— 延期续打帧（15425《海军空降部队》
-		 *      的"是否再发起 1 次陆战"）永久留在 deferred，
-		 *      表现即"即使没有增强卡，第二步也不弹出"。
-		 * 与 guard / kv2 / su_step_back 各分支口径统一：本场战斗结算完即 reconcile
-		 * （内部会先归还操作权，再按守卫提升延期帧）。
-		 */
-		battle_reconcile_active(game)
-		return game
-	}
+	if (action === 'resolve_battle') return action_resolve_battle(game, side, current, arg)
 
 	if (action === 'uranus_choice') return action_uranus_choice(game, side, current, arg)
 
 	if (action === 'su_status_play') return action_su_status_play(game, side, current, arg)
 	if (action === 'su_status_skip') return action_su_status_skip(game, side, current, arg)
 
-	/* 【2026-09-30 重构·战斗预算】逐次发起战斗（每战都是一次完全原子的 do_battle），
-	 * 代受/抵消/响应/闪电战窗口/15245 二连打全部照常，期间可插入状态/免死/飞机代受。 */
-	if (action === 'event_battle') {
-		const b = game.event_budget
-		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
-		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可发起战斗预算'); return game }
-		if (b.remaining <= 0) { game.log.push('战斗机会已用尽，请点「结束《' + ((inst_card(b.card_id) || {}).name) + '》」结算'); return game }
-		/* 单场战斗的代受/抵消尚未结算时，禁止续战，否则会打断 counter 对话框 */
-		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再发起下一场'); return game }
-		const target = arg && arg.target
-		if (target == null) { game.log.push('请选择一个含' + (b.against || '敌') + '的' + (b.kind === 'sea' ? '海域' : '陆地') + '作为目标'); return game }
-		/*
-		 * 【多国部队同处一格】发起方应指定要攻击哪一支（arg.victim）；
-		 * 不指定时退回 do_battle 的默认口径（enemies[0]，即自动取第一个）。
-		 * 与发起陆战/发起海战（arg.piece）同源，保证"选哪国打"一致。
-		 */
-		let wantVictim = (arg && arg.victim != null) ? arg.victim
-			: (arg && arg.piece != null) ? arg.piece : null
-		/*
-		 * 【2026-11-12 · B38】「至多三支不同的目标部队」：
-		 *  ① 目标必须是回合开始快照里的部队（快照外中途新出现的不许打）；
-		 *  ② 同一支部队本张卡只打一次 —— 即使被保护/代受未移除也不重复；
-		 *  ③ 客户端未指定 victim 时按「未打过的快照部队」自动取第一支并写回，
-		 *     避免 do_battle 的 enemies[0] 打到别的实例。
-		 */
-		if (b.unitTargets) {
-			const used = b.usedVictims || (b.usedVictims = [])
-			if (wantVictim == null) {
-				const first = pieces_on(game, Number(target)).find(p =>
-					game.piece_type[p] !== 'air' &&
-					budget_unit_unused(b, p, game, Number(target)))
-				wantVictim = first || null
-			}
-			const bName = ((inst_card(b.card_id) || {}).name) || b.card_id
-			if (wantVictim == null ||
-				!b.unitTargets.some(x => String(x) === String(wantVictim))) {
-				game.log.push('《' + bName + '》只能攻击本回合开始时已确定的目标部队')
-				return game
-			}
-			if (used.some(x => String(x) === String(wantVictim))) {
-				game.log.push('《' + bName + '》该目标部队已打过，不能重复发起战斗')
-				return game
-			}
-		}
-		/* 战斗已发起（含 pending 代受）即记账，与 remaining 扣减同步 */
-		const recordVictim = () => {
-			if (b.unitTargets && wantVictim != null) {
-				const used = b.usedVictims || (b.usedVictims = [])
-				const key = String(wantVictim)
-				if (used.indexOf(key) < 0) used.push(key)
-			}
-		}
-		const cands = event_battle_targets(game, b)
-		if (cands.indexOf(Number(target)) < 0) {
-			game.log.push('「' + data.name_of(Number(target)) + '」不是合法目标（需含' + (b.against || '敌') + '部队且可发起）')
-			return game
-		}
-		/*
-		 * 【2026-10-07 修复 · useNewPiece】若预算标记了"必须用新单位发起"，
-		 * 发起单位强制为那支新单位，忽略玩家传来的 arg.from（防止指定任意法军）。
-		 * 新单位不存在(极端情况)时退回默认 b.from，避免卡死。
-		 */
-		if (b.useNewPiece) {
-			if (b.newPiece != null) {
-				const okHere = battle_initiators(game, b.as, Number(target))
-					.some(x => x.id === b.newPiece)
-				if (!okHere) {
-					game.log.push('「' + data.name_of(game.location[b.newPiece]) +
-						'」无法对「' + data.name_of(Number(target)) + '」发起战斗（须相邻且处于补给状态）')
-					return game
-				}
-				/* 强制作发起者为新单位（即便客户端传了别的 arg.from 也覆盖） */
-				const r0 = do_battle(game, b.as, Number(target), wantVictim, b.kind, { from: b.newPiece })
-				if (!r0.ok) { game.log.push(r0.reason); return game }
-				b.battleOk = (b.battleOk || 0) + 1
-				b.descs.push(battle_desc(r0, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
-				b.remaining -= 1
-				recordVictim()
-				if (r0.pending) {
-					game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
-					return game
-				}
-				game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
-				return game
-			}
-			/* newPiece 为 null 的兜底：走下面的通用逻辑 */
-		}
-		/*
-		 * 【2026-10-01 修复 · 一类问题】发起单位应由玩家选择。
-		 * view 下发了每个候选目标的可发起单位(event_budget.initiators)，
-		 * 玩家点击后把选中的单位放在 arg.from 里回传；服务端校验它确实
-		 * 属于该目标格的合法发起者，防止任意指定。
-		 */
-		let from = b.from
-		const wantFrom = arg && arg.from
-		if (wantFrom != null) {
-			const okInits = battle_initiators(game, b.as, Number(target))
-			if (!okInits.some(x => x.id === wantFrom)) {
-				game.log.push('「' + data.name_of(game.location[wantFrom]) +
-					'」不能作为该场战斗的发起单位（须相邻且处于补给状态）')
-				return game
-			}
-			from = wantFrom
-		}
-		const r = do_battle(game, b.as, Number(target), wantVictim, b.kind, { from: from })
-		if (!r.ok) { game.log.push(r.reason); return game }
-		b.battleOk = (b.battleOk || 0) + 1
-		b.descs.push(battle_desc(r, Number(target), b.kind === 'sea' ? '海战' : '陆战'))
-		b.remaining -= 1
-		recordVictim()
-		if (r.pending) {
-			/* 空军代受挂起：pending_battle 已设置，预算保留(remaining 已扣减)，等 resolve_battle 解出后预算仍在 */
-			game.log.push('【' + b.nation + '】对' + data.name_of(Number(target)) + '发起' + (b.kind === 'sea' ? '海战' : '陆战') + '（空军代受待结算）')
-			return game
-		}
-		game.log.push('【' + b.nation + '】' + b.descs[b.descs.length - 1])
-		return game
-	}
+	if (action === 'event_battle') return action_event_battle(game, side, current, arg)
 
-	/* 【2026-09-30 重构·战斗预算】结算预算：放弃剩余机会 + 触发德国国家技能。
-	 * 必然晚于最后一场战斗的 after_land(闪电战)窗口（玩家先点完闪电战再点结束）。 */
-	if (action === 'event_finish') {
-		const b = game.event_budget
-		if (!b) { game.log.push('当前没有进行中的战斗预算'); return game }
-		if (faction_of_nation(b.nation) !== side) { game.log.push('只有【' + b.nation + '】阵营可结算战斗预算'); return game }
-		if (game.pending_battle) { game.log.push('请先完成当前战斗的结算（代受/抵消）再结算预算'); return game }
-		const nm = ((inst_card(b.card_id) || {}).name) || b.card_id
-		game.log.push('《' + nm + '》战斗预算结束（' + b.battleOk + ' 场已结算，剩余 ' + b.remaining + ' 次机会放弃）')
-		if (b.descs.length) game.log.push('—— ' + b.descs.join('；'))
-		game.event_budget = null
-
-		/* 【2026-10-18】17851 天王星行动：source:'uranus' 预算结算——
-		 * 每次机会 = 1 次陆战 或 1 次建设，由 uranus_choice 驱动。
-		 * 战斗结束（battleOk>0）后：剩余次数 -1；>0 重弹菜单，==0 收尾；
-		 * 玩家直接点「结束」（battleOk=0）则放弃剩余、直接收尾。
-		 * 跳过下方 armed 分支与统一弃卡，由 finish_uranus 统一处理。 */
-		if (b.source === 'uranus') {
-			const __a = b.nation
-			const __c = b.card_id
-			const __sp = b.space
-			const __rem = (b.uranus_remaining || 1) - (b.battleOk > 0 ? 1 : 0)
-			if (b.battleOk > 0 && __rem > 0) {
-				game.pending_uranus = {
-					remaining: __rem, total: __rem,
-					actor: __a, card_id: __c, space: __sp,
-				}
-				game.log.push('天王星行动：剩 ' + __rem + ' 次机会')
-				return game
-			}
-			finish_uranus(game, { actor: __a, card_id: __c })
-			return game
-		}
-
-		/*
-		 * 【2026-10-07】armed 型预算（15205《JU-87》）：卡【仍留在手牌】，
-		 * 代价是"发动"的代价 —— 至少真打了 1 场才付；一场都没发动 = 等同放弃，
-		 * 卡留手牌、不付代价（与 use_armed_offer 的 skip 口径一致）。
-		 */
-		if (b.source === 'armed' && !(b.battleOk > 0)) {
-			game.log.push('《' + nm + '》未发动任何战斗 —— 卡留在手牌，不付代价')
-			return game
-		}
-		if (b.cost && b.cost.attrition) {
-			if (!can_attrite(game, b.nation, b.cost.attrition)) {
-				game.log.push('《' + nm + '》需损耗 ' + b.cost.attrition + ' 张牌，但牌库不足')
-			} else {
-				attrition_cards(game, b.nation, b.cost.attrition)
-				game.log.push('【' + b.nation + '】损耗 ' + b.cost.attrition + ' 张牌')
-			}
-		}
-		/* 【2026-10-11】battle 预算之后还有后续 step（如 build/recruit）：
-		 * 预算结算后从第 resumeStep 步续跑，复用 resolve_event_card 同款逻辑。
-		 * resumeStep=0 表示 battle 已是最后一步（如 15226），不续跑。 */
-		if (b.resumeStep && b.resumeStep > 0) {
-			const _eff = card_effect_of(b.card_id)
-			const _steps = _eff
-				? (_eff.choice ? (_eff.choice[b.choice] || []) : (_eff.steps || []))
-				: []
-			if (b.resumeStep < _steps.length) {
-				/* 【2026-11-10 · #9】把打出时玩家已选的 spaces/picks 一并带回续跑，
-				 * 不再只传 choice（否则后续 build/recruit 步由服务端自动挑第一个候选）。 */
-				const res = resolve_event_card(game, b.nation, b.card_id,
-					Object.assign({}, b.accum || {}, { choice: b.choice }), b.resumeStep)
-				if (res && res.ok && res.desc)
-					game.log.push('《' + nm + '》后续步骤：' + res.desc)
-				else if (res && res.reason)
-					game.log.push('《' + nm + '》后续步骤未执行（' + res.reason + '）')
-			}
-		}
-		/* 【2026-09-30 德国增强】预算卡（含英国战斗事件卡）结算后入弃牌堆 */
-		/*
-		 * 【2026-10-22 修复·多步事件卡吞卡】多步 EVENT 在 play_card 的 stepPause/
-		 * armedPause 分支已把卡移出手牌；而 discard_card 要求牌仍在手牌（indexOf<0 直接
-		 * return），于是 17828 百团大战这类"征召+战斗预算"的卡打完后【凭空消失】、
-		 * 既不进弃牌堆也不触发弃牌堆相关效果。
-		 * 在手牌 -> discard_card（保留手牌类计分）；已离手 -> push_discard_direct。
-		 */
-		if ((game.hands[b.nation] || []).indexOf(b.card_id) >= 0)
-			discard_card(game, b.nation, b.card_id)
-		else
-			push_discard_direct(game, b.nation, b.card_id)
-		/* 触发德国国家技能(star_resolved)：晚于最后一场战斗的闪电战时点 */
-		after_card_resolved(game, b.nation, b.card_id)
-		/*
-		 * 【2026-10-28 #15】租借法案委托的「预算型」收尾点。
-		 *
-		 * 被委托国打出的是战斗预算卡时，battle_reconcile_active 因"预算未打完"不归还
-		 * （见该函数的守卫）；必须等玩家点「结束」走到这里才真正收尾：
-		 * 摸 1 张 + 操作权归还美国 + 触发美国★国家技能。
-		 * 顺序放在 after_card_resolved 之后：finish_us_lend_lease 内部会按 return_nation（美国）
-		 * 再触发一次，英国自己那次属于代打，不为其开技能窗口。
-		 */
-		/* 【2026-11-10】统一手动归还：预算打完只置 played，收尾交给「结束委托」按钮 */
-		if (game.delegate && game.delegate.mode === 'single' && game.delegate.resume_after_battle)
-			game.delegate.played = true
-		/*
-		 * 【2026-10-28 #13 修复】战斗预算卡收尾 = 卡牌生效（战斗已打完），同样派发 play_card。
-		 * 与 EVENT 分支、finish_event_card 三处对齐 —— 缺任何一处，
-		 * 15333《配给》对相应类型的英国事件卡就不触发。
-		 */
-		try {
-			request_responses(game, 'play_card', {
-				nation: b.nation, card: b.card_id, card_obj: inst_card(b.card_id),
-			}, false)
-		} catch (e) { game.log.push('play_card(budget) 错误：' + e.message) }
-		return game
-	}
+	if (action === 'event_finish') return action_event_finish(game, side, current, arg)
 
 	if (action === 'event_step_next') return action_event_step_next(game, side, current, arg)
 
@@ -37096,569 +38137,7 @@ function do_action(state, current, action, arg) {
 
 	if (action === 'skip_status_ask') return action_skip_status_ask(game, side, current, arg)
 
-	if (action === 'activate_status') {
-		const cardId = arg && arg.card
-		if (!cardId) {
-			game.log.push('请指定要触发的状态卡')
-			return game
-		}
-		/* 该卡必须在本方【代表国】的桌面上 */
-		const owner = (() => {
-			for (const n in (game.table || {}))
-				if ((game.table[n] || []).indexOf(cardId) >= 0) return n
-			return null
-		})()
-		if (owner == null) {
-			game.log.push('桌面上没有这张状态卡')
-			return game
-		}
-		/* 17732 借用：借来的德国状态卡本回合可被意大利激活（绕过"须本国"校验） */
-		const borrowed = !!(game.italy_borrow && game.italy_borrow.turn === game.turn &&
-			game.italy_borrow.card_face === cardId &&
-			game.current_nation === game.italy_borrow.nation)
-		const cfg = status_config_of(cardId)
-		if (!cfg || !cfg.trigger) {
-			game.log.push('该状态卡没有可触发的效果')
-			return game
-		}
-		const tr = cfg.trigger
-		if (!borrowed && !CROSS_NATION_STATUS_WINDOWS[tr.window] &&
-			!status_instant_covers(game, cardId, owner) &&
-			delegate_of_nation(owner) !== delegate_of_nation(game.current_nation)) {
-			game.log.push('不能触发非本方的状态卡')
-			return game
-		}
-		const cName = (inst_card(cardId) || {}).name || '状态卡'
-
-		/* 15353 保持冷静·继续前进：本回合已被拦截压制 -> 状态卡效果不发生（卡留桌面、不付代价） */
-		if ((game.status_suppressed_this_turn || {})[cardId] === freq_key(game)) {
-			/*
-			 * 【2026-10-26 玩家口径】被压制 = 本次发动已被抵消，标为「已发动」。
-			 * 主标记在 15353 的 run 里；这里补一刀，覆盖：
-			 *   · 旧存档 / 旧代码只写了 suppressed 而没写 status_used 的局面；
-			 *   · 任何直接写 suppressed 的旁路。
-			 * 让「界面显示已发动」与「再点被拒」两处口径始终一致。
-			 */
-			game.status_used = game.status_used || {}
-			game.status_used[cardId] = freq_key(game)
-			game.log.push('《' + cName + '》本回合已被《保持冷静·继续前进》压制，无法发动')
-			return game
-		}
-
-		/* 15343 压制：敌方在场时本卡无效 */
-		if (!status_active(game, cardId, owner)) {
-			game.log.push('《' + cName + '》被敌方《霍巴特滑稽坦克》压制，无法发动')
-			return game
-		}
-		/* 一回合一次 */
-		if (tr.once_per_turn && (game.status_used || {})[cardId] === freq_key(game)) {
-			game.log.push('《' + cName + '》本回合已经发动过')
-			return game
-		}
-
-		/*
-		 * 【2026-09-28】【替换建设】专用通道。
-		 *
-		 * 客户端在"打出《建设陆军》后、正在选地块"时点本卡，会带 from_status:true。
-		 * 这类窗口（build_army）是**事件驱动**的：服务端无法感知"正在选地块"
-		 * 这个客户端 UI 状态，所以 status_window_ready 默认返回 false
-		 * （保证其余时间 UI 不显示可点）。这里凭 from_status 放行，并：
-		 *   · **不检查阶段** —— 玩家明确说"不受阶段影响"，
-		 *     别人回合触发的英国建设，英国照样能替换。
-		 *   · **不额外占出牌名额** —— 名额由那张被替换的建设卡自己占。
-		 *
-		 * 安全性：客户端只能对【本方桌面】的卡发此动作（上面已校验 owner），
-		 * 且服务端仍校验 status_active / once_per_turn / 卡在桌面。
-		 */
-		const isForgoBuild = !!(arg && arg.from_status) && !!(tr.cost && tr.cost.forgo_build_army)
-		/*
-		 * 【2026-10-26 ③·同源】与 register_status_actions 共用同一道闸门。
-		 *
-		 * 之前只有白名单侧（register_status_actions）在"战斗/经济战/响应待决"时
-		 * 整体不发 activate_status，服务端入口却只看 status_window_ready ——
-		 * 于是出现 "view.table_status[].ready = true（客户端显示可触发、点得动）、
-		 * 但 actions 白名单里没有 activate_status" 的错配，玩家点了照样结算。
-		 * 17554 线上 bug 能成立正是靠这条缝（客户端不判 ready 直接发动作）。
-		 *
-		 * 现在两处同一判据：白名单不发 -> 服务端也拒。
-		 */
-		/* 【2026-11-10 · #7 雷达】按【这张卡】判冻结：它自己处在立刻窗口时不冻结 */
-		const frozen = status_actions_frozen(game, cardId)
-		if (frozen && !isForgoBuild) {
-			game.log.push('《' + cName + '》现在不能发动：' + frozen)
-			return game
-		}
-		const ready = status_window_ready(game, owner, cardId, tr)
-		if (!ready.ok && !isForgoBuild) {
-			game.log.push('《' + cName + '》现在不能发动：' + ready.reason)
-			return game
-		}
-		/*
-		 * 【2026-11-04 · S2-b】付代价【之前】的参数预检。
-		 *
-		 * 损耗（attrition）代价一旦付出就无法精确回滚（见 activate_status 失败分支：
-		 * 只退回 discard，attrition 明确不退）。所以"注定会失败"的参数必须在这里拦下，
-		 * 而不是等 run 返回 ok:false —— 否则玩家点了发动就是白亏牌。
-		 */
-		{
-			/*
-		 * 【2026-11-05 · B12】预检也要按【付款方】看手牌：
-		 * 借用德国状态卡时 costPayer = 意大利，弃牌代价必须从意大利手牌里选；
-		 * 传 owner（德国）会误判「要弃置的手牌不在手里」，借用直接失效。
-		 */
-		const pre = precheck_status_args(game,
-			borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner,
-			tr, arg || {}, cardId)
-			if (!pre.ok && !isForgoBuild) {
-				game.log.push('《' + cName + '》现在不能发动：' + pre.reason)
-				return game
-			}
-		}
-		/*
-		 * ---------------- 付代价（【2026-10-31 S1】已前移到拦截窗口之前） ----------------
-		 *
-		 * 玩家口径：代价属于"发动"的一部分，被 15353 拦截时【代价不退】、只取消效果。
-		 * 所以顺序是：参数预检 ->【付代价】-> 派发 enemy_status_effect ->（被拦则到此为止）-> 执行效果。
-		 * 例外：cost.skip_play（跳过出牌阶段）仍留在窗口之后 —— 被拦时不照付，待玩家裁定。
-		 *
-		 * 【2026-10-31】_costPaidNow：放弃拦截后我们会【续跑】activate_status（见 skip_armed_offer），
-		 * 续跑时不能二次扣代价 —— 代价照付，但只付一次。
-		 */
-		 const _costPaidNow = game.__status_cost_resume === cardId
-		if (_costPaidNow) delete game.__status_cost_resume   /* 一次性令牌：只免重扣这一次 */
-		 /*
-		 * 【2026-10-18 修复】15341/15342 仅当【英国执行建设陆军】时（game.current_nation==='英国'，
-		 * 含美国 17526《民主兵工厂》让权英国建设期间，offer_uk_build_delegate 已翻 current_nation='英国'）
-		 * 才可替换发动。非英国玩家、或英国玩家的非建设陆军行为一律拒发。
-		 * 这是权威兜底：即便客户端越权发送 from_status，此处也按 current_nation 拦截，
-		 * 与 view.forgo_build / register_status_actions 三处同源（通用教训 3）。
-		 */
-		if (isForgoBuild && (inst_card_id(cardId) === '15341' || inst_card_id(cardId) === '15342') && game.current_nation !== '英国') {
-			game.log.push('《' + cName + '》只能在英国建设陆军时由英国替换发动')
-			return game
-		}
-
-
-		/* ---------------- 付代价 ---------------- */
-		/*
-		 * 代价支付方 costPayer：默认桌面归属 owner；
-		 * 借用卡（17732 借来的德国状态卡）由借用方意大利承担——
-		 * 因为实际发动方是意大利，而该卡仍挂在德国桌面（owner 为德国），故用 costPayer 重定向到 game.italy_borrow.nation。
-		 * cost 取该卡 tr.cost 正常计算，不做免代价处理（卡面本就未写"免费"）。
-		 */
-		const costPayer = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
-		const cost = tr.cost || {}
-		/*
-		 * 【2026-11-05 · B12】损耗代价的前置预检。
-		 *
-		 * 原来 can_attrite 校验在 skip_play 之后：15255《征兵》这种「跳过出牌阶段 + 损耗 2」的卡，
-		 * 牌库不足时会**先把出牌阶段跳过**、再报"牌库不足，无法发动" —— 代价白付、效果零。
-		 * 借用（17732）时更明显：意大利付不起损耗，却已经把德国的出牌阶段……不对，是自己的阶段跳掉了。
-		 *
-		 * 玩家口径：付不起就「拒绝发动」= 一张都不扣、阶段也不动。故把校验提到所有代价之前。
-		 */
-		if (cost.attrition && !_costPaidNow && !can_attrite(game, costPayer, cost.attrition)) {
-			game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
-				' 张牌，但牌库不足，无法发动（未支付代价）')
-			return game
-		}
-		/*
-		 * 【2026-10-23】效果【参数】预检 —— 必须在付代价之前。
-		 *
-		 * 起因：17846《坦克运输》要求"以此陆军发起陆战"，即发起单位必须是刚建成的那支。
-		 * 但客户端 battle_initiators 是通用口径（相邻的本国补给陆/海军），玩家点了另一支
-		 * 也能提交；服务端直到 run 里才校验 → 代价（弃 1 张牌）已扣、效果失败。
-		 * game 24 实测："建设期间坦克运输失效"，手牌白亏 1 张。
-		 *
-		 * 由卡配置提供 precheck(game, nation, arg, ctxSpace)，返回 {ok, reason}。
-		 * 没有 precheck 的卡行为完全不变。
-		 */
-		if (typeof tr.precheck === 'function') {
-			const _pcSpace = ((game.status_instant || []).find(x => x.card_id === cardId) || {}).space
-			const _pc = tr.precheck(game, costPayer, arg || {}, _pcSpace)
-			if (!_pc || _pc.ok === false) {
-				game.log.push('《' + cName + '》' + ((_pc && _pc.reason) || '参数不合法') +
-					'（未支付代价）')
-				return game
-			}
-		}
-		/*
-		 * 【2026-10-28 修 · 待办 #14】effect.kind==='battle' 的【参数预检】。
-		 *
-		 * 症状（玩家原话）：「损耗了牌却没触发」——17746《耀武》扣掉 2 张牌 + 跳过出牌阶段后，
-		 * 效果什么都没发生。
-		 *
-		 * 根因链：
-		 *   ① 代价（attrition / skip_play）在本段【之前】就已扣掉；
-		 *   ② run_status_effect 的 battle 分支要求 `arg.from`（发起单位），否则
-		 *      `{ ok:false, reason:'请选择发起单位' }` —— 但客户端对 17746 这类
-		 *      「卡面没写地区」的 battle 效果不弹选择框，`from` 恒为 null；
-		 *   ③ 失败处理（29464）只回滚 `cost.discard`，**attrition 不回滚**
-		 *      （损耗已进牌库底，注释里明说"无法精确还原"）。
-		 *   => 牌白扣、出牌阶段白跳，效果零。
-		 *
-		 * 修法：把"battle 效果必须带发起单位"提前到【付代价之前】拒绝。
-		 * 对所有 effect.kind==='battle' 的状态卡通用（15338 / 15339 / 15346 / 15247 / 17746 …），
-		 * 与上面 tr.precheck 同位置、同口径（未支付代价）。
-		 */
-		if (tr.effect && tr.effect.kind === 'battle' && ((arg || {}).from == null)) {
-			game.log.push('《' + cName + '》请先选择发起战斗的单位与地区（未支付代价）')
-			return game
-		}
-		/*
-		 * 【2026-10-23 修复】"跳过出牌阶段"原本在这里就置位，早于 cost.discard /
-		 * cost.attrition 的校验。玩家不带 discard 点发动时：skip_play_done 被永久置位、
-		 * 代价一分没付、效果也没结算，且 status_window_ready 会以"本回合已跳过出牌阶段"
-		 * 拒绝重试 —— 白丢整个出牌阶段。现移到所有代价校验通过之后（见下方"执行效果"前）。
-		 */
-		/*
-		 * 【2026-10-28 修】17732《德国军事顾问》借用德国状态卡时是「免费激活」：
-		 * `borrowed` 已用于窗口放行与 costPayer 重定向，但【代价校验全部没跳过】——
-		 * 于是借用 15242 时仍要求弃 1 张手牌，玩家不传 discard 就卡在
-		 * 「请先选择要弃置的 1 张手牌」，效果一个都不结算
-		 * （症状：玩家报「借用《贵在行动》没有生效」）。
-		 * 下面 discard / attrition / skip_play 三处代价统一按 borrowed 免除。
-		 */
-		if (cost.discard && !_costPaidNow) {
-			const picked = (arg && arg.discard) || []
-			/*
-			 * 【2026-11-05 · B12】代价必须来自【付款方】手牌。
-			 * 借用德国状态卡时 costPayer = 意大利：玩家点了德国的牌、或点了不在手里的牌，
-			 * discard_card 会静默失败（牌没扣、效果照跑 = 白嫖），这里提前拒绝。
-			 */
-			for (const _dc of ((arg && arg.discard) || []).slice(0, cost.discard)) {
-				if ((game.hands[costPayer] || []).indexOf(_dc) < 0) {
-					game.log.push('《' + cName + '》的代价须从【' + costPayer + '】手牌中选择（未支付代价）')
-					return game
-				}
-			}
-			if (picked.length < cost.discard) {
-				game.log.push('请先选择要弃置的 ' + cost.discard + ' 张手牌')
-				return game
-			}
-			/* 代价须为指定卡（15242 等：必须弃置【发起陆战】） */
-			if (cost.discard_is) {
-				for (const cid of picked.slice(0, cost.discard)) {
-					const c = inst_card(cid)
-					if (!card_matches_filter(c, cost.discard_is)) {
-						/* 【2026-10-20】discard_is.name 可能是数组（"或"关系），文案须展开为"A或B" */
-						const nm = cost.discard_is.name
-						const nmTxt = Array.isArray(nm) ? nm.join('或') : (nm || '')
-						/*
-						 * 【2026-10-23 修复】这里原调用 status_name(cardId)，但该函数
-						 * 【从未定义】—— 15242 人民冲锋队弃错牌时会抛 ReferenceError。
-						 * 直接复用上文已算好的 cName（同一状态卡名）。
-						 */
-						game.log.push('《' + cName + '》的代价必须是指定的牌（' + nmTxt + '）')
-						return game
-					}
-				}
-			}
-			for (const cid of picked.slice(0, cost.discard))
-				discard_card(game, costPayer, cid)
-			game.log.push('【' + costPayer + '】弃置 ' + cost.discard + ' 张手牌')
-		}
-		if (cost.forgo_build_army && !_costPaidNow) {
-			/*
-			 * S4：放弃本次建设陆军 —— 由 build_army 窗口保证语义。
-			 *
-			 * 【2026-09-28】被放弃的那张《建设陆军》卡【必须真正打出】
-			 * （进弃牌堆），而不是悄悄退回手牌。
-			 *
-			 * 原因：玩家这次出牌行动打的就是《建设陆军》——
-			 * 状态卡只是把【结果】从"建设"换成"征召"，
-			 * 那张建设卡作为本次出牌是【已经打出去了】的。
-			 * 若退回手牌，等于白嫖：既征召了陆军，建设卡还能再用一次。
-			 *
-			 * 客户端在提交时把建设卡实例 id 放在 arg.build_card。
-			 */
-			const bc = (arg && arg.build_card) || null
-			if (bc) {
-				discard_card(game, owner, bc)
-				/*
-				 * 出牌名额由【这张建设卡】占掉（状态卡本身不额外占）。
-				 * mark_play_done 内部只在 turn_phase === PH.PLAY 时才置位，
-				 * 所以在别人回合/非出牌阶段触发时不会误伤（本卡"不受阶段影响"）。
-				 */
-				mark_play_done(game, owner)
-				game.log.push('【' + owner + '】放弃建设陆军（《建设陆军》已打出进弃牌堆）')
-			} else {
-				/*
-				 * 【2026-09-29】没有 build_card 时【禁止】从手牌里猜一张打出。
-				 *
-				 * 原因：无法区分两种来源——
-				 *   ① 玩家打出《建设陆军》后替换，但客户端漏传 build_card
-				 *   ② 【卡牌效果】让他国建设，例如美国 17526《民主兵工厂》
-				 *      「英国按任意顺序执行：建设1支海军 及 建设1支陆军」
-				 *      —— 此时英国【根本没打出】《建设陆军》卡，
-				 *         若兜底去手牌里找一张打掉，就是凭空扣牌（规则错误）。
-				 *
-				 * 权衡：
-				 *   兜底命中 ① -> 正确；命中 ② -> 【误扣玩家一张牌】。
-				 *   漏掉 ①    -> 建设卡退回手牌（白嫖，玩家得利、易发现、可修客户端）。
-				 *   "误扣"远比"白嫖"严重且难发现，所以【禁止猜】。
-				 *
-				 * 结论：build_card 是【唯一权威来源】。没有它 = 没有建设卡被打出，
-				 *       只替换建设的结果、不扣任何手牌、不占名额。
-				 *
-				 * （若将来要实现"效果触发的建设也允许替换"，同样走这里：
-				 *   不扣卡，仅把 build 的结果换成 recruit。）
-				 */
-				game.log.push('【' + owner + '】放弃建设陆军' +
-					'【说明】未指定被放弃的建设卡，故不扣除任何手牌')
-			}
-		}
-		if (cost.lose_score && !_costPaidNow) {
-			const f = faction_of_nation(costPayer)
-			if (f) {
-				game.score[f] = (game.score[f] || 0) - cost.lose_score
-				game.log.push('【' + costPayer + '】失去 ' + cost.lose_score + ' 分')
-			}
-		}
-		/*
-		 * 【2026-10-23】"跳过出牌阶段"放在这里：所有代价（discard / attrition）
-		 * 的校验都已通过。放在效果之前，是为了让"跳过"在本阶段结束的自动推进
-		 * （maybe_advance_after_skip_play）里生效。
-		 *
-		 * 【2026-10-26 玩家口径·不再自动推进】自动推进已取消（见下方"推进"处），
-		 * 于是"跳过出牌阶段"必须靠【占掉出牌名额】来兑现：
-		 *   · skip_play_done —— 仍置，供 status_window_ready 拒绝再次发动（既有语义）；
-		 *   · mark_play_done / mark_play_acted —— 补上：否则玩家仍停在出牌阶段且
-		 *     play_done 未置 -> 还能继续打出别的牌，代价形同虚设。
-		 * 即"跳过"= 出牌阶段已被这张卡用掉，但【不】替玩家推进阶段。
-		 */
-		if (cost.skip_play && !_costPaidNow) {   /* 【2026-10-30】被拦也照付 */
-			/* 【2026-10-28】统一走 apply_skip_play（与自动派发 / 17841 等同一实现） */
-			apply_skip_play(game, costPayer)
-			game.log.push('【' + costPayer + '】跳过本回合出牌阶段（不再出牌，可点「下一阶段」继续）')
-		}
-
-		/*
-		 * 【2026-09-29 主动损耗】牌库不足时【无法发动】。
-		 *
-		 * 与 cost.discard（手牌不足则拒绝）同款口径：
-		 * 代价付不出来就【不能发动】，而不是"少损耗几张凑合"。
-		 * 注意这里【不】走 attrition_passive 的"差额扣分"——
-		 * 那条规则只适用于【被别国损耗】，自己主动付代价不适用。
-		 */
-		if (cost.attrition && !_costPaidNow) {
-			if (!can_attrite(game, costPayer, cost.attrition)) {
-				game.log.push('《' + cName + '》需要损耗 ' + cost.attrition +
-					' 张牌，但牌库不足，无法发动')
-				return game
-			}
-			attrition_cards(game, costPayer, cost.attrition)
-			game.log.push('【' + costPayer + '】损耗 ' + cost.attrition + ' 张牌')
-		}
-
-		/* 15353：本回合已跳过拦截 -> 不再弹窗，敌方照常执行；否则派发拦截窗口让英国响应 */
-		const _15353skip = (game.status_intercept_skipped || {})[cardId] === freq_key(game)
-		if (!_15353skip) {
-			offer_armed_effects(game, 'enemy_status_effect', { nation: owner, card: cardId, arg: arg || {}, window: 'enemy_status_effect' })
-			if ((game.armed_offers || []).some(w => w.when === 'enemy_status_effect' && w.ctx && w.ctx.card === cardId))
-				return game
-		}
-
-		/* ---------------- 执行效果 ---------------- */
-		/*
-		 * 【2026-09-30】"X 后立刻"卡（after_land / after_build_army）在武装瞬间
-		 * 把事件地区存进了 game.status_instant，这里把对应 entry 的地区传进
-		 * run，确保手动发动时用到的是"发起陆战 / 建设陆军"那一刻的地区，
-		 * 而不是已被清空的 game.last_built。
-		 */
-		const instEntry = (game.status_instant || []).find(x => x.card_id === cardId)
-		/*
-		 * 【2026-09-30 互相触发修复】发动前先快照当前已武装的窗口集合。
-		 * 本卡效果内部可能又发起了战斗/建设（15245/15247/15248 的嵌套动作），
-		 * 那次嵌套动作会武装【新的】after_land/after_build_army 窗口——
-		 * 这些新窗口应保留给玩家作为下一个动作（互相触发：15247→15245、
-		 * 15253→15247…），只清掉"发动前就已存在"的窗口（即本卡自己的那一个）。
-		 */
-		const beforeKeys = new Set((game.status_instant || []).map(e => e.card_id + ':' + e.window))
-		// 借用生效（italy_borrow）时，效果归属国改为借用方（意大利），
-		// 而非桌面归属 owner（德国）；代价/弃牌已由上方 costPayer 处理，不动。
-		const effNation = borrowed ? ((game.italy_borrow && game.italy_borrow.nation) || owner) : owner
-		/*
-		 * 【2026-11-04 · S1】in-flight 标记：run 期间本卡不能被重新武装。
-		 *
-		 * 17848《一步也不许后退》的 run 会再发起一次陆战；那次战斗结束又触发
-		 * arm_status_instant('after_land')，而"本回合已发动"要等 run 返回后才记账
-		 * （见下方 status_used 写入）——于是同一张卡在运行途中被重新点亮，可连续发动。
-		 * 这里只在 run 期间挂标记，跑完立刻清：
-		 *   · 不影响多步卡第二次点击续跑（那时标记已清）；
-		 *   · 不影响 15245→15253 这类【别的卡】在嵌套战斗里被武装。
-		 */
-		game.status_inflight = String(cardId)
-		let r
-		try {
-			r = run_status_effect(game, effNation, cardId, tr, arg || {}, instEntry && instEntry.space)
-		} finally {
-			delete game.status_inflight
-		}
-		/*
-		 * 【2026-10-15】效果发起了战斗（15247 贵在行动 / 15245 等）-> 挂起高速公路。
-		 * 否则 pending_autobahn 守卫会拦掉后续所有战斗结算动作，玩家卡死。
-		 * 挂起时 autobahn 上下文完整存盘，战斗结束后由 maybe_resume_autobahn 恢复。
-		 *
-		 * 【2026-10-16 修复】原条件仅看 game.pending_battle（空军代受/kv2/guard 挂起）。
-		 * 但 15247 对"只有陆军、无空军"的目标发起战斗会【同步完成】——
-		 * do_battle 不挂起 pending_battle，而是直接在末尾 request_responses('battle')
-		 * 把响应卡（如 15336 法兰西爱国者·英国持有）入队并 handoff 给持有方。
-		 * 此时 pending_autobahn 仍为真，全局拦截器（20564）会把 trigger_response /
-		 * pass_response 一并拦下，表现为"挂起给英国后点击发动/不发动无反应"。
-		 * 故挂起条件扩展为：战斗引入了【任何】嵌套挂起（pending_battle /
-		 * response_queue / pending_econ）就挂起高速公路，待其全部清空后自动恢复。
-		 */
-		if (game.pending_battle || (game.response_queue || []).length || game.pending_econ)
-			suspend_autobahn(game)
-		/*
-		 * 【2026-10-15】多步选位：trigger.run 需要玩家在地图上选地区（17547 人工港 /
-		 * 17550 先进造船厂）。与 armed 的 r.need 同款：不付代价、不清窗口，
-		 * 把待收集信息写进 game.pending_status，经 view.pending_status 下发给客户端
-		 * 高亮候选；玩家点图后回传 activate_status{space}，run 拿到 space 真正建设。
-		 */
-		if (r.pending) {
-			/* 多步状态卡（17546 铆钉女工）第 1 步：返回 pending 表示待续，
-			 * 不算失败、不记"未能执行"；pending_echo 已由 trigger.run 写入 */
-			game.log.push('《' + cName + '》' + (r.desc || '请继续'))
-			return game
-		}
-		if (!r.ok) {
-			/*
-			 * 【2026-10-23】效果没成立 -> 退回【弃牌类】代价。
-			 *
-			 * 旧口径是"代价已付的不回滚（玩家确认过才点的）"，但实测玩家往往是被
-			 * 客户端通用候选引导选了非法单位（17846 只能以刚建成的那支陆军发起），
-			 * 白亏一张牌不可接受。牌退回手牌 + 窗口保留，玩家可改选后重试。
-			 *
-			 * 只回滚 discard：损耗已进牌库底部、失分/放弃建设卡已改变盘面，
-			 * 无法精确还原（各自在日志里已写明）。
-			 */
-			const _pk = (arg && arg.discard) || []
-			if (cost.discard && _pk.length) {
-				let back = 0
-				for (const cid of _pk.slice(0, cost.discard)) {
-					const pile = game.discard[costPayer] || []
-					const di = pile.indexOf(cid)
-					if (di < 0) continue
-					pile.splice(di, 1)
-					put_back_to_hand(game, costPayer, cid)
-					back++
-				}
-				if (back) game.log.push('【' + costPayer + '】已退回 ' + back + ' 张代价手牌（效果未成立）')
-			}
-			game.log.push('《' + cName + '》效果未能执行：' + r.reason)
-			return game
-		}
-		/*
-		 * 发动成功：消耗本卡自身的"立刻"窗口，但【保留嵌套动作武装的新窗口】。
-		 * 下一次其它动作仍会在 exports.action 顶部清空，所以保留的新窗口
-		 * 也只对本回合的下一个动作有效（与"X 后立刻"口径一致）。
-		 */
-		/* 本卡效果内嵌套发起战斗/建设，会重新武装同阵营窗口（如 15245 发起陆战 → 再武装 15253《闪电战》）。
-		 * 这些被重新武装的窗口（e.rearmed）应保留给玩家作为下一步动作；
-		 * 但【正在触发的这张卡本身】应当被消耗（从窗口移除），即使它在嵌套战斗里也被再次武装。 */
-		game.status_instant = (game.status_instant || []).filter(e =>
-			(e.rearmed || !beforeKeys.has(e.card_id + ':' + e.window)) && e.card_id !== cardId)
-		game.pending_status = null
-
-		/* 一回合一次记账（A3① 卡保留）。
-		 * 【2026-10-17】17513 战时生产委员会改为【定向重置】：把某张"本回合已发动"的
-		 * 美国状态卡删掉 status_used 记账，使其可再发动1次（见 resolve_us_wartime），
-		 * 故这里统一只写 status_used，不再有 status_extra 特例。 */
-		if (tr.once_per_turn) {
-			/*
-			 * 【2026-11-04 · S1】记账键归一成【桌面实例 id】—— 与 arm_status_instant /
-			 * view.table_status[].used_this_turn 的读侧完全一致。
-			 * 客户端偶尔会回传面 id（如 "17848"），若直接当键写，读侧按 "17848#75" 找不到，
-			 * `once_per_turn` 就永远判空 = 每回合都能再发动（与 rtt-card-id-face 记的是同一类坑）。
-			 */
-			const _tab = game.table[owner] || []
-			const _usedKey = _tab.find(x => String(x) === String(cardId)) ||
-				_tab.find(x => String(x).split('#')[0] === String(cardId)) || cardId
-			game.status_used = game.status_used || {}
-			game.status_used[String(_usedKey)] = freq_key(game)
-		}
-		/*
-		 * 【2026-10-11】repeat:'per_unit' + count_by：每成功发动 1 次记 1 笔，
-		 * 上限 = 计数地区内指定国指定兵种数（status_unit_count）。
-		 * 键含 freq_key，跨回合自动失效。视觉/可发动判定见 status_window_ready。
-		 */
-		if (tr.repeat === 'per_unit' && tr.count_by)
-			status_repeat_bump(game, cardId)
-		/*
-		 * 【2026-09-28】"放弃建设陆军" = 用状态卡【替代】本次出牌行动，
-		 * 因此必须【占掉出牌名额】。
-		 *
-		 * 否则会出现两个问题：
-		 *   ① 本回合可反复点击该卡（每次白嫖 1 支征召陆军）——
-		 *      build_army 窗口里的 play_done 检查也会失效（因为始终 false）；
-		 *   ② 玩家相当于凭空多了一次行动（既征召、又还能正常出牌）。
-		 */
-		/*
-		 * 注意【不】在这里 mark_play_done：
-		 * 15341/15342 是【替换】已经打出的《建设陆军》卡的结果，
-		 * 出牌名额由那张建设卡自己占掉，状态卡本身不再额外占用
-		 * （玩家 2026-09-28 口径："不影响出牌"）。
-		 */
-		game.log.push('【' + owner + '】发动《' + cName + '》—— ' + r.desc)
-		request_responses(game, 'play_card', {
-			nation: owner, card: cardId, card_obj: inst_card(cardId),
-			from_status: true,
-		}, false)
-		/*
-		 * 【2026-10-22】德国状态卡【效果发动成功】-> 上报 15328《破译恩尼格码》。
-		 * 用户口径：手动 activate_status / attacked / econ_used / econ_target 算，auto 不算。
-		 * 放在效果结算之后（"发动效果后：弃置该卡"），skip 不算真正发动。
-		 */
-		const _cCard = inst_card(cardId)
-		if (_cCard && _cCard.nation === '德国' && !r.skip)
-			notify_german_status_used(game, [cardId])
-
-		/*
-		 * 【2026-10-26 玩家口径·取消自动推进】（取代 2026-09-28 的"立刻自动进入下一阶段"）
-		 *
-		 * 旧行为：发动 cost.skip_play 的卡后【立刻】advance_phase 到空军阶段。
-		 * 三个副作用：
-		 *   ① 挂起被甩到错误阶段 —— 17554 征召触发 17553 让权日本、同时 17555 要求弃牌，
-		 *      两个挂起都还没结算，阶段就已经被推到空军阶段；
-		 *   ② 随后给的【额外打出权】phase='play' 一离开出牌阶段立刻失效
-		 *      （"看得见用不了"）；
-		 *   ③ 原实现只在"有响应挂起"时才延后，委托 / 弃牌类挂起根本不在检查范围内。
-		 *
-		 * 新行为：不替玩家推进阶段。出牌名额已在上面占掉（mark_play_done / mark_play_acted），
-		 * "跳过"的代价照样兑现（打不出别的牌、play_start 卡也关闭），
-		 * 阶段由玩家自己点「下一阶段」—— 挂起因此能在【出牌阶段内】正常结算。
-		 *
-		 * 只对 cost.skip_play 生效：15348 这类代价是"失去 1 分"的卡
-		 * 不结束出牌阶段，玩家还能继续出牌。
-		 */
-		if (cost.skip_play && game.turn_phase === PH.PLAY) {
-			/*
-			 * pending_advance_phase 不再由这里设置 —— 取消自动推进后无需延后标记。
-			 * （maybe_advance_after_skip_play 保留但不被本分支触发。）
-			 */
-			game.log.push('《' + cName + '》发动完毕 —— 本回合出牌阶段已用完')
-		}
-		/*
-		 * 【2026-11-11】"立刻窗口"排他询问的收尾放在【分支最末尾】：
-		 * 上面的 play_card 响应派发 / 上报都已完成，此时清挂起 + 成对归还让权，
-		 * 才会让被暂停的响应链按原栈顶继续（不能提前清，否则新压的 play_card
-		 * 帧会插到链首，改变既有响应顺序）。
-		 * 只认同一个 card_id：别的状态卡发动不会误清别人的挂起。
-		 * 位置在 status_used 记账之后：口径 B 只在成功发动时消耗本回合机会。
-		 */
-		if (game.pending_status_ask &&
-			String(game.pending_status_ask.card_id) === String(cardId))
-			close_immediate_status_ask(game)
-		/*
-		 * 【2026-11-11 · B35】状态卡发动成功后，立刻给「窗口专用增强卡」开强制询问。
-		 * 放在分支最末尾：雷达自身的挂起已在上面收尾，且 play_card 响应派发已完成；
-		 * 若响应链非空，本挂起会按雷达同款机制暂停它，答完由 close 续跑。
-		 */
-		open_wartime_status_window(game, owner, cardId, cName, instEntry)
-		return game
-	}
+	if (action === 'activate_status') return action_activate_status(game, side, current, arg)
 
 	if (action === 'resolve_effect') return action_resolve_effect(game, side, current, arg)
 
@@ -37677,445 +38156,8 @@ function do_action(state, current, action, arg) {
 
 	if (action === 'finish_armed_delegate') return action_finish_armed_delegate(game, side, current, arg)
 
-	if (action === 'use_armed_offer') {
-		const cardId = arg && arg.card
-		const off = (game.armed_offers || []).find(w => (w.cards || []).some(x => x.card_id === cardId))
-		if (!off || !cardId) {
-			game.log.push('当前没有可打出的增强卡')
-			return game
-		}
-		const entry = (off.cards || []).find(x => x.card_id === cardId)
-		if (!entry) {
-			game.log.push('这张卡当前不在可打出窗口内')
-			return game
-		}
-		const owner = entry.nation
-		if (faction_of_nation(owner) !== side) {
-			game.log.push('不能打出对方的牌')
-			return game
-		}
-		/* 必须仍在手牌（防止窗口残留后重复打出） */
-		if ((game.hands[owner] || []).indexOf(cardId) < 0) {
-			game.log.push('【' + owner + '】手中没有这张牌')
-			removeArmedWindow(game, off)
-			return game
-		}
-		const eff = ECHO_EFFECTS[String(inst_card_id(cardId))]
-		const ar = eff && eff.armed
-		const nm = (inst_card(cardId) || { name: '?' }).name
-		if (!ar) {
-			game.log.push('《' + nm + '》配置异常')
-			return game
-		}
-		/*
-		 * 【2026-10-07 修复】多步交互支持。
-		 * 旧逻辑只调一次 ar.run 且【不把玩家选择传进去】，run 返回 need:'piece'/'space'
-		 * 直接被忽略 —— 凡是"选棋子/选地区"的 armed 卡（17806/17808/17809/17811）实战中
-		 * 效果都不会结算（窗口能弹、代价会扣，但移除/建设不落地）。
-		 *
-		 * 新逻辑：把客户端逐步传来的选择（piece/space/choice）与已收集部分合并成 gathered，
-		 * 作为第 3 参传给 ar.run；若 run 返回 need，则把待收集信息写进
-		 * armed_offer.pending 下发，【不付代价、不移除卡、不清除窗口】，等待下一步输入；
-		 * 客户端把选择随下一次 use_armed_offer 回传，handler 重新跑 run（gathered 已暂存）。
-		 */
-		const _sel = {}
-		if (arg && arg.piece != null) _sel.piece = arg.piece
-		if (arg && arg.space != null) _sel.space = arg.space
-		if (arg && arg.status != null) _sel.status = arg.status
-		if (arg && arg.choice != null) _sel.choice = arg.choice
-		/*
-		 * 【2026-10-17 修复】弃牌代价（cost.discard）在多步交互里会丢失：
-		 * 玩家在第一步弹框选的 drop 随 use_armed_offer 传入 arg.drop，但 run 返回 need 时
-		 * handler 直接 return、弃牌块还没执行，且 _sel 不含 drop → 选择不进 off.arg；
-		 * 到最终结算时 arg.drop 已无（仅剩 {card, space/piece}），弃牌被忽略，
-		 * 无响应卡时更会直接 return（既不弃牌也不开战）。这里把 drop 一并持久化，
-		 * 弃牌块改读 gathered.drop（见下方）。
-		 */
-		if (arg && arg.drop) _sel.drop = arg.drop
-		if (arg && arg.pick != null) _sel.pick = arg.pick
-		const gathered = Object.assign({}, off.arg || {}, _sel)
-		off.arg = gathered
-		/*
-		 * 【2026-10-23 玩家口径】弃牌代价必须【玩家指定】，且必须在 run 之前拦。
-		 *
-		 * 本函数既有结构是"先 run 后付代价"（好处：条件不满足时不白亏牌）。
-		 * 但代价不再自动兜底后，若仍等到 run 之后才校验，玩家不选牌点发动会
-		 * 【先吃到卡牌效果】（如 15405 当场建出海军），再被代价校验拒绝 ——
-		 * 效果白嫖、卡还没消耗。故把"张数够不够"前置到 run 之前。
-		 */
-		const _discNeed0 = (ar.cost && ar.cost.discard) || 0
-		if (_discNeed0 > 0) {
-			let _picked = (gathered.drop || []).filter(id =>
-				(game.hands[owner] || []).indexOf(id) >= 0 && id !== cardId)
-			/*
-			 * 【2026-11-08】代价的【类型限定】必须在服务端校验。
-			 * 15411 夜间运输是「弃置 1 张[响应卡]」：此前只校验张数，
-			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意牌替代。
-			 */
-			if (ar.cost.filter === 'response')
-				_picked = _picked.filter(id => {
-					const _c = inst_card(id)
-					return !!(_c && String(_c.type).toUpperCase() === 'RESPONSE')
-				})
-			/*
-			 * 【2026-11-11】补 'build'（[建设陆军]）类型限定。
-			 * 17900《八月风暴》代价是"弃 1 张[建设陆军]"：此前只校验张数，
-			 * 客户端 filter 只在选牌框里生效，直接调 action 能拿任意手牌替代
-			 * （判定不同源）。与 2026-11-08 给 'response' 补的类型校验同口径。
-			 */
-			if (ar.cost.filter === 'build')
-				_picked = _picked.filter(id => {
-					const _c = inst_card(id)
-					return !!(_c && String(_c.type).toUpperCase() === 'BASIC' && _c.name === '建设陆军')
-				})
-			if (_picked.length < _discNeed0) {
-				game.log.push('《' + nm + '》需先选择弃置 ' + _discNeed0 +
-					(ar.cost.filter === 'response' ? ' 张[响应卡]'
-						: (ar.cost.filter === 'build' ? ' 张[建设陆军]' : ' 张手牌')) +
-					'作为代价，再发动（当前已选 ' + _picked.length + ' 张）')
-				return game
-			}
-		}
-		/*
-		 * 【2026-10-29 二级拦截】"打出增强卡"这个动作本身也可能被敌方反制
-		 * （英国 15352 拦意大利 16701 时，15352 是增强卡 -> 意大利 16700 可再拦）。
-		 * 必须放在 ar.run 之前：效果一旦执行就拦不住了。
-		 */
-		/*
-		 * 【2026-10-31】开窗前的【代价可行性预检】：
-		 * 代价付不起就不要开窗问敌方 —— 否则对方白表一次态、随后 run 才报"付不起"。
-		 * （discard 张数已由上面的 _discNeed0 预检覆盖，这里补 attrition。）
-		 */
-		{
-			const _attrNeed = (ar.cost && ar.cost.attrition) || 0
-			if (_attrNeed && !can_attrite(game, owner, _attrNeed)) {
-				game.log.push('《' + nm + '》需损耗 ' + _attrNeed + ' 张牌，但牌库不足（未发动）')
-				off.cards = off.cards.filter(x => x.card_id !== cardId)
-				if (!off.cards.length) removeArmedWindow(game, off)
-				else sync_armed_offer(game)
-				refresh(game)
-				return game
-			}
-		}
-		if (suspend_armed_use_for_intercept(game, off, cardId, owner, gathered, nm)) {
-			refresh(game)
-			return game
-		}
-		/* 先执行；条件不满足就保留手牌、不付代价 */
-		const r = ar.run(game, Object.assign({ nation: owner, card_id: cardId }, off.ctx || {}), gathered)
-		if (!r || r.skip) {
-			game.log.push('《' + nm + '》本次未满足发动条件：' + ((r && r.desc) || ''))
-			/* 单卡不满足：从本窗口移除该卡，其余候选仍可打（支持连打多张） */
-			off.cards = off.cards.filter(x => x.card_id !== cardId)
-			if (!off.cards.length) removeArmedWindow(game, off)
-			else sync_armed_offer(game)
-			refresh(game)
-			return game
-		}
-		/*
-		 * 多步交互：需要玩家进一步选择。不付代价、不移除卡、不清窗口，
-		 * 等客户端回传选择后重跑（gathered 已落盘到 game.armed_offer.arg）。
-		 * 候选为空是防御性兜底，避免死锁。
-		 */
-		if (r.need) {
-			if (!r.candidates || !r.candidates.length) {
-				game.log.push('《' + nm + '》没有合法选择，发动结束')
-				removeArmedWindow(game, off)
-				refresh(game)
-				return game
-			}
-			off.pending = {
-				need: r.need,
-				revealNation: r.revealNation || null,
-				candidates: r.candidates || [],
-				pick: r.pick || 1,
-				pickMin: r.pickMin || 1,
-				choiceOptions: r.choiceOptions || null,
-				/*
-				 * 【2026-10-17】need:'piece' 时可附带 spaceCandidates（空白合法地块），
-				 * 供客户端把"敌方单位"与"可空打的空白地块"同时高亮（15406）。
-				 */
-				spaceCandidates: r.spaceCandidates || null,
-			}
-			game.log.push('【' + owner + '】《' + nm + '》—— 请' +
-				(r.need === 'piece' ? '选择一支部队' :
-					r.need === 'space' ? '选择一个地区' : '做出选择'))
-			refresh(game)
-			return game
-		}
-		/*
-		 * 【2026-10-31】run 明确失败（ok:false，如"所选单位不在候选内"）：
-		 * 此前没有任何分支处理 —— 会掉进下面的"付代价 + 卡进弃牌堆"，
-		 * 日志只剩一句 `打出《X》——`（desc 为空），玩家看到的是"点了、代价没了、什么也没发生"。
-		 * 现在：不付代价、不消耗卡，写清原因并从本窗口摘掉该卡（与 skip 分支同款），
-		 * 避免反复提交同一个非法参数。
-		 */
-		if (r && r.ok === false) {
-			game.log.push('【' + owner + '】《' + nm + '》未发动：' + (r.reason || '条件不满足'))
-			off.cards = off.cards.filter(x => x.card_id !== cardId)
-			if (!off.cards.length) removeArmedWindow(game, off)
-			else sync_armed_offer(game)
-			refresh(game)
-			return game
-		}
-		/*
-		 * 【2026-10-07】15205《JU-87》型：run 建立的是【战斗预算】而不是立即结算。
-		 *
-		 * 此时【不能】走下面的"付代价 + 卡进弃牌堆"—— 战斗还没打，
-		 * 损耗 1 张牌是【发动】的代价；且卡若现在离手，预算面板的
-		 * card_id 就指向一张已弃的牌了。
-		 *
-		 * 处理：卡留在手牌、代价延后（记在 budget.cost），
-		 * 由 event_finish 决定付不付（至少发动 1 场才付，见该处）。
-		 */
-		if (r.budget) {
-			game.log.push('【' + owner + '】《' + nm + '》—— ' + (r.desc || ''))
-			removeArmedWindow(game, off)
-			refresh(game)
-			return game
-		}
-		/* 成功后才付代价 + 消耗 */
-		const need = (ar.cost && ar.cost.attrition) || 0
-		if (need) {
-			if (!can_attrite(game, owner, need)) {
-				game.log.push('《' + nm + '》需损耗 ' + need + ' 张牌，但牌库不足')
-				removeArmedWindow(game, off)
-				return game
-			}
-			attrition_cards(game, owner, need)
-			game.log.push('【' + owner + '】损耗 ' + need + ' 张牌')
-		}
-		/*
-		 * 【2026-10-06】弃置代价（日本增强卡：「弃置 1 张【响应卡】」）。
-		 *
-		 * 原先只处理 attrition（损耗），日本卡的 discard 代价会被【跳过】
-		 * —— 表现为"技能/装载卡白嫖，没付代价"。
-		 *
-		 * cost.discard 可带 filter（限定牌类型）；玩家用 arg.drop 指定要弃的牌，
-		 * 未指定时自动取第一张符合类型的（服务端兜底，客户端应让玩家选）。
-		 */
-		const discNeed = (ar.cost && ar.cost.discard) || 0
-		if (discNeed) {
-			const costFilter = (ar.cost && ar.cost.filter) || null
-			const wantType = costFilter
-				? (costFilter === 'response' ? 'RESPONSE'
-					: costFilter === 'build' ? 'BASIC'   /* 【2026-10-07 修复】'build' 对应 BASIC 基础卡（[建设陆军]），不是字面 'BUILD'（无此类型） */
-					: String(costFilter).toUpperCase())
-				: null
-			const typeName = costFilter === 'response' ? '响应牌' : (wantType || '手牌')
-			const handNow = game.hands[owner] || []
-			const matchType = (id) => {
-				if (!wantType) return true
-				/* 【2026-10-07 修复】'build' 代价 = 弃置 1 张【建设陆军】（BASIC 且 name=建设陆军），
-				   不是任意 BASIC 卡（否则会误弃《空军力量》等其它基础卡，与卡面代价不符）。
-				   与 national_skill 的 'build' 口径（rules.js:~1621）保持一致。 */
-				if (costFilter === 'build') {
-					const c = inst_card(String(inst_card_id(id)))
-					return !!c && c.type === 'BASIC' && c.name === '建设陆军'
-				}
-				return is_card_type(String(inst_card_id(id)), wantType)
-			}
-			const pool = handNow.filter(id => id !== cardId && matchType(id))
-			/*
-			 * 【2026-10-23 玩家口径】不再"替玩家挑牌"。
-			 *
-			 * 原实现 gathered.drop 为空时退回 `pool.slice(0, discNeed)` ——
-			 * 等于玩家不选就自动弃手牌最前面 N 张（与 17837 KV-2 同一类问题）。
-			 * 改为与 17837 相同口径：只认玩家指定的 drop（含多步交互里
-			 * 持久化进 off.arg 的 gathered.drop），不足则拒绝并【保留窗口】让玩家重选。
-			 *
-			 * 客户端已有自选 UI：pending_echo_discard.armed -> use_armed_offer{card, drop}。
-			 */
-			const want = (gathered.drop || []).filter(id =>
-				handNow.indexOf(id) >= 0 && id !== cardId && matchType(id))
-			if (want.length < discNeed) {
-				game.log.push('《' + nm + '》需弃置 ' + discNeed + ' 张' + typeName +
-					'（已指定 ' + want.length + ' 张，可用 ' + pool.length +
-					' 张），请在选牌框中选择后再发动')
-				return game
-			}
-			for (const id of want.slice(0, discNeed)) discard_card(game, owner, id)
-			game.log.push('【' + owner + '】弃置 ' + discNeed + ' 张' + typeName)
-		}
-		/* 从手牌移除 -> 进弃牌堆 */
-		const hi = (game.hands[owner] || []).indexOf(cardId)
-		if (hi >= 0) game.hands[owner].splice(hi, 1)
-		game.discard[owner] = game.discard[owner] || []
-		if (!game.discard[owner].includes(cardId)) game.discard[owner].push(cardId)
-		game.log.push('【' + owner + '】打出《' + nm + '》—— ' + (r.desc || ''))
-		/* 【2026-10-18】拦截捕获：enemy_echo_played / enemy_status_effect 是专用拦截窗口，
-		 * off.ctx.card = 被拦截的敌方卡（实例 id），off.ctx.nation = 被拦截方国家。 */
-		if ((off.when === 'enemy_echo_played' || off.when === 'enemy_status_effect') &&
-			off.ctx && off.ctx.card) {
-			record_intercept(game, cardId, off.ctx.card, {
-				by_nation: owner,
-				victim_nation: off.ctx.nation,
-			})
-		}
-		/*
-		 * 【2026-10-29 二级拦截】本次拦掉的是"某张增强卡的打出" ->
-		 * 那张卡按被反制处理（代价照付、效果不发生、放行它原本压住的那张牌）。
-		 */
-		if (off.when === 'enemy_echo_played' && game.pending_armed_use &&
-			off.ctx && game.pending_armed_use.card === off.ctx.card)
-			void_pending_armed_use(game, nm)
-		refresh_armed_window(game, off)
-		/*
-		 * 【2026-10-29 P0-a】拦截成功：被拦的那张已出队（进弃牌堆、效果不发生），
-		 * 接着询问队列里的下一张，避免"先打的那张成孤儿"。
-		 */
-		if (off.when === 'enemy_echo_played' && off.ctx && off.ctx.card) {
-			/*
-			 * 【2026-10-31 S1】拦的是"代价照付"型卡（15214 战术革新）：
-			 * 它的代价（弃置桌面状态卡）已经付掉，这里只取消【效果】
-			 * —— 清掉它停在 Step 2 的 pending_echo，免费打出不再发生。
-			 */
-			if (game.pending_echo && game.pending_echo.card === off.ctx.card) {
-				const nm2 = (inst_card(String(inst_card_id(off.ctx.card))) || {}).name || off.ctx.card
-				game.log.push('《' + nm2 + '》效果被拦截：' +
-					(off.ctx.nation || '') + '已付代价不退，剩余效果不发生')
-				game.pending_echo = null
-			}
-			echo_queue_drop(game, off.ctx.card)
-			resume_echo_queue(game)
-		}
-		refresh(game)
-		return game
-		}
-		if (action === 'skip_armed_offer') {
-			const win = (game.armed_offers || []).find(w => faction_of_nation(w.nation) === side)
-			/* 【2026-10-31 S1】放弃拦截敌方【状态卡】后要续跑的那次发动（须在下面的分支之前声明） */
-			let resumeStatus = null
-			if (win) {
-				/* 15353：跳过对敌方状态卡的拦截 -> 记"本回合放行"，敌方重发时不再弹窗 */
-				if (win.when === 'enemy_status_effect' && win.ctx && win.ctx.card) {
-					game.status_intercept_skipped = game.status_intercept_skipped || {}
-					game.status_intercept_skipped[win.ctx.card] = freq_key(game)
-					/*
-					 * 【2026-10-31 S1】放弃拦截 -> 续跑那次发动。
-					 * 旧实现只记放行标记 + 关窗，状态卡效果【永远不执行】；
-					 * S1 之后代价已付，不续跑就成了"付了代价没效果"。
-					 * 原 arg（space/from/discard…）由派发时存进 ctx.arg 带回来；
-					 * 放行标记保证续跑时不再弹窗，__status_cost_paid 保证不再重复扣代价。
-					 */
-					resumeStatus = {
-						card: win.ctx.card,
-						nation: win.ctx.nation,
-						arg: win.ctx.arg || {},
-					}
-				}
-				/*
-				 * 【2026-10-21 修复】15352 / 16700：跳过对敌方[增强卡]的拦截后，
-				 * 必须把【被挂起的那次出牌】续跑完。
-				 *
-				 * 旧实现只 `removeArmedWindow` 后 return，于是：
-				 *   · 敌方那张增强卡既不入弃牌堆、也不结算效果（卡留在手牌里）；
-				 *   · play_card 收尾的 request_responses('play_card') 不会触发
-				 *     —— 对方响应卡因此永远不生效（用户实测反馈）；
-				 *   · 玩家再点那张牌会再次弹同一个窗，形成"问了->放弃->什么都没发生"的死循环。
-				 *
-				 * 做法：先记下被拦截的卡并登记"本回合放行"（echo_intercept_skipped），
-				 * 再移除窗口（sync_armed_handoff 随把 active 归还原阵营）、
-				 * 重跑同一次 play_card。放行标记让 ECHO 分支跳过再次询问、直接执行。
-				 *
-				 * 多拦截方（如英国 15352 + 意大利 16700 同时有窗）时，续跑会再次派发
-				 * 剩余窗口，全部放弃后才真正结算 —— 语义正确。
-				 */
-				let resumeEcho = null
-				if (win.when === 'enemy_echo_played' && win.ctx && win.ctx.card && win.ctx.nation)
-					resumeEcho = { card: win.ctx.card, nation: win.ctx.nation }
-				/*
-				 * 【2026-10-31 S1】"代价照付"型卡【不用重放 play_card】——
-				 * 它的 play_card 已经跑完（代价已付、pending_echo 停在效果那一步），
-				 * 放弃拦截后玩家直接用 resolve_effect 继续即可；若在这里重放，
-				 * 会因 pending_echo 仍存在而退回"请选择…"的旧步骤，出现重复提示。
-				 */
-				if (resumeEcho && ECHO_COST_FIRST.has(String(inst_card_id(resumeEcho.card)))) {
-					/*
-					 * 同时解除"效果冻结"（wait_intercept），玩家随后用 resolve_effect 继续。
-					 * 代价此前已付，不再回退；本国家回合也记一次放行，避免再次弹窗。
-					 */
-					game.echo_intercept_skipped = game.echo_intercept_skipped || {}
-					game.echo_intercept_skipped[resumeEcho.card] = freq_key(game)
-					echo_queue_drop(game, resumeEcho.card)
-					if (game.pending_echo && game.pending_echo.card === resumeEcho.card &&
-						game.pending_echo.wait_intercept) {
-						delete game.pending_echo.wait_intercept
-						game.pending_echo.title = '《战术革新》：选择要免费打出的状态卡'
-						game.log.push('《战术革新》未被拦截（代价已付），请继续选择要免费打出的状态卡')
-					}
-					resumeEcho = null
-				}
-				/*
-				 * 【2026-10-29 二级拦截】若这次放弃的是"对某张增强卡【打出】的反制"，
-				 * 被挂起的是 use_armed_offer（不是 play_card）——不能走 play_card 重放，
-				 * 要放回原窗口续跑那次 use。
-				 */
-				const _pu = game.pending_armed_use
-				const _isCounterOfUse = !!(_pu && win.ctx && win.ctx.card === _pu.card)
-				if (_isCounterOfUse) resumeEcho = null
-				game.log.push('【' + win.nation + '】放弃打出增强卡')
-				/*
-				 * 【2026-10-21 修复·回归】记"本国家回合放行【这一张】"——
-				 * 与 15353 的 status_intercept_skipped 完全同款（按被拦截卡的实例 id 记）。
-				 *
-				 * 为什么必须记：被挂起的那次出牌续跑后，玩家提交参数时
-				 * （如 15215《卓越规划》点【确认排列】回传 placement）
-				 * 若不再放行，enemy_echo_played 窗口会【再次弹出】并提前 return：
-				 *   · game.peek 不变、弹框不关 → 玩家看到"确认排列点击无效"；
-				 *   · 且对方可以无限次拒绝，这张卡永远打不完。
-				 * 按实例 id 记，故同一回合打【别的】增强卡仍会正常询问。
-				 */
-				if (resumeEcho) {
-					game.echo_intercept_skipped = game.echo_intercept_skipped || {}
-					game.echo_intercept_skipped[resumeEcho.card] = freq_key(game)
-					/*
-					 * 【2026-10-29 P0-a】必须在续跑【之前】出队：
-					 * 否则续跑的那次 play_card 会看到队列非空、以为"前面还有别的卡在等"，
-					 * 把自己又排回队尾 -> 这张卡永远结算不了。
-					 */
-					echo_queue_drop(game, resumeEcho.card)
-				}
-				removeArmedWindow(game, win)
-				if (resumeEcho) {
-					/*
-					 * 防御：若窗口期间该牌已被移走（弃置/损耗等），就不续跑 ——
-					 * 否则 play_card 会拿 current_nation 当主体，可能误判成"别国出牌"。
-					 */
-					if ((game.hands[resumeEcho.nation] || []).indexOf(resumeEcho.card) < 0) {
-						game.log.push('【' + resumeEcho.nation + '】《' +
-							((inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card) +
-							'》已不在手牌，无需续跑')
-					} else {
-						const nm = (inst_card(String(inst_card_id(resumeEcho.card))) || {}).name || resumeEcho.card
-						game.log.push('【' + resumeEcho.nation + '】《' + nm + '》未被拦截，照常结算')
-						internal_action(game, faction_role_of_nation(resumeEcho.nation), 'play_card',
-							{ card: resumeEcho.card })
-					}
-				}
-				/* 【2026-10-31 S1】放弃拦截敌方状态卡 -> 续跑那次 activate_status */
-				if (resumeStatus) {
-					const onm = (inst_card(String(inst_card_id(resumeStatus.card))) || {}).name ||
-						resumeStatus.card
-					game.log.push('《' + onm + '》未被拦截（代价已付），效果照常执行')
-					/* 置一次性令牌：这次续跑不再重复扣代价 */
-					game.__status_cost_resume = resumeStatus.card
-					try {
-						internal_action(game, faction_role_of_nation(resumeStatus.nation), 'activate_status',
-							Object.assign({ card: resumeStatus.card }, resumeStatus.arg))
-					} catch (e) {
-						game.log.push('续跑《' + onm + '》出错：' + e.message)
-					} finally {
-						delete game.__status_cost_resume
-					}
-				}
-				/* 【2026-10-29 二级拦截】反制方放弃 -> 放回原窗口，续跑那次 use */
-				if (_isCounterOfUse) resume_pending_armed_use(game)
-				/* 【2026-10-29 P0-a】应答完队首：继续询问队列里的下一张（或直接放行全部） */
-				resume_echo_queue(game)
-			}
-			return game
-		}
+	if (action === 'use_armed_offer') return action_use_armed_offer(game, side, current, arg)
+	if (action === 'skip_armed_offer') return action_skip_armed_offer(game, side, current, arg)
 	if (action === 'event_delegate_decline') return action_event_delegate_decline(game, side, current, arg)
 
 	if (action === 'italy_german_draw') return action_italy_german_draw(game, side, current, arg)
