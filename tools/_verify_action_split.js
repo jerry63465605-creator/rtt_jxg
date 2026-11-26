@@ -193,33 +193,50 @@ for (const [nm, cnt] of Object.entries(cBranchNames)) {
 {
 	const FORMAL = new Set(['game', 'side', 'current', 'arg'])
 	const decls = []
+	/* 从【基线】的 do_action 收集，才能发现「原本在 do_action 里、被搬走后调用点够不到」的东西 */
 	let d = 0
-	for (let i = cRange[0]; i <= cRange[1]; i++) {
+	for (let i = bRange[0]; i <= bRange[1]; i++) {
 		const before = d
-		const b = braces(cur[i]); d += b.o - b.c
+		const b = braces(base[i]); d += b.o - b.c
+		/* ① 函数级局部变量（depth==1） */
 		if (before === 1) {
-			const m = cur[i].match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=;]/)
-			if (m && !FORMAL.has(m[1])) decls.push({ name: m[1], line: i + 1 })
+			const m = base[i].match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=;]/)
+			if (m && !FORMAL.has(m[1])) decls.push({ name: m[1], line: i + 1, kind: '局部变量' })
+		}
+		/* ② 嵌套函数声明（depth>=1，即 do_action 内部的 function）
+		 *   这类东西只在 do_action 作用域可见。2026-11-27 线上事故：
+		 *   discard_table_card 是 do_action 内的嵌套函数，三个调用它的分支被搬成
+		 *   模块顶层函数后抛「ReferenceError: discard_table_card is not defined」。 */
+		if (before >= 1) {
+			const f = base[i].match(/^\t+function\s+([A-Za-z_$][\w$]*)\s*\(/)
+			if (f) decls.push({ name: f[1], line: i + 1, kind: '嵌套函数' })
 		}
 	}
 	if (decls.length) {
-		console.log('\ndo_action 函数级局部变量（新函数无法直接访问，搬迁时须逐项确认）：')
-		for (const x of decls) console.log('  L' + x.line + '  ' + x.name)
+		console.log('\ndo_action 内部声明（新函数无法直接访问，搬迁时必须确认已提升到模块顶层）：')
+		for (const x of decls) console.log('  L' + x.line + '  [' + x.kind + '] ' + x.name)
+	}
+	/* 当前文件的模块顶层 function 名 —— 已提升到顶层的就不算泄漏 */
+	const topLevelFns = new Set()
+	for (let i = 0; i < cur.length; i++) {
+		const m = cur[i].match(/^function\s+([A-Za-z_$][\w$]*)\s*\(/)
+		if (m) topLevelFns.add(m[1])
 	}
 	for (const nm of done) {
 		const fn = findActionFn(nm)
 		if (!fn) continue
 		const body = cur.slice(fn[0] + 1, fn[1]).join('\n')
 		for (const dl of decls) {
-			/* 函数体内自己声明了同名变量（如 play_card 里重建的 `const mySide = side`）
-			 * 就不算跨作用域引用 —— 那是「显式化别名」，语义等价。 */
-			const declaredHere = new RegExp('^\\s*(?:const|let|var)\\s+' + dl.name + '\\s*=', 'm').test(body)
+			if (topLevelFns.has(dl.name)) continue          /* 已提升到模块顶层，合法 */
+			/* 函数体内自己声明了同名符号 → 「显式化」，合法 */
+			const declaredHere = new RegExp('^\\s*(?:const|let|var)\\s+' + dl.name + '\\s*=', 'm').test(body) ||
+				new RegExp('^\\s*function\\s+' + dl.name + '\\s*\\(', 'm').test(body)
 			if (declaredHere) continue
 			if (new RegExp('\\b' + dl.name + '\\b').test(body))
-				problems.push('【跨作用域引用】action_' + nm + ' 用了 do_action 的局部变量 ' + dl.name)
+				problems.push('【跨作用域引用】action_' + nm + ' 用了 do_action 内部的' + dl.kind + ' ' + dl.name)
 		}
 	}
-}
+	}
 
 const total = seenNames.size
 console.log('基线 ' + BASE_REF + '：do_action ' + (bRange[1] - bRange[0] + 1) + ' 行，识别分支 ' + total + ' 个')

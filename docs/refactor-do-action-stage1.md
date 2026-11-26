@@ -127,6 +127,40 @@
 
 ---
 
+## 八点五、补修：嵌套函数未提升（2026-11-27 线上事故）
+
+**现象**：苏联进战弃《大清洗》打新牌时卡死 ——
+```
+ReferenceError: discard_table_card is not defined
+```
+
+**根因**：`discard_table_card` 原本是 `do_action` **内部的嵌套函数**（缩进 1 tab），
+只在 `do_action` 作用域可见。拆分时三个调用它的分支被搬成模块顶层函数
+（`action_su_purge_play` / `action_su_purge_skip` / `action_su_17817_proceed`），
+调用点再也够不到它 —— 而且**只在跑到这条 action 时才炸**，回归测试没覆盖到该路径。
+
+**为什么校验器没拦住**：第 ⑥ 项「跨作用域引用」只扫了 `const / let / var` 声明的
+**局部变量**，**没扫 `function` 声明**。`function` 同样是作用域内的东西，同样会 ReferenceError。
+
+**修复**：
+1. `discard_table_card` 上移到模块顶层（纯函数，只依赖参数与 `inst_card_id` / `revert_status_ongoing`）；
+2. 校验器升级 —— 从【基线】`do_action` 同时收集「局部变量」与「嵌套函数」，
+   并把「已提升到模块顶层」判为合法；
+3. 新增 `tools/_real_test_B56_nested_fn_hoisted.js`（17 项）：真实 `su_purge_skip` 路径 +
+   静态守卫（`discard_table_card` 必须顶层、`do_action` 内不得再有嵌套函数、三个调用点均为顶层函数）。
+
+**实测对比（同一场景）**：
+```
+修复前 7812004  -> 抛异常: ReferenceError: discard_table_card is not defined
+当前（已修）    -> 成功（大清洗已弃: true）| （放弃《大清洗》机会，已弃置《大清洗》）
+```
+
+**教训**：机械搬迁的作用域风险有两类 ——
+「局部**变量**」和「局部**函数**」。只检查前者会漏掉后者，而后者更隐蔽（函数声明有
+hoisting，读代码时容易以为它全局可见）。
+
+---
+
 ## 九、回滚方式
 
 ```bash

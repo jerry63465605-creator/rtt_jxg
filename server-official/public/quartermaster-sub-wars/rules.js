@@ -32634,6 +32634,30 @@ function internal_action(game, role, action, arg) {
  * ============================================================
  */
 
+/*
+ * 【阶段 1 补修 · 2026-11-27】从某国桌面弃置指定 face 的卡到该国弃牌堆。
+ * 大清洗「结束中立时：弃置此牌」在三条路径（打出奖励 / 跳过 / 17817 继续放弃）复用。
+ *
+ * 它原本是 do_action 内部的【嵌套函数】。拆分时三个调用它的分支被搬成模块顶层函数
+ * （action_su_purge_play / action_su_purge_skip / action_su_17817_proceed），
+ * 而嵌套函数只在 do_action 作用域可见 —— 于是运行时抛
+ * 「ReferenceError: discard_table_card is not defined」。
+ * 修法：上移到模块顶层（纯函数，只依赖参数与 inst_card_id / revert_status_ongoing）。
+ */
+function discard_table_card(game, nation, card_id) {
+	const t = game.table[nation] || []
+	const inst = t.find(x => String(inst_card_id(x)) === String(card_id))
+	if (!inst) return null
+	const i = t.indexOf(inst)
+	if (i >= 0) t.splice(i, 1)
+	/* 【2026-10-23】与 discard_status_instance 成对：撤掉该卡的 ongoing 光环，
+	 * 否则弃掉带光环的状态卡会留下"幽灵光环"（如 17549 共享补给线）。 */
+	try { revert_status_ongoing(game, inst, nation) } catch (e) { /* 无光环时无副作用 */ }
+	game.discard[nation] = game.discard[nation] || []
+	game.discard[nation].push(inst)
+	return inst
+}
+
 function action_log(game, side, current, arg) {
 	game.log.push(String(arg == null ? '' : arg))
 	return game
@@ -39284,22 +39308,6 @@ function do_action(state, current, action, arg) {
 	if (action === 'resolve_script') return action_resolve_script(game, side, current, arg)
 
 	if (action === 'play_card') return action_play_card(game, side, current, arg)
-
-	/* 从某国桌面弃置指定 face 的卡到该国弃牌堆。
-	 * 大清洗「结束中立时：弃置此牌」在三条路径（打出奖励 / 跳过 / 17817 继续放弃）复用。 */
-	function discard_table_card(game, nation, card_id) {
-		const t = game.table[nation] || []
-		const inst = t.find(x => String(inst_card_id(x)) === String(card_id))
-		if (!inst) return null
-		const i = t.indexOf(inst)
-		if (i >= 0) t.splice(i, 1)
-		/* 【2026-10-23】与 discard_status_instance 成对：撤掉该卡的 ongoing 光环，
-		 * 否则弃掉带光环的状态卡会留下"幽灵光环"（如 17549 共享补给线）。 */
-		try { revert_status_ongoing(game, inst, nation) } catch (e) { /* 无光环时无副作用 */ }
-		game.discard[nation] = game.discard[nation] || []
-		game.discard[nation].push(inst)
-		return inst
-	}
 
 	if (action === 'su_purge_play') return action_su_purge_play(game, side, current, arg)
 
