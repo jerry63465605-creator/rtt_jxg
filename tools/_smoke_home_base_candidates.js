@@ -159,7 +159,14 @@ section('S7 源码守卫：5 处候选生成都走 home_or_adjacent_spaces')
 	ok('us_china_build_candidates 用新原子', /home_or_adjacent_spaces\(game, nation\)/.test(fnBody('us_china_build_candidates')))
 	ok('resolve_us_china_build 用新原子', /home_or_adjacent_spaces\(game, dg\.nation\)/.test(fnBody('resolve_us_china_build')))
 	ok('us_merchant_targets 用新原子', /home_or_adjacent_spaces\(game, nation\)/.test(fnBody('us_merchant_targets')))
-	ok('17505 P-51 用 effective_home_base', /const hb = effective_home_base\(game, t\)/.test(src))
+	/*
+	 * 【B62】P-51 的「要求地区」改为读轰炸卡自己的 req：
+	 *   · req.home === true  -> effective_home_base(game, t)（仍尊重迁都）
+	 *   · req.space 固定格名 -> 与那张轰炸卡 run 的判定完全同源
+	 * 旧断言写死了 `const hb = effective_home_base(game, t)`，实现换了就误报。
+	 */
+	ok('17505 P-51 要求地区读卡自己的 req（home:true 时走 effective_home_base）',
+		/econ_req_area\(game, cardId, t\)/.test(src) && /effective_home_base\(game, t\)/.test(src))
 	ok('view.us_china_build 用新原子', /us_china_build: \(function \(\) \{[\s\S]{0,600}home_or_adjacent_spaces\(game, dg\.nation\)/.test(src))
 	/* 反例：上述 4 个函数体内不应再有静态 home_base_of */
 	for (const fn of ['us_china_build_candidates', 'resolve_us_china_build', 'us_merchant_targets']) {

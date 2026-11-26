@@ -3540,8 +3540,10 @@ const ECON_CARDS = {
 	'17515': {
 		tag: '轰炸行动',
 		targets: ['意大利'],
-		run(game, actor, target) {
-			if (count_pieces(game, { space: '意大利', radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
+		/* 【B62】要求地区声明：<意大利>2 地区内有美国陆军。run / targets_fn 与 17505 P-51 同源 */
+		req: { space: '意大利', radius: 2, types: ['army'] },
+		run(game, actor, target, card_id) {
+			if (!econ_req_met(game, (this && this.req) || card_id, target))
 				return { ok: true, desc: '<意大利>2 地区内无美国陆军，无效果' }
 			const lost = attrition_passive(game, target, 5)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -3550,8 +3552,10 @@ const ECON_CARDS = {
 	'17517': {
 		tag: '轰炸行动',
 		targets: ['德国'],
-		run(game, actor, target) {
-			if (count_pieces(game, { space: '德国', radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
+		/* 【B62】要求地区声明：<德国>2 地区内有美国陆军 */
+		req: { space: '德国', radius: 2, types: ['army'] },
+		run(game, actor, target, card_id) {
+			if (!econ_req_met(game, (this && this.req) || card_id, target))
 				return { ok: true, desc: '<德国>2 地区内无美国陆军，无效果' }
 			const lost = attrition_passive(game, target, 6)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -3560,8 +3564,10 @@ const ECON_CARDS = {
 	'17518': {
 		tag: '轰炸行动',
 		targets: ['日本'],
-		run(game, actor, target) {
-			if (count_pieces(game, { space: '日本', radius: bombing_radius(game, 2), types: ['navy'], nation: '美国' }) < 1)
+		/* 【B62】要求地区声明：<日本>2 地区内有美国海军 */
+		req: { space: '日本', radius: 2, types: ['navy'] },
+		run(game, actor, target, card_id) {
+			if (!econ_req_met(game, (this && this.req) || card_id, target))
 				return { ok: true, desc: '<日本>2 地区内无美国海军，无效果' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -3570,12 +3576,15 @@ const ECON_CARDS = {
 	'17521': {
 		tag: '轰炸行动',
 		targets: ['日本'],
-		run(game, actor, target) {
+		/*
+		 * 【B62】要求地区声明：<日本>3 地区内有【补给状态】的美国海军。
+		 * 这张就是 P-51 漂移的源头 —— 它要 3 环，而 P-51 旧代码写死 2 环，
+		 * 于是 3 支空军只数到 1 支（玩家报障「应 -6 实际 -2」）。
+		 */
+		req: { space: '日本', radius: 3, types: ['navy'], supplied: true },
+		run(game, actor, target, card_id) {
 			/* 卡面「<日本>3 地区内有【补给状态】的美国海军」 */
-			const k = count_pieces(game, {
-				space: '日本', radius: bombing_radius(game, 3),
-				types: ['navy'], nation: '美国', supplied: true,
-			})
+			const k = econ_req_count(game, (this && this.req) || card_id, target)
 			if (!k) return { ok: true, desc: '<日本>3 地区内无处于补给状态的美国海军，无效果' }
 			const lost = attrition_passive(game, target, 1)
 			add_allied_score(game, 3)
@@ -3589,13 +3598,14 @@ const ECON_CARDS = {
 	/* ---- 17516 B-26 掠夺者：选择 1 个【大本营 2 地区内有美国陆军】的敌方国家：其损耗 4 ---- */
 	'17516': {
 		tag: '轰炸行动',
-		/* 动态目标：复用 econ_enemy_nations + count_units_radius */
-		targets_fn(game, actor) {
-			return econ_enemy_nations(game, actor).filter(n =>
-				count_pieces(game, { space: home_base_of(n), radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) >= 1)
+		/* 【B62】要求地区声明：目标国大本营 2 地区内有美国陆军（home:true -> 尊重迁都） */
+		req: { home: true, radius: 2, types: ['army'] },
+		/* 动态目标：复用 econ_enemy_nations + 统一的要求地区判定 */
+		targets_fn(game, actor, card_id) {
+			return econ_enemy_nations(game, actor).filter(n => econ_req_met(game, (this && this.req) || card_id, n))
 		},
-		run(game, actor, target) {
-			if (count_pieces(game, { space: home_base_of(target), radius: bombing_radius(game, 2), types: ['army'], nation: '美国' }) < 1)
+		run(game, actor, target, card_id) {
+			if (!econ_req_met(game, (this && this.req) || card_id, target))
 				return { ok: false, reason: '<' + home_base_of(target) + '>2 地区内无美国陆军' }
 			const lost = attrition_passive(game, target, 4)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -3605,18 +3615,13 @@ const ECON_CARDS = {
 	/* ---- 17519 燃烧弹轰炸：选择 1 个【大本营 1 地区内有美国部队】的敌方国家：其损耗 8 ---- */
 	'17519': {
 		tag: '轰炸行动',
-		targets_fn(game, actor) {
-			return econ_enemy_nations(game, actor).filter(n =>
-				count_pieces(game, {
-					space: home_base_of(n), radius: bombing_radius(game, 1),
-					types: ['army', 'navy', 'air'], nation: '美国',
-				}) >= 1)
+		/* 【B62】要求地区声明：目标国大本营 1 地区内有美国部队（全兵种） */
+		req: { home: true, radius: 1, types: ['army', 'navy', 'air'] },
+		targets_fn(game, actor, card_id) {
+			return econ_enemy_nations(game, actor).filter(n => econ_req_met(game, (this && this.req) || card_id, n))
 		},
-		run(game, actor, target) {
-			if (count_pieces(game, {
-				space: home_base_of(target), radius: bombing_radius(game, 1),
-				types: ['army', 'navy', 'air'], nation: '美国',
-			}) < 1)
+		run(game, actor, target, card_id) {
+			if (!econ_req_met(game, (this && this.req) || card_id, target))
 				return { ok: false, reason: '<' + home_base_of(target) + '>1 地区内无美国部队' }
 			const lost = attrition_passive(game, target, 8)
 			return { ok: true, desc: target + ' 损耗 ' + lost.length + ' 张牌' }
@@ -11057,7 +11062,7 @@ function inst_pub(instance_id, game) {
 	if (c.type === 'ECON' && ECON_CARDS[c.id]) {
 		const ec = ECON_CARDS[c.id]
 		if (ec.targets_fn && game && c.nation)
-			o.econ_targets = ec.targets_fn(game, c.nation)
+			o.econ_targets = ec.targets_fn(game, c.nation, c.id)
 		else if (ec.targets)
 			o.econ_targets = ec.targets.slice()
 	}
@@ -11086,6 +11091,70 @@ function econ_enemy_nations(game, actor) {
  */
 function bombing_radius(game, base) {
 	return base + (table_has(game, '美国', 17542) ? 1 : 0)
+}
+
+/*
+ * ============================================================
+ * 【B62】轰炸卡的「要求地区」—— 声明式单一来源
+ * ============================================================
+ * 背景（玩家报障 2026-11-27：「野马应有 3 单位 -6 实际 -2」）：
+ *   卡面 P-51 是「其【要求地区】内每有 1 支美国空军，损耗数加 2」，
+ *   但旧代码里「要求地区」有【两份事实来源】：
+ *     · 每张轰炸卡在 run() 里手写 { space: '意大利', radius: bombing_radius(game, 2), ... }
+ *     · P-51 在 p51_air_in_required_area() 里另写 effective_home_base(target) + 2 环
+ *   两份必然漂移：17521 要求的是 <日本> **3 环**，P-51 却按 2 环数
+ *   -> 3 支空军里只有 1 支落在 2 环内 -> 只加 2 张（玩家看到的就是 -2 而不是 -6）。
+ *   另外 17515/17517/17518/17521 手写的是【固定格名】，而 P-51 用 effective_home_base
+ *   （尊重迁都）-> 一旦迁都，两者算的还不是同一片地区。
+ *
+ * 现在：每张轰炸卡声明一次 req，run()/targets_fn() 的前置判定与 P-51 的空军计数
+ * 都从这里取，17542 的 +1 也只在 bombing_radius 里生效一次。
+ *
+ * req 字段：
+ *   space: '日本'      固定格（用地区名，走 space_id）
+ *   home: true         目标国大本营（走 effective_home_base，尊重 15344/17845 迁都）
+ *   radius: 2          基础半径（bombing_radius 再加 17542 的 +1）
+ *   types: ['army']    卡自身前置要求的兵种（P-51 **不继承**）
+ *   supplied: true     卡自身前置要求「处于补给状态」（P-51 **不继承**）
+ * ============================================================
+ */
+function econ_req_area(game, cardIdOrReq, target) {
+	/*
+	 * 第 2 参可以是【req 对象】或【卡实例 id】：
+	 *   · 卡自己的 run/targets_fn 传 `this.req`（方法简写里 this 即该卡配置对象），
+	 *     这样冒烟/测试直接 `ECON['17516'].targets_fn(g,'美国')` 也无需补第 3 参；
+	 *   · 调度层（run_econ_card / view）传 card_id，供 17505 P-51 跨卡读取。
+	 */
+	let r = null
+	if (cardIdOrReq && typeof cardIdOrReq === 'object') r = cardIdOrReq
+	else {
+		const ec = cardIdOrReq != null ? ECON_CARDS[String(inst_card_id(cardIdOrReq))] : null
+		r = ec && ec.req
+	}
+	if (!r) return null
+	const sp = r.home ? effective_home_base(game, target) : space_id(r.space)
+	if (sp == null) return null
+	return {
+		space: sp,
+		radius: bombing_radius(game, r.radius || 1),
+		types: r.types || null,
+		supplied: !!r.supplied,
+	}
+}
+
+/* 该卡「要求地区」内、满足自身条件的美国部队数量（run 的 desc 与 targets_fn 的过滤都要） */
+function econ_req_count(game, cardId, target) {
+	const a = econ_req_area(game, cardId, target)
+	if (!a) return 0
+	const opt = { space: a.space, radius: a.radius, nation: '美国' }
+	if (a.types) opt.types = a.types
+	if (a.supplied) opt.supplied = true
+	return count_pieces(game, opt)
+}
+
+/* 该卡「要求地区」内是否至少有 1 支满足自身条件的美国部队（run/targets_fn 的前置） */
+function econ_req_met(game, cardId, target) {
+	return econ_req_count(game, cardId, target) >= 1
 }
 
 /* [轰炸行动]判定：ECON 卡且 tag 为轰炸行动（供 17542 的额外打出过滤） */
@@ -21251,13 +21320,23 @@ CARD_TRIGGERS['17513'] = {
  * "无效果不加成"：econ_used 的 ctx 自带 `attrited`（本次真实损耗张数），为 0 就不弹。
  * ============================================================
  */
-function p51_air_in_required_area(game, t) {
-	const hb = effective_home_base(game, t)
-	if (hb == null) return 0
-	return count_pieces(game, {
-		space: hb, radius: bombing_radius(game, 2),
-		nation: '美国', types: ['air'],
-	})
+function p51_air_in_required_area(game, t, cardId) {
+	/*
+	 * 【B62】「要求地区」改为读【打出那张轰炸卡自己的 req】—— 单一事实来源。
+	 *
+	 * 旧实现写死 `effective_home_base(t) + 2 环`，对要求 3 环的 17521 少算一圈：
+	 * 3 支美国空军里只有 1 支落在 2 环内 -> 只加 2 张（玩家报障「应 -6 实际 -2」）。
+	 *
+	 * P-51 只借「地区范围」：
+	 *   · 不继承 req.types   —— 它数的是空军，不是那张卡要求的兵种；
+	 *   · 不继承 req.supplied —— 玩家口径 2026-11-27：不要求补给状态。
+	 * 未传 cardId（老调用/无 req 的卡）时退回旧口径，保证向后兼容。
+	 */
+	const a = cardId != null ? econ_req_area(game, cardId, t) : null
+	const sp = a ? a.space : effective_home_base(game, t)
+	if (sp == null) return 0
+	const rad = a ? a.radius : bombing_radius(game, 2)
+	return count_pieces(game, { space: sp, radius: rad, nation: '美国', types: ['air'] })
 }
 
 ECHO_EFFECTS['17505'] = {
@@ -21284,7 +21363,7 @@ ECHO_EFFECTS['17505'] = {
 			return ts.some(t => {
 				const a = attritedOf(t)
 				if (a != null && !(a > 0)) return false
-				return p51_air_in_required_area(game, t) > 0
+				return p51_air_in_required_area(game, t, ctx.card) > 0
 			})
 		},
 		run(game, ctx) {
@@ -21292,7 +21371,7 @@ ECHO_EFFECTS['17505'] = {
 			let total = 0
 			const names = []
 			for (const t of ts) {
-				const n = p51_air_in_required_area(game, t)
+				const n = p51_air_in_required_area(game, t, ctx.card)
 				if (!n) { names.push(t + ' +0'); continue }
 				const lost = attrition_passive(game, t, 2 * n)
 				total += lost.length
@@ -33759,7 +33838,8 @@ function run_econ_card(game, nation, c, card_id, arg, opts) {
 	 * 例如 17516「选择 1 个大本营 2 地区内有美国陆军的敌方国家」。
 	 * 统一先算出 tgts，再走与静态 targets 完全相同的通道（复用）。
 	 */
-	const tgts = cfg.targets_fn ? cfg.targets_fn(game, nation)
+	/* 【B62】把本卡 id 一并传入：targets_fn 的前置判定要读该卡自己的 req */
+	const tgts = cfg.targets_fn ? cfg.targets_fn(game, nation, card_id)
 		: (cfg.targets ? cfg.targets.slice() : null)
 	if (tgts) {
 		const t = arg && arg.target
@@ -33808,7 +33888,8 @@ function run_econ_card(game, nation, c, card_id, arg, opts) {
 		 * 做法：run 之前记目标国总牌数，run 之后确实变少才加成。
 		 */
 		/* 【2026-11-08】P-51 已改为 armed 一次性加成，永久 flag `us_p51` 删除 */
-		const r = cfg.run(game, nation, t)
+		/* 【B62】run 的第 4 参是本次卡 id（老卡不用，向后兼容） */
+		const r = cfg.run(game, nation, t, card_id)
 		try {
 					/* 【2026-11-05 · 15353】先收集 -> 逐张询问 -> 再结算（原来直接结算，拦不到） */
 					const _econItems = status_econ_items(game, cfg.tag, t, nation)
@@ -33853,6 +33934,9 @@ function run_econ_card(game, nation, c, card_id, arg, opts) {
 		 */
 		offer_armed_effects(game, 'econ_used', {
 			tag: cfg.tag,
+			/* 【B62】带上本次打出的卡 id：17505 P-51 要读该卡自己的 req（要求地区半径），
+			 * 否则它只能按旧的「大本营 + 2 环」猜，对 17521（3 环）会少算一圈。 */
+			card: card_id,
 			targets: [t],
 			nation: nation,
 			/*
@@ -40642,6 +40726,14 @@ if (typeof module !== 'undefined') {
 	battle_initiators,
 	su_air_deploy_spaces,
 	do_sea_battle_at,
+	p51_air_in_required_area,
+	ECON_CARDS,
+	econ_req_area,
+	econ_req_count,
+	econ_req_met,
+	region_spaces,
+	effective_home_base,
+	bombing_radius,
 	us_launch_battle_spaces,
 	us_launch_battle_froms,
 	us_can_launch_battle,
