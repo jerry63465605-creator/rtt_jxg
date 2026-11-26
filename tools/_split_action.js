@@ -85,7 +85,8 @@ for (const name of targets) {
 	const bodyFrom = ifIdx + 1
 	const bodyTo = endIdx - 1
 	/* 去一层缩进 */
-	const body = lines.slice(bodyFrom, bodyTo + 1).map(l => (l.charAt(0) === '\t' ? l.slice(1) : l))
+	/* body 保持原缩进（2 层 tab）—— 函数体会再套一层 { }，缩进正好对上 */
+	const body = lines.slice(bodyFrom, bodyTo + 1)
 	/* 注释行保持原缩进（它们本来就是 1 层 tab，正好等于函数体内层） */
 	const cmtLines = cmt ? lines.slice(cmt[0], cmt[1] + 1) : []
 
@@ -111,10 +112,13 @@ for (const name of targets) {
 	if (!f) continue
 	const parts = []
 	parts.push('')
-	parts.push('/* 搬自 do_action 的 `if (action === \'' + name + '\')` 分支（逐字，仅去一层缩进） */')
+	parts.push('/* 搬自 do_action 的 `if (action === \'' + name + '\')` 分支（逐字） */')
 	parts.push('function action_' + name + '(game, side, current, arg) {')
 	for (const c of f.cmtLines) parts.push(c)
+	parts.push('\t/* 内层块：分支若自带 `const arg / game / side / current` 声明，靠块级遮蔽避免与形参重名 */')
+	parts.push('\t{')
 	for (const b of f.body) parts.push(b)
+	parts.push('\t}')
 	parts.push('}')
 	fns.push(parts.join('\n'))
 }

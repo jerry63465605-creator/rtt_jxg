@@ -89,11 +89,32 @@ function branchBlocks(lines, from, to) {
 	return out
 }
 
-/* 规范化代码行：trim + 去空行 + 去纯注释行 */
+/*
+ * 按【块】去掉注释（逐行判断会漏掉多行注释的「收尾行」—— 那一行往往不以 `*` 开头，
+ * 会被当成代码参与比对，误报「逐字不一致」）。
+ */
+function dropComments(lines) {
+	return lines.join('\n')
+		.replace(/\/\*[\s\S]*?\*\//g, '')
+		.replace(/\/\/[^\n]*/g, '')
+}
+
+/* 规范化代码行：去注释 + trim + 去空行 */
 function norm(lines) {
-	return lines.map(l => l.trim())
-		.filter(l => l.length && !/^\/\*/.test(l) && !/^\*/.test(l) && !/^\/\//.test(l))
-		.join('\n')
+	return dropComments(lines).split('\n').map(l => l.trim()).filter(l => l.length).join('\n')
+}
+
+/*
+ * 剥掉函数体最外层的「包裹块」{ ... }。
+ * _split_action.js 给每个 action 函数体套了一层块（让分支内自带的
+ * `const arg / game / side / current` 声明靠块级作用域遮蔽形参），
+ * 比对时必须先剥掉，否则会误报「逐字不一致」。
+ * 返回值同样是「已 trim 的代码行数组」，可直接喂给 norm。
+ */
+function stripWrap(arr) {
+	const code = dropComments(arr).split('\n').map(l => l.trim()).filter(l => l.length)
+	if (code.length >= 2 && code[0] === '{' && code[code.length - 1] === '}') return code.slice(1, -1)
+	return code
 }
 
 const base = loadBaseline()
@@ -133,7 +154,7 @@ for (const b of bBranches) {
 		}
 		continue
 	}
-	const bodyFn = norm(cur.slice(fn[0] + 1, fn[1]))
+	const bodyFn = norm(stripWrap(cur.slice(fn[0] + 1, fn[1])))
 	if (bodyFn === bodyBase) { ok++; done.push(b.name) }
 	else {
 		bad++
@@ -151,6 +172,38 @@ for (const b of bBranches) {
 /* ② 重复分支 */
 for (const [nm, cnt] of Object.entries(cBranchNames)) {
 	if (cnt > 1) problems.push('【do_action 内重复分支】' + nm + ' x' + cnt)
+}
+
+/*
+ * ⑥ 跨作用域引用检查（搬迁最容易炸的一环）
+ * do_action 里的【函数级局部变量】（如 mySide / isDebugAction）不在新函数的形参里，
+ * 分支体若引用了它们，搬出去就 ReferenceError —— 而且是运行到那条 action 才炸。
+ */
+{
+	const FORMAL = new Set(['game', 'side', 'current', 'arg'])
+	const decls = []
+	let d = 0
+	for (let i = cRange[0]; i <= cRange[1]; i++) {
+		const before = d
+		const b = braces(cur[i]); d += b.o - b.c
+		if (before === 1) {
+			const m = cur[i].match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=;]/)
+			if (m && !FORMAL.has(m[1])) decls.push({ name: m[1], line: i + 1 })
+		}
+	}
+	if (decls.length) {
+		console.log('\ndo_action 函数级局部变量（新函数无法直接访问，搬迁时须逐项确认）：')
+		for (const x of decls) console.log('  L' + x.line + '  ' + x.name)
+	}
+	for (const nm of done) {
+		const fn = findActionFn(nm)
+		if (!fn) continue
+		const body = cur.slice(fn[0] + 1, fn[1]).join('\n')
+		for (const dl of decls) {
+			if (new RegExp('\\b' + dl.name + '\\b').test(body))
+				problems.push('【跨作用域引用】action_' + nm + ' 用了 do_action 的局部变量 ' + dl.name)
+		}
+	}
 }
 
 const total = seenNames.size
