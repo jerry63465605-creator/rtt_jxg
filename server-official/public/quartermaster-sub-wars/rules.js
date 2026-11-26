@@ -32613,6 +32613,32 @@ function internal_action(game, role, action, arg) {
 	}
 }
 
+/*
+ * ============================================================
+ * 【重构 · 拆分 do_action · 阶段 1】action 处理函数
+ * ============================================================
+ * 目的：把 do_action（6,258 行 / 86 个 `if (action === ...)`）的分支体逐个搬成
+ *      具名函数，do_action 只保留「守卫链 + 一行委派」。
+ *
+ * 阶段 1 三条铁律（与 docs/迁移方案_拆分do_action.pdf 的差异见本次提交说明）：
+ *   ① 守卫链【完全不动】、分支顺序【完全不变】—— 只搬分支体，原地留
+ *      `if (action === 'x') return action_x(game, side, current, arg)`。
+ *      执行顺序、短路行为、异常传播与重构前逐字等价。
+ *   ② 函数体【逐字复制】，只把隐式依赖的 game / side / current / arg 改成显式形参。
+ *      任何改名、合并、重写都属「非纯重构」，禁止。
+ *   ③ 不跨文件 require —— `actions/*.js` 需要 do_battle / build_piece / can_build_at
+ *      等数十个规则内部原子，反过来 require rules.js 会形成 CommonJS 循环依赖
+ *      （返回未完成的 exports，且只在某 action 首次被调用时炸）。
+ *
+ * 验证：tools/_verify_action_split.js（逐字等价 + 覆盖率）+ 原有 36 套编号测试 + 全量冒烟。
+ * ============================================================
+ */
+
+function action_log(game, side, current, arg) {
+	game.log.push(String(arg == null ? '' : arg))
+	return game
+}
+
 function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
@@ -32938,10 +32964,7 @@ function do_action(state, current, action, arg) {
 	 */
 	const mySide = side   /* 提交者所属阵营 key */
 
-	if (action === 'log') {
-		game.log.push(String(arg == null ? '' : arg))
-		return game
-	}
+	if (action === 'log') return action_log(game, side, current, arg)
 
 	/* 初始阶段：当前弃牌国弃 3 张手牌 */
 	if (action === 'opening_discard')
