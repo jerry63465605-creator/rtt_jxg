@@ -15619,7 +15619,14 @@ const ECHO_EFFECTS = {
 	'17900': {
 		name: '八月风暴', actor: '苏联',
 		armed: {
-			when: 'after_battle', actor: '苏联',
+			/*
+			 * 【B61】watch:true —— 与其他「同盟国发起战斗后」型增强卡一致。
+			 * 卡面是「<中国东北>被【友方】攻击后」，友方既包括同盟国（英/美）
+			 * 也包括苏联自己；而 offer_armed_effects 默认只按 actor 匹配
+			 * （自己发起），同盟国发起时必须靠 watch 才会武装。
+			 * 具体地区/阵营判据仍由 ready() 把关。
+			 */
+			when: 'after_battle', actor: '苏联', watch: true,
 			cost: { discard: 1, filter: 'build' },
 			desc: '<中国东北>被友方攻击后：弃置1张[建设陆军]，在战斗地区征召1支苏联陆军，并以此发起1次陆战',
 			ready(game, ctx) {
@@ -17900,7 +17907,18 @@ function finish_armed_delegate(game) {
 function maybe_arm_su_augstorm(game, space, kind, attackerNation) {
 	if (kind !== 'land') return
 	if (data.name_of(space) !== '中国东北') return
-	if (attackerNation === '苏联') return
+	/*
+	 * 【B61】玩家口径 2026-11-27：「友方应该包含苏联自身 + 友方」。
+	 *
+	 * 旧代码这里有一行 `if (attackerNation === '苏联') return` —— 苏联自己打
+	 * 〈中国东北〉时直接返回，于是【不会】set_pending_armed_delegate，
+	 * 也就没把 use_armed_offer 登记进动作白名单：
+	 *   窗口其实被 offer_armed_effects 武装了（actor 匹配自己），
+	 *   但玩家点了没反应 —— 这就是「自己打不触发」的实际体感。
+	 *
+	 * 现在自己打也走同一条路（同阵营不会切 current_nation，只是登记白名单）；
+	 * 武装去重见下面的 alreadyArmed。
+	 */
 	if (faction_of_nation(attackerNation) !== faction_of_nation('苏联')) return
 	const suHand = game.hands['苏联'] || []
 	const cid17900 = suHand.find(id => String(inst_card_id(id)) === '17900')
@@ -17915,6 +17933,14 @@ function maybe_arm_su_augstorm(game, space, kind, attackerNation) {
 	if (typeof eff.armed.ready === 'function' &&
 		!eff.armed.ready(game, { space: space, attacker: attackerNation, nation: attackerNation, kind: kind }))
 		return
+	/*
+	 * 【B61】去重：17900 现在带 watch:true，offer_armed_effects（同一派发点、
+	 * 在本函数【之前】调用）在「自己发起 / 同盟发起」两种情况下都可能已经武装过
+	 * 同一张。pushArmedWindow 自身不去重，所以这里只补让权、不重复压窗口。
+	 */
+	const alreadyArmed = (game.armed_offers || []).some(w => w && w.when === 'after_battle' &&
+		(w.cards || []).some(c => String(c.card_id || '').indexOf('17900') === 0))
+	if (!alreadyArmed) {
 	pushArmedWindow(game, {
 		kind: 'special',
 		nation: '苏联',
@@ -17938,6 +17964,7 @@ function maybe_arm_su_augstorm(game, space, kind, attackerNation) {
 		}],
 		ctx: { space: space, attacker: attackerNation, kind: kind },
 	})
+	}
 	set_pending_armed_delegate(game, {
 		card_id: cid17900, space: space, attacker: attackerNation, nation: '苏联',
 	})
