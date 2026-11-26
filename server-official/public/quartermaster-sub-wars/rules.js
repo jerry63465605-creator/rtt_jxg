@@ -15872,9 +15872,18 @@ const ECHO_EFFECTS = {
 			when: 'piece_removed', actor: '苏联', watch: true,
 			desc: '苏联空军被移除后：在该地区或其相邻地区部署/调度1支苏联空军',
 			ready(game, ctx) {
+				/*
+				 * 【B58】玩家口径 2026-11-27：「设计局空军应该被移除就触发」。
+				 *
+				 * 旧实现还要求「该地区或相邻有合法部署格」，候选为空就整个窗口不弹。
+				 * 但那个候选判定本身曾因 can_build_at(air) 的错口径常年为空
+				 * （见 su_air_deploy_spaces 的注释），等于这张卡实际上从不触发。
+				 *
+				 * 现在：只要「苏联空军被移除」就给窗口；能不能部署是【发动时】
+				 * 才需要校验的事 —— 候选为空时 run 会返回 skip 并说明原因。
+				 */
 				if (!ctx || ctx.piece_nation !== '苏联' || ctx.piece_type !== 'air') return false
-				if (ctx.space == null) return false
-				return su_air_deploy_spaces(game, ctx.space).length > 0
+				return ctx.space != null
 			},
 			run(game, ctx, arg) {
 				arg = arg || {}
@@ -20438,9 +20447,18 @@ function su_air_deploy_spaces(game, base, nation) {
 	const out = []
 	for (const sp of pool) {
 		if (!data.spaces[sp]) continue
-		/* 空军不能独立存在：必须有补给中的本国陆/海军作载体 */
+		/*
+		 * 【B58】用 can_deploy_air（air_host_check + 每格 1 支槽位）替代
+		 * `can_build_at(…,'air')`。
+		 *
+		 * 旧判据查的是「本国大本营 或【邻接】补给中的同国部队」，对靠海军搭载的
+		 * 海域空军一律误判非法（见 can_deploy_air 上方那段注释的原话）——
+		 * 于是 17811《雅科夫列夫设计局》在「同格只有海军载体」的孤立格
+		 * 候选恒为空、窗口永不弹（玩家报障 2026-11-27：
+		 * 「设计局空军应该被移除就触发」）。
+		 */
 		if (!air_host_check(game, nation, sp).ok) continue
-		if (can_build_at(game, nation, sp, 'air').ok) out.push(sp)
+		if (can_deploy_air(game, nation, sp).ok) out.push(sp)
 	}
 	return out
 }
@@ -40562,6 +40580,7 @@ if (typeof module !== 'undefined') {
 	battle_targets,
 	battle_froms,
 	battle_initiators,
+	su_air_deploy_spaces,
 	us_launch_battle_spaces,
 	us_launch_battle_froms,
 	us_can_launch_battle,
