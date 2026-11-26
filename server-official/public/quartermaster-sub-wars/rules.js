@@ -17531,7 +17531,19 @@ function release_echo_entry(game, entry) {
 	game.log.push('【' + entry.nation + '】《' + nm + '》未被打断，直接生效')
 	game.__resuming_echo = true
 	try {
-		internal_action(game, faction_role_of_nation(entry.nation), 'play_card', { card: entry.card })
+		/*
+		 * 【B65】重放必须带上【入队时保存的 arg】。
+		 *
+		 * 旧实现只传 { card }，对 `one_step` 类卡（15412 御前会议：一次提交要同时给
+		 * "弃哪张"+"打出哪张"）等于把参数丢了 —— 重放后 event_card_needs 又返回
+		 * need:'one_step_pick'，窗口二次弹出；而代价记账（__echo_cost_paid）已置位，
+		 * 第二次提交不再扣代价 -> 玩家选的 drop 牌留在手里（"扔的又回来了"）、
+		 * 而桌面被打出两张。
+		 *
+		 * card 放在最后：arg 里可能残留客户端字段，不允许覆盖本次 entry 的卡实例 id。
+		 */
+		internal_action(game, faction_role_of_nation(entry.nation), 'play_card',
+			Object.assign({}, entry.arg || {}, { card: entry.card }))
 	} catch (e) {
 		game.log.push('续跑《' + nm + '》出错：' + e.message)
 	} finally {
@@ -33327,13 +33339,13 @@ function action_play_card(game, side, current, arg) {
 				 * （既不结算也不进弃牌堆，实测 _repro_15352_lock.js D2）。
 				 */
 				if (_q.length && !_q.some(e => e.card === card_id)) {
-					_q.push({ card: card_id, nation: nation })
+					_q.push({ card: card_id, nation: nation, arg: Object.assign({}, arg || {}) })
 					game.log.push('【' + nation + '】打出增强《' + c.name +
 						'》—— 前一张增强卡仍在等待拦截应答，先排队（队列 ' + _q.length + ' 张）')
 					return game
 				}
 				if (!_q.some(e => e.card === card_id))
-					_q.push({ card: card_id, nation: nation })
+					_q.push({ card: card_id, nation: nation, arg: Object.assign({}, arg || {}) })
 				try {
 					offer_armed_effects(game, 'enemy_echo_played', {
 						nation: nation, card: card_id, space: null,
@@ -40769,6 +40781,8 @@ if (typeof module !== 'undefined') {
 	battle_froms,
 	battle_initiators,
 	su_air_deploy_spaces,
+	release_echo_entry,
+	echo_queue,
 	do_sea_battle_at,
 	p51_air_in_required_area,
 	ECON_CARDS,
