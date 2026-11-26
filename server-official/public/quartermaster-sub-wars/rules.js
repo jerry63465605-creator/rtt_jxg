@@ -18382,12 +18382,15 @@ function pick_enemy_army_then_eliminate(game, ctx, choice, opt) {
  * 在【指定海域】发起 1 次海战（目标写死的卡用，如<南海>）。
  * 发起单位复用 battle_initiators；返回 { ok, desc }。
  */
-function do_sea_battle_at(game, sea, nat) {
+function do_sea_battle_at(game, sea, nat, opt) {
 	nat = nat || '日本'
 	const inits = battle_initiators(game, nat, sea)
 	if (!inits.length)
 		return { ok: false, desc: '（无相邻补给日本海军，海战未发动）' }
-	const r = do_battle(game, '日本', sea, null, 'sea', { from: inits[0].id })
+	/* 【B60】透传 opt（主要用途：fromCard，让 15430 的 filter 能识别"这场海战是
+	 * 奇袭自己发起的"，从而不再自我触发） */
+	const r = do_battle(game, '日本', sea, null, 'sea',
+		Object.assign({ from: inits[0].id }, opt || {}))
 	return {
 		ok: r.ok,
 		desc: r.ok ? '对' + data.name_of(sea) + '发起海战'
@@ -18879,7 +18882,24 @@ const RESPONSE_EFFECTS = {
 	},
 	'15430': {
 		name: '奇袭', actor: '日本',
-		trigger: { on: 'battle', filter: (g, ctx) => ctx.kind === 'sea' && ctx.nation === '日本' },
+		trigger: {
+			on: 'battle',
+			/*
+			 * 【B60】防自触发（玩家报障 2026-11-27：「在奇袭过程中，触发了奇袭的bug」）。
+			 *
+			 * 卡面「发起海战后：发起1次海战，发起1次陆战」—— 它自己发起的那场海战
+			 * 同样会派发 `on:'battle'` 事件，于是又匹配本条 filter，奇袭可以反复响应自己。
+			 *
+			 * 修法：`do_battle` 记录发起卡（`game.__battle_from_card`，栈式保存/恢复），
+			 * 这里精确排除「由 15430 自己发起」的那一场。
+			 * 注意：15426《驱逐舰运输》等其它响应卡没有这个标记，在海域仍正常触发。
+			 */
+			filter: (g, ctx) => {
+				if (ctx.kind !== 'sea' || ctx.nation !== '日本') return false
+				if (g.__battle_from_card === '15430') return false
+				return true
+			},
+		},
 	},
 	'15431': {
 		name: '全面侵华', actor: '日本',
@@ -19962,7 +19982,8 @@ const RESPONSE_EFFECT_IMPL = {
 		if (extra && extra.step === 'sea') {
 			/* ② 已选海战地区：开海战 */
 			const seaId = Number(choice)
-			const sr = do_sea_battle_at(game, seaId, '日本')
+			/* 【B60】标记「这场海战由奇袭发起」-> 15430 的 filter 不再自我触发 */
+			const sr = do_sea_battle_at(game, seaId, '日本', { fromCard: '15430' })
 			/* 海战未真正发动（无相邻补给日本海军）：直接陆战（无海战后响应要等） */
 			if (!sr.ok)
 				return emitLand2(seaId, sr.desc || '海战未发动', false)
@@ -23754,10 +23775,22 @@ function do_battle(game, nation, space, target_piece, kind, opt) {
 	}
 
 	game.battle_in_progress = (game.battle_in_progress || 0) + 1
+	/*
+	 * 【B60】记录「本次战斗由哪张卡发起」，用于防止 15430《奇袭》自触发：
+	 * 它自己发起的海战会再次匹配 `trigger.on='battle'` 的 filter（ctx.kind==='sea'
+	 * && ctx.nation==='日本'），玩家报障「在奇袭过程中，触发了奇袭的bug」。
+	 *
+	 * 只做【精确排除】（filter 里比对 fromCard === '15430'）：
+	 * 15426《驱逐舰运输》等其它卡在同一片海域仍应正常响应。
+	 * 嵌套战斗用「保存/恢复」栈式处理，内层不会污染外层。
+	 */
+	const _prevFromCard = game.__battle_from_card
+	if (opt && opt.fromCard) game.__battle_from_card = opt.fromCard
 	try {
 		return do_battle_inner(game, nation, space, target_piece, kind, opt)
 	} finally {
 		game.battle_in_progress = Math.max(0, (game.battle_in_progress || 0) - 1)
+		game.__battle_from_card = _prevFromCard
 		/*
 		 * 战斗【真正】结束时清掉"本次战斗"级保护。
 		 * 判据：没有嵌套战斗，且没有挂起待决（pending_battle = 空军代受 / 武士道 guard /
@@ -40581,6 +40614,7 @@ if (typeof module !== 'undefined') {
 	battle_froms,
 	battle_initiators,
 	su_air_deploy_spaces,
+	do_sea_battle_at,
 	us_launch_battle_spaces,
 	us_launch_battle_froms,
 	us_can_launch_battle,
