@@ -9142,6 +9142,9 @@ function clear_response_choice_highlight() {
 	} catch (e) { /* 重贴失败不影响主流程 */ }
 }
 
+/* 【B64】kind:'card' 卡图网格的渲染去重键（避免每帧重复追加 DOM） */
+let rc_card_grid_key = null
+
 function update_response_choice_box() {
 	const rc = view && view.response_choice
 	if (!rc) {
@@ -9150,6 +9153,7 @@ function update_response_choice_box() {
 			ask_state = null
 			render_ask_box(null, null, null)
 		}
+		rc_card_grid_key = null
 		clear_response_choice_highlight()
 		return
 	}
@@ -9187,7 +9191,37 @@ function update_response_choice_box() {
 		return
 	}
 
-	/* card / option：弹选项框（响应卡在队列里，优先级高，直接占用 ask_box） */
+	/*
+	 * 【B64】card：检视弃牌堆 / 手牌选 1 张 —— 改用【卡图网格】
+	 * （与 17855 间谍机构、7900 竭泽而渔 同款），不再用文字按钮。
+	 * 服务端候选已补 face/type/img/text（7904 亡命之计、15328 破译恩尼格码）。
+	 * 本函数每帧都会进来，用 rc_card_grid_key 去重，避免重复追加 DOM。
+	 */
+	if (rc.kind === 'card') {
+		rc_highlight_active = false
+		const cands = rc.candidates || []
+		if (!cands.length) {
+			toast('《' + rc.name + '》当前没有可选的牌')
+			return
+		}
+		const key = String(rc.name) + '|' + cands.map(c => String(c.id)).join(',')
+		if (rc_card_grid_key !== key) {
+			rc_card_grid_key = key
+			ask_state = { kind: 'response_choice' }
+			render_ask_box('《' + rc.name + '》', rc.prompt || '请选择 1 张牌', [])
+			const box = document.getElementById('ask_box')
+			if (box) {
+				const grid = document.createElement('div')
+				grid.className = 'card-grid'
+				for (const c of cands)
+					grid.appendChild(card_elt(c, () => submit(c.id)))
+				box.appendChild(grid)
+			}
+		}
+		return
+	}
+
+	/* option：弹选项框（响应卡在队列里，优先级高，直接占用 ask_box） */
 	rc_highlight_active = false
 	ask_state = { kind: 'response_choice' }
 	render_ask_box(

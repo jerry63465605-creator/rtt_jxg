@@ -19409,9 +19409,13 @@ const RESPONSE_EFFECT_IMPL = {
 		if (!cards.length) return { ok: false, reason: '没有可弃置的德国状态卡' }
 		/* 第一次进入（无 choice）：弹窗选 1 张（用户口径：多张仍选 1 张） */
 		if (choice == null) {
+			/* 【B64】同 7904：候选带卡图字段，客户端 kind:'card' 走卡图网格 */
 			const candidates = cards.map(cid => {
-				const c = inst_card(cid)
-				return { id: cid, name: c ? c.name : '状态卡' }
+				const c = inst_card(cid) || {}
+				return {
+					id: cid, face: String(inst_card_id(cid)),
+					name: c.name || '状态卡', type: c.type, img: c.img, text: c.text,
+				}
 			})
 			return { pending: true, kind: 'card', candidates, prompt: '破译恩尼格码：选择弃置 1 张德国状态卡' }
 		}
@@ -20235,9 +20239,18 @@ const RESPONSE_EFFECT_IMPL = {
 			if (!pool.length) return { ok: false, desc: '（弃牌堆中没有响应牌）' }
 			return {
 				pending: true, kind: 'card',
-				candidates: pool.map(id => ({
-					id: id, name: (inst_card(id) || {}).name || id,
-				})),
+				/*
+				 * 【B64】候选带上卡图字段：客户端 kind:'card' 改用【卡图网格】渲染
+				 * （与 17855 间谍机构 / 7900 竭泽而渔 同款），不再是文字按钮。
+				 * 缺 img 时客户端 card_elt 会回落成文字卡面，仍可点。
+				 */
+				candidates: pool.map(id => {
+					const c = inst_card(id) || {}
+					return {
+						id: id, face: String(inst_card_id(id)),
+						name: c.name || id, type: c.type, img: c.img, text: c.text,
+					}
+				}),
 				prompt: '从弃牌堆选择 1 张响应牌（暗置于桌面）',
 			}
 		}
@@ -40759,6 +40772,7 @@ if (typeof module !== 'undefined') {
 	do_sea_battle_at,
 	p51_air_in_required_area,
 	ECON_CARDS,
+	RESPONSE_EFFECT_IMPL,
 	econ_req_area,
 	econ_req_count,
 	econ_req_met,
