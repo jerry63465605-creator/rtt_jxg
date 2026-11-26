@@ -32639,6 +32639,267 @@ function action_log(game, side, current, arg) {
 	return game
 }
 
+/* 搬自 do_action 的 `if (action === 'debug_place')` 分支（逐字，仅去一层缩进） */
+function action_debug_place(game, side, current, arg) {
+	/* 调试用：直接把一个部队放到某格位，用于验证海峡动态 */
+	const { piece: reqPiece, nation, type, space } = arg || {}
+	if (!reqPiece || !space) return game
+	if (!data.spaces[space]) return game
+	/* 同一格位不能有敌方部队（与建设/征召规则一致） */
+	const faction = faction_of_nation(nation)
+	for (const p of pieces_on(game, space)) {
+		const other = faction_of_nation(game.piece_nation[p])
+		if (other && faction && other !== faction) return game
+	}
+	/*
+	 * 【2026-11-11 修复·第二次放置覆盖第一次】撞号自动顺延，绝不覆盖已有单位。
+	 *
+	 * 客户端的 `dbg_N` 序号是【页面级变量】（`let debug_seq = 0`），刷新页面/
+	 * 重开对局就归零；再放一支就撞上服务器上早已存在的 `dbg_1`。
+	 * 旧实现直接 `game.location[piece] = space` + 改写 nation/type，
+	 * 于是第一次放的那支被【静默覆盖】——玩家看到的就是"第二次放置覆盖第一次"。
+	 *
+	 * 现在：请求 id 已被占用时，从 1 起找下一个空闲 `dbg_N`，并在日志里写明换号。
+	 * 调试动作不该因为刷新而报错，所以选择自动换号而不是拒绝。
+	 */
+	let piece = reqPiece
+	if (game.location[piece] != null) {
+		const m = /^dbg_(\d+)$/.exec(String(reqPiece))
+		let n = m ? Number(m[1]) : 1
+		while (game.location['dbg_' + n] != null) n++
+		piece = 'dbg_' + n
+	}
+	game.location[piece] = space
+	game.piece_nation[piece] = nation
+	game.piece_type[piece] = type || 'army'
+	refresh(game)
+	game.log.push(side + ' 放置 ' + piece + '(' + nation + ') 到 ' + data.name_of(space) +
+		(piece !== reqPiece ? '（请求 ' + reqPiece + ' 已被占用，改用 ' + piece + '）' : ''))
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_remove')` 分支（逐字，仅去一层缩进） */
+function action_debug_remove(game, side, current, arg) {
+	/* 调试用：移除一个部队 */
+	const piece = arg && arg.piece
+	if (piece == null || game.location[piece] == null) return game
+	const sp = game.location[piece]
+	delete game.location[piece]
+	refresh(game)
+	game.log.push(side + ' 移除 ' + piece + '（原在 ' + data.name_of(sp) + '）')
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_clear')` 分支（逐字，仅去一层缩进） */
+function action_debug_clear(game, side, current, arg) {
+	/* 调试用：清空全部部队 */
+	const n = Object.keys(game.location).length
+	game.location = {}
+	game.piece_nation = {}
+	game.piece_type = {}
+	refresh(game)
+	game.log.push(side + ' 清空全部部队（' + n + ' 个）')
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_add_card')` 分支（逐字，仅去一层缩进） */
+function action_debug_add_card(game, side, current, arg) {
+	/* 调试用：把一张牌加入【当前行动国】的手牌 / 牌库顶 / 牌库底 / 弃牌堆 */
+	const face = arg && arg.face != null ? String(arg.face) : ''
+	const card = face ? CARD_BY_ID[face] : null
+	if (!card) {
+		game.log.push('【调试】未知卡牌：' + (face || '?'))
+		return game
+	}
+	const nation = (arg && arg.nation) || game.current_nation
+	const dest = (arg && arg.dest) || 'hand'
+	/* 惰性初始化牌库（幂等）—— 保证 card_inst[nation] 序号已就绪，避免与既有实例撞号 */
+	init_nation_deck(game, nation)
+	game.card_inst = game.card_inst || {}
+	game.card_inst[nation] = Number(game.card_inst[nation] || 0) + 1
+	const instId = face + '#' + game.card_inst[nation]
+	const DEST_ZH = { hand: '手牌', deck_top: '牌库顶', deck_bottom: '牌库底', discard: '弃牌堆' }
+	if (dest === 'deck_top') {
+		game.decks[nation] = game.decks[nation] || []
+		game.decks[nation].unshift(instId)
+	} else if (dest === 'deck_bottom') {
+		game.decks[nation] = game.decks[nation] || []
+		game.decks[nation].push(instId)
+	} else if (dest === 'discard') {
+		game.discard[nation] = game.discard[nation] || []
+		game.discard[nation].push(instId)
+	} else {
+		if (!game.hands[nation]) game.hands[nation] = []
+		game.hands[nation].push(instId)
+	}
+	refresh(game)
+	game.log.push('【调试】' + nation + ' 的' + (DEST_ZH[dest] || '手牌') +
+		'加入《' + card.name + '》')
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_attrition')` 分支（逐字，仅去一层缩进） */
+function action_debug_attrition(game, side, current, arg) {
+	/*
+	 * 【2026-11-07 · B28】调试卡牌面板：对【当前国家】损耗 N 张牌。
+	 *
+	 * 语义与真实损耗完全一致（复用 attrition_cards）：
+	 *   牌库顶 → 弃牌堆，带 15251 记录等副作用；【不含 17847 计分】
+	 *   （损耗不计分，本体 #5 与真实损耗同口径）；
+	 *   法国/中国按 NATION_DELEGATE 落到控制国牌库。
+	 * arg: { n }
+	 */
+	const raw = Number(arg && arg.n)
+	const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
+	if (!nation || !Number.isFinite(raw) || raw <= 0) {
+		game.log.push('【调试】损耗需要正数张数（当前国家：' + (nation || '未知') + '）')
+		return game
+	}
+	init_nation_deck(game, nation)
+	const before = (game.decks[nation] || []).length
+	const lost = attrition_cards(game, nation, Math.floor(raw))
+	refresh(game)
+	game.log.push('【调试】' + nation + ' 损耗 ' + lost.length + ' 张牌（牌库 ' + before +
+		'→' + (game.decks[nation] || []).length + '，弃牌堆 ' + (game.discard[nation] || []).length + '）')
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_restore')` 分支（逐字，仅去一层缩进） */
+function action_debug_restore(game, side, current, arg) {
+	/*
+	 * 【2026-11-07 · B28】调试卡牌面板：把【最近进入弃牌堆】的 N 张牌，
+	 * 按它们在弃牌堆里的原顺序放回【牌库顶】（等价于撤销一次损耗）。
+	 *
+	 * 例：损耗 3 张后弃牌堆末尾是 [A,B,C]（A 先掉），复原后牌库顶 = [A,B,C,…]，
+	 *     之后再抽牌会先抽到 A —— 顺序与损耗前一致。
+	 * arg: { n }
+	 */
+	const raw = Number(arg && arg.n)
+	const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
+	if (!nation || !Number.isFinite(raw) || raw <= 0) {
+		game.log.push('【调试】复原需要正数张数（当前国家：' + (nation || '未知') + '）')
+		return game
+	}
+	init_nation_deck(game, nation)
+	game.discard[nation] = game.discard[nation] || []
+	const want = Math.floor(raw)
+	const take = Math.min(want, game.discard[nation].length)
+	if (!take) {
+		game.log.push('【调试】' + nation + ' 弃牌堆是空的，无法复原')
+		return game
+	}
+	const back = game.discard[nation].splice(game.discard[nation].length - take, take)
+	game.decks[nation] = back.concat(game.decks[nation] || [])
+	refresh(game)
+	game.log.push('【调试】' + nation + ' 复原 ' + take + ' 张牌到牌库顶' +
+		(take < want ? '（弃牌堆不足 ' + want + ' 张）' : '') +
+		'（弃牌堆剩 ' + game.discard[nation].length + '，牌库 ' + (game.decks[nation] || []).length + '）')
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_score')` 分支（逐字，仅去一层缩进） */
+function action_debug_score(game, side, current, arg) {
+	/*
+	 * 【2026-11-07 · B28】调试阶段面板：阵营分数增减（game.score 只有阵营总分）。
+	 * arg: { faction: 'axis'|'allies', delta: 整数（可负） }
+	 */
+	const f = String((arg && (arg.faction || arg.side)) || '').toLowerCase()
+	const delta = Math.trunc(Number(arg && arg.delta))
+	if ((f !== 'axis' && f !== 'allies') || !Number.isFinite(delta) || !delta) {
+		game.log.push('【调试】分数增减需要阵营（axis/allies）与非零整数')
+		return game
+	}
+	game.score = game.score || { axis: 0, allies: 0 }
+	game.score[f] = Number(game.score[f] || 0) + delta
+	refresh(game)
+	game.log.push('【调试】' + (f === 'axis' ? '轴心' : '同盟') + ' 分数 ' +
+		(delta > 0 ? '+' : '') + delta + ' → ' + game.score[f])
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_set_phase')` 分支（逐字，仅去一层缩进） */
+function action_debug_set_phase(game, side, current, arg) {
+	/*
+	 * 调试用：清空所有挂起态，然后把对局直接推到【指定国家 · 指定阶段】，
+	 * 并执行该阶段的入口函数（玩家口径 2026-10-29：跳过去要真的生效）。
+	 */
+	const nation = (arg && arg.nation) || game.current_nation
+	const phase = (arg && arg.phase) || PH.PLAY
+	if (!PHASES.some(p => p.key === phase)) {
+		game.log.push('【调试】未知阶段：' + phase)
+		return game
+	}
+	if (!nation) {
+		game.log.push('【调试】未指定国家')
+		return game
+	}
+	clear_all_pending_for_debug(game, nation)
+	game.current_nation = nation
+	game.active = faction_of_nation(nation) === 'allies' ? ALLIES_ROLE : AXIS_ROLE
+	game.turn_phase = phase
+	/* 【2026-11-06 · 15226】调试/测试盘面同样在"德国回合开始"这一刻冻结快照 */
+	if (nation === '德国') refresh_barbarossa_snapshot(game)
+	refresh(game)
+	game.log.push('【调试】清空挂起态，跳到【' + nation + '】·' + phase_zh(phase))
+	const ENTRY = {
+		resource: phase_resource, play: phase_play, airforce: phase_airforce,
+		supply: phase_supply, scoring: phase_scoring, discard: phase_discard, draw: phase_draw,
+	}
+	const fn = ENTRY[phase]
+	if (typeof fn === 'function') {
+		try { fn(game, nation) } catch (e) { game.log.push('【调试】阶段入口出错：' + e.message) }
+	}
+	refresh(game)
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_set_view_nation')` 分支（逐字，仅去一层缩进） */
+function action_debug_set_view_nation(game, side, current, arg) {
+	/*
+	 * 【2026-10-31 调试】手牌视角：默认等待时显示哪个国家的手牌。
+	 *
+	 * 用途：调试/试玩时本方多国（英/法/美 或 德/意/日），非本方回合时
+	 * 手牌区默认只显示"本阵营排最前"的国家，想临时看另一国的手牌只能等它的回合。
+	 * 这里按【阵营】记一个 override，view 的兜底分支优先用它。
+	 *
+	 * arg: { nation } —— 必须是本方阵营的国家；空/native 传 null 表示清除（恢复默认）。
+	 */
+	const nat = (arg && arg.nation) || null
+	/*
+	 * 阵营取【请求方角色 side】（do_action 的第 2 参），不能取 current_nation ——
+	 * 敌方回合时本方仍要能切自己的手牌视角（否则同盟在德国回合设置会被判成 axis 而忽略）。
+	 */
+	const reqSide = (String(side || '').toLowerCase() === 'allies') ? 'allies' : 'axis'
+	const wantSide = (arg && arg.side) || reqSide
+	game.debug_view_nation = game.debug_view_nation || {}
+	if (!nat) {
+		delete game.debug_view_nation[wantSide]
+		game.log.push('【调试】手牌视角已恢复默认（' + wantSide + '）')
+		refresh(game)
+		return game
+	}
+	if (faction_of_nation(nat) !== wantSide) {
+		game.log.push('【调试】手牌视角：' + nat + ' 不属于【' +
+			(wantSide === 'allies' ? '同盟' : '轴心') + '】，已忽略')
+		return game
+	}
+	game.debug_view_nation[wantSide] = nat
+	game.log.push('【调试】手牌视角：' + (wantSide === 'allies' ? '同盟' : '轴心') +
+		' 默认显示【' + nat + '】的手牌')
+	refresh(game)
+	return game
+}
+
+/* 搬自 do_action 的 `if (action === 'debug_draw')` 分支（逐字，仅去一层缩进） */
+function action_debug_draw(game, side, current, arg) {
+	/* 抓牌（调试/跳过用） */
+	const nation = (arg && arg.nation) || game.current_nation
+	const n = (arg && arg.n) || 1
+	const drawn = draw_cards(game, nation, n)
+	game.log.push(nation + ' 抓 ' + drawn.length + ' 张牌')
+	return game
+}
+
 function do_action(state, current, action, arg) {
 	const game = state
 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
@@ -32970,247 +33231,23 @@ function do_action(state, current, action, arg) {
 	if (action === 'opening_discard')
 		return do_opening_discard(game, current, arg)
 
-	/* 调试用：直接把一个部队放到某格位，用于验证海峡动态 */
-	if (action === 'debug_place') {
-		const { piece: reqPiece, nation, type, space } = arg || {}
-		if (!reqPiece || !space) return game
-		if (!data.spaces[space]) return game
-		/* 同一格位不能有敌方部队（与建设/征召规则一致） */
-		const faction = faction_of_nation(nation)
-		for (const p of pieces_on(game, space)) {
-			const other = faction_of_nation(game.piece_nation[p])
-			if (other && faction && other !== faction) return game
-		}
-		/*
-		 * 【2026-11-11 修复·第二次放置覆盖第一次】撞号自动顺延，绝不覆盖已有单位。
-		 *
-		 * 客户端的 `dbg_N` 序号是【页面级变量】（`let debug_seq = 0`），刷新页面/
-		 * 重开对局就归零；再放一支就撞上服务器上早已存在的 `dbg_1`。
-		 * 旧实现直接 `game.location[piece] = space` + 改写 nation/type，
-		 * 于是第一次放的那支被【静默覆盖】——玩家看到的就是"第二次放置覆盖第一次"。
-		 *
-		 * 现在：请求 id 已被占用时，从 1 起找下一个空闲 `dbg_N`，并在日志里写明换号。
-		 * 调试动作不该因为刷新而报错，所以选择自动换号而不是拒绝。
-		 */
-		let piece = reqPiece
-		if (game.location[piece] != null) {
-			const m = /^dbg_(\d+)$/.exec(String(reqPiece))
-			let n = m ? Number(m[1]) : 1
-			while (game.location['dbg_' + n] != null) n++
-			piece = 'dbg_' + n
-		}
-		game.location[piece] = space
-		game.piece_nation[piece] = nation
-		game.piece_type[piece] = type || 'army'
-		refresh(game)
-		game.log.push(side + ' 放置 ' + piece + '(' + nation + ') 到 ' + data.name_of(space) +
-			(piece !== reqPiece ? '（请求 ' + reqPiece + ' 已被占用，改用 ' + piece + '）' : ''))
-		return game
-	}
+	if (action === 'debug_place') return action_debug_place(game, side, current, arg)
 
-	/* 调试用：移除一个部队 */
-	if (action === 'debug_remove') {
-		const piece = arg && arg.piece
-		if (piece == null || game.location[piece] == null) return game
-		const sp = game.location[piece]
-		delete game.location[piece]
-		refresh(game)
-		game.log.push(side + ' 移除 ' + piece + '（原在 ' + data.name_of(sp) + '）')
-		return game
-	}
+	if (action === 'debug_remove') return action_debug_remove(game, side, current, arg)
 
-	/* 调试用：清空全部部队 */
-	if (action === 'debug_clear') {
-		const n = Object.keys(game.location).length
-		game.location = {}
-		game.piece_nation = {}
-		game.piece_type = {}
-		refresh(game)
-		game.log.push(side + ' 清空全部部队（' + n + ' 个）')
-		return game
-	}
+	if (action === 'debug_clear') return action_debug_clear(game, side, current, arg)
 
-	/* 调试用：把一张牌加入【当前行动国】的手牌 / 牌库顶 / 牌库底 / 弃牌堆 */
-	if (action === 'debug_add_card') {
-		const face = arg && arg.face != null ? String(arg.face) : ''
-		const card = face ? CARD_BY_ID[face] : null
-		if (!card) {
-			game.log.push('【调试】未知卡牌：' + (face || '?'))
-			return game
-		}
-		const nation = (arg && arg.nation) || game.current_nation
-		const dest = (arg && arg.dest) || 'hand'
-		/* 惰性初始化牌库（幂等）—— 保证 card_inst[nation] 序号已就绪，避免与既有实例撞号 */
-		init_nation_deck(game, nation)
-		game.card_inst = game.card_inst || {}
-		game.card_inst[nation] = Number(game.card_inst[nation] || 0) + 1
-		const instId = face + '#' + game.card_inst[nation]
-		const DEST_ZH = { hand: '手牌', deck_top: '牌库顶', deck_bottom: '牌库底', discard: '弃牌堆' }
-		if (dest === 'deck_top') {
-			game.decks[nation] = game.decks[nation] || []
-			game.decks[nation].unshift(instId)
-		} else if (dest === 'deck_bottom') {
-			game.decks[nation] = game.decks[nation] || []
-			game.decks[nation].push(instId)
-		} else if (dest === 'discard') {
-			game.discard[nation] = game.discard[nation] || []
-			game.discard[nation].push(instId)
-		} else {
-			if (!game.hands[nation]) game.hands[nation] = []
-			game.hands[nation].push(instId)
-		}
-		refresh(game)
-		game.log.push('【调试】' + nation + ' 的' + (DEST_ZH[dest] || '手牌') +
-			'加入《' + card.name + '》')
-		return game
-	}
+	if (action === 'debug_add_card') return action_debug_add_card(game, side, current, arg)
 
-	/*
-	 * 【2026-11-07 · B28】调试卡牌面板：对【当前国家】损耗 N 张牌。
-	 *
-	 * 语义与真实损耗完全一致（复用 attrition_cards）：
-	 *   牌库顶 → 弃牌堆，带 15251 记录等副作用；【不含 17847 计分】
-	 *   （损耗不计分，本体 #5 与真实损耗同口径）；
-	 *   法国/中国按 NATION_DELEGATE 落到控制国牌库。
-	 * arg: { n }
-	 */
-	if (action === 'debug_attrition') {
-		const raw = Number(arg && arg.n)
-		const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
-		if (!nation || !Number.isFinite(raw) || raw <= 0) {
-			game.log.push('【调试】损耗需要正数张数（当前国家：' + (nation || '未知') + '）')
-			return game
-		}
-		init_nation_deck(game, nation)
-		const before = (game.decks[nation] || []).length
-		const lost = attrition_cards(game, nation, Math.floor(raw))
-		refresh(game)
-		game.log.push('【调试】' + nation + ' 损耗 ' + lost.length + ' 张牌（牌库 ' + before +
-			'→' + (game.decks[nation] || []).length + '，弃牌堆 ' + (game.discard[nation] || []).length + '）')
-		return game
-	}
+	if (action === 'debug_attrition') return action_debug_attrition(game, side, current, arg)
 
-	/*
-	 * 【2026-11-07 · B28】调试卡牌面板：把【最近进入弃牌堆】的 N 张牌，
-	 * 按它们在弃牌堆里的原顺序放回【牌库顶】（等价于撤销一次损耗）。
-	 *
-	 * 例：损耗 3 张后弃牌堆末尾是 [A,B,C]（A 先掉），复原后牌库顶 = [A,B,C,…]，
-	 *     之后再抽牌会先抽到 A —— 顺序与损耗前一致。
-	 * arg: { n }
-	 */
-	if (action === 'debug_restore') {
-		const raw = Number(arg && arg.n)
-		const nation = delegate_of_nation((arg && arg.nation) || game.current_nation)
-		if (!nation || !Number.isFinite(raw) || raw <= 0) {
-			game.log.push('【调试】复原需要正数张数（当前国家：' + (nation || '未知') + '）')
-			return game
-		}
-		init_nation_deck(game, nation)
-		game.discard[nation] = game.discard[nation] || []
-		const want = Math.floor(raw)
-		const take = Math.min(want, game.discard[nation].length)
-		if (!take) {
-			game.log.push('【调试】' + nation + ' 弃牌堆是空的，无法复原')
-			return game
-		}
-		const back = game.discard[nation].splice(game.discard[nation].length - take, take)
-		game.decks[nation] = back.concat(game.decks[nation] || [])
-		refresh(game)
-		game.log.push('【调试】' + nation + ' 复原 ' + take + ' 张牌到牌库顶' +
-			(take < want ? '（弃牌堆不足 ' + want + ' 张）' : '') +
-			'（弃牌堆剩 ' + game.discard[nation].length + '，牌库 ' + (game.decks[nation] || []).length + '）')
-		return game
-	}
+	if (action === 'debug_restore') return action_debug_restore(game, side, current, arg)
 
-	/*
-	 * 【2026-11-07 · B28】调试阶段面板：阵营分数增减（game.score 只有阵营总分）。
-	 * arg: { faction: 'axis'|'allies', delta: 整数（可负） }
-	 */
-	if (action === 'debug_score') {
-		const f = String((arg && (arg.faction || arg.side)) || '').toLowerCase()
-		const delta = Math.trunc(Number(arg && arg.delta))
-		if ((f !== 'axis' && f !== 'allies') || !Number.isFinite(delta) || !delta) {
-			game.log.push('【调试】分数增减需要阵营（axis/allies）与非零整数')
-			return game
-		}
-		game.score = game.score || { axis: 0, allies: 0 }
-		game.score[f] = Number(game.score[f] || 0) + delta
-		refresh(game)
-		game.log.push('【调试】' + (f === 'axis' ? '轴心' : '同盟') + ' 分数 ' +
-			(delta > 0 ? '+' : '') + delta + ' → ' + game.score[f])
-		return game
-	}
+	if (action === 'debug_score') return action_debug_score(game, side, current, arg)
 
-	/*
-	 * 调试用：清空所有挂起态，然后把对局直接推到【指定国家 · 指定阶段】，
-	 * 并执行该阶段的入口函数（玩家口径 2026-10-29：跳过去要真的生效）。
-	 */
-	if (action === 'debug_set_phase') {
-		const nation = (arg && arg.nation) || game.current_nation
-		const phase = (arg && arg.phase) || PH.PLAY
-		if (!PHASES.some(p => p.key === phase)) {
-			game.log.push('【调试】未知阶段：' + phase)
-			return game
-		}
-		if (!nation) {
-			game.log.push('【调试】未指定国家')
-			return game
-		}
-		clear_all_pending_for_debug(game, nation)
-		game.current_nation = nation
-		game.active = faction_of_nation(nation) === 'allies' ? ALLIES_ROLE : AXIS_ROLE
-		game.turn_phase = phase
-		/* 【2026-11-06 · 15226】调试/测试盘面同样在"德国回合开始"这一刻冻结快照 */
-		if (nation === '德国') refresh_barbarossa_snapshot(game)
-		refresh(game)
-		game.log.push('【调试】清空挂起态，跳到【' + nation + '】·' + phase_zh(phase))
-		const ENTRY = {
-			resource: phase_resource, play: phase_play, airforce: phase_airforce,
-			supply: phase_supply, scoring: phase_scoring, discard: phase_discard, draw: phase_draw,
-		}
-		const fn = ENTRY[phase]
-		if (typeof fn === 'function') {
-			try { fn(game, nation) } catch (e) { game.log.push('【调试】阶段入口出错：' + e.message) }
-		}
-		refresh(game)
-		return game
-	}
+	if (action === 'debug_set_phase') return action_debug_set_phase(game, side, current, arg)
 
-	/*
-	 * 【2026-10-31 调试】手牌视角：默认等待时显示哪个国家的手牌。
-	 *
-	 * 用途：调试/试玩时本方多国（英/法/美 或 德/意/日），非本方回合时
-	 * 手牌区默认只显示"本阵营排最前"的国家，想临时看另一国的手牌只能等它的回合。
-	 * 这里按【阵营】记一个 override，view 的兜底分支优先用它。
-	 *
-	 * arg: { nation } —— 必须是本方阵营的国家；空/native 传 null 表示清除（恢复默认）。
-	 */
-	if (action === 'debug_set_view_nation') {
-		const nat = (arg && arg.nation) || null
-		/*
-		 * 阵营取【请求方角色 side】（do_action 的第 2 参），不能取 current_nation ——
-		 * 敌方回合时本方仍要能切自己的手牌视角（否则同盟在德国回合设置会被判成 axis 而忽略）。
-		 */
-		const reqSide = (String(side || '').toLowerCase() === 'allies') ? 'allies' : 'axis'
-		const wantSide = (arg && arg.side) || reqSide
-		game.debug_view_nation = game.debug_view_nation || {}
-		if (!nat) {
-			delete game.debug_view_nation[wantSide]
-			game.log.push('【调试】手牌视角已恢复默认（' + wantSide + '）')
-			refresh(game)
-			return game
-		}
-		if (faction_of_nation(nat) !== wantSide) {
-			game.log.push('【调试】手牌视角：' + nat + ' 不属于【' +
-				(wantSide === 'allies' ? '同盟' : '轴心') + '】，已忽略')
-			return game
-		}
-		game.debug_view_nation[wantSide] = nat
-		game.log.push('【调试】手牌视角：' + (wantSide === 'allies' ? '同盟' : '轴心') +
-			' 默认显示【' + nat + '】的手牌')
-		refresh(game)
-		return game
-	}
+	if (action === 'debug_set_view_nation') return action_debug_set_view_nation(game, side, current, arg)
 
 	/*
 	 * 补给阶段：结算【指定国家】（默认当前回合国）的断补部队。
@@ -38883,14 +38920,7 @@ function do_action(state, current, action, arg) {
 		return game
 	}
 
-	/* 抓牌（调试/跳过用） */
-	if (action === 'debug_draw') {
-		const nation = (arg && arg.nation) || game.current_nation
-		const n = (arg && arg.n) || 1
-		const drawn = draw_cards(game, nation, n)
-		game.log.push(nation + ' 抓 ' + drawn.length + ' 张牌')
-		return game
-	}
+	if (action === 'debug_draw') return action_debug_draw(game, side, current, arg)
 
 	throw new Error('未知行动: ' + action)
 }
