@@ -99,9 +99,18 @@ function dropComments(lines) {
 		.replace(/\/\/[^\n]*/g, '')
 }
 
-/* 规范化代码行：去注释 + trim + 去空行 */
+/* `const mySide = side` 这类【纯形参别名】：分支搬出后需在新函数里重建，
+ * 外层 do_action 的局部变量不可见。它不改变语义，两边都过滤掉再比对。 */
+function isAlias(t) {
+	return /^const\s+[A-Za-z_$][\w$]*\s*=\s*(game|side|current|arg)\s*$/.test(t)
+}
+
+/* 规范化代码行：去注释 + trim + 去空行 + 去形参别名 */
 function norm(lines) {
-	return dropComments(lines).split('\n').map(l => l.trim()).filter(l => l.length).join('\n')
+	return dropComments(lines).split('\n').map(l => l.trim())
+		.filter(l => l.length)
+		.filter(l => !isAlias(l))
+		.join('\n')
 }
 
 /*
@@ -112,7 +121,9 @@ function norm(lines) {
  * 返回值同样是「已 trim 的代码行数组」，可直接喂给 norm。
  */
 function stripWrap(arr) {
-	const code = dropComments(arr).split('\n').map(l => l.trim()).filter(l => l.length)
+	const code = dropComments(arr).split('\n').map(l => l.trim())
+		.filter(l => l.length)
+		.filter(l => !isAlias(l))
 	if (code.length >= 2 && code[0] === '{' && code[code.length - 1] === '}') return code.slice(1, -1)
 	return code
 }
@@ -200,6 +211,10 @@ for (const [nm, cnt] of Object.entries(cBranchNames)) {
 		if (!fn) continue
 		const body = cur.slice(fn[0] + 1, fn[1]).join('\n')
 		for (const dl of decls) {
+			/* 函数体内自己声明了同名变量（如 play_card 里重建的 `const mySide = side`）
+			 * 就不算跨作用域引用 —— 那是「显式化别名」，语义等价。 */
+			const declaredHere = new RegExp('^\\s*(?:const|let|var)\\s+' + dl.name + '\\s*=', 'm').test(body)
+			if (declaredHere) continue
 			if (new RegExp('\\b' + dl.name + '\\b').test(body))
 				problems.push('【跨作用域引用】action_' + nm + ' 用了 do_action 的局部变量 ' + dl.name)
 		}
