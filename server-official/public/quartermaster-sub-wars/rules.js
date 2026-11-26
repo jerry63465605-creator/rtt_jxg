@@ -1171,6 +1171,37 @@ function compute_supply(game, conn_snap) {
 			const mine = roots[pid] || (roots[pid] = {})
 			const nbrs = get_connections(game, loc, faction_of_nation(nat), snap)
 
+			/*
+			 * 【B63】空军补给 = 与同格【本国载体】完全一致（玩家口径 2026-11-27：
+			 *   「要求本国，空军补给与所属的载体完全一致」）。
+			 *
+			 * 旧实现：空军和陆军共用下面的通用接根（大本营 / 邻接补给链），
+			 * 只借「同格是否有源」（承载阶段），不借「同格部队是否已补给」；
+			 * 而接根又只看【邻格】。于是同格载体靠 aura / port_as / granted 补给时，
+			 * 空军 roots 为空 -> 被判断补（实测：〈硫磺岛〉port_as 格上
+			 * navy in_supply=true、同格 air=false）。
+			 *
+			 * 现在：空军没有独立判定，完全跟随载体 ——
+			 *   · 同格本国陆军/海军任一在补给中 -> 空军补给；
+			 *   · 载体都不补给 / 根本没有载体 -> 空军不补给（随后按断补移除，
+			 *     与 air_host_check「空军不能独立存在」一致）；
+			 *   · 载体【本国】限定（不含 17549 组内盟国），与 air_host_check 同源；
+			 *   · 空军不作为中继/补给源（不设 can_source），也不再走陆军接根（continue）。
+			 */
+			if (type === 'air') {
+				const hosts = (bySpace[loc] || []).filter(p2 => p2 !== pid &&
+					game.piece_nation[p2] === nat &&
+					(game.piece_type[p2] === 'army' || game.piece_type[p2] === 'navy'))
+				if (hosts.some(p2 => in_supply[p2])) {
+					if (!in_supply[pid]) {
+						in_supply[pid] = true
+						if (!sources[pid]) sources[pid] = 'chain'
+						changed = true
+					}
+				}
+				continue
+			}
+
 			if (type === 'navy') {
 				/*
 				 * 海军补给（2026-10-11 收紧 →【2026-10-20 玩家口径修正】）：

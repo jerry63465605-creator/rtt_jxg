@@ -126,11 +126,16 @@ console.log('\n=== F. 静态守卫 ===')
 	ok('★★ air 分支与 can_build_at / can_recruit_at 三元互斥（air 走 can_deploy_air）',
 		/st\.type === 'air'\)[\s\S]{0,60}\?\s*out\.filter\(sp => can_deploy_air\(game, actor, sp\)\.ok\)[\s\S]{0,40}:\s*out\.filter\(sp => \(st\.op === 'recruit' \? can_recruit_at : can_build_at\)/.test(seg.replace(/\r/g, '')))
 	ok('★ 非 air 分支仍保留 can_build_at / can_recruit_at', /can_recruit_at : can_build_at/.test(seg))
-	/* 17811 本轮不改（玩家口径：窄场景待观察）——守卫防止误改 */
+	/*
+	 * 【B58 起已过时】原断言「su_air_deploy_spaces 本轮保持原样、未动」，
+	 * 玩家后来明确要求「设计局空军应该被移除就触发」，B58 已把它从
+	 * can_build_at(…,'air') 改为 can_deploy_air（与 17509 同源）。
+	 * 这里改为守卫「已同源」，防止被回退成旧口径。
+	 */
 	const k = src.indexOf('function su_air_deploy_spaces')
-	const seg2 = src.slice(k, k + 700)
-	ok('★ 17811 那条（su_air_deploy_spaces）本轮保持原样、未动',
-		/can_build_at\(game, nation, sp, 'air'\)\.ok/.test(seg2))
+	const seg2 = src.slice(k, k + 900)
+	ok('★ 17811 那条（su_air_deploy_spaces）已与 can_deploy_air 同源（B58）',
+		/can_deploy_air\(game, nation, sp\)\.ok/.test(seg2))
 	/* B54 起客户端有改动（17535 遮罩让位）-> 版本串会再 bump，这里只校验统一非空 */
 	ok('★ 版本串统一且非空（B51 当轮 20261122a，B54 起 20261122b）',
 		(vers => vers.length >= 5 && vers.every(v => v && v === vers[0]))(
