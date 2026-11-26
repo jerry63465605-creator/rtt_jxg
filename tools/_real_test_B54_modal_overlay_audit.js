@@ -149,8 +149,9 @@ console.log('\n=== E. 版本串与零服务端改动 ===')
 {
 	const vers = (PHTML.match(/\?v=(\d{8}[a-z])/g) || []).map(s => s.slice(3))
 	const uniq = Array.from(new Set(vers))
-	ok('★★ 版本串统一为 20261122b（客户端有改动）',
-		uniq.length === 1 && uniq[0] === '20261122b', J(uniq))
+	/* B55 bump 到 20261122c 后本断言曾写死 b 而变红（基线遗留）—— 改为只校验「统一且格式合法」 */
+	ok('★★ 版本串统一且格式合法（B54 当轮 20261122b，后续会继续 bump）',
+		uniq.length === 1 && /^\d{8}[a-z]$/.test(uniq[0] || ''), J(uniq))
 	ok('★ rules.js 的 17535 委托分支仍是「追加而非替换」注释（服务端口径未变）',
 		/追加而非替换，避免排他式提前 return 吞掉动作白名单/.test(SRC))
 }
