@@ -6361,6 +6361,24 @@ const STATUS_EFFECTS = {
 				const typ = (ctx && ctx.piece_type) || (ctx && ctx.type)
 				if (nat !== '美国') return false
 				if (typ !== 'navy') return false
+				/*
+				 * 【B66】卡面是「美国海军**被攻击时**」—— 只认【战斗移除】。
+				 *
+				 * 旧实现只判国别 + 兵种，于是断补（reason='supply'）/ 经济战（'econ'）/
+				 * 卡牌消灭（'eliminate'）导致的海军移除也会弹窗：
+				 *   · 断补那种最坑 —— 玩家花 2 张牌救回来，断补状态没变，
+				 *     下个补给阶段又被移除，纯白亏。
+				 * ctx.reason 由 arm_status_instant 从 last_piece_removed 透传；
+				 * 拿不到 reason（老路径 / 无上下文）时按"不是战斗"处理，宁可漏不可错。
+				 */
+				/*
+				 * reason 未知（undefined）时【放行】，向后兼容：
+				 *   · 真实路径的 5 处 last_piece_removed 赋值【都带 reason】
+				 *     （'piece_removed' / 'supply' / 'econ' / 'eliminate'）；
+				 *   · 只有手工构造的 status_instant（测试 / 老存档）没有 reason，
+				 *     那种情况按旧行为处理，避免把测试和老存档一起打死。
+				 */
+				if (ctx && ctx.reason != null && ctx.reason !== 'piece_removed') return false
 				return true
 			},
 			run(game) {
@@ -9855,6 +9873,20 @@ function arm_status_instant(game, window, nation, space) {
 			space: lp.space != null ? lp.space : space,
 			was_supplied: lp.was_supplied,
 			retreated_airs: lp.retreated_airs,
+			/*
+			 * 【B66】把【移除原因】也传下去。
+			 *
+			 * 取值（各派发点写入 last_piece_removed 时给）：
+			 *   'piece_removed' 战斗移除
+			 *   'supply'        断补移除
+			 *   'econ'          经济战移除
+			 *   'eliminate'     卡牌效果消灭
+			 *
+			 * 少了它，卡面写「**被攻击时**」的 17543《雷达》无法区分原因 ——
+			 * 实测断补被移除的美国海军也会弹窗（玩家白花 2 张牌，且下个补给阶段
+			 * 还是会被移除）。判据由各卡自己的 ready() 决定，这里只负责如实透传。
+			 */
+			reason: lp.reason,
 		}
 	})()
 	const fac = faction_of_nation(nation)
