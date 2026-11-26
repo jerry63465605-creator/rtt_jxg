@@ -1,0 +1,86 @@
+do_action 位置：第 32616 行 ~ 第 38873 行（共 6258 行）
+
+=== if (action === ...) 分支：86 处 ===
+这些分支合计 6248 行，占 do_action 的 99.8%
+
+=== 按行数降序（前 30） ===
+  L37243  play_card                                       1100 行
+  L35648  activate_status                                  576 行
+  L34622  resolve_battle                                   450 行
+  L33231  next_nation                                      425 行
+  L32625  prelude_trigger_discard                          316 行
+  L36540  use_armed_offer                                  305 行
+  L33991  resolve_response_choice                          205 行
+  L34442  trigger_response                                 180 行
+  L36845  skip_armed_offer                                 141 行
+  L34321  pass_response                                    121 行
+  L35161  event_battle                                     119 行
+  L35280  event_finish                                     117 行
+  L35459  air_support                                      102 行
+  L34208  response_reorder                                  86 行
+  L36288  resolve_econ                                      81 行
+  L33785  discard_in_discard_phase                          78 行
+  L37079  resolve_italy_play                                72 行
+  L33656  next_phase                                        70 行
+  L36224  resolve_effect                                    64 行
+  L38343  su_purge_play                                     63 行
+  L35397  event_step_next                                   62 行
+  L35561  use_wartime_window                                57 行
+  L33913  clear_ask                                         49 行
+  L35072  uranus_choice                                     49 行
+  L38406  uk_enigma_play                                    45 行
+  L37151  resolve_red                                       44 行
+  L33011  debug_add_card                                    43 行
+  L32947  opening_discard+debug_place                       42 行
+  L36388  theater_next                                      41 行
+  L38791  us_depression_discard                             41 行
+
+=== 按行数升序（后 20，可能是小分支） ===
+  L34317  trigger_response                                   4 行
+  L32941  log                                                6 行
+  L36369  resolve_autobahn                                   7 行
+  L38864  debug_draw                                         9 行
+  L35151  su_status_skip                                    10 行
+  L32989  debug_remove                                      11 行
+  L33000  debug_clear                                       11 行
+  L36460  skip_national_skill                               11 行
+  L34196  response_reorder+response_confirm                 12 行
+  L36376  resolve_theater                                   12 行
+  L38637  resolve_us_merchant_select                        12 行
+  L38649  resolve_us_merchant_build                         12 行
+  L38661  resolve_us_merchant_type                          12 行
+  L38686  resolve_us_lend_lease_select                      12 行
+  L36986  event_delegate_decline                            13 行
+  L38451  uk_enigma_skip                                    13 行
+  L38587  resolve_us_replay                                 13 行
+  L38673  resolve_us_political_play                         13 行
+  L37195  cancel_script                                     14 行
+  L38573  resolve_us_theater_delegate                       14 行
+
+=== 合并了多个 action 的分支：3 处 ===
+  L32947  opening_discard+debug_place  (42 行)
+  L34196  response_reorder+response_confirm  (12 行)
+  L34294  trigger_response+pass_response  (23 行)
+
+=== do_action 开头的共享逻辑（第一个 if 之前）：9 行 ===
+  | function do_action(state, current, action, arg) {
+  | 	const game = state
+  | 	const side = current === ALLIES_ROLE ? ALLIES : AXIS
+  | 	/*
+  | 	 * 【D1/P21】前奏军备卡触发代价：弃 1 张正式手牌后重放 trigger_response。
+  | 	 * 必须放在【前奏动作分发守卫之前】——响应栈未决时守卫会冻结一切
+  | 	 * prelude_* 动作，放在后面会「弹框能选、点了被拒」的死锁。
+  | 	 * 范式照 17555：前置代价 + discard_card + 一次性跳过标记 + internal_action 重放。
+  | 	 */
+  | 	
+
+=== 最后一个分支之后的收尾逻辑：6 行 ===
+  | if (action === 'debug_draw') {
+  | 		const nation = (arg && arg.nation) || game.current_nation
+  | 		const n = (arg && arg.n) || 1
+  | 		const drawn = draw_cards(game, nation, n)
+  | 		game.log.push(nation + ' 抓 ' + drawn.length + ' 张牌')
+  | 		return game
+  | 	
+
+=== action 名总数：89 个（去重后 85） ===
