@@ -1,8 +1,57 @@
 # 前奏（Prelude）重做与安全清空手册
 
-> 状态：**准备阶段**（总开关已就绪，尚未删除任何代码）
+> 状态：**引擎与 UI 已清空（2026-11-27 执行完毕），只保留基础数据**
 > 适用：`server-official/public/quartermaster-sub-wars/`
 > 最后更新：2026-11-27
+
+---
+
+## 执行结果（2026-11-27）
+
+玩家决定「保留清单都不要保留，只保留基础数据，重新设计」，因此**比本手册原方案更彻底**：
+
+| 已删除 | 规模 |
+|---|---|
+| `prelude_compiler.js`（整个文件） | 802 行 |
+| `rules.js` 的 `PRELUDE_*` 常量/表 + 39 个 `prelude_*` 函数 | 1,334 行 |
+| `game.prelude` schema + `options.prelude` + `view.prelude` | ~50 行 |
+| 6 处 `prelude_on()` 早退 + `do_action`/`build_actions` 的前奏分支 | ~90 行 |
+| 前奏军备卡 ↔ 响应栈桥接 8 处（`prelude_response_impl` / `_trigger_of` / `prelude_cand_info` / `trigger_cost` / `action_prelude_trigger_discard`） | ~80 行 |
+| `play.js` 11 个前奏 UI 函数 + 4 本地变量 + 5 处调用点 | 548 行 |
+| 前奏测试 **26 个**（`_test_prelude_*` ×3、`P2–P21` ×18、`prelude_diy.js`、`_audit_prelude_semantics.js`、`_probe_*` ×3） | ~250 KB |
+| `exports.scenarios` 去掉 `Episode 2` / `Episode 2 德国单国` | — |
+
+**净减：`rules.js` 41,104 → 39,456 行；`play.js` 减 548 行。**
+
+### 保留的基础数据（重新设计的原料）
+
+| 内容 | 位置 |
+|---|---|
+| **125 张前奏/军备卡元数据**（`id / nation / deck / type / name / text / img`，`ops` 全为 `null`） | `cards.js` |
+| **4 张 DIY 元数据** | `prelude_specs.js`（421 行，已无引用者，纯数据） |
+| **卡图**（`sheetNNN_rX_cY.png` 等 + `diy_9000*.png`） | `cards/`、`cards_tts/` |
+| 卡类型白名单里的 `PRELUDE` / `ARMAMENT` 字样 | `play.js` |
+
+> 重要：`cards.js` 里 125 张卡的 `ops` **全是 `null`**，效果只存在于中文 `text`。
+> 所以清空引擎**没有丢失任何机器可读语义** —— 留下的就是干净的原文 + 卡图。
+
+### 回归（清空后）
+
+`test_basic_cards` **288/9**（与基线一致）、全量冒烟 **✅ 全绿**（22 个白名单）、
+隐私 **20/0**、阶段 key **18/0**、**B 系列全部 ALL PASS**。
+
+> 正式局的保护由 `test_basic_cards`(288) + `B34–B68` + 40+ 冒烟 + `paradigm_*`/`precheck_*` 承担，
+> 删掉的 26 个测试**全部是前奏专属**（`P` = Prelude），不覆盖正式局逻辑。
+
+### 回滚
+
+```bash
+git tag before-prelude-reset        # 清空前的完整状态（已在远端）
+git checkout before-prelude-reset -- server-official/public/quartermaster-sub-wars/
+```
+
+---
+
 
 ---
 

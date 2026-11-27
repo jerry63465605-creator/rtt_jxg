@@ -121,7 +121,12 @@ console.log('\n=== D. 全量遮罩审计：15 个 .modal，只有 17535 需要 p
 		/pe\.step === 'space'[\s\S]{0,600}modal\.classList\.add\("hide"\)/.test(PJS))
 	/* 其它 13 个：update 函数内不含「需点外部」关键词（除已知两个） */
 	const lines = PJS.split(/\r?\n/)
-	const OUTSIDE = /地图|桌面状态卡|桌面上的|手牌区|算子|highlight_targets/
+	/*
+	 * 「需点外部」的标志：真的要玩家去点地图/桌面算子。
+	 * 不含「手牌区」—— 弃牌框本来就会提"从手牌区选"，那不是遮罩问题。
+	 * （2026-11-27 前奏移除后，echo_discard_modal 的首个引用落到含该词的渲染函数，误报）
+	 */
+	const OUTSIDE = /地图|桌面状态卡|桌面上的|算子|highlight_targets/
 	const risky = []
 	for (const md of modals) {
 		let idx = -1
@@ -129,9 +134,17 @@ console.log('\n=== D. 全量遮罩审计：15 个 .modal，只有 17535 需要 p
 			if (lines[i].indexOf("'" + md + "'") >= 0 || lines[i].indexOf('"' + md + '"') >= 0) { idx = i; break }
 		}
 		if (idx < 0) continue
+		/*
+		 * 只检查【每帧渲染】函数（update_* / render_*）。
+		 * 原因：`confirm_echo_discard` / `cancel_echo_discard` 这类事件处理器本来就该
+		 * 调 highlight_targets（确认后进入选地流程），它们不是"遮罩挡住地图"的问题来源。
+		 * 2026-11-27 前奏移除后，echo_discard_modal 的第一处引用前移到了
+		 * confirm_echo_discard，旧逻辑把它当成渲染函数，误报为「需点外部」。
+		 */
 		let f = idx
 		while (f >= 0 && !/^function \w+/.test(lines[f])) f--
 		if (f < 0) continue
+		if (!/^function (update_|render_)/.test(lines[f])) continue
 		let end = f
 		for (let i = f; i < lines.length; i++) { if (/^}/.test(lines[i])) { end = i + 1; break } }
 		const body = lines.slice(f, end).join('\n')
