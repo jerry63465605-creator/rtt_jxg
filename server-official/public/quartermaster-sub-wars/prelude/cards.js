@@ -126,6 +126,29 @@ const EFFECTS = {
 	},
 
 	/*
+	 * 获得1分 或 在陆地地区部署1支空军。
+	 *
+	 * 复用参考：
+	 *   choice 二选一          <- 14900 德奥合并（options 的 key/label/when/effect）
+	 *   “得分 or 部署空军”语义 <- 18315 英联邦空军训练计划（无可部署地区时只留得分）
+	 *   deploy_air 无地区候选  <- 14908 作战指挥条令 / 18303 妇女志愿服务团
+	 *
+	 * 新增参数 terrain:'land'：can_deploy_air 默认允许海域（有载体即可），
+	 * 牌面限定“陆地地区”必须在候选层过滤。不新增 op。
+	 */
+	'18403': {
+		name: '帝国陆军航空队',
+		seg1: {
+			effect: [{ op: 'choice', options: [
+				{ key: 'score', label: '获得 1 分',
+				  effect: [{ op: 'score', n: 1 }] },
+				{ key: 'air', label: '在陆地地区部署 1 支空军',
+				  effect: [{ op: 'deploy_air', terrain: 'land', n: 1 }] },
+			] }],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 在<硫磺岛>相邻地区征召1支海军。
 	 *
 	 * 复用参考：18302《斯卡帕湾打捞》（adjacentOf + recruit navy），只换锚点地区。

@@ -531,7 +531,9 @@ function applyEffect(game, nation, eff, deps) {
 		let globalCands = []
 		let needFilter = true
 		if (eff.op === 'deploy_air') {
-			globalCands = deps.deployCandidates ? deps.deployCandidates(game, actorNation) : []
+			/* terrain 参数透传给注入的候选函数（18403：陆地地区） */
+			globalCands = deps.deployCandidates
+				? deps.deployCandidates(game, actorNation, eff.terrain || null) : []
 		} else if (eff.op === 'recruit') {
 			/*
 			 * 【③-C】征召不预筛：候选 = 卡面点名的地区（spaces / adjacentOf）。

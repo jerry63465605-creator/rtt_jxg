@@ -38505,11 +38505,15 @@ function do_action(state, current, action, arg) {
 			pieceLabel: function (g, id) {
 				return piece_candidate_label(g, id)
 			},
-			/* 空军候选：独立通道（载体 + 槽位），不能用 can_build_at */
-			deployCandidates: function (g, nation) {
+			/* 空军候选：独立通道（载体 + 槽位），不能用 can_build_at
+			 * 【2026-11-28】terrain 参数（18403“在陆地地区部署空军”）：
+			 * can_deploy_air 默认允许海域（同格有本国陆/海军作载体即可），
+			 * 卡面限定地形时在这里过滤，不新增 op。 */
+			deployCandidates: function (g, nation, terrain) {
 				const out = []
 				for (let i = 1; i < data.spaces.length; i++) {
 					if (!data.spaces[i]) continue
+					if (terrain && data.spaces[i].terrain !== terrain) continue
 					if (can_deploy_air(g, nation, i).ok) out.push(i)
 				}
 				return out
