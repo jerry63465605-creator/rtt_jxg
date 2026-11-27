@@ -627,7 +627,7 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                    '`deck` = formal / prelude', '**已实现**'],
                   ['`place_status_from_hand`', '`n`', '把正式状态卡明置到桌面', '**已实现**'],
                   ['`place_response_from_hand`', '`n`', '把正式响应卡暗置到桌面（18404 首次使用）', '**已实现**'],
-                  ['`eliminate`', '`space, type`',
+                  ['`eliminate`', '`space, type, onlyNation`（目标国限定）',
                    '消灭 1 支敌方部队（复用 `eliminate_candidates`）；'
                    '多支时挂起 `pick_piece` 由玩家点地图选', '**已实现**'],
                   ['`attrition_prelude`', '`n`',

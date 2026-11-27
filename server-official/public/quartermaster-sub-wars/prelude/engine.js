@@ -769,7 +769,7 @@ function applyEffect(game, nation, eff, deps) {
 		if (sp == null) { game.log.push('【前奏】地区解析失败：' + eff.space); return }
 		const wantType = eff.type || 'army'
 		const cands = deps.eliminateCandidates
-			? deps.eliminateCandidates(game, nation, Number(sp), wantType) : []
+			? deps.eliminateCandidates(game, nation, Number(sp), wantType, eff.onlyNation) : []
 		if (!cands.length) {
 			game.log.push('【前奏】<' + (deps.spaceNameOf ? deps.spaceNameOf(Number(sp)) : sp) +
 				'> 没有可消灭的敌方部队，跳过')

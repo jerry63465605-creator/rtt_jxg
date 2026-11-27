@@ -10804,13 +10804,20 @@ function qiushui_targets(game) {
 	return out
 }
 
-function eliminate_candidates(game, nation, space, wantType) {
+function eliminate_candidates(game, nation, space, wantType, onlyNation) {
 	const myFaction = faction_of_nation(nation)
 	return pieces_on(game, space).filter(p => {
 		const f = faction_of_nation(game.piece_nation[p])
 		if (!f || f === myFaction) return false
 		if (game.piece_type[p] === 'air') return false
 		if (wantType && game.piece_type[p] !== wantType) return false
+		/*
+		 * 【2026-11-28】onlyNation（18405“消灭1支中国陆军”）：
+		 * 口径照抄 15433 皖南事变 pick_enemy_army_then_eliminate 的
+		 * `if (opt.onlyNation && pn !== opt.onlyNation) continue` ——
+		 * 按 piece_nation 精确匹配，不是按阵营。没有该参数时行为不变。
+		 */
+		if (onlyNation && game.piece_nation[p] !== onlyNation) return false
 		return true
 	})
 }
@@ -38496,8 +38503,8 @@ function do_action(state, current, action, arg) {
 				return sp ? sp.name : String(id)
 			},
 			/* 消灭部队：候选与执行都复用正式版原子（同 15316 口径） */
-			eliminateCandidates: function (g, nation, space, type) {
-				return eliminate_candidates(g, nation, Number(space), type)
+			eliminateCandidates: function (g, nation, space, type, onlyNation) {
+				return eliminate_candidates(g, nation, Number(space), type, onlyNation)
 			},
 			eliminatePiece: function (g, nation, space, piece, opt) {
 				return eliminate_piece(g, nation, Number(space), piece, opt)

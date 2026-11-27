@@ -126,6 +126,30 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度+2] 在<中国东部>消灭1支中国陆军。
+	 * [紧张度+3][弃置1张手牌] 在<中国东部>征召陆军。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   onlyNation:'中国'  <- 15433 皖南事变（pick_enemy_army_then_eliminate）
+	 *   eliminate 基础结构 <- 18310 唯有荣誉（space/type + 紧张度代价）
+	 *   seg2 多代价        <- 18412 近卫文麿 seg2
+	 *   recruit 中国东部   <- 18400 九一八事变 seg1
+	 */
+	'18405': {
+		name: '卢沟桥事变',
+		seg1: {
+			cost: [{ op: 'tension', delta: 2 }],
+			effect: [{
+				op: 'eliminate', space: '中国东部', type: 'army', onlyNation: '中国',
+			}],
+		},
+		seg2: {
+			cost: [{ op: 'tension', delta: 3 }, { op: 'discard_hand', n: 1 }],
+			effect: [{ op: 'recruit', space: '中国东部', type: 'army' }],
+		},
+	},
+
+	/*
 	 * 弃置1张[响应卡]：获得2分。[紧张度+1] 打出1张[响应卡]。摸1张牌。
 	 *
 	 * 复用参考（每次复用都给出对象）：
