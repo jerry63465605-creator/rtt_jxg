@@ -53,16 +53,17 @@ function segOf(fn, len) {
 console.log('=== A. 每个 box：入口登记 ask_state.kind ===')
 for (const [fn, kind] of BOXES) {
 	const seg = segOf(fn)
-	ok(fn + ' 登记 ' + kind, new RegExp("ask_state = \\{ kind: '" + kind + "' \\}").test(seg))
+	/* 【B68】登记统一走 claim_ask_box(kind) */
+	ok(fn + ' 登记 ' + kind, new RegExp("claim_ask_box\\('" + kind + "'\\)").test(seg))
 }
 
 console.log('\n=== B. 每个 box：!dg 时清框 ===')
 for (const [fn, kind] of BOXES) {
 	const seg = segOf(fn)
 	const m = seg.match(/if \(!dg\) \{([\s\S]{0,600}?)\n\t\}/)
-	const has = !!m && /render_ask_box\(null, null, null\)/.test(m[1]) &&
-		new RegExp("ask_state\\.kind === '" + kind + "'").test(m[1])
-	ok(fn + ' !dg -> 按 kind 清 render_ask_box(null)', has)
+	/* 【B68】清理统一走 clear_own_ask_box(kind) */
+	const has = !!m && new RegExp("clear_own_ask_box\\('" + kind + "'\\)").test(m[1])
+	ok(fn + ' !dg -> clear_own_ask_box(' + kind + ')', has)
 }
 
 console.log('\n=== C. 每个 box：!dg 时清地图高亮 ===')
@@ -78,7 +79,7 @@ ok('update_us_theater_box 另清棋子高亮', /clear_piece_highlight\('theater'
 console.log('\n=== D. 美国视角关键路径：登记必须在 waiting_for 之前 ===')
 for (const [fn, kind] of BOXES) {
 	const seg = segOf(fn)
-	const iReg = seg.indexOf("ask_state = { kind: '" + kind + "' }")
+	const iReg = seg.indexOf("claim_ask_box('" + kind + "')")
 	const iWait = seg.indexOf('if (dg.waiting_for)')
 	ok(fn + ' 登记在 waiting_for 分支之前', iReg >= 0 && iWait >= 0 && iReg < iWait,
 		JSON.stringify({ iReg, iWait }))
@@ -88,7 +89,12 @@ console.log('\n=== E. 版本串 ===')
 {
 	const vers = (HTML.match(/\?v=(\d{8}[a-z])/g) || []).map(s => s.slice(3))
 	const uniq = Array.from(new Set(vers))
-	ok('★★ 客户端有改动 -> 版本串统一为 20261127b', uniq.length === 1 && uniq[0] === '20261127b', JSON.stringify(uniq))
+	/*
+	 * 只校验「统一且格式合法」，不写死具体版本 —— 之前 B54/B64/B67 都因为写死版本、
+	 * 后续 bump 时被打红，属于测试脆弱而非产品问题。
+	 */
+	ok('★★ 版本串统一且格式合法（B67 当轮 20261127b，后续会继续 bump）',
+		uniq.length === 1 && /^\d{8}[a-z]$/.test(uniq[0] || ''), JSON.stringify(uniq))
 }
 
 console.log('\n=== F. 其余 delegate box 不得回退成「只有 return」 ===')

@@ -104,8 +104,9 @@ section('S5 客户端守卫：已借用态不再 render_ask_box，改为一次�
 		body.slice(-400))
 	ok('已借用分支有一次性 toast', /italy_borrow_toasted !== ib\.card_face[\s\S]{0,200}toast\(/.test(body))
 	ok('提示标记在窗口消失时复位', /if \(!ib\) \{[\s\S]{0,80}italy_borrow_toasted = null/.test(body))
-	ok('借用成功后主动清掉残留 ask_box',
-		/ask_state && ask_state\.kind === 'italy_borrow'[\s\S]{0,120}render_ask_box\(null, null, null\)/.test(afterPending))
+	/* 【B68】清理统一走 helper：断言 clear_own_ask_box('italy_borrow')（旧断言写死裸判断） */
+	ok('借用成功后主动清掉残留 ask_box（B68 起走 clear_own_ask_box）',
+		/clear_own_ask_box\('italy_borrow'\)|ask_state && ask_state\.kind === 'italy_borrow'[\s\S]{0,120}render_ask_box\(null, null, null\)/.test(afterPending))
 }
 
 console.log('\n' + (fails.length ? 'FAILED' : 'ALL PASS') + '  ' + pass + ' ok, ' + fails.length + ' fail')

@@ -332,13 +332,10 @@ function update_map() {
 function update_pending_status_ask_box() {
 	const ask = view && view.pending_status_ask
 	if (!ask) {
-		if (ask_state && ask_state.kind === 'status_ask') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('status_ask')
 		return
 	}
-	ask_state = { kind: 'status_ask' }
+	claim_ask_box('status_ask')
 	const costTxt = (ask.cost && ask.cost.attrition)
 		? '（代价：损耗 ' + ask.cost.attrition + ' 张牌）' : ''
 	/* 【2026-11-11 · B35】wartime 变体：按钮与文案按服务端下发的 kind/target_name/desc 分流，
@@ -1407,10 +1404,7 @@ function extra_play_hint() {
 function update_balloon_box() {
 	const b = view && view.balloon
 	if (!b) {
-		if (ask_state && ask_state.kind === 'balloon') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('balloon')
 		return
 	}
 	const opt = []
@@ -1433,7 +1427,7 @@ function update_balloon_box() {
 			send_action('balloon_done', {})
 		},
 	})
-	ask_state = { kind: 'balloon' }
+	claim_ask_box('balloon')
 	render_ask_box('气球炸弹（可选）',
 		'获得 1 分。可弃 3 张手牌，将本卡回手（可跳过）', opt)
 }
@@ -1924,10 +1918,7 @@ function update_it_delegate_box() {
 	const d = (view && view.delegate && view.delegate.mode === 'chain') ? (view.it_delegate || view.delegate) : null
 	if (!d) {
 		/* 窗口消失：若当前 ask 是 it_delegate，关闭它 */
-		if (ask_state && ask_state.kind === 'it_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('it_delegate')
 		return
 	}
 	const opt = [{
@@ -1939,7 +1930,7 @@ function update_it_delegate_box() {
 			send_action('event_delegate_decline', {})
 		},
 	}]
-	ask_state = { kind: 'it_delegate' }
+	claim_ask_box('it_delegate')
 	render_ask_box('钢铁条约（德国可打出状态卡）',
 		'德国可额外打出 1 张状态卡；打出后控制权归还意大利。', opt)
 }
@@ -1968,14 +1959,8 @@ function update_italy_chain_box() {
 	if (!ch || !ch.pickedCard) {
 		/* 框收起 -> 清掉"已贴过"的标记，下次重新贴 */
 		italy_chain_shown_card = null
-		if (ask_state && ask_state.kind === 'italy_chain') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
-		if (ask_state && ask_state.kind === 'italy_chain_sub') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('italy_chain')
+		clear_own_ask_box('italy_chain_sub')
 		return
 	}
 	const pc = ch.pickedCard
@@ -1996,7 +1981,7 @@ function update_italy_chain_box() {
 			italy_chain_sub_started = cid
 			start_basic_card({ id: cid, card_id: cid, name: pc.name, type: pc.type })
 		}
-		ask_state = { kind: 'italy_chain_sub' }
+		claim_ask_box('italy_chain_sub')
 		render_ask_box('卡佩里尼：打出《' + pc.name + '》',
 			pending_card
 				? '请按提示选择模式/目标（与平时打出该基本卡完全一致）。'
@@ -2029,7 +2014,7 @@ function update_italy_chain_box() {
 			send_action('resolve_italy_chain', { choice: 'play' })
 		} })
 	}
-	ask_state = { kind: 'italy_chain' }
+	claim_ask_box('italy_chain')
 	render_ask_box('卡佩里尼 UIT 24：你抽到《' + pc.name + '》',
 		'友方玩家依次检视抽到的牌。选择处置方式：' +
 			(pc.playable ? '可打出（基本卡）/置顶/弃置。' : '该牌非基本卡，仅可置顶/弃置。'),
@@ -2076,10 +2061,7 @@ function update_italy_chain_box() {
 function update_italy_german_draw_box() {
 	const d = (view && view.delegate && view.delegate.mode === 'german_draw') ? (view.italy_german_draw || view.delegate) : null
 	if (!d) {
-		if (ask_state && ask_state.kind === 'italy_german_draw') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('italy_german_draw')
 		return
 	}
 	const opt = [{
@@ -2090,7 +2072,7 @@ function update_italy_german_draw_box() {
 			send_action('event_delegate_decline', {})
 		},
 	}]
-	ask_state = { kind: 'italy_german_draw' }
+	claim_ask_box('italy_german_draw')
 	render_ask_box('罗马尼亚铁卫团：德国弃1张手牌摸1张',
 		'点击下方一张【德国手牌】将其弃置并摸1张；或放弃。当前手牌 ' + (d.handCount || 0) + ' 张。', opt)
 }
@@ -2112,26 +2094,16 @@ function update_delegate_box() {
 function update_us_japan_box() {
 	const dg = view && view.us_japan_delegate
 	if (!dg) {
-		if (ask_state && ask_state.kind === 'us_japan_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_japan_delegate')
 		return
 	}
-	/*
-	 * 【B67】入口即登记归属。
-	 * 旧代码只在「非 waiting_for」分支设 ask_state，而【美国视角】走的是
-	 * waiting_for 分支（服务端对非日本阵营返回 { waiting_for:'日本' }）——
-	 * 那条分支写了框却没登记 kind，于是 !dg 时判不出"这个框是我写的"，
-	 * 美国侧的「等待日本弃牌」提示永久残留（玩家报障：日本视角清了、美国没清）。
-	 */
-	ask_state = { kind: 'us_japan_delegate' }
+	claim_ask_box('us_japan_delegate')
 	if (dg.waiting_for) {
 		render_ask_box('抗日义勇军：等待【' + dg.waiting_for + '】弃牌',
 			'中国' + (dg.reason || '行动') + '后，日本需弃置 1 张手牌并损耗 1 张。', [])
 		return
 	}
-	ask_state = { kind: 'us_japan_delegate' }
+	claim_ask_box('us_japan_delegate')
 	render_ask_box('抗日义勇军：日本弃 1 张手牌',
 		'点击下方一张【日本手牌】将其弃置，并损耗 1 张。当前手牌 ' + (dg.hand_count || 0) + ' 张。', [])
 }
@@ -2142,15 +2114,11 @@ function update_us_japan_box() {
 function update_us_china_box() {
 	const dg = view && view.us_china_delegate
 	if (!dg) {
-		/* 【B67】无数据时清框 + 清地图高亮（旧代码只有 return -> 框与高亮永久残留） */
-		if (ask_state && ask_state.kind === 'us_china_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_china_delegate')
 		if (typeof clear_target_highlight === 'function') clear_target_highlight()
 		return
 	}
-	ask_state = { kind: 'us_china_delegate' }
+	claim_ask_box('us_china_delegate')
 	if (dg.waiting_for) {
 		render_ask_box('中国远征军：等待【' + dg.waiting_for + '】选择',
 			'<东南亚>的中国陆军被移除，美国需选择相邻地区之一征召中国陆军。', [])
@@ -2170,15 +2138,11 @@ function update_uk_build_box() {
 	const dg = view && view.uk_build_delegate
 	if (!dg) {
 		window.__ukSelType = null
-		/* 【B67】无数据时清框 + 清高亮 */
-		if (ask_state && ask_state.kind === 'uk_build_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('uk_build_delegate')
 		if (typeof clear_target_highlight === 'function') clear_target_highlight()
 		return
 	}
-	ask_state = { kind: 'uk_build_delegate' }
+	claim_ask_box('uk_build_delegate')
 	if (dg.waiting_for) {
 		render_ask_box('民主兵工厂：等待【' + dg.waiting_for + '】建设',
 			'美国打出《民主兵工厂》，让权【' + dg.waiting_for + '】按所选顺序建设1支海军与1支陆军。', [])
@@ -2236,15 +2200,11 @@ function update_uk_build_box() {
 function update_su_build_box() {
 	const dg = view && view.su_build_delegate
 	if (!dg) {
-		/* 【B67】无数据时清框 + 清高亮 */
-		if (ask_state && ask_state.kind === 'su_build_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('su_build_delegate')
 		if (typeof clear_target_highlight === 'function') clear_target_highlight()
 		return
 	}
-	ask_state = { kind: 'su_build_delegate' }
+	claim_ask_box('su_build_delegate')
 	if (dg.waiting_for) {
 		render_ask_box('摩尔曼斯克运输船队：等待【' + dg.waiting_for + '】建设',
 			'美国打出《摩尔曼斯克运输船队》，让权【' + dg.waiting_for + '】在<罗斯>征召1支陆军并建设1支陆军。', [])
@@ -2264,15 +2224,11 @@ function update_su_build_box() {
 function update_us_china_build() {
 	const dg = view && view.us_china_build
 	if (!dg) {
-		/* 【B67】无数据时清框 + 清高亮 */
-		if (ask_state && ask_state.kind === 'us_china_build') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_china_build')
 		if (typeof clear_target_highlight === 'function') clear_target_highlight()
 		return
 	}
-	ask_state = { kind: 'us_china_build' }
+	claim_ask_box('us_china_build')
 	if (dg.waiting_for) {
 		render_ask_box('美国人民同情中国：等待【' + dg.waiting_for + '】操作',
 			'美国打出《美国人民同情中国》，由【' + dg.waiting_for + '】选择中国大本营或相邻地区征召1支中国陆军。', [])
@@ -2292,16 +2248,12 @@ function update_us_china_build() {
 function update_us_theater_box() {
 	const dg = view && view.us_theater_delegate
 	if (!dg) {
-		/* 【B67】无数据时清框 + 清地区高亮 + 清棋子高亮（step0 用 highlight_pieces） */
-		if (ask_state && ask_state.kind === 'us_theater_delegate') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_theater_delegate')
 		if (typeof clear_target_highlight === 'function') clear_target_highlight()
 		if (typeof clear_piece_highlight === 'function') clear_piece_highlight('theater')
 		return
 	}
-	ask_state = { kind: 'us_theater_delegate' }
+	claim_ask_box('us_theater_delegate')
 	if (dg.waiting_for) {
 		render_ask_box('战区移动：等待【' + dg.waiting_for + '】操作',
 			'美国打出《战区移动》，由【' + dg.waiting_for + '】移除己方部队并建设。', [])
@@ -2544,7 +2496,7 @@ function update_us_replay_armed() {
 function update_us_merchant() {
 	const dg = view && view.us_merchant
 	if (!dg) {
-		if (ask_state && ask_state.kind === 'us_merchant') { ask_state = null; render_ask_box(null, null, null) }
+		clear_own_ask_box('us_merchant')
 		return
 	}
 	if (!dg.nation) {
@@ -2553,7 +2505,7 @@ function update_us_merchant() {
 			label: '为【' + n + '】征召部队', cls: 'primary',
 			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_select', { nation: n }) }
 		}))
-		ask_state = { kind: 'us_merchant' }
+		claim_ask_box('us_merchant')
 		render_ask_box('现购自运政策：选择友方国家',
 			'选择英/苏/中/法之一，美国在其本土或相邻地区征召1支合法部队（陆军/海军/空军，美国直接操作）。', opt)
 		return
@@ -2576,7 +2528,7 @@ function update_us_merchant() {
 			label: '征召' + t.zh, cls: 'primary',
 			onClick: () => { ask_state = null; render_ask_box(null, null, null); send_action('resolve_us_merchant_type', { type: t.type }) }
 		}))
-		ask_state = { kind: 'us_merchant' }
+		claim_ask_box('us_merchant')
 		render_ask_box('现购自运政策：' + dg.nation + ' ' + where + '选择兵种',
 			'只列出该国此刻能合法征召的兵种。', opt)
 		return
@@ -2842,10 +2794,7 @@ function update_us_political_box() {
 function update_us_depression_box() {
 	const on = view && view.actions && view.actions.us_depression_use
 	if (!on) {
-		if (ask_state && ask_state.kind === 'us_depression') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_depression')
 		return
 	}
 	const opt = [{
@@ -2856,7 +2805,7 @@ function update_us_depression_box() {
 			send_action('us_depression_use', {})
 		},
 	}]
-	ask_state = { kind: 'us_depression' }
+	claim_ask_box('us_depression')
 	render_ask_box('大萧条的余波：美国结束中立奖励',
 		'美国已结束中立。可弃置此牌，使 <美国> 增加 1 个计分标记。', opt)
 }
@@ -2870,10 +2819,7 @@ function update_us_depression_discard_box() {
 			pending_depression_discard = null
 			update_hand_panel()
 		}
-		if (ask_state && ask_state.kind === 'us_depression_discard') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('us_depression_discard')
 		return
 	}
 	if (!pending_depression_discard) pending_depression_discard = { drop: [] }
@@ -2891,7 +2837,7 @@ function update_us_depression_discard_box() {
 			send_action('us_depression_discard', { card })
 		},
 	}]
-	ask_state = { kind: 'us_depression_discard' }
+	claim_ask_box('us_depression_discard')
 	render_ask_box('大萧条的余波：出牌前须弃置 1 张手牌',
 		'美国打出[事件/状态]卡，须先自选弃置 1 张手牌（点手牌选择，再点下方确认）。' +
 		'弃完后该卡自动结算 —— 代价已付，不会重复询问。', opt)
@@ -2906,10 +2852,7 @@ function update_italy_borrow_box() {
 	const ib = view && view.italy_borrow
 	if (!ib) {
 		italy_borrow_toasted = null
-		if (ask_state && ask_state.kind === 'italy_borrow') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('italy_borrow')
 		return
 	}
 	/*
@@ -2932,7 +2875,7 @@ function update_italy_borrow_box() {
 				send_action('resolve_italy_borrow', { face: o.card_id })
 			},
 		}))
-		ask_state = { kind: 'italy_borrow' }
+		claim_ask_box('italy_borrow')
 		render_ask_box('德国军事顾问：选择借用的德国状态卡',
 			'点击下方一张【德国状态卡】借用（本回合内可激活其效果）：', opt)
 		return
@@ -2953,10 +2896,7 @@ function update_italy_borrow_box() {
 	 *
 	 * 所以这里改成：只在【刚借用成功那一刻】toast 一次，之后不占 ask_box。
 	 */
-	if (ask_state && ask_state.kind === 'italy_borrow') {
-		ask_state = null
-		render_ask_box(null, null, null)
-	}
+	clear_own_ask_box('italy_borrow')
 	if (italy_borrow_toasted !== ib.card_face) {
 		italy_borrow_toasted = ib.card_face
 		toast('已借用《' + ib.name + '》：点击桌面状态区的它即可激活（不占名额）')
@@ -2980,7 +2920,7 @@ function update_armed_offer_box() {
 	 */
 	const _pd = view && view.pending_armed_delegate
 	if (_pd && _pd.played) {
-		ask_state = { kind: 'armed_offer' }
+		claim_ask_box('armed_offer')
 		render_ask_box(
 			'让权委托进行中',
 			'《' + (_pd.name || '增强卡') + '》已打出。' +
@@ -3010,10 +2950,7 @@ function update_armed_offer_box() {
 			clear_target_highlight()
 			clear_piece_highlight('armed')
 		}
-		if (ask_state && ask_state.kind === 'armed_offer') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('armed_offer')
 		return
 	}
 	/* 已被更高优先级的框占用 -> 本框让位（下一帧再看） */
@@ -3095,7 +3032,7 @@ function update_armed_offer_box() {
 					toast('已选择：' + (o.name || o.id))
 				},
 				}))
-				ask_state = { kind: 'armed_offer' }
+				claim_ask_box('armed_offer')
 				render_ask_box(
 				'请选择（' + (ao.cards[0] ? ao.cards[0].name : '') + '）',
 				'选择要发动的战斗类型以继续《' + (ao.cards[0] ? ao.cards[0].name : '') + '》',
@@ -3177,7 +3114,7 @@ function update_armed_offer_box() {
 			 */
 			highlight_targets({ spaces: (ao.pending.candidates || []).map(id => ({ id: id })) })
 		}
-		ask_state = { kind: 'armed_offer' }
+		claim_ask_box('armed_offer')
 		render_ask_box(
 			'请选择（高亮处）',
 			(isPiece ? '选择一支部队' : isSpace ? '选择一个地区' : '做出选择') +
@@ -3200,7 +3137,7 @@ function update_armed_offer_box() {
 	/* 非多步：常规"打出 / 不打出"选择框 */
 	/* 弃牌选牌中（armed 代价），保持 echo modal，不再重绘 armed offer */
 	if (pending_echo_discard && pending_echo_discard.armed) return
-	ask_state = { kind: 'armed_offer' }
+	claim_ask_box('armed_offer')
 	const opts = ao.cards.map(c => {
 		const att = (c.cost && c.cost.attrition) || 0
 		const dis = (c.cost && c.cost.discard) || 0
@@ -6395,15 +6332,12 @@ function update_su_red_delegate_box() {
 		 * 只清理本框占用的 #ask_box（kind === 'red'），避免误清空其它框
 		 * （pending_trigger / national_skill 等），与全工程其它 update_*_box 一致。
 		 */
-		if (ask_state && ask_state.kind === 'red') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('red')
 		return
 	}
 	/* 其它更高优先级框占用 #ask_box 时让位（与 update_armed_offer_box 等一致） */
 	if (ask_state && ask_state.kind !== 'red') return
-	ask_state = { kind: 'red' }
+	claim_ask_box('red')
 	const isDecider = Array.isArray(pr.options) && pr.options.length > 0
 	const opts = isDecider
 		? pr.options.map(o => ({
@@ -6521,6 +6455,34 @@ function render_box_into(boxId, title, text, options) {
 /* 通用询问面板（借用框 / 经济战 / 响应卡…共用，单一 #ask_box） */
 function render_ask_box(title, text, options) {
 	render_box_into("ask_box", title, text, options)
+}
+
+/*
+ * ============================================================
+ * 【B68】「自有提示框」的统一登记 / 清理
+ * ============================================================
+ * `#ask_box` 是【单槽位】容器，规则是「谁最后写谁负责清」。之前每个 update_xxx 各写一遍
+ * 「if (ask_state.kind === 'xxx') { ask_state = null; render_ask_box(null,null,null) }」，
+ * 一路复制了 6 份，漏一处就永久残留 —— 2026-11-27 的事故就是义勇军的
+ * 【美国视角】走了 waiting_for 分支、忘记登记 kind（日本视角登记了，所以只有美国不清）。
+ *
+ * 现在统一成一对函数，登记与清理永远成对出现：
+ *   claim_ask_box(kind)      —— 我（kind 对应的 update_xxx）现在占用 #ask_box
+ *   clear_own_ask_box(kind)  —— 只有当前确实是我占用的才清（避免误清别人的框）
+ *
+ * 约定：任何「每帧渲染、由 view 字段驱动」的提示框都必须走这一对，不得再手写判断。
+ */
+function claim_ask_box(kind) {
+	ask_state = { kind: kind }
+}
+
+function clear_own_ask_box(kind) {
+	if (ask_state && ask_state.kind === kind) {
+		ask_state = null
+		render_ask_box(null, null, null)
+		return true
+	}
+	return false
 }
 
 /* 国家技能专用面板（独立于 #ask_box，位置靠上；所有国家技能统一走这里） */
@@ -7682,10 +7644,7 @@ let econ_pick_navy = null   /* 选 remove 时指定的海军算子 */
 function update_pending_econ_box() {
 	const pe = view.pending_econ
 	if (!pe) {
-		if (ask_state && ask_state.kind === 'econ') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('econ')
 		econ_pick_navy = null
 		clear_piece_highlight('econ')
 		return
@@ -9204,10 +9163,7 @@ function update_response_choice_box() {
 	const rc = view && view.response_choice
 	if (!rc) {
 		/* 窗口没了：若本框还占着 ask_box 就清掉，并摘掉自己贴的地图高亮 */
-		if (ask_state && ask_state.kind === 'response_choice') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('response_choice')
 		rc_card_grid_key = null
 		clear_response_choice_highlight()
 		return
@@ -9262,7 +9218,7 @@ function update_response_choice_box() {
 		const key = String(rc.name) + '|' + cands.map(c => String(c.id)).join(',')
 		if (rc_card_grid_key !== key) {
 			rc_card_grid_key = key
-			ask_state = { kind: 'response_choice' }
+			claim_ask_box('response_choice')
 			render_ask_box('《' + rc.name + '》', rc.prompt || '请选择 1 张牌', [])
 			const box = document.getElementById('ask_box')
 			if (box) {
@@ -9278,7 +9234,7 @@ function update_response_choice_box() {
 
 	/* option：弹选项框（响应卡在队列里，优先级高，直接占用 ask_box） */
 	rc_highlight_active = false
-	ask_state = { kind: 'response_choice' }
+	claim_ask_box('response_choice')
 	render_ask_box(
 		'《' + rc.name + '》：选择',
 		rc.prompt || '请选择一项',
@@ -9794,10 +9750,7 @@ function update_pending_trigger_box() {
 	}
 	/* 正在为该响应卡选目标：交给响应选择框，不显示发动/排序框 */
 	if (view.response_choice) {
-		if (ask_state && ask_state.kind === 'response') {
-			ask_state = null
-			render_ask_box(null, null, null)
-		}
+		clear_own_ask_box('response')
 		return
 	}
 	const cands = pt.candidates || []
@@ -9850,7 +9803,7 @@ function update_pending_trigger_box() {
 		}
 		resp_ui_sig = sig
 	}
-	ask_state = { kind: 'response_order' }
+	claim_ask_box('response_order')
 	const box = document.getElementById('ask_box')
 	if (!box) return
 	box.innerHTML = ''
