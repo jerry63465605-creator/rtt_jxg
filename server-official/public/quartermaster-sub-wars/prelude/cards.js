@@ -126,6 +126,33 @@ const EFFECTS = {
 	},
 
 	/*
+	 * 英国损耗3张前奏牌。[除非英国弃置1张手牌] 英国损耗2张前奏牌。
+	 *
+	 * 两段式损耗，不是付代价改数值：
+	 *   seg1 无条件损耗 3；
+	 *   seg2 是独立的「除非」条款，付了就整段跳过（只损耗3），
+	 *        不付就第二段生效（再损耗2，共5）。
+	 *
+	 * 复用参考：
+	 *   blocker —— 14903《进军莱茵兰》（targets / cost / label 三字段）
+	 *   attrition_prelude 带 targets —— 18305《意大利煤炭禁运》seg2
+	 */
+	'18401': {
+		name: '非暴力不合作运动',
+		seg1: {
+			effect: [{ op: 'attrition_prelude', n: 3, targets: ['英国'] }],
+		},
+		seg2: {
+			blocker: {
+				targets: ['英国'],
+				cost: { op: 'discard_hand', n: 1 },
+				label: '除非英国弃置 1 张手牌',
+			},
+			effect: [{ op: 'attrition_prelude', n: 2, targets: ['英国'] }],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 检视牌堆前10张，选择并打出1张[响应卡]。
 	 * [弃置1张手牌][失去2分] 选择并将1张牌加入手牌。
 	 *
