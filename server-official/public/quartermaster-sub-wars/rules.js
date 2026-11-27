@@ -17283,10 +17283,21 @@ function do_sea_battle_at(game, sea, nat, opt) {
 	nat = nat || '日本'
 	const inits = battle_initiators(game, nat, sea)
 	if (!inits.length)
-		return { ok: false, desc: '（无相邻补给日本海军，海战未发动）' }
-	/* 【B60】透传 opt（主要用途：fromCard，让 15430 的 filter 能识别"这场海战是
-	 * 奇袭自己发起的"，从而不再自我触发） */
-	const r = do_battle(game, '日本', sea, null, 'sea',
+		return { ok: false, desc: '（无相邻补给的本国海军/陆军，海战未发动）' }
+	/*
+	 * 【2026-11-28 修复·硬编码国家】
+	 *
+	 * 旧实现这里写的是 do_battle(game, '日本', ...) —— nat 只用来算候选和日志，
+	 * 真正发起战斗时国家被写死成日本。别人传 nat='德国'（14910 俾斯麦级战列舰）时：
+	 *   候选按德国算 -> 有得选；do_battle 却按日本发起 -> 日本在该海域没部队 -> 失败，
+	 *   而且 reason 为空，玩家只看到「（海战未发动：）」。
+	 * 实测：battle_initiators(德国,波罗的海)=[p1/army@德国]，
+	 *      battle_initiators(日本,波罗的海)=[]，14910 永远发不出去。
+	 *
+	 * 其余调用方（15419/15422/15423/15430/15438）传的都是 '日本'，
+	 * 所以这个错误一直被掩盖着 —— 典型的"默认值恰好等于唯一用例"。
+	 */
+	const r = do_battle(game, nat, sea, null, 'sea',
 		Object.assign({ from: inits[0].id }, opt || {}))
 	return {
 		ok: r.ok,
