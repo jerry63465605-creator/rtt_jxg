@@ -219,6 +219,31 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度+1] 美国损耗3张前奏牌。
+	 * [紧张度-1][失去2分] 日本损耗1张前奏牌。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   attrition_prelude targets <- 18305 意大利煤炭禁运 / 18401 非暴力不合作
+	 *   tension ±1 代价           <- 18401 / 18406
+	 *   score -2 代价             <- 18412 近卫文麿 seg2
+	 *   同段多代价                <- 18405 卢沟桥事变 seg2
+	 *
+	 * seg2.cost 里的 tension -1 确实对日本有利，但牌面方括号一律走 cost，
+	 * 引擎只做 Math.max(0, tension+delta)，负数照减（18406 已验证）。
+	 */
+	'18408': {
+		name: '天津事变',
+		seg1: {
+			cost: [{ op: 'tension', delta: 1 }],
+			effect: [{ op: 'attrition_prelude', n: 3, targets: ['美国'] }],
+		},
+		seg2: {
+			cost: [{ op: 'tension', delta: -1 }, { op: 'score', n: -2 }],
+			effect: [{ op: 'attrition_prelude', n: 1, targets: ['日本'] }],
+		},
+	},
+
+	/*
 	 * [紧张度+2] 在<中国东部>消灭1支中国陆军。
 	 * [紧张度+3][弃置1张手牌] 在<中国东部>征召陆军。
 	 *
