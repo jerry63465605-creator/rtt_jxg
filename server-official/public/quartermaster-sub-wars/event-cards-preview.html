@@ -120,13 +120,34 @@ const NODE_STUBS = {
 	},
 }
 
+/* 【2026-11-27】模块名 → 所在目录（'' 或 'prelude/'），用于解析相对 require */
+function dirOf(name) {
+	const i = name.lastIndexOf('/')
+	return i < 0 ? '' : name.slice(0, i + 1)
+}
+
+/* 【2026-11-27】把 ./ ../ 按"当前模块目录"归一化成 MODULES 的 key：
+ *   rules.js 里的 './prelude/index.js' → 'prelude/index.js'
+ *   prelude/view.js 里的 '../cards.js' → 'cards.js'
+ * 旧的 raw.replace(/^\.\//, '') 只去掉了开头的 './'，不认 '..' 也不认目录。 */
+function resolveRel(dir, raw) {
+	const out = []
+	for (const seg of (dir + raw).split('/')) {
+		if (!seg || seg === '.') continue
+		if (seg === '..') out.pop()
+		else out.push(seg)
+	}
+	return out.join('/')
+}
+
 function runModule(name, code) {
 	const module = { exports: {} }
+	const dir = dirOf(name)
 	const require = (p) => {
 		const raw = String(p)
 		/* Node 内置模块优先走占位，否则会被当成"未加载的本地文件" */
 		if (NODE_STUBS[raw]) return NODE_STUBS[raw]
-		const key = raw.replace(/^\.\//, '')
+		const key = raw.startsWith('.') ? resolveRel(dir, raw) : raw
 		if (!MODULES[key]) throw new Error('模块未加载: ' + p)
 		return MODULES[key]
 	}
@@ -136,8 +157,22 @@ function runModule(name, code) {
 	return module.exports
 }
 
+/* 【2026-11-27】加载顺序 = 依赖顺序：被 require 的必须先加载。
+ * rules.js 顶部 require('./prelude/index.js')，index.js 又 require prelude 下的
+ * state/view/engine/cards，view.js 还 require('../cards.js') —— 漏一个整页就报「模块未加载」。 */
+const PRELOAD = [
+	'data.js',
+	'cards.js',
+	'prelude/state.js',
+	'prelude/cards.js',
+	'prelude/engine.js',
+	'prelude/view.js',
+	'prelude/index.js',
+	'rules.js',
+]
+
 async function loadAll() {
-	for (const name of ['data.js', 'cards.js', 'rules.js']) {
+	for (const name of PRELOAD) {
 		const res = await fetch(name, { cache: 'no-store' })
 		if (!res.ok) throw new Error('无法读取 ' + name + '（HTTP ' + res.status + '）')
 		runModule(name, await res.text())

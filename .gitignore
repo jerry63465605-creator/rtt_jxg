@@ -80,3 +80,27 @@ out/
 __pycache__/
 *.pyc
 /军需官.zip
+
+# ---- 2026-11-28 会话清理：前奏实装期间的临时产物 ----
+# 服务器进程日志（每次重启生成，rtt_8091.out 等）
+server-official/rtt_*.out
+server-official/rtt_*.err
+server-official/*.out
+server-official/*.err
+# 模块内一次性补丁/生成脚本（已应用完毕，结论进 rules.js / play.js）
+server-official/public/quartermaster-sub-wars/_patch_*.py
+server-official/public/quartermaster-sub-wars/_fix_*.py
+server-official/public/quartermaster-sub-wars/_gen_*.js
+server-official/public/quartermaster-sub-wars/_gen_*.py
+server-official/public/quartermaster-sub-wars/_add_*.py
+server-official/public/quartermaster-sub-wars/_bump_*.py
+server-official/public/quartermaster-sub-wars/_revert_*.py
+server-official/public/quartermaster-sub-wars/_probe_*.js
+server-official/public/quartermaster-sub-wars/_dbg_*.js
+server-official/public/quartermaster-sub-wars/_audit_*.py
+server-official/public/quartermaster-sub-wars/_audit_*.txt
+# 一次性探针（同 _test*，正式回归统一放 tools/）
+server-official/public/quartermaster-sub-wars/_qtest*.js
+server-official/public/quartermaster-sub-wars/_regen_*.py
+# 临时 DOM 快照
+/_dom*.html

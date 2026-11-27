@@ -8,11 +8,11 @@
 	<link rel="stylesheet" href="/fonts/fonts.css?v=20261127d">
 	<link rel="stylesheet" href="/common/client.css?v=20261127d">
 	<!-- 【2026-10-22】模块自有前端资源必须带版本串：改动后 bump，否则反代/浏览器缓存会吃掉更新 -->
-	<link rel="stylesheet" href="play.css?v=20261127d">
+	<link rel="stylesheet" href="play.css?v=20261128f">
 	<script defer src="/common/client.js?v=20261127d"></script>
 	<script defer src="data.js?v=20261127d"></script>
 	<script defer src="layout.js?v=20261127d"></script>
-	<script defer src="play.js?v=20261127d"></script>
+	<script defer src="play.js?v=20261128g"></script>
 </head>
 <body>
 
@@ -111,7 +111,19 @@
 				未选满 N 个时置灰；选满后亮起，点击 -> confirm_event_done。
 			-->
 			<button id="btn_event_done" class="action primary hide" onclick="confirm_event_done()">Done</button>
+			<!-- 【前奏 2026-11-27】前奏专属按钮：与正式期按钮同容器，样式天然一致 -->
+			<button id="btn_prelude_play_top" class="action hide" onclick="do_prelude_play_top()">打出牌堆顶</button>
+			<button id="btn_prelude_swap_mode" class="action hide" onclick="toggle_prelude_swap_mode()">换牌模式：关</button>
+			<!-- 【分步结算 2026-11-27】第一段走完后出现，点击后再询问第二段 -->
+			<div id="prelude_resolve_box" class="hide">
+				<div class="prb-line">正在结算<span id="prelude_resolve_name"></span></div>
+				<div class="prb-step">✓ 第一段已结算</div>
+				<button id="btn_prelude_end_seg1" class="action primary" onclick="do_prelude_end_seg1()">结束第一段</button>
+			</div>
+
+
 		</div>
+
 		<!-- 资源再分配的挑选面板 -->
 		<div id="resource_box" class="hide"></div>
 		<!-- 通用询问面板 -->
@@ -161,6 +173,12 @@
 			<span class="score-gap" id="score_gap"></span>
 			<span class="score-side allies"><b id="score_allies">0</b><i>同盟</i></span>
 		</div>
+		<!-- 【前奏 2026-11-27】紧张度：仅 Episode 2 显示 -->
+		<div id="prelude_tension" class="hide">
+			<span class="pt-label">紧张度</span>
+			<b id="prelude_tension_val">0</b><i id="prelude_tension_max">/10</i>
+			<div class="pt-bar"><span id="prelude_tension_bar"></span></div>
+		</div>
 		<div id="score_detail_head" class="hide">
 			本方（<span id="score_my_nation">—</span>）本次可得
 		</div>
@@ -190,6 +208,9 @@
 		<!-- 【2026-10-18】各国后备按钮：展示各阵营陆军"后备"加成 -->
 		<button id="reserve_toggle" type="button">各国后备</button>
 		<div id="reserve_list" class="hide"></div>
+		<!-- 【前奏 2026-11-27】前奏牌库/弃牌数量 -->
+		<button id="prelude_deck_toggle" type="button" class="hide">前奏牌库</button>
+		<div id="prelude_deck_list" class="hide"></div>
 	</div>
 
 	<!--
@@ -533,11 +554,20 @@
 	<div class="panel-list">
 		<!-- 【D1/P10】前奏手牌区：在正式 Hand 面板【上方】独立成块，卡片用真实卡图。
 		     非前奏局由 update_prelude_hand_zone() 隐藏，不占用版面。 -->
-		<div class="panel" id="prelude_hand_wrap" style="display:none">
-			<div class="panel-head">
-				前奏手牌区 <span id="prelude_hand_note"></span>
+		<!-- 【2026-11-27】前奏手牌行：自己的 + 同阵营友军的，同一行左右并排 -->
+		<div id="prelude_hand_row" style="display:none">
+			<div class="panel" id="prelude_hand_wrap">
+				<div class="panel-head">
+					前奏手牌区 <span id="prelude_hand_note"></span>
+				</div>
+				<div class="panel-body" id="prelude_hand_cards"></div>
 			</div>
-			<div class="panel-body" id="prelude_hand_cards"></div>
+			<div class="panel" id="prelude_ally_hands_wrap">
+				<div class="panel-head">
+					前奏友军手牌 <span id="prelude_ally_note"></span>
+				</div>
+				<div class="panel-body" id="prelude_ally_hands"></div>
+			</div>
 		</div>
 		<div class="panel" id="hand_wrap">
 			<div class="panel-head">

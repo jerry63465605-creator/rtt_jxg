@@ -3261,3 +3261,158 @@ body.allies .score-side.allies {
 #pieces.no-marks .marker-badge {
 	display: none;
 }
+
+/* ================= 前奏（Episode 2 门前惊雷）=================
+   与正式局同一套观感：沿用 .card 卡面、与计分区同宽 */
+#prelude_tension:not(.hide) {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 6px;
+	padding: 4px 6px;
+	border-left: 3px solid #8a6d3b;
+	background: rgba(138, 109, 59, .12);
+	font-size: 12px;
+}
+#prelude_tension .pt-label { opacity: .8; }
+#prelude_tension b { font-size: 15px; color: #ffd479; }
+#prelude_tension i { font-style: normal; font-size: 11px; opacity: .7; }
+#prelude_tension.danger { border-left-color: #c0392b; background: rgba(192, 57, 43, .18); }
+#prelude_tension.danger b { color: #ff8a7a; }
+.pt-bar {
+	flex: 1;
+	height: 6px;
+	margin-left: 4px;
+	border-radius: 3px;
+	background: rgba(255, 255, 255, .12);
+	overflow: hidden;
+}
+.pt-bar > span {
+	display: block;
+	height: 100%;
+	width: 0;
+	background: linear-gradient(90deg, #d4a24c, #ffd479);
+	transition: width .18s ease;
+}
+#prelude_tension.danger .pt-bar > span { background: linear-gradient(90deg, #c0392b, #ff8a7a); }
+
+#prelude_hand_wrap {
+	margin: 4px 0 6px;
+	padding: 4px 6px;
+	border: 1px dashed rgba(212, 162, 76, .55);
+	border-radius: 4px;
+	background: rgba(212, 162, 76, .07);
+}
+#prelude_hand_wrap .panel-head {
+	font-size: 11.5px;
+	opacity: .85;
+	margin-bottom: 4px;
+}
+#prelude_hand_cards {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+/* 卡牌尺寸交给 .card 默认（120x180），与正式 Hand 面板完全一致 */
+#prelude_hand_wrap .card,
+#prelude_ally_hands_wrap .card {
+	cursor: default;
+}
+/* 牌堆顶：加金色描边区分「这是要打出/弃掉的那张」 */
+#prelude_hand_cards .card.prelude-top {
+	outline: 2px solid #ffd479;
+	outline-offset: 1px;
+	box-shadow: 0 0 8px rgba(255, 212, 121, .55);
+}
+#prelude_deck_toggle {
+	display: block;
+	flex: 1 0 100%;      /* 独占一行（父容器是 flex-wrap） */
+	order: 98;           /* 排在各国牌库/后备之后 */
+	font-size: 11px;
+	padding: 3px 8px;
+	margin-top: 4px;
+	cursor: pointer;
+	background: #f5f5f5;
+	border: 1px solid #bbb;
+	border-radius: 3px;
+	color: #333;
+}
+#prelude_deck_toggle:hover { background: #e9e9e9; }
+#prelude_deck_list { flex: 1 0 100%; order: 99; margin-top: 5px; font-size: 11px; }
+#prelude_deck_list.hide { display: none; }
+
+/* .hide 必须压过上面的 display:flex（id 选择器优先级更高） */
+#prelude_tension.hide { display: none !important; }
+
+
+/* ================= 前奏手牌行（自己 + 友军，同一行）================= */
+#prelude_hand_row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	align-items: stretch;
+}
+#prelude_hand_row.hide { display: none; }
+#prelude_hand_wrap,
+#prelude_ally_hands_wrap {
+	flex: 1 1 380px;
+	min-width: 0;          /* 允许窄屏收缩，避免撑破容器 */
+}
+#prelude_hand_cards,
+#prelude_ally_hands {
+	min-height: 190px;     /* 与 #hand_cards 一致 */
+}
+/* 友军分组：国家名 + 一组卡 */
+.prelude-ally-group { width: 100%; }
+.prelude-ally-cap {
+	font-size: 11.5px;
+	opacity: .8;
+	margin-bottom: 4px;
+}
+.prelude-ally-cards {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+
+/* ================= 前奏：可点击的卡（自己的手牌与顶牌）================= */
+#prelude_hand_wrap .card.prelude-clickable { cursor: pointer; }
+/* 按 can 置灰：不可用时降低不透明度，避免"点了没反应" */
+#prelude_hand_wrap .card.prelude-clickable:hover {
+	transform: translateY(-4px);
+	box-shadow: 0 4px 14px #0007;
+}
+#prelude_hand_wrap .card.prelude-dim { opacity: .45; filter: grayscale(.5); }
+
+/* ================= 前奏状态面板的按钮（与正式期同容器，只补"开启"态）================= */
+#phase_actions button.action.on {
+	background-color: #7a2f2f;
+	border-color: #a54444;
+	color: #ffe;
+}
+
+/* 换牌模式下，手牌加红框（提示"点我会弃掉并换掉牌堆顶"） */
+#prelude_hand_wrap .card.prelude-swap-armed {
+	outline: 3px solid #c0392b;
+	outline-offset: 2px;
+	box-shadow: 0 0 12px rgba(192, 57, 43, .55);
+	cursor: crosshair;
+}
+
+/* #phase_actions 自身是 display:flex（id 优先级），.hide 压不过它 */
+#phase_actions.hide { display: none !important; }
+
+/* ================= 前奏分步结算框（右侧面板内）================= */
+#prelude_resolve_box {
+	margin-top: 6px;
+	padding: 6px 8px;
+	border: 1px solid #c9a227;
+	border-radius: 4px;
+	background: rgba(201, 162, 39, .12);
+	font-size: 11.5px;
+}
+#prelude_resolve_box.hide { display: none !important; }
+#prelude_resolve_box .prb-line { color: #e6d18a; margin-bottom: 2px; }
+#prelude_resolve_box .prb-step { opacity: .85; margin-bottom: 6px; }
+#prelude_resolve_box button { width: 100%; }

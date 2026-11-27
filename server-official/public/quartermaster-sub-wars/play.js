@@ -192,6 +192,9 @@ function update_map() {
 	if (!ui.built)
 		build_map()
 
+	/* 【前奏 2026-11-27】放在最前面：后面的 update_* 若抛错也不影响前奏面板 */
+	update_prelude_ui()
+
 	update_side_info()
 	update_phase_panel()
 	update_pieces()
@@ -239,6 +242,7 @@ function update_map() {
 	/* 计分：分数面板 + 地图上的计分标记 */
 	update_score_panel()
 	update_markers()
+
 
 	/*
 	 * 手牌/目标可能因这次 view 更新而失效（如卡已被打出），
@@ -398,6 +402,26 @@ function reapply_event_budget_highlight() {
  */
 function reapply_all_highlights() {
 
+	/*
+	 * 【前奏 2026-11-27】选建设/征召地区：与正式局同一套地图高亮。
+	 * 必须排在最前——前奏期不会有其它流程同时要求选地。
+	 */
+	const _pp = view && view.prelude
+	if (_pp && _pp.pending && _pp.pending.kind === 'pick_space') {
+		highlight_targets({
+			spaces: (_pp.pending.spaces || []).map(s => ({
+				id: Number(s.id),
+				reason: '前奏·可建设地区',
+			})),
+		})
+		return
+	}
+	/* 【前奏 2026-11-28】选部队（消灭敌方陆军）：高亮候选算子，点地图上的部队提交 */
+	if (_pp && _pp.pending && _pp.pending.kind === 'pick_piece') {
+		highlight_pieces((_pp.pending.pieces || []).map(String), 'prelude_pick')
+		return
+	}
+
 	/* 1. 增强卡 armed：选部队(need:'piece') / 选地(need:'space')，含空打地块 */
 	if (pending_armed && pending_armed.need === 'piece') {
 		highlight_pieces(pending_armed.candidates || [], 'armed')
@@ -527,7 +551,380 @@ function update_side_info() {
  * 回合状态机面板：显示当前行动国 + 7 阶段进度条
  * 进度条上每个阶段一个小格，当前阶段高亮，已过的打勾。
  */
+/* ============================================================
+ * 前奏专用状态面板（2026-11-27）
+ *
+ * 正式期是 7 阶段；前奏只有「行动 / 卡牌」两阶段，且行动阶段的规则不同
+ * （不可跳过，但可反复弃牌换牌）。所以整块替换，而不是复用 7 格进度条。
+ * ============================================================ */
+let prelude_swap_mode = false
+
+function toggle_prelude_swap_mode() {
+	prelude_swap_mode = !prelude_swap_mode
+	update_phase_panel()
+	update_prelude_ui()
+}
+
+function do_prelude_play_top() {
+	const P = view && view.prelude
+	if (!P || !P.can || !P.can.playTop) return
+	send_action('prelude_play_top', {})
+}
+
+/* ============================================================
+ * 前奏：代价选牌（2026-11-27）
+ *
+ * 复用 #prelude_peek_modal —— 它的结构就是正式版 .modal / .modal-box /
+ * .card-grid / .action primary 那一套，样式与正式完全一致。
+ * ============================================================ */
+let prelude_cost_picked = []
+
+/* ============================================================
+ * 前奏：二选一（2026-11-27）
+ *
+ * 复用正式版的 #ask_box（render_ask_box）——样式与其它询问框完全一致。
+ * 不能执行的选项置灰（disabled），避免"点了没反应"。
+ * ============================================================ */
+/* ============================================================
+ * 前奏：分步结算框（2026-11-27）
+ *
+ * 第一段（含可能的插入结算）走完后，右侧面板出现「结束第一段」；
+ * 点击后才询问是否执行第二段 —— 避免玩家看不清第一段结算了什么。
+ * ============================================================ */
+function update_prelude_resolve_box() {
+	const R = view && view.prelude && view.prelude.resolving
+	const box = document.getElementById('prelude_resolve_box')
+	if (!box) return
+
+	const show = R && (R.stage === 'seg1_done' || R.stage === 'settled')
+	if (!show) {
+		box.classList.add('hide')
+		return
+	}
+
+	box.classList.remove('hide')
+	set_text('prelude_resolve_name', '《' + (R.name || '') + '》' +
+		(R.depth > 1 ? '（嵌套 ' + R.depth + ' 层）' : ''))
+
+	const step = box.querySelector('.prb-step')
+	const btn = document.getElementById('btn_prelude_end_seg1')
+
+	if (R.stage === 'settled') {
+		if (step) step.textContent = '✓ 本张牌已结算完毕'
+		if (btn) btn.textContent = '进入卡牌阶段 ▶'
+	} else {
+		if (step) step.textContent = '✓ 第一段已结算'
+		if (btn) btn.textContent = R.hasSeg2
+			? '结束第一段（之后可执行第二段）'
+			: '结束第一段'
+	}
+}
+
+/* 分步框上的按钮：按当前 stage 决定发哪个动作 */
+function do_prelude_end_seg1() {
+	const R = view && view.prelude && view.prelude.resolving
+	if (!R) return
+	if (R.stage === 'seg1_done') send_action('prelude_end_seg1', {})
+	else if (R.stage === 'settled') send_action('prelude_advance_phase', {})
+}
+
+/*
+ * 前奏选地提示：与正式版「建设地区」同一个 #ask_box。
+ */
+function update_prelude_pick_space_box() {
+	const P = view && view.prelude
+	const pd = P && P.pending
+
+	/* 【2026-11-28】选部队（消灭敌方陆军）共用这个提示框，只是文案不同 */
+	if (pd && pd.kind === 'pick_piece') {
+		claim_ask_box('prelude_pick_space')
+		render_ask_box('选择要消灭的部队',
+			'请点击地图上高亮的敌方部队（' +
+			((pd.pieces || []).length) + ' 支可选）', [])
+		return
+	}
+
+	if (!pd || pd.kind !== 'pick_space') {
+		clear_own_ask_box('prelude_pick_space')
+		return
+	}
+
+	claim_ask_box('prelude_pick_space')
+	const isBuild = pd.then && pd.then.op === 'build'
+	const typeZh = (pd.then && pd.then.type === 'navy') ? '海军'
+		: ((pd.then && pd.then.type === 'air') ? '空军' : '陆军')
+
+	render_ask_box(
+		isBuild ? '建设地区' : '征召地区',
+		'请点击地图上的高亮地区，' + (isBuild ? '建设' : '征召') + '1 支' + typeZh +
+		'（' + (pd.spaces || []).length + ' 处可选）',
+		[]
+	)
+}
+
+function update_prelude_choice_box() {
+	const P = view && view.prelude
+	const pd = P && P.pending
+
+	/*
+	 * 【2026-11-28】选执行国家（卡面「英国 或 法国」）：
+	 * 复用 #ask_box，一行一个国家按钮 —— 就是作者说的「通用选择 UI」。
+	 */
+	if (pd && pd.kind === 'pick_nation') {
+		claim_ask_box('prelude_choice')
+		const btns = (pd.options || []).map(nm => ({
+			label: nm,
+			cls: 'primary',
+			onClick: () => {
+				render_ask_box(null)
+				send_action('prelude_pick_nation', { nation: nm })
+			},
+		}))
+		render_ask_box('选择执行国家',
+			'本效果由哪个国家执行？（' + (pd.options || []).join(' / ') + '）', btns)
+		return
+	}
+
+	if (!pd || pd.kind !== 'choice') {
+		clear_own_ask_box('prelude_choice')
+		return
+	}
+
+	claim_ask_box('prelude_choice')
+
+	const opts = (pd.options || []).map(function (o) {
+		return {
+			label: o.enabled ? o.label : (o.label + '（不可选）'),
+			cls: o.enabled ? 'primary' : '',
+			disabled: !o.enabled,
+			onClick: function () {
+				if (!o.enabled) return
+				send_action('prelude_choose_option', { key: o.key })
+			},
+		}
+	})
+
+	render_ask_box(
+		'二选一 · 《' + (pd.name || '') + '》',
+		pd.label + (opts.length ? '' : '（无可选项）'),
+		opts
+	)
+}
+
+function update_prelude_cost_modal() {
+	const P = view && view.prelude
+	const pd = P && P.pending
+	const modal = document.getElementById('prelude_peek_modal')
+	if (!modal) return
+
+	/*
+	 * 只有「代价/嵌套选牌」用这个框；二选一走 #ask_box、选地走地图，都不能同时弹。
+	 * ask_enemy 且我不是回答方时也不弹（只能看着对方决定）。
+	 */
+	/*
+	 * 【2026-11-28】reorder_deck（18300 军情五处）必须排除 —— 它的交互全部由
+	 * #peek_modal（15215 同款排列框，view.peek 驱动）负责。
+	 * 漏排会导致两个 modal 同时弹出，本框是空的「支付代价」，还盖在排列框上面，
+	 * 玩家点不到「确认排列」= 卡死。
+	 */
+	if (!pd || pd.kind === 'choice' || pd.kind === 'pick_space' ||
+		pd.kind === 'pick_piece' || pd.kind === 'pick_nation' ||
+		pd.kind === 'reorder_deck' ||
+		(pd.kind === 'ask_enemy' && !pd.isAnswerer)) {
+		modal.classList.add('hide')
+		prelude_cost_picked = []
+		return
+	}
+	modal.classList.remove('hide')
+
+	const isHand = pd.kind === 'discard_hand'
+	const isNested = pd.kind === 'nested_play'
+	const isSearch = pd.kind === 'search_deck'
+	const isPlace = pd.kind === 'place_card'
+	const isResp = isPlace && pd.placeKind === 'response'
+	const isAsk = pd.kind === 'ask_enemy'
+
+	set_text('prelude_peek_title',
+		isSearch ? '检视牌堆'
+			: (isNested ? '选择要打出的牌'
+				: (isAsk ? '阻止对方效果'
+					: (isPlace ? (isResp ? '暗置响应卡' : '明置状态卡') : '支付代价'))))
+	const searchToZh = pd.to === 'table_status' ? '明置到桌面'
+		: (pd.to === 'table_response' ? '暗置到桌面'
+			: (pd.to === 'auto' ? '（状态卡明置，其余置入手牌）' : '置入手牌'))
+	if (isAsk) {
+		set_text('prelude_peek_name',
+			(pd.label ? pd.label + '：' : '') +
+			'弃置 ' + pd.n + ' 张手牌可阻止，或跳过后效果生效')
+	} else set_text('prelude_peek_name', isSearch
+		? ('从牌堆中选择 ' + pd.n + ' 张牌' + searchToZh + '（取牌后洗混牌堆）')
+		: (isNested
+			? ('《' + (pd.name || '') + '》需要打出一张前奏手牌')
+			: (isPlace
+				? ('《' + (pd.name || '') + '》选择 1 张' +
+					(isResp ? '响应卡暗置' : '状态卡明置') +
+					'到桌面（进入正式游戏后生效）')
+				: ('《' + (pd.name || '') + '》需弃置 ' + pd.n + ' 张' +
+					(isHand ? '正式手牌' : '前奏手牌')))))
+	set_text('prelude_peek_note', prelude_cost_picked.length + '/' + pd.n)
+
+	const grid = document.getElementById('prelude_peek_grid')
+	if (grid) {
+		grid.innerHTML = ''
+		const list = pd.candidates || []
+		for (const c of list) {
+			const el = build_card_elt(c)
+			const i = prelude_cost_picked.indexOf(c.id)
+			if (i >= 0) {
+				el.classList.add('sel')
+				el.dataset.pickNo = String(i + 1)
+			}
+			el.onclick = function () { toggle_prelude_cost_pick(c.id) }
+			grid.appendChild(el)
+		}
+	}
+
+	const btn = document.getElementById('prelude_peek_confirm')
+	if (btn) {
+		btn.textContent = isAsk ? '确认弃置（阻止）' : '确认选择'
+		btn.disabled = prelude_cost_picked.length !== pd.n
+	}
+
+	/* 回答方额外给一个「跳过」：不弃牌，让对方效果生效 */
+	let skipBtn = document.getElementById('prelude_peek_skip')
+	if (isAsk) {
+		if (!skipBtn) {
+			skipBtn = document.createElement('button')
+			skipBtn.id = 'prelude_peek_skip'
+			skipBtn.className = 'action'
+			skipBtn.textContent = '跳过（让效果生效）'
+			skipBtn.style.marginLeft = '8px'
+			skipBtn.onclick = function () {
+				send_action('prelude_enemy_answer', { pass: true })
+			}
+			const foot = modal.querySelector('.modal-foot')
+			if (foot) foot.appendChild(skipBtn)
+		}
+		skipBtn.classList.remove('hide')
+	} else if (skipBtn) {
+		skipBtn.classList.add('hide')
+	}
+}
+
+function toggle_prelude_cost_pick(id) {
+	const P = view && view.prelude
+	const pd = P && P.pending
+	if (!pd) return
+	const i = prelude_cost_picked.indexOf(id)
+	if (i >= 0) prelude_cost_picked.splice(i, 1)
+	else if (prelude_cost_picked.length < pd.n) prelude_cost_picked.push(id)
+	update_prelude_cost_modal()
+}
+
+function confirm_prelude_peek() {
+	const P = view && view.prelude
+	const pd = P && P.pending
+	if (!pd) return
+	if (prelude_cost_picked.length !== pd.n) return
+
+	if (pd.kind === 'nested_play') {
+		/* 嵌套打出：一次一张 */
+		send_action('prelude_nested_play', { card: prelude_cost_picked[0] })
+	} else if (pd.kind === 'search_deck') {
+		/* 检视牌堆：一次一张 */
+		send_action('prelude_search_pick', { card: prelude_cost_picked[0] })
+	} else if (pd.kind === 'place_card') {
+		/* 放置到桌面：一次一张 */
+		send_action('prelude_place_card', { card: prelude_cost_picked[0] })
+	} else if (pd.kind === 'ask_enemy') {
+		/* 弃牌阻止：一次给 N 张 */
+		send_action('prelude_enemy_answer', { drop: prelude_cost_picked.slice() })
+	} else {
+		send_action('prelude_pay_cards', { cards: prelude_cost_picked.slice() })
+	}
+	prelude_cost_picked = []
+}
+
+function update_prelude_phase_panel() {
+	const P = view.prelude || {}
+	const n = P.currentNation || '?'
+	const isAction = P.phase === 'action'
+
+	set_text('phase_nation', n)
+	set_text('phase_name', isAction ? '前奏 · 行动阶段' : '前奏 · 卡牌阶段')
+	set_text('phase_step', '第 ' + (P.round || 1) + ' 轮')
+
+	/* 两格阶段条 */
+	const track = document.getElementById('phase_track')
+	if (track) {
+		track.innerHTML = [
+			{ k: 'action', zh: '行动阶段', mark: '行动' },
+			{ k: 'card', zh: '卡牌阶段', mark: '卡牌' },
+		].map(function (p) {
+			const cur = P.phase === p.k
+			const done = p.k === 'action' && P.phase === 'card'
+			const cls = cur ? 'cur' : (done ? 'done' : '')
+			return '<span class="ph ' + cls + '" title="' + p.zh + '">' +
+				(done ? '✓' : p.mark) + '</span>'
+		}).join('')
+	}
+
+	/* 规则提示 */
+	let note
+	if (isAction) {
+		note = n + ' 行动阶段：打出 1 张手牌或牌堆顶（不可跳过）'
+		if (P.can && (P.can.playHand || P.can.playTop)) note += ' · 可反复弃牌换牌'
+	} else {
+		note = n + ' 卡牌阶段：弃置所有手牌，摸 2 张'
+	}
+	set_text('phase_note', note)
+
+	/*
+	 * 按钮逐项控制（不再整块隐藏 #phase_actions）：
+	 *   隐藏 —— 只属于正式期的动作（出牌三选一 / 资源 / 空军 / 弃牌确认 / 打牌模式 / 下一阶段 / Done）
+	 *   保留 —— 「询问收回部队」（前奏同样适用）
+	 *   显示 —— 前奏两个按钮
+	 */
+	const HIDE_IDS = ['play_choices', 'btn_resource', 'btn_air_move',
+		'btn_confirm_discard', 'btn_discard_playmode', 'btn_next_phase', 'btn_event_done']
+	HIDE_IDS.forEach(function (id) {
+		const el = document.getElementById(id)
+		if (el) el.classList.add('hide')
+	})
+	const askBtn = document.getElementById('btn_toggle_ask')
+	if (askBtn) askBtn.classList.remove('hide')
+	const bTop0 = document.getElementById('btn_prelude_play_top')
+	if (bTop0) bTop0.classList.remove('hide')
+	const bSwap0 = document.getElementById('btn_prelude_swap_mode')
+	if (bSwap0) bSwap0.classList.remove('hide')
+
+	const bTop = document.getElementById('btn_prelude_play_top')
+	if (bTop) {
+		bTop.disabled = !(P.can && P.can.playTop)
+		bTop.textContent = P.topCard
+			? ('打出牌堆顶《' + P.topCard.name + '》')
+			: '打出牌堆顶'
+	}
+	const bSwap = document.getElementById('btn_prelude_swap_mode')
+	if (bSwap) {
+		const on = !!prelude_swap_mode
+		bSwap.textContent = on ? '换牌模式：开（点手牌弃置）' : '换牌模式：关'
+		bSwap.classList.toggle('on', on)
+		bSwap.disabled = !(P.can && P.can.swap)
+	}
+}
+
 function update_phase_panel() {
+	/* 【前奏 2026-11-27】前奏期整块替换为前奏面板 */
+	if (view && view.prelude && view.prelude.active) {
+		return update_prelude_phase_panel()
+	}
+	/* 非前奏：隐藏前奏专属按钮（正式期按钮由下面各自的逻辑控制） */
+	const pTop0 = document.getElementById('btn_prelude_play_top')
+	if (pTop0) pTop0.classList.add('hide')
+	const pSwap0 = document.getElementById('btn_prelude_swap_mode')
+	if (pSwap0) pSwap0.classList.add('hide')
+
 	const nation = view.current_nation || "?"
 	const idx = (view.phase_index || 1) - 1     /* 0-based */
 
@@ -5261,6 +5658,17 @@ function update_peek_box() {
 	modal.classList.remove("hide")
 
 	/*
+	 * 【2026-11-28 防御】排列框独占输入：顺手把前奏代价框关掉。
+	 * 正常情况 update_prelude_cost_modal 会自己 hide（依赖 kind 白名单），
+	 * 但它漏排一个 kind 就会出现「两个 modal 叠着、下面的按钮点不到」。
+	 * 这里再兜一层，代价是 1 行，换的是不会再卡死。
+	 */
+	{
+		const preCostModal = document.getElementById("prelude_peek_modal")
+		if (preCostModal) preCostModal.classList.add("hide")
+	}
+
+	/*
 	 * 【2026-10-01 玩家口径】peek 弹框【不可取消】—— 关闭 × 与取消按钮
 	 * 已直接从 play.html 移除（不是隐藏）：牌一旦摊给玩家看，信息就已拿到
 	 * （看对手手牌 = 知道对手秘密；看自己牌堆顶 = 知道接下来摸什么），
@@ -5456,8 +5864,16 @@ function submit_peek() {
 	 * 根本没收到、弹框不消失"的假象，排查极费时。
 	 * 这里改为：没发出去就如实提示【并保留已排的顺序】，不谎报成功。
 	 */
-	if (!send_action("play_card", payload)) {
-		toast("提交失败：当前不接受出牌" +
+	/*
+	 * 【2026-11-28】前奏 18300《军情五处》复用同一个排列框，但提交动作不同：
+	 * 正式局走 play_card（内部 resolve_script 的 deck_inspect 步），
+	 * 前奏走 prelude_reorder（P.pending.kind === 'reorder_deck'）。
+	 * 服务端两边都读 payload.placement，格式一致。
+	 */
+	const _isPreludeReorder = !!(view && view.prelude && view.prelude.pending &&
+		view.prelude.pending.kind === 'reorder_deck')
+	if (!send_action(_isPreludeReorder ? "prelude_reorder" : "play_card", payload)) {
+		toast("提交失败：当前不接受该操作" +
 			(view.block_reason ? "（" + view.block_reason + "）" : "") +
 			"，已保留排序，请稍后再试")
 		return
@@ -5924,6 +6340,8 @@ function render_box_into(boxId, title, text, options) {
 		b.className = "action" + (o.cls ? " " + o.cls : "")
 		b.textContent = o.label
 		b.onclick = o.onClick
+		/* 【2026-11-27】支持置灰（前奏二选一用：不能执行的分支不可点） */
+		if (o.disabled) b.disabled = true
 		box.appendChild(b)
 	}
 }
@@ -6037,6 +6455,7 @@ function update_deck_panel() {
 
 	const order = (view && view.order_of_nations) || AXIS_NATIONS
 	const disc = (view && view.discard_counts) || {}
+	const handc = (view && view.hand_counts) || {}
 	const rows = []
 	for (const nat of order) {
 		const deck = dc[nat] || 0
@@ -6056,6 +6475,7 @@ function update_deck_panel() {
 			'<span class="dk-nation">' + esc(nat) + '</span>' +
 			'<span class="dk-stat"><i>牌库</i><b>' + deck + '</b></span>' +
 			'<span class="dk-stat dk-discard"><i>弃牌</i><b>' + dis + '</b></span>' +
+			'<span class="dk-stat"><i>手牌</i><b>' + (handc[nat] || 0) + '</b></span>' +
 			'</div>')
 	}
 	if (!rows.length)
@@ -7667,6 +8087,19 @@ function finish_effect_cost_discard() {
 	 * view 不变 -> stage 不变 -> 上一次的 4 张仍然在框里，玩家只需微调；
 	 * 成功时 step 会推进，update_pending_script_box 的 stageKey 变化会自动清空。
 	 */
+	/*
+	 * 通用转发：其它流程（军备卡发动）复用同一个弃牌框时，
+	 * 在 effect_cost_discard_sel 里放 verb / verbArg / verbKey，
+	 * 确认后按 verb 发动作，把选中的牌放进 verbKey 字段。
+	 */
+	if (s.verb) {
+		const arg = Object.assign({}, s.verbArg || {})
+		arg[s.verbKey || 'drop'] = picked
+		effect_cost_discard_sel = null
+		update_echo_discard_box()
+		send_action(s.verb, arg)
+		return
+	}
 	send_action('resolve_script', { discard: picked })
 }
 
@@ -7681,6 +8114,8 @@ function cancel_script_card() {
 	effect_cost_discard_sel = null
 	update_echo_discard_box()
 	update_hand_panel()
+	/* 转发场景（军备卡）：取消 = 关掉选牌框，回到「发动/不发动」询问 */
+	if (s.verb) { update_pending_trigger_box(); return }
 	send_action('cancel_script', {})
 }
 
@@ -8655,6 +9090,30 @@ function update_response_choice_box() {
 		toast('《' + rc.name + '》已结算')
 	}
 
+	/*
+	 * 【2026-11-27】kind='nation'：选 1 个敌方国家。
+	 * 用 #ask_box 列国家按钮 —— 与 ECON 卡（15217 电动潜艇等）选目标国的体验一致。
+	 */
+	if (rc.kind === 'nation') {
+		rc_highlight_active = false
+		const cands = rc.candidates || []
+		if (!cands.length) {
+			toast('《' + rc.name + '》没有可选的敌方国家')
+			return
+		}
+		ask_state = { kind: 'response_choice' }
+		render_ask_box(
+			'选择目标国家',
+			'《' + rc.name + '》' + (rc.prompt || '请选择 1 个敌方国家'),
+			cands.map(c => ({
+				label: c.name,
+				cls: 'primary',
+				onClick: () => submit(c.id),
+			}))
+		)
+		return
+	}
+
 	if (rc.kind === 'space') {
 		/* 复用事件卡的高亮：格式必须是 [{id, reason}] */
 		const cands = (rc.candidates || []).map(c => ({ id: c.id, reason: c.name || '' }))
@@ -9263,9 +9722,40 @@ function update_pending_trigger_box() {
 		const text = (tgtLine ? (tgtLine + '\n') : '') +
 			(tgtText ? ('　' + tgtText + '\n') : '') +
 			'是否发动 ' + names + '？' + where + kind + rest
+		/*
+		 * 【军备卡 2026-11-28】发动代价 = 自选弃 1 张手牌。
+		 * 点「发动」时先开共用弃牌框挑牌，确认后带着 drop 发 trigger_response；
+		 * 手牌为空则由服务端自动折算成损耗，不需要选。
+		 */
+		const isArm = !!(cur && cur.isArmament)
+		const myHand = ((view.hands && view.hands[view.my_nation] &&
+			view.hands[view.my_nation].cards) || []).filter(c => c && c.id)
+		const needPick = isArm && myHand.length > 0
+
+		const onTrigger = () => {
+			if (!needPick) { send_action('trigger_response', {}); return }
+			effect_cost_discard_sel = {
+				need: 1,
+				picked: [],
+				candidates: myHand,
+				source_name: (cur && cur.name) || '军备卡',
+				source_inst: cur && cur.card_id,
+				cancellable: true,
+				verb: 'trigger_response',
+				verbKey: 'drop',
+				verbArg: {},
+			}
+			render_ask_box(null)
+			update_echo_discard_box()
+		}
+
 		ask_state = { kind: 'response', pt: pt }
 		render_ask_box(title, text, [
-			{ label: '发动响应', cls: 'primary', onClick: () => send_action('trigger_response', {}) },
+			{
+				label: needPick ? '发动（弃 1 张手牌）' : '发动响应',
+				cls: 'primary',
+				onClick: onTrigger,
+			},
 			{ label: '不发动', cls: '', onClick: () => send_action('pass_response', {}) },
 		])
 		return
@@ -9445,6 +9935,238 @@ function clear_piece_highlight(kind) {
  *   ② 【本方代表国】当前可得分数的明细（按地块），
  *      标注是"独自占领"还是"共同占领"，以及同格的友军
  * ============================================================ */
+/* ============================================================
+ * 前奏（Episode 2 门前惊雷）2026-11-27
+ *
+ * 三处增量，全部复用正式局组件：
+ *   #prelude_hand      手牌区多一块（与正式手牌分开，避免误点）
+ *   #prelude_deck_*    牌库区多一个按钮
+ *   #prelude_tension   计分区多一行紧张度
+ *
+ * 只读 view.prelude；该字段为空（Standard 局）时三块全部隐藏。
+ * ============================================================ */
+function build_prelude_card_elt(c, isTop, clickable) {
+	const d = document.createElement('div')
+	d.className = 'card t-' + (c.type || 'PRELUDE') +
+		(isTop ? ' prelude-top' : '') + (clickable ? ' prelude-clickable' : '')
+	const url = card_image_url(c)
+	if (url) d.style.backgroundImage = 'url(' + JSON.stringify(url) + ')'
+	d.title = (isTop ? '【牌堆顶】' : '') + (c.name || '') +
+		(clickable ? '\n（点击打出 / Shift+点击：弃 1 手牌 + 弃牌堆顶，不占行动）' : '') +
+		'\n' + (c.text || '')
+	d.__card = c
+	/* 与正式手牌一致：悬停浮现放大卡图 */
+	d.addEventListener('mouseenter', () => on_focus_card(d.__card))
+	d.addEventListener('mouseleave', on_blur_card)
+
+	/* 【第 3 步】点击出牌；Shift+点击 = 弃牌换牌（不占行动） */
+	if (clickable) {
+		d.addEventListener('click', function (e) {
+			const P = view && view.prelude
+			if (!P || !P.can) return
+			if (isTop) {
+				if (P.can.playTop) send_action('prelude_play_top', {})
+				return
+			}
+			if (e.shiftKey || prelude_swap_mode) {
+				if (P.can.swap) {
+					send_action('prelude_swap', { card: c.id })
+					if (prelude_swap_mode) {
+						/* 换牌模式：点完一张自动退出，避免误操作 */
+						prelude_swap_mode = false
+						update_phase_panel()
+					}
+				}
+				return
+			}
+			if (P.can.playHand) send_action('prelude_play_hand', { card: c.id })
+		})
+	}
+	return d
+}
+
+function update_prelude_ui() {
+	const P = view && view.prelude
+	const on = !!(P && P.active)
+
+	const tEl = document.getElementById('prelude_tension')
+	const hEl = document.getElementById('prelude_hand_row')
+	const dEl = document.getElementById('prelude_deck_toggle')
+
+	if (!on) {
+		if (tEl) tEl.classList.add('hide')
+		if (hEl) hEl.style.display = 'none'      /* 该块默认 inline style 隐藏 */
+		if (dEl) dEl.classList.add('hide')
+		return
+	}
+
+	/* ---- 紧张度 ---- */
+	if (tEl) {
+		tEl.classList.remove('hide')
+		const val = Number(P.tension) || 0
+		const max = Number(P.tensionMax) || 10
+		set_text('prelude_tension_val', String(val))
+		set_text('prelude_tension_max', '/' + max)
+		const bar = document.getElementById('prelude_tension_bar')
+		if (bar) bar.style.width = Math.max(0, Math.min(100, val / max * 100)) + '%'
+		tEl.classList.toggle('danger', val >= max - 2)
+	}
+
+	/* ---- 前奏手牌 ---- */
+	if (hEl) {
+		hEl.style.display = ''
+		/*
+		 * 敌方回合：主区（当前国手牌）整块隐藏 —— 对方的前奏手牌不应可见。
+		 * 外层行容器保留，让「友军手牌」独占一行（此时它展示的是己方 3 国）。
+		 */
+		const mainWrap = document.getElementById('prelude_hand_wrap')
+		if (mainWrap) mainWrap.style.display = P.isMyTurn ? '' : 'none'
+
+		const head = document.getElementById('prelude_hand_note')
+		if (head) {
+			const ph = P.phase === 'card' ? '卡牌阶段' : '行动阶段'
+			const who = P.isMyTurn ? '轮到你' : ('等待 ' + (P.currentNation || ''))
+			let tip = '第 ' + (P.round || 1) + ' 轮 · ' + ph + ' · ' + who
+			if (P.isMyTurn && P.phase === 'action') {
+				tip += ' · 点击出牌 / Shift+点击换牌'
+			}
+			head.textContent = tip
+		}
+		const box = document.getElementById('prelude_hand_cards')
+		if (box) {
+			box.innerHTML = ''
+			const list = P.myHand || []
+			for (const c of list) box.appendChild(build_prelude_card_elt(c, false, true))
+			/* 自己的牌堆顶：金框 + 可点击打出 */
+			if (P.topCard) box.appendChild(build_prelude_card_elt(P.topCard, true, true))
+
+			/* 不可用的牌置灰（与服务端 can 同源，避免"点了没反应"） */
+			box.querySelectorAll('.prelude-clickable').forEach(function (el) {
+				const isTopEl = el.classList.contains('prelude-top')
+				const may = isTopEl ? P.can.playTop : (P.can.playHand || P.can.swap)
+				el.classList.toggle('prelude-dim', !may)
+				/* 换牌模式：手牌加红框提示"点我会弃掉" */
+				el.classList.toggle('prelude-swap-armed',
+					!!prelude_swap_mode && !isTopEl && !!(P.can && P.can.swap))
+			})
+		}
+
+		/* ---- 同阵营友军的前奏手牌（只读）---- */
+		const allyBox = document.getElementById('prelude_ally_hands')
+		const allyNote = document.getElementById('prelude_ally_note')
+		if (allyBox) {
+			allyBox.innerHTML = ''
+			const ally = P.allyHands || {}
+			const names = Object.keys(ally)
+			let total = 0
+			for (const nat of names) {
+				const wrap = document.createElement('div')
+				wrap.className = 'prelude-ally-group'
+				const cap = document.createElement('div')
+				cap.className = 'prelude-ally-cap'
+				cap.textContent = nat + '（' + (ally[nat] || []).length + '）'
+				wrap.appendChild(cap)
+				const row = document.createElement('div')
+				row.className = 'prelude-ally-cards'
+				for (const c of (ally[nat] || [])) row.appendChild(build_prelude_card_elt(c, false, false))
+				/* 队友的前奏牌堆顶：只读展示 */
+				const t = (P.topCards || {})[nat]
+				if (t) row.appendChild(build_prelude_card_elt(t, true, false))
+				wrap.appendChild(row)
+				allyBox.appendChild(wrap)
+				total += (ally[nat] || []).length
+			}
+			if (allyNote) allyNote.textContent = names.length ? ('手牌共 ' + total + ' 张 · 顶牌已标金框') : '（无）'
+		}
+	}
+
+	/* ---- 前奏牌库 ---- */
+	if (dEl) {
+		dEl.classList.remove('hide')
+		if (!dEl.__bound) {
+			dEl.addEventListener('click', toggle_prelude_deck_panel)
+			dEl.__bound = true
+		}
+		update_prelude_deck_panel()
+	}
+
+	/*
+	 * 状态面板也在这里刷：update_map 里 update_phase_panel() 排在
+	 * update_side_info() 之后，若后者抛错就到不了——而前奏面板不依赖它。
+	 */
+	update_prelude_phase_panel()
+
+	/* 代价选牌框（有待支付时弹出） */
+	update_prelude_cost_modal()
+
+	/* 二选一询问框 */
+	update_prelude_choice_box()
+
+	/* 选地提示框 */
+	update_prelude_pick_space_box()
+
+	/* 分步结算框 */
+	update_prelude_resolve_box()
+}
+
+/* ============================================================
+ * 各国前奏牌库 / 前奏手牌面板（2026-11-27）
+ *
+ * 与「各国牌库」完全同款：按钮 + 展开列表 + .deck-row 行样式，
+ * 数据来自 view.prelude.counts（服务端按国汇总，手牌只给张数）。
+ * ============================================================ */
+let prelude_deck_panel_open = false
+
+function toggle_prelude_deck_panel() {
+	prelude_deck_panel_open = !prelude_deck_panel_open
+	update_prelude_deck_panel()
+}
+
+function update_prelude_deck_panel() {
+	const listEl = document.getElementById('prelude_deck_list')
+	const btn = document.getElementById('prelude_deck_toggle')
+	if (!listEl) return
+
+	const P = view && view.prelude
+	const me = view && view.my_nation
+	const cnt = (P && P.counts) || {}
+	const decks = cnt.decks || {}
+	const disc = cnt.discard || {}
+	const hands = cnt.hands || {}
+
+	if (btn) {
+		btn.textContent = P && P.active
+			? '各国前奏牌库（我：' + (decks[me] || 0) + '）'
+			: '各国前奏牌库'
+	}
+
+	if (!prelude_deck_panel_open) {
+		listEl.classList.add('hide')
+		return
+	}
+	listEl.classList.remove('hide')
+
+	const order = (view && view.order_of_nations) || AXIS_NATIONS
+	const rows = []
+	for (const nat of order) {
+		const d = decks[nat] || 0
+		const di = disc[nat] || 0
+		const h = hands[nat] || 0
+		const isAxis = AXIS_NATIONS.indexOf(nat) >= 0
+		rows.push(
+			'<div class="deck-row' + (nat === me ? ' is-me' : '') +
+			(d <= 1 ? ' is-low' : '') + '">' +
+			'<span class="dk-side" style="background:' +
+			(isAxis ? '#8a2d2d' : '#1e3a5f') + '"></span>' +
+			'<span class="dk-nation">' + esc(nat) + '</span>' +
+			'<span class="dk-stat"><i>前奏库</i><b>' + d + '</b></span>' +
+			'<span class="dk-stat dk-discard"><i>弃</i><b>' + di + '</b></span>' +
+			'<span class="dk-stat"><i>前奏手牌</i><b>' + h + '</b></span>' +
+			'</div>')
+	}
+	listEl.innerHTML = rows.length ? rows.join('') : '（暂无数据）'
+}
+
 function update_score_panel() {
 	const sc = view.score || {}
 	const a = Number(sc.axis || 0)
@@ -11086,6 +11808,19 @@ function after_status_space_done() {
 function on_click_space(evt) {
 	const s = evt.currentTarget.space_id
 
+	/* 【前奏 2026-11-27】正在选建设/征召地区：点高亮格即提交 */
+	const _pp = view && view.prelude
+	if (_pp && _pp.pending && _pp.pending.kind === 'pick_space') {
+		const sid = Number(s)
+		const hit = (_pp.pending.spaces || []).some(x => Number(x.id) === sid)
+		if (!hit) {
+			toast('请点击地图上的高亮地区')
+			return
+		}
+		send_action('prelude_pick_space', { space: sid })
+		return
+	}
+
 
 
 	/*
@@ -11537,6 +12272,19 @@ function select_space(s) {
 function on_click_piece(evt) {
 	evt.stopPropagation()
 	const id = evt.currentTarget.piece_id
+
+	/* 【前奏 2026-11-28】正在选要消灭的部队：点到候选即提交 */
+	const _ppPick = view && view.prelude
+	if (_ppPick && _ppPick.pending && _ppPick.pending.kind === 'pick_piece') {
+		const hit = (_ppPick.pending.pieces || []).map(String).indexOf(String(id)) >= 0
+		if (!hit) {
+			const nm = (_ppPick.pending.labels || {})[String(id)] || '该部队'
+			toast('请点击高亮的敌方部队')
+			return
+		}
+		send_action('prelude_pick_piece', { piece: String(id) })
+		return
+	}
 
 	/*
 	 * 【2026-10-25】战区移动（17532）：stage='remove' 时点美国算子即提交移除。
