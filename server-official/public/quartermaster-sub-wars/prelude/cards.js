@@ -167,9 +167,27 @@ const EFFECTS = {
 	 */
 	'18407': {
 		name: '日苏中立条约',
+		persistent: true,
 		seg1: {
 			cost: [{ op: 'tension', delta: -1 }],
 			effect: [{ op: 'soviet_japan_pact', owner: '日本', target: '苏联', points: 4 }],
+		},
+		seg2: {
+			/*
+			 * [除非日本弃1张手牌] 从苏联前奏牌堆打出[苏日中立条约]。
+			 * blocker targets 是【自己】（日本）—— 付了就阻止对方条约，
+			 * 不付则对方免费打出（但 B 口径：对方自己仍付 tension-1）。
+			 * 参考对象：14903 进军莱茵兰（结构相同，targets 填自己）。
+			 */
+			blocker: {
+				targets: ['日本'],
+				cost: { op: 'discard_hand', n: 1 },
+				label: '除非日本弃置 1 张手牌（阻止苏联打出条约）',
+			},
+			effect: [{
+				op: 'search_deck', deck: 'prelude',
+				fromNation: '苏联', card: '18006', to: 'play',
+			}],
 		},
 	},
 
@@ -181,9 +199,22 @@ const EFFECTS = {
 	 */
 	'18006': {
 		name: '苏日中立条约',
+		persistent: true,
 		seg1: {
 			cost: [{ op: 'tension', delta: -1 }],
 			effect: [{ op: 'soviet_japan_pact', owner: '苏联', target: '日本', points: 4 }],
+		},
+		seg2: {
+			/* 18407 的镜像：除非苏联弃1张手牌，否则从日本牌堆打出 18407 */
+			blocker: {
+				targets: ['苏联'],
+				cost: { op: 'discard_hand', n: 1 },
+				label: '除非苏联弃置 1 张手牌（阻止日本打出条约）',
+			},
+			effect: [{
+				op: 'search_deck', deck: 'prelude',
+				fromNation: '日本', card: '18407', to: 'play',
+			}],
 		},
 	},
 

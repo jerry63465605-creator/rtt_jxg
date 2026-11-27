@@ -629,9 +629,10 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                    '**已实现**'],
                   ['`add_card_to_deck`', '`card`（按卡名）, `dest`',
                    '把 1 张牌洗入正式牌堆（`card_inst` 生成实例）', '**已实现**'],
-                  ['`search_deck`', '`type, n, topN, to, deck`',
-                   '检视牌堆选牌；`to` = hand / table_status / table_response；'
-                   '`deck` = formal / prelude', '**已实现**'],
+                  ['`search_deck`', '`type, n, topN, to, deck, fromNation, card`',
+                   '检视牌堆选牌；`to` = hand / table_status / table_response / play；'
+                   '`deck` = formal / prelude；`fromNation` 跨牌堆（18407）、'
+                   '`card` 按面id找、`to:"play"` 取出后嵌套打出', '**已实现**'],
                   ['`place_status_from_hand`', '`n`', '把正式状态卡明置到桌面', '**已实现**'],
                   ['`place_response_from_hand`', '`n`', '把正式响应卡暗置到桌面（18404 首次使用）', '**已实现**'],
                   ['`eliminate`', '`space, type, onlyNation`（目标国限定）',

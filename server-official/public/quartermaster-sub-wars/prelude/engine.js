@@ -928,10 +928,17 @@ function applyEffect(game, nation, eff, deps) {
 		 * 默认 'formal' -> 正式牌堆。
 		 */
 		const fromPrelude = eff.deck === 'prelude'
+		/*
+		 * 【2026-11-28】fromNation：牌堆归属国（可与操作者 nation 不同）。
+		 * 18407 seg2 是日本行动、却要从【苏联】前奏牌堆取出对应条约。
+		 * pending.nation 仍是操作者（提交校验用），牌堆国单独记在 fromNation。
+		 */
+		const deckNation = eff.fromNation || nation
 		const deck = fromPrelude
-			? ((P.decks && P.decks[nation]) || [])
-			: ((game.decks && game.decks[nation]) || [])
+			? ((P.decks && P.decks[deckNation]) || [])
+			: ((game.decks && game.decks[deckNation]) || [])
 		const wantType = eff.type || null
+		const wantCard = eff.card ? String(eff.card) : null
 		/*
 		 * topN：只看牌堆顶 N 张。
 		 * ⚠ 正式牌库【数组开头为顶】（draw_cards / attrition_cards 都用 shift()），
@@ -940,6 +947,8 @@ function applyEffect(game, nation, eff, deps) {
 		const pool = eff.topN ? deck.slice(0, eff.topN) : deck
 		const cands = pool.filter(function (id) {
 			const face = String(id).split('#')[0]
+			/* card 参数：按【面 id】精确匹配（14902 add_card_to_deck card:'高速公路' 同款口径） */
+			if (wantCard && face !== wantCard) return false
 			const c = deps.cardById ? deps.cardById(face) : null
 			return c && (!wantType || c.type === wantType)
 		})
@@ -951,7 +960,8 @@ function applyEffect(game, nation, eff, deps) {
 		const to = eff.to || 'hand'
 		P.pending = {
 			kind: 'search_deck',
-			nation: nation,
+			nation: nation,                    /* 操作者（提交校验用） */
+			fromNation: deckNation,            /* 牌堆归属国（可与操作者不同） */
 			n: eff.n || 1,
 			candidates: cands.slice(),
 			to: to,
@@ -1541,9 +1551,11 @@ function searchPick(game, current, arg, deps) {
 	}
 
 	const fromPrelude = pd.deck === 'prelude'
+	/* 牌堆国与操作者分离（18407 seg2：日本操作、苏联牌堆） */
+	const deckNation = pd.fromNation || pd.nation
 	const deck = fromPrelude
-		? ((P.decks && P.decks[pd.nation]) || [])
-		: ((game.decks && game.decks[pd.nation]) || [])
+		? ((P.decks && P.decks[deckNation]) || [])
+		: ((game.decks && game.decks[deckNation]) || [])
 	const i = deck.indexOf(id)
 	if (i < 0) { game.log.push('【前奏】该牌已不在牌堆'); return game }
 
@@ -1584,6 +1596,32 @@ function searchPick(game, current, arg, deps) {
 		game.log.push('【前奏】' + pd.nation + ' 从牌堆打出《' + cname + '》并明置于桌面（正式游戏生效）')
 		P.placed = P.placed || []
 		P.placed.push({ card_id: String(id), nation: pd.nation, kind: 'status' })
+	} else if (toMode === 'play') {
+		/*
+		 * 【2026-11-28】to:'play' —— 取出后【嵌套打出并结算】。
+		 * 参考 play_prelude_top -> nestPlayTop：入 P.discard、压栈、结算 seg1。
+		 * 与 nestPlayTop 的唯一区别：牌已由 searchPick 从牌堆取出，
+		 * 这里只做「入弃牌堆 + 压栈 + 跑 seg1」，不再 shift 牌堆。
+		 */
+		;(P.discard[deckNation] = P.discard[deckNation] || []).push(String(id))
+		game.log.push('【前奏】' + deckNation + ' 被打出《' + cname + '》（来自' +
+			(fromPrelude ? '前奏牌堆' : '牌堆') + '，嵌套结算）')
+		const def = (deps.cards && deps.cards[String(id).split('#')[0]]) || null
+		if (!def) {
+			game.log.push('【前奏】该牌效果未实装')
+		} else {
+			pushFrame(game, {
+				cardId: String(id), nation: deckNation,
+				stage: 'seg1', hasSeg2: !!def.seg2, restEffects: [],
+			})
+			const rr = runSegment(game, deckNation, def.seg1, deps,
+				{ cardId: String(id), seg: def.seg1 })
+			if (rr === 'pending') {
+				P.pending = null
+				return game
+			}
+			markSeg1Done(game, deps)
+		}
 	} else {
 		;(game.hands[pd.nation] = game.hands[pd.nation] || []).push(id)
 		game.log.push('【前奏】' + pd.nation + ' 从牌堆取得《' + cname + '》')
@@ -1594,8 +1632,8 @@ function searchPick(game, current, arg, deps) {
 	 * 前奏牌堆顶本来就是公开的，且牌面没写洗混 —— 不动顺序。
 	 */
 	if (!fromPrelude && deps.shuffleDeck) {
-		deps.shuffleDeck(game, pd.nation)
-		game.log.push('【前奏】洗混牌堆')
+		deps.shuffleDeck(game, deckNation)
+		game.log.push('【前奏】洗混' + deckNation + '的牌堆')
 	}
 
 	P.pending = null
