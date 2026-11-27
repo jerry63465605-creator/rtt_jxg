@@ -101,6 +101,31 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度+1] 在<中国东北>征召陆军。
+	 * [弃置1张手牌][持续] <中国东北>的日本陆军总是处于补给状态。
+	 *
+	 * 「持续」两件事：
+	 *   ① cards 里标 persistent -> 前奏结束时明置到正式局状态区（玩家看得见）；
+	 *   ② 效果走 status_aura.supply_immune，与状态卡 15346 / 17838 同源，不新造机制。
+	 * 牌面写「总是」，所以不给 untilTurn（永久）。
+	 */
+	'18400': {
+		name: '九一八事变',
+		persistent: true,
+		seg1: {
+			cost: [{ op: 'tension', delta: 1 }],
+			effect: [{ op: 'recruit', space: '中国东北', type: 'army' }],
+		},
+		seg2: {
+			cost: [{ op: 'discard_hand', n: 1 }],
+			effect: [{
+				op: 'supply_immune',
+				nations: ['日本'], type: 'army', space: '中国东北',
+			}],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 检视牌堆前10张，选择并打出1张[响应卡]。
 	 * [弃置1张手牌][失去2分] 选择并将1张牌加入手牌。
 	 *

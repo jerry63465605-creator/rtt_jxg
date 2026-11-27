@@ -18174,6 +18174,11 @@ STATUS_EFFECTS['18305'] = {
 	desc: '第 1 回合内，意大利每次发起战斗失去 3 分（持续效果，效果由 ongoing 标记实现）',
 	from_prelude: true,
 }
+STATUS_EFFECTS['18400'] = {
+	name: '九一八事变',
+	desc: '<中国东北>的日本陆军总是处于补给状态（持续效果，效果由补给光环实现）',
+	from_prelude: true,
+}
 STATUS_EFFECTS['18308'] = {
 	name: '法国殖民地基地',
 	desc: '<非洲南部>的英国或法国陆军总是处于补给状态（持续效果，效果由补给光环实现）',
