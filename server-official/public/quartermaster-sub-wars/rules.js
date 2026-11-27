@@ -4317,7 +4317,11 @@ function script_start(game, nation, card_id, timing, kind) {
 	const ps = {
 		kind: kind,
 		actor: nation,
-		answer_nation: '英国',
+		/*
+		 * 【2026-11-28 修·重复键】这里原来还写了一次 answer_nation: '英国'，
+		 * 与下面 target_nation 旁边那次重复（对象字面量后者覆盖前者，行为无害，
+		 * 但会让人以为有两个不同的默认值）。统一保留下面那一处。
+		 */
 		source: faceId,
 		source_name: c ? c.name : faceId,
 		/*
@@ -4378,7 +4382,16 @@ function script_start(game, nation, card_id, timing, kind) {
 			shuffle_deck(game, nation)
 			game.log.push('牌堆中没有[状态卡]，仅洗混牌堆')
 		} else {
-			game.log.push('【' + ps.answer_nation + '】桌面上没有暗置的响应卡，无效果')
+			/*
+			 * 【2026-11-28 修·日志主语】
+			 * answer_nation 只对 uk_facedown_discard / jp_facedown_discard 有意义
+			 * （见 script_answer_nation）；其余 kind 读它只是拿到默认值 '英国'，
+			 * 于是 play_status_from_deck / draw_pick_discard 这类卡在候选为空时
+			 * 会打出「【英国】桌面上没有暗置的响应卡」—— 主语根本不是英国。
+			 * 改用 script_answer_nation(game)：它对这两种 kind 返回 answer_nation，
+			 * 其余返回 actor（打出者本人），正是日志该写的人。
+			 */
+			game.log.push('【' + script_answer_nation(game) + '】桌面上没有暗置的响应卡，无效果')
 		}
 		script_clear(game)
 		return game
