@@ -219,6 +219,33 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度+1] 获得1分。[除非英国或美国弃置1张手牌] 获得3分。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   blocker 三字段  <- 14903 进军莱茵兰（targets/cost/label）
+	 *   score +1/+3     <- 18309 波兰动员 / 18403 帝国陆军航空队
+	 *   tension +1      <- 18402 / 18408
+	 *   多目标队列      <- engine.askBlocker 的 answerers（首次由本牌使用）
+	 *
+	 * 英国/美国同属 allies，同一玩家角色连续回答，无跨玩家让权问题。
+	 */
+	'18409': {
+		name: '天羽声明',
+		seg1: {
+			cost: [{ op: 'tension', delta: 1 }],
+			effect: [{ op: 'score', n: 1 }],
+		},
+		seg2: {
+			blocker: {
+				targets: ['英国', '美国'],
+				cost: { op: 'discard_hand', n: 1 },
+				label: '除非英国或美国弃置 1 张手牌',
+			},
+			effect: [{ op: 'score', n: 3 }],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 美国损耗3张前奏牌。
 	 * [紧张度-1][失去2分] 日本损耗1张前奏牌。
 	 *
