@@ -18136,6 +18136,27 @@ const RESPONSE_EFFECTS = {
 const RESPONSE_PRE_CANCEL = new Set(['15329', '17736', '18311'])
 
 /*
+ * 【前奏 2026-11-28】持续型前奏卡在正式局状态区的展示条目。
+ *
+ * 为什么必须有：`view.table_status` 里 `const cfg = status_config_of(cid); if (!cfg) continue`
+ * —— 没有 STATUS_EFFECTS 条目就【不会渲染】，玩家看不到那张一直在生效的卡。
+ *
+ * 为什么只写 name/desc、不写 auto/trigger：
+ *   效果本身已经由 game.ongoing['18305'] 和 status_aura.supply_immune 实现，
+ *   这里纯粹是"让桌子上的牌能显示出来"，多写一个 auto 就会重复结算。
+ */
+STATUS_EFFECTS['18305'] = {
+	name: '意大利煤炭禁运',
+	desc: '第 1 回合内，意大利每次发起战斗失去 3 分（持续效果，效果由 ongoing 标记实现）',
+	from_prelude: true,
+}
+STATUS_EFFECTS['18308'] = {
+	name: '法国殖民地基地',
+	desc: '<非洲南部>的英国或法国陆军总是处于补给状态（持续效果，效果由补给光环实现）',
+	from_prelude: true,
+}
+
+/*
  * 【2026-10-31 S1 玩家口径】"代价照付、只拦效果"。
  *
  * 默认（D1）：拦截窗口在 play_card 里、卡的效果执行【之前】派发 —— 于是被拦时

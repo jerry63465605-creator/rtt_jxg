@@ -310,6 +310,34 @@ function endPrelude(game, reason, deps) {
 	P.end_reason = reason
 	P.turn_phase = 'ended'
 
+	/*
+	 * 【持续】型前奏卡（cards.js 里标了 persistent）明置到状态区。
+	 *
+	 * 效果本身是常驻的（18305 走 game.ongoing、18308 走 status_aura），本来不需要这张牌；
+	 * 但玩家在正式局里需要"看得见它还在生效"，否则只能靠记忆。
+	 * 必须在清空 P.discard 之前做 —— 已打出的前奏牌都在那里。
+	 */
+	try {
+		const _cardsTbl = (deps && deps.cards) || {}
+		for (const _n of (deps.nations || [])) {
+			const _disc = (P.discard && P.discard[_n]) || []
+			for (const _raw of _disc) {
+				const _face = String(_raw).split('#')[0]
+				const _def = _cardsTbl[_face]
+				if (!_def || !_def.persistent) continue
+				game.table = game.table || {}
+				game.table[_n] = game.table[_n] || []
+				if (game.table[_n].indexOf(_face) >= 0) continue
+				game.table[_n].push(_face)
+				game.log.push('【前奏·持续】《' + (_def.name || _face) +
+					'》明置到 ' + _n + ' 的状态区')
+			}
+		}
+	} catch (e) {
+		/* 容错：明置失败不能挡住进入正式局 */
+		game.log.push('【前奏·持续】明置状态区失败：' + e.message)
+	}
+
 	/* 前奏的三副牌一律清空，正式局不应看到它们 */
 	P.hands = {}
 	P.decks = {}

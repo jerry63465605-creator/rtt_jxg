@@ -208,6 +208,8 @@ const EFFECTS = {
 	 */
 	'18308': {
 		name: '法国殖民地基地',
+		/* 【持续】前奏结束时明置到状态区（效果本身由 status_aura 实现） */
+		persistent: true,
 		seg1: {
 			effect: [{
 				op: 'recruit', space: '非洲南部', type: 'army', n: 1,
@@ -234,6 +236,8 @@ const EFFECTS = {
 	 */
 	'18305': {
 		name: '意大利煤炭禁运',
+		/* 【持续】前奏结束时明置到状态区（效果本身由 ongoing 标记实现） */
+		persistent: true,
 		seg1: {
 			cost: [{ op: 'tension', delta: 1 }],
 			effect: [{ op: 'coal_ban', target: '意大利', untilTurn: 1 }],
