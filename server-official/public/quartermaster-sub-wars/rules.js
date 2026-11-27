@@ -29091,8 +29091,22 @@ exports.setup = function (seed, scenario, options) {
 		ger_boost_strategy: !!(options && options.ger_boost_strategy),
 		/* 【D1/P2】双入口：创建对局页选 scenario='Episode 2' 或测试直调 options.prelude。
 		 * 【D1/P13】单国验收场景同样启用前奏。 */
-		prelude: scenario === PRELUDE_SCENARIO ||
-			scenario === PRELUDE_SCENARIO_SOLO_DE || !!(options && options.prelude),
+		/*
+		 * 【B69】前奏总开关（支持【强制关闭】）。
+		 *
+		 * 原实现只有「开」的语义：scenario='Episode 2' 或 options.prelude 为真时启用。
+		 * 现在 `options.prelude === false` 可以【强制关掉】—— 即使 scenario 是 'Episode 2'
+		 * 也不建前奏牌堆、prelude_on() 恒 false、不走前奏阶段骨架。
+		 *
+		 * 用途（前奏重做期间）：
+		 *   ① 先关后删 —— 零删除验证正式局是否受影响，暴露所有隐性耦合；
+		 *   ② 前奏卡与主游戏有 6 处共享边界（build/recruit/attrition/facedown_response/
+		 *      fire_trigger/gain_score），直接删容易误伤，开关让删除变成可回退的小步。
+		 */
+		prelude: (options && options.prelude === false)
+			? false
+			: (scenario === PRELUDE_SCENARIO ||
+				scenario === PRELUDE_SCENARIO_SOLO_DE || !!(options && options.prelude)),
 		/* 【D1/P13】单国验收：只给一国建前奏牌堆；测试可直调 options.prelude_solo_nation
 		 * 换国家，传 null / 不传 = 恢复正常 6 国。 */
 		prelude_solo_nation: scenario === PRELUDE_SCENARIO_SOLO_DE
