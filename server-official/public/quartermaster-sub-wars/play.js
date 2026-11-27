@@ -2118,6 +2118,14 @@ function update_us_japan_box() {
 		}
 		return
 	}
+	/*
+	 * 【B67】入口即登记归属。
+	 * 旧代码只在「非 waiting_for」分支设 ask_state，而【美国视角】走的是
+	 * waiting_for 分支（服务端对非日本阵营返回 { waiting_for:'日本' }）——
+	 * 那条分支写了框却没登记 kind，于是 !dg 时判不出"这个框是我写的"，
+	 * 美国侧的「等待日本弃牌」提示永久残留（玩家报障：日本视角清了、美国没清）。
+	 */
+	ask_state = { kind: 'us_japan_delegate' }
 	if (dg.waiting_for) {
 		render_ask_box('抗日义勇军：等待【' + dg.waiting_for + '】弃牌',
 			'中国' + (dg.reason || '行动') + '后，日本需弃置 1 张手牌并损耗 1 张。', [])
@@ -2133,7 +2141,16 @@ function update_us_japan_box() {
  * need:'space' 同款），不新造 UI：美国侧高亮候选并提示，其他方显示"等待美国"。 */
 function update_us_china_box() {
 	const dg = view && view.us_china_delegate
-	if (!dg) return
+	if (!dg) {
+		/* 【B67】无数据时清框 + 清地图高亮（旧代码只有 return -> 框与高亮永久残留） */
+		if (ask_state && ask_state.kind === 'us_china_delegate') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		return
+	}
+	ask_state = { kind: 'us_china_delegate' }
 	if (dg.waiting_for) {
 		render_ask_box('中国远征军：等待【' + dg.waiting_for + '】选择',
 			'<东南亚>的中国陆军被移除，美国需选择相邻地区之一征召中国陆军。', [])
@@ -2151,7 +2168,17 @@ function update_us_china_box() {
  * 复用既有地图高亮 highlight_targets + on_click_space 点选（与 us_china_delegate 同款）。 */
 function update_uk_build_box() {
 	const dg = view && view.uk_build_delegate
-	if (!dg) { window.__ukSelType = null; return }
+	if (!dg) {
+		window.__ukSelType = null
+		/* 【B67】无数据时清框 + 清高亮 */
+		if (ask_state && ask_state.kind === 'uk_build_delegate') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		return
+	}
+	ask_state = { kind: 'uk_build_delegate' }
 	if (dg.waiting_for) {
 		render_ask_box('民主兵工厂：等待【' + dg.waiting_for + '】建设',
 			'美国打出《民主兵工厂》，让权【' + dg.waiting_for + '】按所选顺序建设1支海军与1支陆军。', [])
@@ -2208,7 +2235,16 @@ function update_uk_build_box() {
 /* 【2026-10-10】17529 摩尔曼斯克运输船队：让权苏联执行建设（多步，交互式点地图）。 */
 function update_su_build_box() {
 	const dg = view && view.su_build_delegate
-	if (!dg) return
+	if (!dg) {
+		/* 【B67】无数据时清框 + 清高亮 */
+		if (ask_state && ask_state.kind === 'su_build_delegate') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		return
+	}
+	ask_state = { kind: 'su_build_delegate' }
 	if (dg.waiting_for) {
 		render_ask_box('摩尔曼斯克运输船队：等待【' + dg.waiting_for + '】建设',
 			'美国打出《摩尔曼斯克运输船队》，让权【' + dg.waiting_for + '】在<罗斯>征召1支陆军并建设1支陆军。', [])
@@ -2227,7 +2263,16 @@ function update_su_build_box() {
  * 美国直接操作（非挂起），高亮候选地区由服务端按 中国大本营或相邻 + can_recruit_at 过滤。 */
 function update_us_china_build() {
 	const dg = view && view.us_china_build
-	if (!dg) return
+	if (!dg) {
+		/* 【B67】无数据时清框 + 清高亮 */
+		if (ask_state && ask_state.kind === 'us_china_build') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		return
+	}
+	ask_state = { kind: 'us_china_build' }
 	if (dg.waiting_for) {
 		render_ask_box('美国人民同情中国：等待【' + dg.waiting_for + '】操作',
 			'美国打出《美国人民同情中国》，由【' + dg.waiting_for + '】选择中国大本营或相邻地区征召1支中国陆军。', [])
@@ -2246,7 +2291,17 @@ function update_us_china_build() {
  * step0 移除：高亮美国陆军/海军棋子；step1/step2 建设：高亮候选地区。 */
 function update_us_theater_box() {
 	const dg = view && view.us_theater_delegate
-	if (!dg) return
+	if (!dg) {
+		/* 【B67】无数据时清框 + 清地区高亮 + 清棋子高亮（step0 用 highlight_pieces） */
+		if (ask_state && ask_state.kind === 'us_theater_delegate') {
+			ask_state = null
+			render_ask_box(null, null, null)
+		}
+		if (typeof clear_target_highlight === 'function') clear_target_highlight()
+		if (typeof clear_piece_highlight === 'function') clear_piece_highlight('theater')
+		return
+	}
+	ask_state = { kind: 'us_theater_delegate' }
 	if (dg.waiting_for) {
 		render_ask_box('战区移动：等待【' + dg.waiting_for + '】操作',
 			'美国打出《战区移动》，由【' + dg.waiting_for + '】移除己方部队并建设。', [])

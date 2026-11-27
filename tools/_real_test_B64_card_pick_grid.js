@@ -106,7 +106,9 @@ console.log('\n=== D. 版本串 ===')
 {
 	const vers = (HTML.match(/\?v=(\d{8}[a-z])/g) || []).map(s => s.slice(3))
 	const uniq = Array.from(new Set(vers))
-	ok('★★ 版本串统一为 20261127a', uniq.length === 1 && uniq[0] === '20261127a', J(uniq))
+	/* B67 又 bump 到 20261127b —— 改为只校验「统一且格式合法」，不再写死具体版本 */
+	ok('★★ 版本串统一且格式合法（B64 当轮 20261127a，后续会继续 bump）',
+		uniq.length === 1 && /^\d{8}[a-z]$/.test(uniq[0] || ''), J(uniq))
 }
 
 console.log('\n' + (fail === 0 ? 'ALL PASS（' + pass + ' 项）' : 'FAIL ' + fail + ' 项 / PASS ' + pass + ' 项'))
