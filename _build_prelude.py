@@ -600,7 +600,8 @@ p('**cost（代价）—— 付不起时怎么办是关键**')
 story.append(tbl([['op', '参数', '付不起时'],
                   ['`tension`', '`delta`', '**钳到 0**，照常结算（`0-1=0`）'],
                   ['`score`', '`n`', '**允许为负**，不钳位'],
-                  ['`discard_hand`', '`n`', '**整段跳过**：弹选牌框选【正式手牌】'],
+                  ['`discard_hand`', '`n`、`filter`（可选卡型）',
+                   '**整段跳过**：弹选牌框选【正式手牌】；`filter:"response"` 只弃响应卡（18404，同 15412）'],
                   ['`discard_prelude`', '`n`', '**整段跳过**：选【前奏手牌】'],
                   ], [36, 30, 94]))
 
@@ -625,7 +626,7 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                    '检视牌堆选牌；`to` = hand / table_status / table_response；'
                    '`deck` = formal / prelude', '**已实现**'],
                   ['`place_status_from_hand`', '`n`', '把正式状态卡明置到桌面', '**已实现**'],
-                  ['`place_response_from_hand`', '`n`', '把正式响应卡暗置到桌面', '**已实现**'],
+                  ['`place_response_from_hand`', '`n`', '把正式响应卡暗置到桌面（18404 首次使用）', '**已实现**'],
                   ['`eliminate`', '`space, type`',
                    '消灭 1 支敌方部队（复用 `eliminate_candidates`）；'
                    '多支时挂起 `pick_piece` 由玩家点地图选', '**已实现**'],

@@ -126,6 +126,30 @@ const EFFECTS = {
 	},
 
 	/*
+	 * 弃置1张[响应卡]：获得2分。[紧张度+1] 打出1张[响应卡]。摸1张牌。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   弃1张响应卡  <- 15412 御前会议（正式局 cost:{discard:1, filter:'response'}）
+	 *   打出响应卡   <- place_response_from_hand（前奏 op，engine.js 1031）+ 15412 jp_facedown_play
+	 *   摸1张牌      <- 18301 不信任动议案 draw + 裁定⑨（没写"前奏"就是正式牌）
+	 * 两段都是"弃响应卡换效果"；这里分两步提交，不做 15412 的一步式弹窗。
+	 */
+	'18404': {
+		name: '黑龙会',
+		seg1: {
+			cost: [{ op: 'discard_hand', n: 1, filter: 'response' }],
+			effect: [{ op: 'score', n: 2 }],
+		},
+		seg2: {
+			cost: [{ op: 'tension', delta: 1 }],
+			effect: [
+				{ op: 'place_response_from_hand' },
+				{ op: 'draw', n: 1 },
+			],
+		},
+	},
+
+	/*
 	 * 获得1分 或 在陆地地区部署1支空军。
 	 *
 	 * 复用参考：

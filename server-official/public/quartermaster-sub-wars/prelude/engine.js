@@ -415,9 +415,26 @@ function payCost(game, nation, cost, deps, costCtx) {
 
 		if (c.op === 'discard_hand' || c.op === 'discard_prelude') {
 			/* 硬代价：付不起 -> 整段跳过 */
-			const pool = c.op === 'discard_hand'
-				? (game.hands[nation] || [])
-				: (P.hands[nation] || [])
+			let pool = c.op === 'discard_hand'
+				? (game.hands[nation] || []).slice()
+				: (P.hands[nation] || []).slice()
+			/*
+			 * 【2026-11-28】filter 参数（18404“弃置1张[响应卡]”）：
+			 * 参照正式局 15412 御前会议的 cost:{discard:1, filter:'response'}，
+			 * 只在正式手牌里按卡型过滤。没有 filter 时行为不变。
+			 */
+			if (c.filter) {
+				/*
+				 * 卡面 filter 写小写（15412 口径 filter:'response'），
+				 * cards.js 的 type 是大写 'RESPONSE' —— 统一转小写再比。
+				 */
+				const want = String(c.filter).toLowerCase()
+				pool = pool.filter(function (id) {
+					const face = String(id).split('#')[0]
+					const cd = deps.cardById ? deps.cardById(face) : null
+					return cd && String(cd.type).toLowerCase() === want
+				})
+			}
 			const need = c.n || 1
 			if (pool.length < need) {
 				game.log.push('【前奏】代价不足（' +

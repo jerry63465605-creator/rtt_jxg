@@ -200,13 +200,24 @@ function buildView(game, nation, deps) {
 			}
 
 			if (pd.kind === 'place_card') {
+				/*
+				 * 【2026-11-28 修·手牌泄密】候选来自【正式手牌】（响应卡/状态卡），
+				 * 只能下发给该国的同阵营视角。旧实现无条件 map(cardInfo)，
+				 * 敌方能在 view.prelude.pending.candidates 里看到英国手里那张响应卡的名字。
+				 * 判据照抄上方 ask_enemy 分支：factionOf(观察者) === factionOf(持有方)。
+				 */
+				const who = pd.nation || nation
+				const myF = deps.factionOf ? deps.factionOf(nation) : null
+				const whoF = deps.factionOf ? deps.factionOf(who) : null
+				const iAmOwner = !!(myF && whoF && myF === whoF)
 				return {
 					kind: 'place_card',
 					placeKind: pd.placeKind,
 					cardId: pd.cardId,
 					name: nameOfCard,
 					n: pd.n || 1,
-					candidates: (pd.candidates || []).map(cardInfo),
+					isAnswerer: iAmOwner,
+					candidates: iAmOwner ? (pd.candidates || []).map(cardInfo) : [],
 				}
 			}
 
