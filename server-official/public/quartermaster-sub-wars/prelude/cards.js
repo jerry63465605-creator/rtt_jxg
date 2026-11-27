@@ -157,6 +157,37 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度-1][持续] 若日本未对苏联发起战斗，苏联对日本发起战斗后：其失去4分。
+	 * [除非弃置1张手牌] 从苏联前奏牌堆打出[苏日中立条约]。（seg2 跨牌堆，后补）
+	 *
+	 * 与 18006（苏联视角）对称；两边共用 game.ongoing.soviet_japan_pact 标记。
+	 * 参考对象：
+	 *   受攻击判定 <- maybe_end_neutral_by_attack(game, victim, attacker)（苏联中立）
+	 *   持续标记   <- 18305 coal_ban（game.ongoing + request_responses 开头的钩子）
+	 */
+	'18407': {
+		name: '日苏中立条约',
+		seg1: {
+			cost: [{ op: 'tension', delta: -1 }],
+			effect: [{ op: 'soviet_japan_pact', owner: '日本', target: '苏联', points: 4 }],
+		},
+	},
+
+	/*
+	 * [紧张度-1][持续] 若苏联未对日本发起战斗，日本对苏联发起战斗后：其失去4分。
+	 * [除非弃置1张手牌] 从日本前奏牌堆打出[日苏中立条约]。（seg2 跨牌堆，后补）
+	 *
+	 * 18407 的镜像；owner/target 互换。
+	 */
+	'18006': {
+		name: '苏日中立条约',
+		seg1: {
+			cost: [{ op: 'tension', delta: -1 }],
+			effect: [{ op: 'soviet_japan_pact', owner: '苏联', target: '日本', points: 4 }],
+		},
+	},
+
+	/*
 	 * [紧张度+2] 在<中国东部>消灭1支中国陆军。
 	 * [紧张度+3][弃置1张手牌] 在<中国东部>征召陆军。
 	 *

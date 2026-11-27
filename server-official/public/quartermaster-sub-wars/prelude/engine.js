@@ -854,6 +854,32 @@ function applyEffect(game, nation, eff, deps) {
 	}
 
 	/*
+	 * 苏日中立条约标记（18407 日本视角 / 18006 苏联视角，共用一张标记表）。
+	 *
+	 * 参考对象：maybe_end_neutral_by_attack(game, victim, attacker)
+	 *   —— 按 (被攻击方, 攻击方) 判定，而不是只看 ctx.nation。
+	 * 参考对象：18305 coal_ban —— 用 game.ongoing 挂持续标记，
+	 *   在 request_responses 开头（前奏守卫之前）由规则侧钩子消费。
+	 */
+	if (eff.op === 'soviet_japan_pact') {
+		game.ongoing = game.ongoing || {}
+		const tbl = game.ongoing.soviet_japan_pact || (game.ongoing.soviet_japan_pact = {})
+		const cardKey = String(deps.__ctx && deps.__ctx.cardId || '')
+		tbl[cardKey] = {
+			owner: eff.owner || nation,
+			target: eff.target || '苏联',
+			points: eff.points != null ? eff.points : 4,
+			broken: false,
+		}
+		game.log.push('【前奏】' + (eff.owner || nation) + ' 与 ' +
+			(eff.target || '苏联') + ' 签订中立条约：' +
+			(eff.owner || nation) + ' 若先发起战斗则失效；' +
+			(eff.target || '苏联') + ' 先发起战斗则失去 ' +
+			(eff.points != null ? eff.points : 4) + ' 分')
+		return
+	}
+
+	/*
 	 * 增加 1 支【陆军后备】= 该国陆军上限 +1（17750 意大利殖民地民兵同款）。
 	 * 复用正式原子 add_army_bonus，不新造机制。
 	 */

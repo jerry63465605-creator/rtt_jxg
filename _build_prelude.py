@@ -619,7 +619,10 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                   ['`play_prelude_hand`', '`n`', '打出前奏手牌（插入结算，走栈）', '**已实现**'],
                   ['`play_prelude_top`', '`n`', '打出前奏牌堆顶（插入结算）', '**已实现**'],
                   ['`marker`', '`space, delta`', '加减计分标记（复用 `add_marker`）', '**已实现**'],
-                  ['`army_bonus`', '`nation`',
+                  ['`soviet_japan_pact`', '`owner, target, points`',
+                   '苏日中立持续标记（18407/18006）；参考 maybe_end_neutral_by_attack 的 (victim,attacker) 判定',
+                   '**已实现**'],
+                   ['`army_bonus`', '`nation`',
                    '增加 1 支陆军后备（复用 add_army_bonus；17750/17537/17829 同款）', '**已实现**'],
                    ['`deploy_air`', '`n`、`terrain`（可选地形限定）',
                    '部署空军（`can_deploy_air` 独立通道）；`terrain:"land"` 时候选只留陆地（18403）',
@@ -652,7 +655,7 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                    '**已实现**'],
                   ], [46, 46, 56, 22]))
 
-key('全部 **21 个 op 均已实现**（`add_card_to_deck` / `attrition_prelude` / `build` / '
+key('全部 **22 个 op 均已实现**（`add_card_to_deck` / `attrition_prelude` / `build` / '
     '`choice` / `coal_ban` / `deploy_air` / `draw` / `eliminate` / `extra_action_phase` / '
     '`marker` / `place_response_from_hand` / `place_status_from_hand` / `play_prelude_hand` / '
     '`play_prelude_top` / `recruit` / `reorder_deck` / `score` / `search_deck` / '

@@ -20857,14 +20857,47 @@ function response_queue_view(game) {
  */
 function apply_ongoing_battle_effects(game, on, ctx, pre) {
 	if (on !== 'battle' || pre) return
+
+	/* ---- ① 18305 意大利煤炭禁运（原逻辑不变） ---- */
 	const o = (game.ongoing || {})['18305']
-	if (!o) return
-	if (!ctx || ctx.nation !== o.target) return
-	if (Number(game.turn) !== Number(o.untilTurn)) return
-	/* 意大利属于轴心 -> 直接扣阵营分 */
-	add_axis_score(game, -3)
-	game.log.push('【18305 意大利煤炭禁运】' + o.target + ' 在第 ' +
-		o.untilTurn + ' 回合发起战斗，失去 3 分')
+	if (o && ctx && ctx.nation === o.target &&
+		Number(game.turn) === Number(o.untilTurn)) {
+		/* 意大利属于轴心 -> 直接扣阵营分 */
+		add_axis_score(game, -3)
+		game.log.push('【18305 意大利煤炭禁运】' + o.target + ' 在第 ' +
+			o.untilTurn + ' 回合发起战斗，失去 3 分')
+	}
+
+	/* ---- ② 18407 / 18006 苏日中立条约 ----
+	 * 参考 maybe_end_neutral_by_attack(game, victim, attacker)：
+	 * 按 (被攻击方, 攻击方) 判定；battleCtx.victimNation 可能为空（空打），
+	 * 此时不构成“对某国发起战斗”，跳过。
+	 */
+	const pacts = (game.ongoing || {}).soviet_japan_pact
+	if (!pacts || !ctx || !ctx.victimNation) return
+	for (const key of Object.keys(pacts)) {
+		const pact = pacts[key]
+		if (!pact || pact.broken) continue
+		const attacker = ctx.nation
+		const victim = ctx.victimNation
+
+		/* 条约持有方先动手 -> 该条约永久作废 */
+		if (attacker === pact.owner && victim === pact.target) {
+			pact.broken = true
+			game.log.push('【' + key + ' 中立条约】' + pact.owner +
+				' 先对 ' + pact.target + ' 发起战斗，条约作废')
+			continue
+		}
+		/* 目标方先动手 -> 目标方失分（按阵营扣分） */
+		if (attacker === pact.target && victim === pact.owner) {
+			pact.broken = true
+			const pts = -Math.abs(pact.points || 4)
+			if (faction_of_nation(attacker) === AXIS) add_axis_score(game, pts)
+			else add_allied_score(game, pts)
+			game.log.push('【' + key + ' 中立条约】' + attacker +
+				' 对 ' + pact.owner + ' 发起战斗，失去 ' + Math.abs(pts) + ' 分')
+		}
+	}
 }
 
 function request_responses(game, on, ctx, pre, opt) {
