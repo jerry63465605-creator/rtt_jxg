@@ -126,6 +126,21 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度+1] 在<硫磺岛>相邻地区征召1支海军。
+	 *
+	 * 复用参考：18302《斯卡帕湾打捞》（adjacentOf + recruit navy），只换锚点地区。
+	 * 按已定口径，recruit 不预筛：候选是<硫磺岛>的相邻地区，
+	 * 实际能否征召由 recruit_piece 报原因。
+	 */
+	'18402': {
+		name: '撕毁海军条约',
+		seg1: {
+			cost: [{ op: 'tension', delta: 1 }],
+			effect: [{ op: 'recruit', adjacentOf: '硫磺岛', type: 'navy', n: 1 }],
+		},
+	},
+
+	/*
 	 * 英国损耗3张前奏牌。[除非英国弃置1张手牌] 英国损耗2张前奏牌。
 	 *
 	 * 两段式损耗，不是付代价改数值：
