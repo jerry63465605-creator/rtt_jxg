@@ -38502,6 +38502,21 @@ function do_action(state, current, action, arg) {
 				const sp = data.spaces[id]
 				return sp ? sp.name : String(id)
 			},
+			/* 14913《继续战争》的条件口径：has_pieces(game, {space, nation, types}) */
+			hasPieces: function (g, opt) {
+				return has_pieces(g, opt)
+			},
+			/* 地区组展开：<中国> -> [中国西部, 中国东北, 中国东部] */
+			spaceIdsExpand: function (names) {
+				return space_ids_expand(names)
+			},
+			/* 17750《意大利殖民地民兵》/ 17537 / 17829 用的原子 */
+			addArmyBonus: function (g, nation) {
+				return add_army_bonus(g, nation)
+			},
+			armyBonusOf: function (g, nation) {
+				return army_bonus_of(g, nation)
+			},
 			/* 消灭部队：候选与执行都复用正式版原子（同 15316 口径） */
 			eliminateCandidates: function (g, nation, space, type, onlyNation) {
 				return eliminate_candidates(g, nation, Number(space), type, onlyNation)

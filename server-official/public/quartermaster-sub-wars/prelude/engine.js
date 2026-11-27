@@ -853,6 +853,22 @@ function applyEffect(game, nation, eff, deps) {
 		return 'pending'
 	}
 
+	/*
+	 * 增加 1 支【陆军后备】= 该国陆军上限 +1（17750 意大利殖民地民兵同款）。
+	 * 复用正式原子 add_army_bonus，不新造机制。
+	 */
+	if (eff.op === 'army_bonus') {
+		const who = eff.nation || nation
+		if (!deps.addArmyBonus || !deps.armyBonusOf) {
+			game.log.push('【前奏】缺少原子：addArmyBonus')
+			return
+		}
+		deps.addArmyBonus(game, who)
+		game.log.push('【前奏】' + who + ' 增加 1 支陆军后备（上限→' +
+			(2 + deps.armyBonusOf(game, who)) + '）')
+		return
+	}
+
 	if (eff.op === 'marker') {
 		/* 计分标记：复用正式版 add_marker / remove_marker（会参与正式计分） */
 		const spaceId = deps.spaceIdOf ? deps.spaceIdOf(eff.space) : null
@@ -1672,6 +1688,32 @@ function checkWhen(game, when, nation, deps) {
 	if (when.discard_nonempty && !((P.discard && P.discard[nation]) || []).length) return false
 
 	/* 正式手牌里是否有某类型（状态卡 / 响应卡） */
+	/*
+	 * 【2026-11-28】has_pieces 条件（18406“若<中国>有日本陆军”）：
+	 * 口径照抄 14913《继续战争》的
+	 *   has_pieces(game, {space:'北欧', nation:'德国', types:['army']})
+	 * 不是新语义，只是把现成原子接进 DSL。
+	 *
+	 * space / spaces：单地区 或 地区组（<中国> 用 spaceIdsExpand 展开成三地）。
+	 * negated：true 时取反，用于“否则”分支。
+	 */
+	if (when.has_pieces && deps.hasPieces) {
+		const hp = when.has_pieces
+		let spaces = hp.space ? [hp.space] : (hp.spaces || [])
+		if (hp.space_group && deps.spaceIdsExpand) {
+			spaces = deps.spaceIdsExpand([hp.space_group])
+		} else if (deps.spaceIdOf) {
+			spaces = spaces.map(function (nm) { return deps.spaceIdOf(nm) })
+				.filter(function (id) { return id != null })
+		}
+		let hit = false
+		for (const sp of spaces) {
+			const opt = { space: Number(sp), nation: hp.nation, types: hp.types || null }
+			if (deps.hasPieces(game, opt)) { hit = true; break }
+		}
+		if (when.negated ? hit : !hit) return false
+	}
+
 	if (when.has_status_in_hand || when.has_response_in_hand) {
 		const wantType = when.has_status_in_hand ? 'STATUS' : 'RESPONSE'
 		const hand = (game.hands && game.hands[nation]) || []

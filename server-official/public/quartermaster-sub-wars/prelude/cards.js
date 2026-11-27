@@ -126,6 +126,37 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [若<中国>有日本陆军] 紧张度-1。增加1支陆军后备。
+	 * [否则弃置1张手牌] 增加1支陆军后备。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   条件 has_pieces <- 14913 继续战争（has_pieces(game,{space,nation,types})）
+	 *   地区组 <中国>   <- space_ids_expand（REGION_GROUPS['中国'] 三地）
+	 *   后备           <- 17750 意大利殖民地民兵 / 17537 / 17829（add_army_bonus）
+	 *
+	 * 新增：when.has_pieces + negated（把现成 has_pieces 接进 DSL）；
+	 *       army_bonus op（唯一新 op，复用 add_army_bonus）。
+	 */
+	'18406': {
+		name: '仆从国军',
+		seg1: {
+			when: {
+				has_pieces: { space_group: '中国', nation: '日本', types: ['army'] },
+			},
+			cost: [{ op: 'tension', delta: -1 }],
+			effect: [{ op: 'army_bonus', nation: '中国' }],
+		},
+		seg2: {
+			when: {
+				has_pieces: { space_group: '中国', nation: '日本', types: ['army'] },
+				negated: true,
+			},
+			cost: [{ op: 'discard_hand', n: 1 }],
+			effect: [{ op: 'army_bonus', nation: '中国' }],
+		},
+	},
+
+	/*
 	 * [紧张度+2] 在<中国东部>消灭1支中国陆军。
 	 * [紧张度+3][弃置1张手牌] 在<中国东部>征召陆军。
 	 *
