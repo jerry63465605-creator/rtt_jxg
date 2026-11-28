@@ -219,6 +219,32 @@ const EFFECTS = {
 	},
 
 	/*
+	 * [紧张度-1] <中国东北>增加1个计分标记。
+	 * [失去2分] 在<中国东北>征召1支陆军。
+	 *
+	 * 注意：这是【前奏版】18410；正式局另有同名响应卡 15434。
+	 * 前奏局按卡名删除正式牌时会跳过 PRELUDE 类型（见 state.js strip_formal_cards），
+	 * 所以两者不会互相误伤。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   marker            <- 现有 op（复用正式 add_marker，参与正式计分）
+	 *   recruit 中国东北   <- 18400 九一八事变 seg1
+	 *   tension -1 代价    <- 18406 仆从国军 seg1
+	 *   score -2 代价      <- 18412 近卫文麿 seg2
+	 */
+	'18410': {
+		name: '伪满洲国',
+		seg1: {
+			cost: [{ op: 'tension', delta: -1 }],
+			effect: [{ op: 'marker', space: '中国东北', delta: 1 }],
+		},
+		seg2: {
+			cost: [{ op: 'score', n: -2 }],
+			effect: [{ op: 'recruit', space: '中国东北', type: 'army' }],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 获得1分。[除非英国或美国弃置1张手牌] 获得3分。
 	 *
 	 * 复用参考（每次复用都给出对象）：
