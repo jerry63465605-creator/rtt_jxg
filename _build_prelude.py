@@ -602,7 +602,7 @@ p('**cost（代价）—— 付不起时怎么办是关键**')
 story.append(tbl([['op', '参数', '付不起时'],
                   ['`tension`', '`delta`', '**钳到 0**，照常结算（`0-1=0`）'],
                   ['`score`', '`n`', '**允许为负**，不钳位'],
-                  ['`discard_hand`', '`n`、`filter`（可选卡型）',
+                  ['`discard_hand`', '`n`、`filter`（可选卡型）、`atMost`（至多n张）',
                    '**整段跳过**：弹选牌框选【正式手牌】；`filter:"response"` 只弃响应卡（18404，同 15412）'],
                   ['`discard_prelude`', '`n`', '**整段跳过**：选【前奏手牌】'],
                   ], [36, 30, 94]))
@@ -613,7 +613,7 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                   ['`score`', '`n`', '加阵营分（可为负）', '**已实现**'],
                   ['`recruit`', '`space, type, n`', '征召（复用正式版 `recruit_piece`）', '**已实现**'],
                   ['`build`', '`space, type, n`', '建设（复用 `build_piece`）', '**已实现**'],
-                  ['`draw`', '`n, deck`',
+                  ['`draw`', '`n`、`deck`、`nFrom`（数量来源，如 discarded）', '`n, deck`',
                    '抽牌；`deck` = `formal`（默认）/ `prelude`（摸前奏牌）', '**已实现**'],
                   ['`choice`', '`label, options[]`', '二选一（每项带 when / effect）', '**已实现**'],
                   ['`play_prelude_hand`', '`n`', '打出前奏手牌（插入结算，走栈）', '**已实现**'],
@@ -621,6 +621,9 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                   ['`marker`', '`space, delta`', '加减计分标记（复用 `add_marker`）', '**已实现**'],
                   ['`soviet_japan_pact`', '`owner, target, points`',
                    '苏日中立持续标记（18407/18006）；参考 maybe_end_neutral_by_attack 的 (victim,attacker) 判定',
+                   '**已实现**'],
+                   ['`discarded_to_deck`', '（无参）',
+                   '把本牌弃掉的牌洗回正式牌堆（18411；17812 亚洲人力储备置底口径）',
                    '**已实现**'],
                    ['`army_bonus`', '`nation`',
                    '增加 1 支陆军后备（复用 add_army_bonus；17750/17537/17829 同款）', '**已实现**'],
@@ -656,7 +659,7 @@ story.append(tbl([['op', '参数', '说明', '状态'],
                    '**已实现**'],
                   ], [46, 46, 56, 22]))
 
-key('全部 **22 个 op 均已实现**（`add_card_to_deck` / `attrition_prelude` / `build` / '
+key('全部 **23 个 op 均已实现**（`add_card_to_deck` / `attrition_prelude` / `build` / '
     '`choice` / `coal_ban` / `deploy_air` / `draw` / `eliminate` / `extra_action_phase` / '
     '`marker` / `place_response_from_hand` / `place_status_from_hand` / `play_prelude_hand` / '
     '`play_prelude_top` / `recruit` / `reorder_deck` / `score` / `search_deck` / '

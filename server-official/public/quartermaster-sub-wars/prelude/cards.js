@@ -246,6 +246,38 @@ const EFFECTS = {
 	},
 
 	/*
+	 * 选择并弃置至多3张手牌，摸等量牌。[失去2分] 改为洗入牌堆。
+	 *
+	 * 复用参考（每次复用都给出对象）：
+	 *   弃至多3张   <- discard_hand atMost（先验 _test_else_atmost 已验）
+	 *   洗回正式牌堆 <- 17812 亚洲人力储备 step='deck'（同一实例 id 置底）
+	 *   摸等量牌     <- draw nFrom:'discarded'（抽新牌，数量=弃牌数）
+	 *   失去2分      <- 18412 近卫文麿 seg2（score -2）
+	 *   跳过仍抽牌   <- seg2.elseEffect（先验已验）
+	 *
+	 * 时序：seg1 弃牌并记录 discarded -> seg2 决策：
+	 *   付2分 -> discarded_to_deck 洗回 + 抽 discarded.length 张新牌
+	 *   不付  -> elseEffect 直接抽 discarded.length 张新牌
+	 */
+	'18411': {
+		name: '血盟团事件',
+		seg1: {
+			cost: [{ op: 'discard_hand', n: 3, atMost: true }],
+			effect: [],
+		},
+		seg2: {
+			cost: [{ op: 'score', n: -2 }],
+			effect: [
+				{ op: 'discarded_to_deck' },
+				{ op: 'draw', nFrom: 'discarded' },
+			],
+			elseEffect: [
+				{ op: 'draw', nFrom: 'discarded' },
+			],
+		},
+	},
+
+	/*
 	 * [紧张度+1] 美国损耗3张前奏牌。
 	 * [紧张度-1][失去2分] 日本损耗1张前奏牌。
 	 *

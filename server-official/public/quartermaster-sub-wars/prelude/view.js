@@ -267,6 +267,8 @@ function buildView(game, nation, deps) {
 			return {
 				kind: pd.kind,
 				n: pd.n,
+				/* atMost（18411）：客户端据此放宽「确认」按钮 —— 0..n 张都能提交 */
+				atMost: !!pd.atMost,
 				cardId: pd.cardId,
 				name: nameOfCard,
 				candidates: (pd.candidates || []).map(cardInfo),

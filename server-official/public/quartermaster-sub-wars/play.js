@@ -787,7 +787,13 @@ function update_prelude_cost_modal() {
 	const btn = document.getElementById('prelude_peek_confirm')
 	if (btn) {
 		btn.textContent = isAsk ? '确认弃置（阻止）' : '确认选择'
-		btn.disabled = prelude_cost_picked.length !== pd.n
+		/*
+		 * atMost（18411「弃置至多3张」）：0..n 张都可确认。
+		 * 普通模式仍须恰好 n 张 —— 与服务端 payCards 的校验口径一致。
+		 */
+		btn.disabled = pd.atMost
+			? (prelude_cost_picked.length > pd.n)
+			: (prelude_cost_picked.length !== pd.n)
 	}
 
 	/* 回答方额外给一个「跳过」：不弃牌，让对方效果生效 */
@@ -825,7 +831,10 @@ function confirm_prelude_peek() {
 	const P = view && view.prelude
 	const pd = P && P.pending
 	if (!pd) return
-	if (prelude_cost_picked.length !== pd.n) return
+	/* atMost（18411）：允许少于 n（含 0）；普通模式仍须恰好 n */
+	if (pd.atMost
+		? (prelude_cost_picked.length > pd.n)
+		: (prelude_cost_picked.length !== pd.n)) return
 
 	if (pd.kind === 'nested_play') {
 		/* 嵌套打出：一次一张 */

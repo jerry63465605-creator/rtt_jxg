@@ -436,7 +436,14 @@ function payCost(game, nation, cost, deps, costCtx) {
 				})
 			}
 			const need = c.n || 1
-			if (pool.length < need) {
+			/*
+			 * 【2026-11-28】atMost（18411“弃置至多3张手牌”）：
+			 * 允许弃 0..need 张，不够 need 也照付（0 张也可）。
+			 * 普通 discard 仍须恰好 need 张。
+			 */
+			if (c.atMost && pool.length < need) {
+				/* 至多模式下手牌不足也不跳过，全部弃掉即可 */
+			} else if (!c.atMost && pool.length < need) {
 				game.log.push('【前奏】代价不足（' +
 					(c.op === 'discard_hand' ? '正式手牌 ' : '前奏手牌 ') +
 					pool.length + ' < ' + need + '），该段不结算')
@@ -446,6 +453,7 @@ function payCost(game, nation, cost, deps, costCtx) {
 			P.pending = {
 				kind: c.op,
 				n: need,
+				atMost: !!c.atMost,
 				cardId: costCtx.cardId,
 				nation: nation,
 				candidates: pool.slice(),
@@ -799,8 +807,37 @@ function applyEffect(game, nation, eff, deps) {
 		return 'pending'
 	}
 
+	/*
+	 * 把本牌 seg1 弃掉的牌【洗回正式牌堆】（18411 血盟团事件）。
+	 * 口径照抄 17812 亚洲人力储备 step='deck'：
+	 *   同一实例 id 从 game.discard splice -> game.decks[nation].push（置底，不新建实例）。
+	 * 牌面「洗入牌堆」按既有约定 = 置底，与 17812 一致。
+	 */
+	if (eff.op === 'discarded_to_deck') {
+		const ids = (P.resolving && P.resolving.discarded || []).slice()
+		const disc = (game.discard && game.discard[nation]) || []
+		let moved = 0
+		for (const id of ids) {
+			const i = disc.indexOf(String(id))
+			if (i < 0) continue
+			disc.splice(i, 1)
+			;(game.decks[nation] = game.decks[nation] || []).push(String(id))
+			moved++
+		}
+		game.log.push('【前奏】' + nation + ' 将 ' + moved +
+			' 张弃牌洗回正式牌堆（按 17812 置底口径）')
+		return
+	}
+
 	if (eff.op === 'draw') {
-		const nDraw = eff.n || 1
+		/*
+		 * nFrom:'discarded' —— 抽【本牌 seg1 弃牌数】张新牌（18411）。
+		 * 数量来源参数化，不新开 op；只有 nFrom 缺省时才用固定 n。
+		 */
+		let nDraw = eff.n || 1
+		if (eff.nFrom === 'discarded') {
+			nDraw = (P.resolving && P.resolving.discarded || []).length
+		}
 		/*
 		 * deck: 'prelude' —— 摸【前奏牌】（18301 不信任动议案：「摸2张前奏牌」）。
 		 * 缺省仍是摸正式牌，与旧行为一致。抽牌来源只由 deck 参数决定，
@@ -2105,8 +2142,12 @@ function payCards(game, current, arg, deps) {
 	}
 
 	const picked = (arg && arg.cards) || []
-	if (picked.length !== pd.n) {
-		game.log.push('【前奏】需要选择恰好 ' + pd.n + ' 张（当前 ' + picked.length + '）')
+	/*
+	 * atMost：弃 0..pd.n 张都可（18411）。普通模式仍须恰好 pd.n 张。
+	 */
+	if (pd.atMost ? (picked.length > pd.n) : (picked.length !== pd.n)) {
+		game.log.push('【前奏】' + (pd.atMost ? '至多可选择 ' : '需要选择恰好 ') + pd.n +
+			' 张（当前 ' + picked.length + '）')
 		return game
 	}
 	for (const id of picked) {
@@ -2114,6 +2155,15 @@ function payCards(game, current, arg, deps) {
 			game.log.push('【前奏】该牌不在可选范围')
 			return game
 		}
+	}
+
+	/*
+	 * 【2026-11-28】记录本次弃牌的实例 id 到当前帧，
+	 * 供同卡 seg2 的 draw nFrom:'discarded' / discarded_to_deck 使用。
+	 * 帧在 resolveCard 时 push，finishResolve 时 pop，seg2 全程保持同一对象。
+	 */
+	if (P.resolving) {
+		P.resolving.discarded = picked.slice()
 	}
 
 	/* 扣牌 */
@@ -2199,6 +2249,19 @@ function chooseOption(game, current, arg, deps) {
 			game.log.push('【前奏】第二段结算完成')
 		} else {
 			game.log.push('【前奏】跳过第二段')
+			/*
+			 * 【2026-11-28】elseEffect：跳过第二段时执行的分支（18411 抽等量牌）。
+			 * 帧在 resolveCard 时 push、finishResolve 时 pop，seg2 全程保持同一对象，
+			 * 所以 seg1 记录的 discarded 这里仍可取到。
+			 */
+			if (def && def.seg2 && def.seg2.elseEffect) {
+				P.resolving = P.resolving || { cardId: pd.cardId, nation: pd.nation }
+				P.resolving.stage = 'seg2'
+				P.resolving.restEffects = (def.seg2.elseEffect || []).slice()
+				const rE = drainEffects(game, deps)
+				if (rE === 'pending') return game
+				game.log.push('【前奏】第二段（替代分支）结算完成')
+			}
 		}
 		return finishResolve(game, deps)
 	}
