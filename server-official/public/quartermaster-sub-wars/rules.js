@@ -30353,9 +30353,21 @@ exports.view = function (state, current) {
 				prompt: pc.prompt,
 				/* 【2026-10-31】被拦截的卡（15329 反潜战术 / 17736 王牌飞行员 等 pre-cancel 响应卡） */
 				target: view_intercept_target(pc.ctx, pc.on),
+				/*
+				 * 【B64 补漏 2026-11-28】kind:'card' 的候选必须带上卡图字段
+				 * （face/type/img/text）—— 客户端 card_elt 靠 img 画真实卡面。
+				 *
+				 * 旧实现无脑裁成 {id,name}，把 RESPONSE_EFFECT_IMPL['7904'/'15328']
+				 * 已经补好的 img 又抹掉了，于是卡图网格退化成「空白框 + 左上角卡名」。
+				 * 这是 B64「服务端补字段」与 view 层裁剪不同源导致的漏改。
+				 *
+				 * 其它 kind（space/piece）保持原样，不额外暴露内部字段。
+				 */
 				candidates: (pc.candidates || []).map(x =>
 					(x && typeof x === 'object')
-						? { id: x.id, name: x.name || '' }
+						? (pc.kind === 'card'
+							? { id: x.id, name: x.name || '', face: x.face, type: x.type, img: x.img, text: x.text }
+							: { id: x.id, name: x.name || '' })
 						: { id: x, name: data.name_of(x) || String(x) }),
 			}
 		})(),
