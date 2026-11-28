@@ -18612,6 +18612,70 @@ RESPONSE_EFFECTS['18313'] = {
  * 【英国军备 18315】英联邦空军训练计划：出牌阶段开始时，获得 2 分 或 部署 1 支空军。
  * 二选一用 kind:'option'，选空军后再用 kind:'space' 选地区（靠 extra.step 串联）。
  */
+/*
+ * ============ 日本军备卡（批次 1：计分型） ============
+ * 18414 赤城号航空母舰   计分阶段开始时：建设 1 支海军
+ * 18421 增援太平洋诸岛   计分阶段开始时：<硫磺岛><新几内亚>之一征召 1 支陆军
+ * 18413/18419/18420      计分阶段：两地区每有一个被日本控制，获得 2 分
+ */
+
+/* 18414：结构照抄 18313 光辉号，只把 on 从 play_start 改成 scoring */
+RESPONSE_EFFECTS['18414'] = {
+	name: '赤城号航空母舰',
+	actor: '日本',
+	trigger: {
+		on: 'scoring',
+		filter: (g, ctx, side) => {
+			if (side !== AXIS) return false
+			if (ctx && ctx.nation && ctx.nation !== '日本') return false
+			/* 没有可建海军的海域就不必问（白问一次还得付弃牌代价） */
+			return build_candidate_spaces(g, '日本', 'navy', {}).length > 0
+		},
+	},
+	notes: '计分阶段开始时：建设1支海军',
+}
+
+/* 18421：多地区之一征召，参考 18316 英镑区（scoring 选地区征召） */
+RESPONSE_EFFECTS['18421'] = {
+	name: '增援太平洋诸岛',
+	actor: '日本',
+	trigger: {
+		on: 'scoring',
+		filter: (g, ctx, side) => {
+			if (side !== AXIS) return false
+			if (ctx && ctx.nation && ctx.nation !== '日本') return false
+			/* 两处都建不了就不问 */
+			const spaces = ['硫磺岛', '新几内亚'].map(x => data.id_of(x)).filter(x => x != null)
+			return spaces.some(sp => can_build_at(g, '日本', sp, 'army').ok)
+		},
+	},
+	suspend: true,
+	notes: '计分阶段开始时：在<硫磺岛><新几内亚>之一征召1支陆军',
+}
+
+/*
+ * 18413 / 18419 / 18420：前进基地三兄弟（同构）
+ * 口径：被日本控制 = 该地区有日本部队（has_pieces 的自然语义，与 6601 同源）。
+ */
+function _jpBaseCfg(name, spaces, desc) {
+	return {
+		name: name,
+		actor: '日本',
+		trigger: {
+			on: 'scoring',
+			filter: (g, ctx, side) => side === AXIS && (!ctx || !ctx.nation || ctx.nation === '日本'),
+		},
+		notes: desc,
+		_jpBase: spaces,
+	}
+}
+RESPONSE_EFFECTS['18413'] = _jpBaseCfg('阿留申前进基地', ['阿拉斯加', '北太平洋'],
+	'计分阶段：<阿拉斯加><北太平洋>每有一个被日本控制，获得2分')
+RESPONSE_EFFECTS['18419'] = _jpBaseCfg('莫尔兹比港前进基地', ['新几内亚', '南太平洋'],
+	'计分阶段：<新几内亚><南太平洋>每有一个被日本控制，获得2分')
+RESPONSE_EFFECTS['18420'] = _jpBaseCfg('珍珠港前进基地', ['夏威夷', '中太平洋'],
+	'计分阶段：<夏威夷><中太平洋>每有一个被日本控制，获得2分')
+
 RESPONSE_EFFECTS['18315'] = {
 	name: '英联邦空军训练计划',
 	actor: '英国',
@@ -18740,6 +18804,29 @@ RESPONSE_EFFECTS['14917'] = {
 			return ctx && ctx.nation === '德国' && owner_side === AXIS
 		},
 	},
+}
+
+/*
+ * 18413/18419/18420 前进基地的共用实现。
+ * 控制口径：该地区有日本部队（has_pieces 的自然语义，与 6601 同源）。
+ */
+function _jpBaseImpl(game, cardId) {
+	const cfg = RESPONSE_EFFECTS[cardId]
+	const names = (cfg && cfg._jpBase) || []
+	const hit = []
+	for (const nm of names) {
+		const sp = data.id_of(nm)
+		if (sp == null) continue
+		if (has_pieces(game, { space: sp, nation: '日本' })) hit.push(nm)
+	}
+	const pts = hit.length * 2
+	if (pts > 0) add_axis_score(game, pts)
+	return {
+		ok: true,
+		desc: '<' + names.join('><') + '> 中被日本控制 ' + hit.length +
+			' 处' + (hit.length ? '（' + hit.join('、') + '）' : '') +
+			'，获得 ' + pts + ' 分',
+	}
 }
 
 const RESPONSE_EFFECT_IMPL = {
@@ -19020,6 +19107,66 @@ const RESPONSE_EFFECT_IMPL = {
 	},
 
 	/* 【英国军备 18313】光辉号航空母舰：建设 1 支海军（选海域） */
+	/* ============ 日本军备卡（批次 1）实现 ============ */
+
+	/* 18414：照抄 18313，国家换日本；_armamentBuilding 用 try/finally 保证复位 */
+	'18414': (game, side, ctx, choice) => {
+		const nat = '日本'
+		if (choice === undefined || choice === null) {
+			const cands = build_candidate_spaces(game, nat, 'navy', {})
+			if (!cands.length) return { ok: false, desc: '（没有可建设海军的海域）' }
+			return {
+				pending: true, kind: 'space',
+				candidates: cands.map(sp => ({ id: sp, name: data.name_of(sp) })),
+				prompt: '《赤城号航空母舰》选择建设海军的海域',
+			}
+		}
+		let r = null
+		game._armamentBuilding = true
+		try {
+			r = build_piece(game, nat, 'navy', Number(choice))
+		} finally {
+			/* 异常也必须复位，否则之后所有建设都不再触发 build 响应 */
+			game._armamentBuilding = false
+		}
+		return {
+			ok: !!(r && r.ok !== false),
+			desc: (r && r.ok !== false)
+				? ('在<' + data.name_of(Number(choice)) + '>建设 1 支海军')
+				: ('（建设失败：' + ((r && r.reason) || '') + '）'),
+		}
+	},
+
+	/* 18421：<硫磺岛><新几内亚>之一征召 1 支陆军 */
+	'18421': (game, side, ctx, choice) => {
+		const nat = '日本'
+		const names = ['硫磺岛', '新几内亚']
+		const spaces = names.map(x => data.id_of(x)).filter(x => x != null)
+		if (choice === undefined || choice === null) {
+			const valid = spaces.filter(sp => can_build_at(game, nat, sp, 'army').ok)
+			if (!valid.length) return { ok: false, desc: '（两处都无法征召陆军）' }
+			return {
+				pending: true, kind: 'space',
+				candidates: valid.map(sp => ({ id: sp, name: data.name_of(sp) })),
+				prompt: '《增援太平洋诸岛》选择征召陆军的地区',
+			}
+		}
+		const sp = Number(choice)
+		if (spaces.indexOf(sp) < 0) return { ok: false, desc: '（所选地区不在候选内）' }
+		const r = recruit_piece(game, nat, 'army', sp)
+		return {
+			ok: !!(r && r.ok !== false),
+			desc: (r && r.ok !== false)
+				? ('在<' + data.name_of(sp) + '>征召 1 支陆军')
+				: ('（征召失败：' + ((r && r.reason) || '') + '）'),
+		}
+	},
+
+	/* 18413 / 18419 / 18420：按"被日本控制"的地区数加分，每处 2 分 */
+	'18413': (game, side, ctx) => _jpBaseImpl(game, '18413'),
+	'18419': (game, side, ctx) => _jpBaseImpl(game, '18419'),
+	'18420': (game, side, ctx) => _jpBaseImpl(game, '18420'),
+
 	'18313': (game, side, ctx, choice) => {
 		if (choice === undefined || choice === null) {
 			const cands = build_candidate_spaces(game, '英国', 'navy', {})
