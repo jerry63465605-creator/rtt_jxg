@@ -227,6 +227,8 @@ function buildView(game, nation, deps) {
 					cardId: pd.cardId,
 					name: nameOfCard,
 					n: pd.n,
+					/* 18412：候选全显示，但只有 pickType 类型能确认 */
+					pickType: pd.pickType || null,
 					to: pd.to || 'hand',
 					deck: pd.deck || 'formal',
 					candidates: (pd.candidates || []).map(cardInfo),

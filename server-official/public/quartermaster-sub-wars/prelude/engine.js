@@ -974,8 +974,14 @@ function applyEffect(game, nation, eff, deps) {
 		const deck = fromPrelude
 			? ((P.decks && P.decks[deckNation]) || [])
 			: ((game.decks && game.decks[deckNation]) || [])
+		/*
+		 * type（14903）用于【候选过滤】；
+		 * pickType（18412）不过滤候选 —— 10 张全显示，
+		 * 只限制"能选哪张"（客户端确认按钮 + 服务端二次校验）。
+		 */
 		const wantType = eff.type || null
 		const wantCard = eff.card ? String(eff.card) : null
+		const pickType = eff.pickType || null
 		/*
 		 * topN：只看牌堆顶 N 张。
 		 * ⚠ 正式牌库【数组开头为顶】（draw_cards / attrition_cards 都用 shift()），
@@ -995,21 +1001,29 @@ function applyEffect(game, nation, eff, deps) {
 			return
 		}
 		const to = eff.to || 'hand'
+		/* fromPeek（18412 seg2）：候选来自 seg1 记录的余下牌，不再看牌堆 */
+		let finalCands = cands.slice()
+		if (eff.fromPeek && P.resolving && P.resolving.peekRemaining) {
+			finalCands = P.resolving.peekRemaining.slice()
+		}
 		P.pending = {
 			kind: 'search_deck',
 			nation: nation,                    /* 操作者（提交校验用） */
 			fromNation: deckNation,            /* 牌堆归属国（可与操作者不同） */
 			n: eff.n || 1,
-			candidates: cands.slice(),
+			candidates: finalCands,
+			pickType: pickType,
+			fromPeek: !!eff.fromPeek,
+			topN: eff.topN || null,
 			to: to,
 			deck: fromPrelude ? 'prelude' : 'formal',
 			cardId: (deps.__ctx && deps.__ctx.cardId) || null,
 		}
 		const toZh = to === 'table_status' ? '明置'
 			: (to === 'table_response' ? '暗置' : '入手')
-		game.log.push('【前奏】检视' + (fromPrelude ? '前奏牌堆' : '牌堆') +
-			(eff.topN ? '顶 ' + eff.topN + ' 张' : '') +
-			'（' + cands.length + ' 张符合条件），选择 ' + (eff.n || 1) + ' 张' + toZh)
+		game.log.push('【前奏】检视' + (eff.fromPeek ? '余下牌' :
+			(fromPrelude ? '前奏牌堆' : '牌堆') + (eff.topN ? '顶 ' + eff.topN + ' 张' : '')) +
+			'（' + finalCands.length + ' 张符合条件），选择 ' + (eff.n || 1) + ' 张' + toZh)
 		return 'pending'
 	}
 
@@ -1593,11 +1607,33 @@ function searchPick(game, current, arg, deps) {
 	const deck = fromPrelude
 		? ((P.decks && P.decks[deckNation]) || [])
 		: ((game.decks && game.decks[deckNation]) || [])
-	const i = deck.indexOf(id)
-	if (i < 0) { game.log.push('【前奏】该牌已不在牌堆'); return game }
+	/*
+	 * pickType 二次校验（18412）：候选全显示，但只有指定类型能提交。
+	 * 客户端会在确认按钮上拦；这里是服务端兜底，防绕过。
+	 */
+	if (pd.pickType) {
+		const face = String(id).split('#')[0]
+		const cd = deps.cardById ? deps.cardById(face) : null
+		if (!cd || cd.type !== pd.pickType) {
+			game.log.push('【前奏】只能选择' + pd.pickType + '卡')
+			return game
+		}
+	}
 
-	deck.splice(i, 1)
+	/* fromPeek 走的是帧上余下牌，不在真实牌堆里 */
+	let i = deck.indexOf(id)
+	if (i < 0 && !pd.fromPeek) { game.log.push('【前奏】该牌已不在牌堆'); return game }
+	if (i >= 0) deck.splice(i, 1)
 	const cname = deps.nameOf(id)
+
+	/*
+	 * 记录余下牌到帧（18412 seg2 用）。topN 检视时候选 = 牌堆顶 N 张，
+	 * 选走 1 张后余下 N-1 张 —— 从原 pool 里去掉已选的 id。
+	 */
+	if (pd.topN != null && P.resolving) {
+		const restIds = (pd.candidates || []).filter(x => String(x) !== String(id))
+		P.resolving.peekRemaining = restIds
+	}
 
 	/*
 	 * 【2026-11-28】to:'auto' —— 按牌型决定去向：
@@ -1668,7 +1704,7 @@ function searchPick(game, current, arg, deps) {
 	 * 检索后洗混：只有【正式牌堆】需要（检视了隐藏信息）。
 	 * 前奏牌堆顶本来就是公开的，且牌面没写洗混 —— 不动顺序。
 	 */
-	if (!fromPrelude && deps.shuffleDeck) {
+	if (!pd.fromPeek && !fromPrelude && deps.shuffleDeck) {
 		deps.shuffleDeck(game, deckNation)
 		game.log.push('【前奏】洗混' + deckNation + '的牌堆')
 	}

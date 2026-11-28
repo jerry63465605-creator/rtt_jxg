@@ -791,9 +791,18 @@ function update_prelude_cost_modal() {
 		 * atMost（18411「弃置至多3张」）：0..n 张都可确认。
 		 * 普通模式仍须恰好 n 张 —— 与服务端 payCards 的校验口径一致。
 		 */
-		btn.disabled = pd.atMost
+		let disabled = pd.atMost
 			? (prelude_cost_picked.length > pd.n)
 			: (prelude_cost_picked.length !== pd.n)
+		/*
+		 * pickType（18412）：候选 10 张全显示，但只有指定类型能确认。
+		 * 选中的卡类型不匹配时按钮禁用（与服务端 searchPick 校验同源）。
+		 */
+		if (pd.pickType && prelude_cost_picked.length) {
+			const chosen = (pd.candidates || []).find(c => c.id === prelude_cost_picked[0])
+			if (chosen && chosen.type && chosen.type !== pd.pickType) disabled = true
+		}
+		btn.disabled = disabled
 	}
 
 	/* 回答方额外给一个「跳过」：不弃牌，让对方效果生效 */

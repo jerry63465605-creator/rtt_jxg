@@ -423,17 +423,27 @@ const EFFECTS = {
 	 */
 	'18412': {
 		name: '近卫文麿上台组阁',
+		/*
+		 * 【2026-11-28 修正】
+		 * 原实现 seg1 用 type:'RESPONSE' 在候选层过滤 —— 只显示响应卡，
+		 * 且 seg2 从整个牌堆重新选 —— 都不符合牌面。
+		 *
+		 * 新口径（仿德国 14907 威廉皇帝学会的客户端检索）：
+		 *   seg1 检视前 10 张【全部显示】（pickType 不过滤候选），
+		 *        但只有响应卡能确认（客户端按钮 + 服务端二次校验）；
+		 *        选中的响应卡暗置桌面。
+		 *   seg2 从【余下 9 张】（fromPeek，帧级传递）选 1 张入手。
+		 */
 		seg1: {
 			cost: [{ op: 'tension', delta: 1 }],
 			effect: [{
 				op: 'search_deck', n: 1, topN: 10,
-				type: 'RESPONSE', to: 'table_response',
+				pickType: 'RESPONSE', to: 'table_response',
 			}],
 		},
 		seg2: {
 			cost: [{ op: 'discard_hand', n: 1 }, { op: 'score', n: -2 }],
-			/* 牌面没写「前10张」-> 检视整个牌堆，任取 1 张 */
-			effect: [{ op: 'search_deck', n: 1 }],
+			effect: [{ op: 'search_deck', fromPeek: true, n: 1, to: 'hand' }],
 		},
 	},
 
