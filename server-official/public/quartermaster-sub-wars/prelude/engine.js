@@ -1683,9 +1683,17 @@ function searchPick(game, current, arg, deps) {
 		if (!def) {
 			game.log.push('【前奏】该牌效果未实装')
 		} else {
+			/*
+			 * 【2026-11-28 修复·苏日条约卡死】
+			 * to:'play' 是【对方免费打出】的牌（18407/18006 互打）。
+			 * 只结算 seg1（持续效果）；seg2 的"除非弃牌"是原持有者专属选择，
+			 * 当前玩家（另一方）无权替他决定 —— 若保留 hasSeg2 会停在 seg1_done
+			 * 等原持有者确认，而角色校验永远不通过 = 卡死（实测 game 12）。
+			 * 同时避免两张条约通过 seg2 无限互打。
+			 */
 			pushFrame(game, {
 				cardId: String(id), nation: deckNation,
-				stage: 'seg1', hasSeg2: !!def.seg2, restEffects: [],
+				stage: 'seg1', hasSeg2: false, restEffects: [],
 			})
 			const rr = runSegment(game, deckNation, def.seg1, deps,
 				{ cardId: String(id), seg: def.seg1 })
