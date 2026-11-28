@@ -155,11 +155,27 @@ function strip_formal_cards(game, byId, nations) {
 		for (const list of lists) {
 			if (!Array.isArray(list)) continue
 			for (let k = list.length - 1; k >= 0; k--) {
-				const c = byId[list[k]] || byId[String(list[k])]
-				if (c && FORMAL_CARDS_TO_REMOVE.indexOf(c.name) >= 0) {
-					list.splice(k, 1)
-					if (game.log) game.log.push('【前奏】从 ' + n + ' 移除正式牌《' + c.name + '》')
-				}
+				/*
+				 * 【2026-11-28 修·实例 id】
+				 * 正式牌堆里存的是实例 id（'15434#901'），旧实现直接 byId[整串]，
+				 * 永远查不到卡定义 —— 只要牌堆已实例化，这一函数就是空转。
+				 * 先切出面 id 再查。
+				 */
+				const face = String(list[k]).split('#')[0]
+				const c = byId[face] || byId[list[k]] || byId[String(list[k])]
+				if (!c || FORMAL_CARDS_TO_REMOVE.indexOf(c.name) < 0) continue
+				/*
+				 * 【2026-11-28 修·同名误删】
+				 * 本表按【卡名】匹配（作者口径：避免卡库重构后 id 失效），
+				 * 但前奏版与正式版同名：
+				 *   伪满洲国   15434 RESPONSE / 18410 PRELUDE
+				 *   卢沟桥事变 15429 RESPONSE / 18405 PRELUDE
+				 * 不排除 PRELUDE 会把前奏牌堆的合法成员一起删掉。
+				 * 「删除正式牌」本来就只该作用于正式牌，这里跳过前奏牌。
+				 */
+				if (c.type === 'PRELUDE') continue
+				list.splice(k, 1)
+				if (game.log) game.log.push('【前奏】从 ' + n + ' 移除正式牌《' + c.name + '》')
 			}
 		}
 	}
@@ -254,4 +270,7 @@ module.exports = {
 	init,
 	start,
 	applyTestOverrides,
+	/* 导出以便回归测试直接验证「删正式牌不误伤前奏版」 */
+	strip_formal_cards,
+	FORMAL_CARDS_TO_REMOVE,
 }
